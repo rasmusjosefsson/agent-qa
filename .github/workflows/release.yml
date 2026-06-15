@@ -1,0 +1,135 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+# Cuts a release: cross-compiles per platform, publishes per-platform npm
+# packages, then publishes the umbrella `agent-qa` package that depends on
+# them via optionalDependencies. Tag the commit (e.g. `v0.0.1`) to trigger.
+#
+# Scope: macOS only (darwin-arm64, darwin-x64). Add linux/win back to the
+# matrix + umbrella optionalDependencies if you ever need them.
+
+jobs:
+  build:
+    name: build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin-arm64
+            runner: macos-14
+            target: aarch64-apple-darwin
+            ext: ""
+          - platform: darwin-x64
+            runner: macos-14
+            target: x86_64-apple-darwin
+            ext: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+          key: ${{ matrix.platform }}
+      - name: stamp Cargo.toml version from tag
+        shell: bash
+        run: |
+          set -eux
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          # cargo doesn't ship an in-tree version-bumper; sed the
+          # package version literal. Anchored to the [package] block
+          # so workspace.package or dependency version strings don't
+          # collide.
+          python3 - <<'PY'
+          import os, re, pathlib
+          tag = os.environ.get('GITHUB_REF', '').removeprefix('refs/tags/v')
+          assert tag, 'GITHUB_REF must carry a tag'
+          path = pathlib.Path('cli/Cargo.toml')
+          text = path.read_text()
+          out = re.sub(r'^(version\s*=\s*)"[^"]+"', f'\\1"{tag}"', text, count=1, flags=re.MULTILINE)
+          path.write_text(out)
+          PY
+          # Also drop Cargo.lock so it rebuilds with the new version;
+          # --locked below would otherwise reject the mismatch.
+          rm -f cli/Cargo.lock
+      - name: cargo build --release
+        working-directory: cli
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: stage platform package
+        shell: bash
+        run: |
+          set -eux
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          PLAT="${{ matrix.platform }}"
+          EXT="${{ matrix.ext }}"
+          DEST="npm/platform/${PLAT}/bin"
+          mkdir -p "$DEST"
+          cp "cli/target/${{ matrix.target }}/release/agent-qa${EXT}" "$DEST/agent-qa-${PLAT}${EXT}"
+          if [ "$EXT" != ".exe" ]; then chmod +x "$DEST/agent-qa-${PLAT}${EXT}"; fi
+          node scripts/build-platform-pkg.js "$PLAT" "$VERSION"
+      - name: upload platform package
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkg-${{ matrix.platform }}
+          path: npm/platform/${{ matrix.platform }}
+          if-no-files-found: error
+
+  publish-platforms:
+    name: publish platform packages
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: "https://registry.npmjs.org"
+      - uses: actions/download-artifact@v4
+        with:
+          path: npm/platform
+          pattern: pkg-*
+          merge-multiple: false
+      - name: rename artifact dirs and publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -eux
+          # actions/download-artifact lays out as npm/platform/pkg-<plat>/...
+          for d in npm/platform/pkg-*; do
+            plat=$(basename "$d" | sed 's/^pkg-//')
+            mv "$d" "npm/platform/${plat}"
+          done
+          ls -la npm/platform
+          for plat in npm/platform/*/; do
+            ( cd "$plat" && npm publish --provenance --access public )
+          done
+
+  publish-umbrella:
+    name: publish umbrella
+    needs: publish-platforms
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: "https://registry.npmjs.org"
+      - name: stage umbrella
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          node scripts/build-umbrella-pkg.js "$VERSION"
+      - name: publish umbrella
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        working-directory: npm/agent-qa
+        run: npm publish --provenance --access public

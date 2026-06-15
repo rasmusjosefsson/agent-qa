@@ -1,0 +1,31 @@
+{
+  "schema": "scenario/2",
+  "id": "smoke",
+  "intent": "open example.com and confirm the URL is set",
+  "env": {
+    "open": [
+      { "kind": "nav", "url": "https://example.com/", "intent": "land on the homepage" }
+    ]
+  },
+  "steps": [
+    {
+      "id": "s1",
+      "intent": "url is set",
+      "kind": "check",
+      "claim": {
+        "subject": { "url": true },
+        "predicate": "exists"
+      }
+    },
+    {
+      "id": "s2",
+      "intent": "url contains example.com",
+      "kind": "check",
+      "claim": {
+        "subject": { "url": true },
+        "predicate": "contains",
+        "value": "example.com"
+      }
+    }
+  ]
+}

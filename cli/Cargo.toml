@@ -1,0 +1,40 @@
+[package]
+name = "agent-qa"
+version = "0.0.1"
+edition = "2021"
+description = "Record and replay user scenarios against any web app via CDP."
+license = "MIT"
+repository = "https://github.com/rasmusjosefsson/agent-qa"
+readme = "../README.md"
+rust-version = "1.78"
+
+[[bin]]
+name = "agent-qa"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "1"
+jsonschema = { version = "0.18", features = ["draft202012"] }
+clap = { version = "4", features = ["derive"] }
+include_dir = "0.7"
+toml = "0.8"
+pathdiff = "0.2"
+which = "6"
+regex = "1"
+rand = "0.8"
+sha2 = "0.10"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+similar = "2"
+image = { version = "0.25", default-features = false, features = ["png"] }
+ureq = { version = "2", default-features = false, features = ["json", "tls"] }
+tempfile = "3"
+
+[dev-dependencies]
+
+[lints.clippy]
+# Doc-list-overindentation hits every '//!  - foo' bullet (we use 2-space
+# indent for readability). Style preference, not a bug.
+doc_overindented_list_items = "allow"

@@ -1,0 +1,42 @@
+# Example GitHub Actions workflow: validate + lint every scenario under the repo
+# on every PR. Findings show up as inline PR annotations thanks to --format
+# github.
+#
+# Copy this file to .github/workflows/scenarios.yml in your repo.
+
+name: agent-qa scenarios
+on:
+  pull_request:
+    paths:
+      - 'tmp/agent-qa-scenarios/**/scenario.json'
+      - 'scenarios/**/scenario.json'
+  push:
+    branches: [main]
+    paths:
+      - 'tmp/agent-qa-scenarios/**/scenario.json'
+      - 'scenarios/**/scenario.json'
+
+jobs:
+  validate-and-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - run: npm install -g @agent-qa/cli
+
+      - name: Preflight (paths writable, agent-browser reachable)
+        run: agent-qa info --check
+
+      - name: Schema-validate every scenario
+        run: agent-qa scenario validate-all --format github
+
+      - name: Lint every scenario (errors gate; warnings annotated only)
+        run: agent-qa scenario lint-all --format github
+
+      # Optional: gate on warnings too.
+      # - name: Lint every scenario (strict)
+      #   run: agent-qa scenario lint-all --format github --strict

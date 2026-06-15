@@ -1,0 +1,27 @@
+#!/bin/sh
+# noop-auth — minimal reference plugin proving the agent-qa plugin protocol.
+#
+# Usage: invoked by agent-qa as a subprocess; reads a JSON request on stdin,
+# writes a JSON response on stdout. See docs/plugins.md.
+#
+# This implementation just acknowledges every request as a no-op. Use it as
+# a starting point when writing a real plugin in any language.
+
+set -eu
+
+KIND="${1:-}"   # auth | session-policy | ... | ping
+
+case "$KIND" in
+  ping)
+    echo '{"ok":true,"response":{"protocolVersion":1,"name":"noop-auth","kinds":["auth"]}}'
+    ;;
+  auth)
+    # Drain stdin so the parent doesn't block on a closed pipe.
+    cat >/dev/null
+    echo '{"ok":true,"response":{"status":"authenticated","note":"noop"}}'
+    ;;
+  *)
+    echo "{\"ok\":false,\"error\":{\"code\":\"unsupported-kind\",\"message\":\"noop-auth does not handle ${KIND}\"}}"
+    exit 0
+    ;;
+esac

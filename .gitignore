@@ -1,0 +1,23 @@
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Node
+node_modules/
+*.log
+.DS_Store
+
+# Build artefacts that shouldn't land
+npm/platform/*/bin/agent-qa-*
+!npm/platform/*/bin/.gitkeep
+# Mirrored from repo root by scripts/build-umbrella-pkg.js at release time.
+npm/agent-qa/skills/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Runtime scenario / record output
+tmp/

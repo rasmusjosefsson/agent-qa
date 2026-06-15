@@ -1,0 +1,34 @@
+{
+  "name": "@rasmusjosefsson/agent-qa",
+  "publishConfig": {
+    "access": "public"
+  },
+  "version": "0.0.0",
+  "description": "Record and replay user scenarios against any web app via CDP.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rasmusjosefsson/agent-qa.git"
+  },
+  "bin": {
+    "agent-qa": "bin/agent-qa.js"
+  },
+  "scripts": {
+    "postinstall": "node bin/postinstall.js"
+  },
+  "files": [
+    "bin/",
+    "skills/",
+    "README.md"
+  ],
+  "dependencies": {
+    "agent-browser": "0.27.0"
+  },
+  "optionalDependencies": {
+    "@rasmusjosefsson/agent-qa-darwin-arm64": "0.0.0",
+    "@rasmusjosefsson/agent-qa-darwin-x64": "0.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

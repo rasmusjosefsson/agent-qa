@@ -1,0 +1,67 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+      - run: cd cli && cargo build --locked
+      - name: test
+        working-directory: cli
+        run: cargo test --locked
+      - name: clippy
+        working-directory: cli
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: rustfmt
+        working-directory: cli
+        run: cargo fmt --check
+
+  smoke-install:
+    name: smoke (npm install local)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: build release binary
+        working-directory: cli
+        run: cargo build --release --locked
+      - name: stage platform package
+        run: |
+          set -eux
+          mkdir -p npm/platform/linux-x64/bin
+          cp cli/target/release/agent-qa npm/platform/linux-x64/bin/agent-qa-linux-x64
+          chmod +x npm/platform/linux-x64/bin/agent-qa-linux-x64
+          node scripts/build-platform-pkg.js linux-x64 0.0.0-smoke
+          node scripts/build-umbrella-pkg.js 0.0.0-smoke --local-platforms linux-x64
+      - name: install + run from local tarballs
+        run: |
+          set -eux
+          cd npm/platform/linux-x64 && npm pack --pack-destination /tmp
+          cd $GITHUB_WORKSPACE/npm/agent-qa && npm pack --pack-destination /tmp
+          mkdir -p /tmp/install && cd /tmp/install && npm init -y >/dev/null
+          npm install /tmp/rasmusjosefsson-agent-qa-linux-x64-*.tgz /tmp/rasmusjosefsson-agent-qa-*.tgz
+          ./node_modules/.bin/agent-qa skills list
+          ./node_modules/.bin/agent-qa skills get core | head -5
+          ./node_modules/.bin/agent-qa scenario validate \
+            $GITHUB_WORKSPACE/examples/scenarios/smoke/scenario.json
+          ./node_modules/.bin/agent-qa --version

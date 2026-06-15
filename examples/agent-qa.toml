@@ -1,0 +1,29 @@
+# Reference configuration for agent-qa.
+#
+# Drop a copy of this file at your repo root (or any ancestor of the
+# directory you run agent-qa from) and customise. agent-qa walks the
+# directory tree from cwd up to the filesystem root looking for either
+# `agent-qa.toml` or `.agent-qa.toml`; the first one found wins.
+#
+# Both sections below are optional — agent-qa works with no config
+# file at all. Resolution order for every setting is documented in
+# `docs/configuration.md`.
+
+# Plugin discovery — see `docs/plugins.md` for the protocol contract.
+# Each entry is a (kind, plugin) pair. The plugin value is one of:
+#   "/abs/path/to/binary"          absolute path
+#   "./tools/my-plugin"            relative to this toml file
+#   "agent-qa-plugin-acme"         resolved via $PATH
+#
+# Discovery falls through to AGENT_QA_PLUGINS env var, then $PATH for
+# anything matching `agent-qa-plugin-*`, when this table is empty.
+[plugins]
+# auth = "/usr/local/bin/agent-qa-plugin-acme-auth"
+# session-policy = "./tools/session-policy"
+# setup-hook = "agent-qa-plugin-setup"
+
+# Override the scenarios / record roots. AGENT_QA_SCENARIOS_DIR /
+# AGENT_QA_RECORD_DIR env vars take priority over these settings.
+[paths]
+# scenarios_root = "./tmp/agent-qa-scenarios"
+# record_root   = "./tmp/agent-qa-record"

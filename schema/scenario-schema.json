@@ -1,0 +1,514 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/rasmusjosefsson/agent-qa/schemas/scenario/2.json",
+  "title": "Scenario",
+  "description": "scenario/2 — author-and-runner contract. The artifact is a contract, not a log: every field is author input. Audit data (recorded snapshots, network, heal records, replay candidates) lives in a sibling sidecar tree addressed by step id. The sidecar path convention is documented in docs/specs/scenario-sidecar-tree.md. DO NOT add audit-only fields to this schema; `additionalProperties: false` enforces it.",
+  "type": "object",
+  "required": ["schema", "id", "intent", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": "scenario/2" },
+    "id": { "type": "string", "minLength": 1 },
+    "intent": { "type": "string", "minLength": 1 },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/InputDecl" }
+    },
+    "env": {
+      "type": "object",
+      "additionalProperties": false,
+      "$comment": "Environmental preconditions (open[]) and cleanup (close[]) that bracket the steps.",
+      "properties": {
+        "open": { "type": "array", "items": { "$ref": "#/$defs/EnvOp" } },
+        "close": { "type": "array", "items": { "$ref": "#/$defs/EnvOp" } }
+      }
+    },
+    "steps": { "type": "array", "items": { "$ref": "#/$defs/Step" } },
+    "templates": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/Template" }
+    },
+    "producedBy": { "$ref": "#/$defs/Provenance" }
+  },
+  "$defs": {
+    "Name": {
+      "type": "string",
+      "pattern": "^[A-Za-z_$][A-Za-z0-9_$.]*$",
+      "minLength": 1
+    },
+    "InputDecl": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "enum": ["string", "number", "boolean", "array", "object"] },
+        "default": {},
+        "sensitive": { "type": "boolean" },
+        "items": { "type": "object" },
+        "properties": { "type": "object" },
+        "description": { "type": "string" }
+      }
+    },
+    "Locator": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["role"],
+          "additionalProperties": false,
+          "properties": {
+            "role": { "type": "string", "minLength": 1 },
+            "name": { "$ref": "#/$defs/NameMatch" },
+            "scope": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/Locator" }
+            },
+            "tolerate": { "$ref": "#/$defs/LocatorTolerance" }
+          },
+          "$comment": "Note: `nth` is deliberately absent. Disambiguate via `scope` or a more specific `name`. Multiple structural matches at replay time mean the locator is wrong, not that nth is missing."
+        },
+        {
+          "type": "object",
+          "required": ["raw", "reason"],
+          "additionalProperties": false,
+          "properties": {
+            "raw": {
+              "type": "object",
+              "required": ["kind", "value"],
+              "additionalProperties": false,
+              "properties": {
+                "kind": { "enum": ["css", "xpath", "testId", "text"] },
+                "value": { "type": "string", "minLength": 1 }
+              }
+            },
+            "reason": { "type": "string", "minLength": 1 }
+          },
+          "$comment": "Named-and-shamed escape hatch. `reason` is required so PR review sees why we fell off the accessible-name + role rails."
+        }
+      ]
+    },
+    "LocatorTolerance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason"],
+      "anyOf": [
+        { "required": ["digits"], "properties": { "digits": { "const": true } } },
+        { "required": ["generatedSuffix"], "properties": { "generatedSuffix": { "const": true } } },
+        { "required": ["selectionAugmentedLabel"], "properties": { "selectionAugmentedLabel": { "const": true } } }
+      ],
+      "properties": {
+        "digits": {
+          "type": "boolean",
+          "$comment": "Digit runs anywhere in the name are noise (counters, ids). Silences `digit-anywhere` and `digit-tolerant` matches without emitting a patch file."
+        },
+        "generatedSuffix": {
+          "type": "boolean",
+          "$comment": "Trailing 6-12 char lowercase alphanumeric is noise (generated-id convention). Silences `generated-suffix` matches."
+        },
+        "selectionAugmentedLabel": {
+          "type": "boolean",
+          "$comment": "Recorded name is a whole-word prefix of the live label (combobox / MUI Select augmentation). Silences `name-prefix` matches."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "$comment": "Human-authored justification for silencing this drift. Carried so PR review + `git blame` see WHY the silencing decision was made. Free-form."
+        }
+      },
+      "$comment": "Author-declared tolerance for known-volatile dimensions of the recorded `name`. At least one of `digits`, `generatedSuffix`, `selectionAugmentedLabel` MUST be true AND `reason` is required. The `whitespace-collapsed` strategy is absorbed always-on at the pipeline level — no flag here. When a tolerated dimension's strategy matches, the disposition is rewritten to `matched-drift-absorb-by-policy`: no patch file, no `[healed]` log, no driftSeen() flag. Genuine structural drift (stem change, role change, dimension not tolerated) still fails the run loudly."
+    },
+    "NameMatch": {
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "required": ["pattern"],
+          "additionalProperties": false,
+          "properties": {
+            "pattern": { "type": "string", "minLength": 1 },
+            "match": { "enum": ["exact", "contains", "regex"], "default": "exact" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["i18nKey"],
+          "additionalProperties": false,
+          "properties": {
+            "i18nKey": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "Value": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["from", "literal"],
+          "additionalProperties": false,
+          "properties": {
+            "from": { "const": "literal" },
+            "literal": {}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["from", "input"],
+          "additionalProperties": false,
+          "properties": {
+            "from": { "const": "input" },
+            "input": { "$ref": "#/$defs/Name" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["from", "stepId"],
+          "additionalProperties": false,
+          "properties": {
+            "from": { "const": "step" },
+            "stepId": { "type": "string", "minLength": 1 },
+            "path": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["from", "mint"],
+          "additionalProperties": false,
+          "properties": {
+            "from": { "const": "mint" },
+            "mint": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["template"],
+              "properties": {
+                "template": { "type": "string", "minLength": 1 },
+                "scope": { "enum": ["scenario", "loop", "template"] }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["from", "loopVar"],
+          "additionalProperties": false,
+          "properties": {
+            "from": { "const": "loop" },
+            "loopVar": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    },
+    "NetworkMatcher": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "urlMatches": { "type": "string" },
+        "operationName": { "type": "string" },
+        "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"] }
+      },
+      "anyOf": [{ "required": ["urlMatches"] }, { "required": ["operationName"] }]
+    },
+    "ClaimSubject": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["element"],
+          "additionalProperties": false,
+          "properties": {
+            "element": { "$ref": "#/$defs/Locator" },
+            "attribute": { "type": "string" },
+            "ofKind": { "enum": ["text", "value", "count", "attribute"] }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["url"],
+          "additionalProperties": false,
+          "properties": { "url": { "const": true } }
+        },
+        {
+          "type": "object",
+          "required": ["network"],
+          "additionalProperties": false,
+          "properties": {
+            "network": { "$ref": "#/$defs/NetworkMatcher" },
+            "ofKind": { "enum": ["status", "responseJsonPath", "fired"] },
+            "path": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["data"],
+          "additionalProperties": false,
+          "properties": {
+            "data": { "$ref": "#/$defs/Name" },
+            "path": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["flag"],
+          "additionalProperties": false,
+          "properties": { "flag": { "type": "string", "minLength": 1 } }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "name"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "var" },
+            "name": { "$ref": "#/$defs/Name" },
+            "path": { "type": "string" }
+          },
+          "$comment": "assertVar via ClaimSubject extension — judges 2 + 3 flagged this as the missing assertion shape (assert a previously-saved variable equals a literal). Lands as a ClaimSubject arm rather than a new step type."
+        }
+      ]
+    },
+    "Claim": {
+      "type": "object",
+      "required": ["subject", "predicate"],
+      "additionalProperties": false,
+      "properties": {
+        "subject": { "$ref": "#/$defs/ClaimSubject" },
+        "predicate": {
+          "enum": [
+            "isVisible",
+            "isHidden",
+            "isEnabled",
+            "isDisabled",
+            "isChecked",
+            "isUnchecked",
+            "exists",
+            "notExists",
+            "equals",
+            "contains",
+            "matches",
+            "startsWith",
+            "endsWith",
+            "gt",
+            "gte",
+            "lt",
+            "lte",
+            "countEquals"
+          ]
+        },
+        "value": {},
+        "tolerance": { "type": "object" }
+      }
+    },
+    "StepContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "timeoutMs": { "type": "integer", "minimum": 0 },
+        "onFailure": { "enum": ["abort", "continue", "ignore"] },
+        "runAs": { "type": "string" },
+        "runFor": { "type": "array", "items": { "type": "string" } },
+        "skipFor": { "type": "array", "items": { "type": "string" } },
+        "expectFailFor": { "type": "array", "items": { "type": "string" } },
+        "tab": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "matchUrl": { "type": "string" },
+            "matchTitle": { "type": "string" },
+            "opensFromStepId": { "type": "string" }
+          }
+        }
+      }
+    },
+    "VerbShapeRules": {
+      "$comment": "Cross-field shape rules per verb (e.g. `goto` requires a Value, `click` requires `on`, `loop` requires `params.over`/`params.as`/`params.do`, `useTemplate` requires `params.template`). Left as a structural placeholder — full per-verb gating is enforced by the runner. Today the broad StepDo shape is permissive within additionalProperties: false on its declared keys.",
+      "type": "object"
+    },
+    "Step": {
+      "oneOf": [{ "$ref": "#/$defs/StepDo" }, { "$ref": "#/$defs/StepCheck" }]
+    },
+    "StepDo": {
+      "type": "object",
+      "required": ["id", "intent", "kind", "verb"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$", "minLength": 1 },
+        "intent": { "type": "string", "minLength": 1 },
+        "kind": { "const": "do" },
+        "verb": {
+          "enum": [
+            "goto",
+            "reload",
+            "back",
+            "forward",
+            "click",
+            "type",
+            "clear",
+            "press",
+            "hover",
+            "select",
+            "check",
+            "uncheck",
+            "upload",
+            "scrollTo",
+            "focus",
+            "blur",
+            "read",
+            "callGql",
+            "wait",
+            "loop",
+            "group",
+            "useTemplate"
+          ]
+        },
+        "on": { "$ref": "#/$defs/Locator" },
+        "value": { "$ref": "#/$defs/Value" },
+        "saveAs": { "$ref": "#/$defs/Name" },
+        "params": { "type": "object" },
+        "context": { "$ref": "#/$defs/StepContext" }
+      },
+      "allOf": [{ "$ref": "#/$defs/VerbShapeRules" }]
+    },
+    "StepCheck": {
+      "type": "object",
+      "required": ["id", "intent", "kind", "claim"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$", "minLength": 1 },
+        "intent": { "type": "string", "minLength": 1 },
+        "kind": { "const": "check" },
+        "claim": { "$ref": "#/$defs/Claim" },
+        "context": { "$ref": "#/$defs/StepContext" }
+      }
+    },
+    "EnvOp": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "fresh" },
+            "intent": { "type": "string" },
+            "policy": { "$ref": "#/$defs/EnvOpPolicy" }
+          },
+          "$comment": "Reset browser state for the active session: clear cookies + localStorage + sessionStorage before step 0. Default baseline for anonymous recordings."
+        },
+        {
+          "type": "object",
+          "required": ["kind", "name"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "useProfile" },
+            "intent": { "type": "string" },
+            "name": { "type": "string", "minLength": 1 },
+            "policy": { "$ref": "#/$defs/EnvOpPolicy" }
+          },
+          "$comment": "Re-bootstrap a named profile so replay reaches the same authenticated baseline regardless of leftover cookies. Idempotent."
+        },
+        {
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "nav" },
+            "intent": { "type": "string" },
+            "url": { "type": "string", "format": "uri" },
+            "policy": { "$ref": "#/$defs/EnvOpPolicy" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "cookie" },
+            "intent": { "type": "string" },
+            "name": { "type": "string" },
+            "value": { "type": "string" },
+            "domain": { "type": "string" },
+            "path": { "type": "string" },
+            "policy": { "$ref": "#/$defs/EnvOpPolicy" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "localStorage" },
+            "intent": { "type": "string" },
+            "key": { "type": "string" },
+            "value": { "type": "string" },
+            "policy": { "$ref": "#/$defs/EnvOpPolicy" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "url", "query"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "gql" },
+            "intent": { "type": "string" },
+            "url": { "type": "string", "format": "uri" },
+            "query": { "type": "string", "minLength": 1 },
+            "variables": { "type": "object" },
+            "forEach": { "$ref": "#/$defs/Value" },
+            "saveAs": { "$ref": "#/$defs/Name" },
+            "policy": { "$ref": "#/$defs/EnvOpPolicy" }
+          },
+          "$comment": "`forEach` is a Value (typically from: \"step\" with a JSONPath into a previously-saved list). `variables` values may be (a) any JSON literal, (b) a `{{item}}` / `{{item.x}}` string template (resolved per forEach iteration), or (c) a single-key wrapper `{\"$value\": <Value>}` that resolves via the scenario's Value channel (literal / input / step / mint / loop). The `$value` wrapper makes single-shot (non-forEach) gql ops able to reference earlier `saveAs` bindings — e.g. `{\"id\": {\"$value\": {\"from\": \"step\", \"stepId\": \"existingThings\", \"path\": \"$.collection[0].id\"}}}`."
+        },
+        {
+          "type": "object",
+          "required": ["kind", "name", "enabled"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "flag" },
+            "intent": { "type": "string" },
+            "name": { "type": "string", "minLength": 1 },
+            "enabled": { "type": "boolean" },
+            "policy": { "$ref": "#/$defs/EnvOpPolicy" }
+          }
+        }
+      ]
+    },
+    "EnvOpPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "alwaysRun": { "type": "boolean" },
+        "onAbort": { "enum": ["run", "skip"] },
+        "onFailure": { "enum": ["abort", "continue"] }
+      }
+    },
+    "Template": {
+      "type": "object",
+      "required": ["steps"],
+      "additionalProperties": false,
+      "properties": {
+        "intent": { "type": "string" },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/InputDecl" }
+        },
+        "steps": { "type": "array", "items": { "$ref": "#/$defs/Step" } },
+        "templates": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/Template" }
+        }
+      },
+      "$comment": "Same shape as scenario root minus `env` and `producedBy`. Invoked from a StepDo with verb=\"useTemplate\" and params.template=<name> + params.with=<bindings>."
+    },
+    "Provenance": {
+      "type": "object",
+      "required": ["producer"],
+      "additionalProperties": false,
+      "properties": {
+        "producer": {
+          "enum": ["automated-capture", "llm-author", "agent-recorder", "human"],
+          "$comment": "Producer of the scenario artifact. Kept in the contract so consumers can distinguish authoring sources."
+        },
+        "producedAt": { "type": "string", "format": "date-time" },
+        "recordedAt": { "type": "string", "format": "date-time" },
+        "sourceRef": { "type": "string" }
+      }
+    }
+  }
+}
