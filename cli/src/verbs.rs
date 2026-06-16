@@ -6,8 +6,8 @@
 //!
 //! Locator resolution: for `Locator::Role { role, name, … }` we use
 //! agent-browser's one-shot `find role <r> <act> --name <n>` form. For
-//! `Locator::Raw { raw: { kind, value }, … }` we use `find css|xpath`
-//! or, for `testId`, synthesise a CSS `[data-testid=…]` selector.
+//! `Locator::Raw { raw: { kind, value }, … }` we use native selector verbs
+//! for css/testId and `find xpath` for XPath.
 //! Tolerance / nested scope / heal land later.
 //!
 //! Implemented verbs:
@@ -465,6 +465,101 @@ fn try_text_fallback(session: &str, name: &str, act: RoleAct, value: Option<&str
     false
 }
 
+/// Textboxes are commonly exposed in snapshots by placeholder or implicit
+/// label, while agent-browser's role finder may only see explicit ARIA names.
+/// When role=textbox+fill misses, recover through DOM fields whose visible
+/// label/placeholder/aria/name/id matches the recorded name.
+fn try_named_control_fill(session: &str, name: &str, value: &str) -> anyhow::Result<bool> {
+    let expr = format!(
+        r#"(() => {{
+  const want = {name_lit}.toLowerCase();
+  const value = {value_lit};
+  const text = (s) => (s || '').trim().toLowerCase();
+  const labelText = (el) => [
+    ...(el.labels ? Array.from(el.labels).map(l => l.innerText || l.textContent || '') : []),
+    el.id ? (document.querySelector(`label[for="${{CSS.escape(el.id)}}"]`)?.innerText || '') : '',
+  ].join(' ');
+  const fields = Array.from(document.querySelectorAll('input,textarea,[contenteditable="true"]'));
+  const el = fields.find((field) => [
+    labelText(field),
+    field.getAttribute('placeholder'),
+    field.getAttribute('aria-label'),
+    field.getAttribute('name'),
+    field.id,
+  ].some((candidate) => text(candidate).includes(want)));
+  if (!el) return false;
+  if (el.isContentEditable) {{
+    el.textContent = value;
+  }} else {{
+    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+    if (setter) setter.call(el, value); else el.value = value;
+  }}
+  el.dispatchEvent(new InputEvent('input', {{ bubbles: true, inputType: 'insertText', data: value }}));
+  el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+  return true;
+}})()"#,
+        name_lit = json_str(name),
+        value_lit = json_str(value)
+    );
+    let out = browser::eval_expression(session, &expr)?;
+    Ok(out.trim() == "true")
+}
+
+/// Named buttons/links can appear in snapshots by input value or implicit
+/// button text even when the role finder misses. Recover by matching common
+/// name-bearing attributes and invoking native click/submit behaviour.
+fn try_named_control_click(session: &str, role: &str, name: &str) -> anyhow::Result<bool> {
+    if role != "button" && role != "link" {
+        return Ok(false);
+    }
+    let selector = if role == "link" {
+        "a,[role=link]"
+    } else {
+        "button,input[type=button],input[type=submit],input[type=reset],[role=button]"
+    };
+    let expr = format!(
+        r#"(() => {{
+  const want = {name_lit}.toLowerCase();
+  const text = (s) => (s || '').trim().toLowerCase();
+  const candidates = Array.from(document.querySelectorAll({selector_lit}));
+  const primary = (node) => [
+    node.innerText,
+    node.textContent,
+    node.value,
+    node.getAttribute('aria-label'),
+    node.getAttribute('name'),
+  ].some((candidate) => text(candidate) === want);
+  const secondary = (node) => want.length >= 3 && [
+    node.innerText,
+    node.textContent,
+    node.value,
+    node.getAttribute('aria-label'),
+    node.getAttribute('name'),
+    node.id,
+    node.getAttribute('data-test'),
+    node.getAttribute('data-testid'),
+  ].some((candidate) => text(candidate).includes(want));
+  const el = candidates.find(primary) || candidates.find(secondary);
+  if (!el) return false;
+  const form = el.form || el.closest('form');
+  const isSubmit = el.tagName === 'BUTTON' || (el.tagName === 'INPUT' && ['submit', 'button', 'reset'].includes((el.type || '').toLowerCase()));
+  if (form && isSubmit && typeof form.requestSubmit === 'function') {{
+    form.requestSubmit(el);
+  }} else {{
+    el.dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true, cancelable: true, view: window }}));
+    el.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true, cancelable: true, view: window }}));
+    el.click();
+  }}
+  return true;
+}})()"#,
+        name_lit = json_str(name),
+        selector_lit = json_str(selector)
+    );
+    let out = browser::eval_expression(session, &expr)?;
+    Ok(out.trim() == "true")
+}
+
 /// Final replay-side fallback: snapshot the page, find
 /// `<role> "<name>" [ref=eN]`, click `@eN`. Same rationale as
 /// `smart_click::try_snapshot_fallback` — see that for the why.
@@ -517,13 +612,33 @@ fn act_on_locator(
             // Probe role+name quietly so a recovering miss doesn't spam
             // the user with a `✗ Element not found` line they have to
             // mentally discard.
+            if matches!(act, RoleAct::Click)
+                && !name_str.is_empty()
+                && try_named_control_click(session, &role.role, name_str)?
+            {
+                eprintln!(
+                    "[v2-replay] role='{}' name='{}' activated via named control click",
+                    role.role, name_str
+                );
+                return Ok(());
+            }
+
             match browser::find_role_act_quiet(session, &role.role, name_str, act, value) {
                 Ok(()) => Ok(()),
                 Err(e) if !name_str.is_empty() && role_act_supports_text_fallback(act) => {
                     // Fallback ladder: text → chunked text → snapshot ref.
                     // See [`crate::browser::find_ref_in_snapshot`] for the
                     // snapshot rationale.
-                    if try_text_fallback(session, name_str, act, value) {
+                    if matches!(act, RoleAct::Fill)
+                        && role.role == "textbox"
+                        && try_named_control_fill(session, name_str, value.unwrap_or(""))?
+                    {
+                        eprintln!(
+                            "[v2-replay] role+name miss for role='{}' name='{}' recovered via named control fill",
+                            role.role, name_str
+                        );
+                        Ok(())
+                    } else if try_text_fallback(session, name_str, act, value) {
                         eprintln!(
                             "[v2-replay] role+name miss for role='{}' name='{}' recovered via text locator",
                             role.role, name_str
@@ -548,14 +663,14 @@ fn act_on_locator(
             let v = crate::value::substitute_scenario_vars(&raw.raw.value, scope);
             match &raw.raw.kind {
                 RawLocatorKind::Css => {
-                    browser::find_css_act(session, &v, act, value)?;
+                    browser::selector_act(session, &v, act, value)?;
                 }
                 RawLocatorKind::Xpath => {
                     browser::find_xpath_act(session, &v, act, value)?;
                 }
                 RawLocatorKind::TestId => {
                     let css = format!("[data-testid=\"{}\"]", v.replace('"', "\\\""));
-                    browser::find_css_act(session, &css, act, value)?;
+                    browser::selector_act(session, &css, act, value)?;
                 }
                 RawLocatorKind::Text => {
                     // agent-browser's `find text` doesn't support focus; for
@@ -606,6 +721,16 @@ mod tests {
         ab::_reset_bin_cache_for_tests();
     }
 
+    fn install_fake_eval_true(dir: &Path, log: &Path) {
+        let body = format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\nif [ \"$3\" = eval ]; then printf true; fi\nexit 0\n",
+            log.display()
+        );
+        let bin = write_exec(dir, "agent-browser", &body);
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+    }
+
     fn clear_fake() {
         std::env::remove_var(ab::BIN_ENV);
         ab::_reset_bin_cache_for_tests();
@@ -642,14 +767,55 @@ mod tests {
     }
 
     #[test]
-    fn click_invokes_find_role() {
+    fn click_prefers_named_control_activation() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake_eval_true(tmp.path(), &log);
         let s = parse(json!({
             "id": "s1", "intent": "x", "kind": "do", "verb": "click",
             "on": { "role": "button", "name": "Save" }
         }));
-        let out = run_one(&s);
+        let ctx = DoContext { session: "sess" };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        assert!(out.contains("--session sess eval"), "got: {out}");
         assert!(
-            out.contains("--session sess find role button click --name Save"),
+            !out.contains("find role button click --name Save"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn click_role_button_uses_named_control_click_before_find_role() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        let body = format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\nif [ \"$3\" = find ]; then exit 1; fi\nif [ \"$3\" = eval ]; then printf true; exit 0; fi\nexit 0\n",
+            log.display()
+        );
+        let bin = write_exec(tmp.path(), "agent-browser", &body);
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "click",
+            "on": { "role": "button", "name": "Login" }
+        }));
+        let ctx = DoContext { session: "sess" };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        assert!(out.contains("--session sess eval"), "got: {out}");
+        assert!(out.contains("requestSubmit"), "got: {out}");
+        assert!(
+            !out.contains("find role button click --name Login"),
             "got: {out}"
         );
     }
@@ -666,6 +832,38 @@ mod tests {
             out.contains("--session sess find role textbox fill --name Email a@b"),
             "got: {out}"
         );
+    }
+
+    #[test]
+    fn type_role_textbox_miss_falls_back_to_named_control_fill() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        let body = format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\nif [ \"$3\" = find ]; then exit 1; fi\nif [ \"$3\" = eval ]; then printf true; exit 0; fi\nexit 0\n",
+            log.display()
+        );
+        let bin = write_exec(tmp.path(), "agent-browser", &body);
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "type",
+            "on": { "role": "textbox", "name": "Username" },
+            "value": { "from": "literal", "literal": "standard_user" }
+        }));
+        let ctx = DoContext { session: "sess" };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        assert!(
+            out.contains("--session sess find role textbox fill --name Username standard_user"),
+            "got: {out}"
+        );
+        assert!(out.contains("--session sess eval"), "got: {out}");
+        assert!(out.contains("placeholder"), "got: {out}");
     }
 
     #[test]
@@ -710,14 +908,14 @@ mod tests {
     }
 
     #[test]
-    fn raw_css_locator_uses_find_css() {
+    fn raw_css_locator_uses_native_selector_click() {
         let s = parse(json!({
             "id": "s1", "intent": "x", "kind": "do", "verb": "click",
             "on": { "raw": { "kind": "css", "value": "button.save" }, "reason": "no aria role" }
         }));
         let out = run_one(&s);
         assert!(
-            out.contains("--session sess find css button.save click"),
+            out.contains("--session sess click button.save"),
             "got: {out}"
         );
     }
@@ -730,7 +928,7 @@ mod tests {
         }));
         let out = run_one(&s);
         assert!(
-            out.contains("find css [data-testid=\"save-btn\"] click"),
+            out.contains("click [data-testid=\"save-btn\"]"),
             "got: {out}"
         );
     }

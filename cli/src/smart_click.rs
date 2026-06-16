@@ -39,8 +39,11 @@ pub fn run(args: &[String]) -> Result<u8> {
 
     // Probe role+name quietly so the user only sees one clear message
     // when we recover (or one clear failure when we don't).
-    let click_outcome =
-        browser::find_role_act_quiet(&session, &opts.role, &opts.name, RoleAct::Click, None);
+    let click_outcome = if try_named_control_click(&session, &opts.role, &opts.name)? {
+        Ok(())
+    } else {
+        browser::find_role_act_quiet(&session, &opts.role, &opts.name, RoleAct::Click, None)
+    };
     enum Recovery {
         /// Role+name worked first try. Record as clickRole.
         None,
@@ -169,6 +172,64 @@ fn try_text_fallback(session: &str, name: &str) -> Option<String> {
     None
 }
 
+/// Named buttons/links can be present in the snapshot while agent-browser's
+/// click lands without triggering app handlers. Prefer native DOM activation
+/// for common controls; fall back to agent-browser's role/text/ref ladder.
+fn try_named_control_click(session: &str, role: &str, name: &str) -> Result<bool> {
+    if role != "button" && role != "link" {
+        return Ok(false);
+    }
+    let selector = if role == "link" {
+        "a,[role=link]"
+    } else {
+        "button,input[type=button],input[type=submit],input[type=reset],[role=button]"
+    };
+    let expr = format!(
+        r#"(() => {{
+  const want = {name_lit}.toLowerCase();
+  const text = (s) => (s || '').trim().toLowerCase();
+  const candidates = Array.from(document.querySelectorAll({selector_lit}));
+  const primary = (node) => [
+    node.innerText,
+    node.textContent,
+    node.value,
+    node.getAttribute('aria-label'),
+    node.getAttribute('name'),
+  ].some((candidate) => text(candidate) === want);
+  const secondary = (node) => want.length >= 3 && [
+    node.innerText,
+    node.textContent,
+    node.value,
+    node.getAttribute('aria-label'),
+    node.getAttribute('name'),
+    node.id,
+    node.getAttribute('data-test'),
+    node.getAttribute('data-testid'),
+  ].some((candidate) => text(candidate).includes(want));
+  const el = candidates.find(primary) || candidates.find(secondary);
+  if (!el) return false;
+  const form = el.form || el.closest('form');
+  const isSubmit = el.tagName === 'BUTTON' || (el.tagName === 'INPUT' && ['submit', 'button', 'reset'].includes((el.type || '').toLowerCase()));
+  if (form && isSubmit && typeof form.requestSubmit === 'function') {{
+    form.requestSubmit(el);
+  }} else {{
+    el.dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true, cancelable: true, view: window }}));
+    el.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true, cancelable: true, view: window }}));
+    el.click();
+  }}
+  return true;
+}})()"#,
+        name_lit = json_str(name),
+        selector_lit = json_str(selector)
+    );
+    let out = browser::eval_expression(session, &expr)?;
+    Ok(out.trim() == "true")
+}
+
+fn json_str(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into())
+}
+
 /// Final fallback rung: take a fresh ARIA snapshot, find the line that
 /// matches `<role> "<name>" [... ref=eN]`, and click `@eN`. This
 /// bypasses agent-browser's role engine and visible-text matcher
@@ -289,6 +350,17 @@ mod tests {
         std::env::set_var(ab::BIN_ENV, &bin);
         ab::_reset_bin_cache_for_tests();
     }
+
+    fn install_fake_eval_true(dir: &Path, log: &Path) {
+        let body = format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\nif [ \"$3\" = \"eval\" ]; then echo true; fi\nexit 0\n",
+            log.display()
+        );
+        let bin = write_exec(dir, &body);
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+    }
+
     fn clear_fake() {
         std::env::remove_var(ab::BIN_ENV);
         ab::_reset_bin_cache_for_tests();
@@ -409,6 +481,38 @@ mod tests {
         let buf_path = rec.join("scenario.steps.jsonl");
         let buf = fs::read(&buf_path).unwrap_or_default();
         assert!(buf.is_empty(), "no row should be appended with --no-record");
+
+        std::env::remove_var(paths::SCENARIOS_DIR_ENV);
+        std::env::remove_var(paths::RECORD_DIR_ENV);
+        clear_fake();
+    }
+
+    #[test]
+    fn click_button_prefers_named_control_activation() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var(paths::SCENARIOS_DIR_ENV, tmp.path());
+        let rec = tmp.path().join("rec");
+        std::env::set_var(paths::RECORD_DIR_ENV, &rec);
+        let log = tmp.path().join("ab.log");
+        install_fake_eval_true(tmp.path(), &log);
+        write_env(&rec, "j3");
+
+        run(&["Add to cart".into()]).unwrap();
+        let invocation = fs::read_to_string(&log).unwrap();
+        assert!(
+            invocation.contains("--session default eval"),
+            "got: {invocation}"
+        );
+        assert!(
+            !invocation.contains("find role button click --name Add to cart"),
+            "got: {invocation}"
+        );
+        let buf = fs::read_to_string(rec.join("scenario.steps.jsonl")).unwrap();
+        let row: Json = serde_json::from_str(buf.lines().next().unwrap()).unwrap();
+        assert_eq!(row["payload"]["method"], "clickRole");
+        assert_eq!(row["payload"]["args"][0], "button");
+        assert_eq!(row["payload"]["args"][1], "Add to cart");
 
         std::env::remove_var(paths::SCENARIOS_DIR_ENV);
         std::env::remove_var(paths::RECORD_DIR_ENV);
