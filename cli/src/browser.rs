@@ -429,6 +429,28 @@ pub fn find_css_act(
     Ok(())
 }
 
+/// Act on an element using agent-browser's native selector verbs. Newer
+/// agent-browser versions do not expose `find css`; the top-level verbs
+/// accept CSS selectors directly.
+pub fn selector_act(
+    session: &str,
+    selector: &str,
+    act: RoleAct,
+    value: Option<&str>,
+) -> Result<(), AgentBrowserError> {
+    match act {
+        RoleAct::Click => run(session, ["click", selector], RunOpts::new()).map(|_| ()),
+        RoleAct::Hover => run(session, ["hover", selector], RunOpts::new()).map(|_| ()),
+        RoleAct::Focus => run(session, ["focus", selector], RunOpts::new()).map(|_| ()),
+        RoleAct::Fill => run(
+            session,
+            ["fill", selector, value.unwrap_or("")],
+            RunOpts::new(),
+        )
+        .map(|_| ()),
+    }
+}
+
 /// Act on an element matched by an XPath expression.
 pub fn find_xpath_act(
     session: &str,
