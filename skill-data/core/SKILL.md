@@ -55,11 +55,13 @@ Drive the tab via CDP. Two complementary modes:
 
 Recording is **strictly serial**. One step at a time, in this exact order:
 
+Use one browser session for the whole recording. If you drive any action manually with `agent-browser --session <name>`, that `<name>` must match the session passed to `agent-qa start --session <name>`; otherwise `record-step` and `smart-click` will observe/click a different tab.
+
 1. **Snapshot first** to see the page's accessibility tree and pick a target by `[ref=eXX]` or by role + accessible name:
    ```bash
    agent-browser --session <name> snapshot | less
    ```
-2. **Drive the action.** Use `agent-qa smart-click "<accessible name>"` / `agent-qa fill-unique` when they apply (one call: drives the browser AND records). When they don't (e.g. role+name lookup misses, click by snapshot ref, etc.), drive the browser yourself with `agent-browser <verb>` then call `record-step` immediately afterwards.
+2. **Drive the action.** Use `agent-qa smart-click "<accessible name>"` / `agent-qa fill-unique` when they apply (one call: drives the browser AND records). `fill-unique` only applies to newly-created values whose template contains `{{vars._unique}}`; fixed credentials and existing values are plain fills. When helpers don't apply (e.g. fixed username/password, role+name lookup misses, click by snapshot ref, etc.), drive the browser yourself with `agent-browser <verb>` then call `record-step` immediately afterwards.
 3. **Wait for `record-step` to return successfully** before driving the next action.
 
 `record-step` validates the trigger payload up front (allow-listed methods, required fields), so typos fail at the record site with a copy-pasteable hint. It does NOT drive the browser — it only writes the row + the per-step ARIA snapshot + screenshot sidecars.
@@ -118,8 +120,8 @@ When `smart-click` (or any verb that issues CDP eval calls) fails with an intern
 
 ## Prerequisites
 
-- An authenticated `agent-browser` session pointed at the target app. The default profile is `default-user` (resolves to session `default-user-session`); a vendor plugin may register others — run `agent-qa profile-list` to see what's defined and which is the default. **Always look first**: `agent-browser doctor` lists every live daemon under `Daemons`; `agent-qa profile-status <profile>` reports `authenticated` when the session is ready. If a session is already running, REUSE IT — every `agent-qa` verb (record, replay, inspect) attaches to the existing daemon. Don't claim you have no session before running those two probes.
-- If the session is missing or lands on a login page, run `agent-qa profile-bootstrap <profile>` (uses the registered auth plugin, if any; see `agent-qa skills get profiles`).
+- A live `agent-browser` session pointed at the target app. If the scenario starts after login, use a registered authenticated profile: run `agent-qa profile-list`, then `agent-qa profile-status <profile>`, and bootstrap only registered profiles with `agent-qa profile-bootstrap <profile>` when needed. If the scenario itself starts at a public login page, do **not** bootstrap a profile; open the URL and record the username/password/login gestures as ordinary steps. `agent-browser doctor` lists every live daemon under `Daemons`; if a session is already running, REUSE IT.
+- If `profile-list` says no profiles are registered, do not run `profile-bootstrap default-user`. Either record from the public entry URL the user gave you, or ask before creating a profile. `profile-bootstrap` requires a prior `profile-add`/plugin registration.
 - Known target routes — if a route-catalog skill is registered (e.g. a vendor `pages` skill via `[skills] extra-dirs`), load `agent-qa skills get pages` and use the registered URLs instead of guessing. If your target route isn't in that catalog — or no such skill is registered — just use the URL the user gave you and move on.
 
 ## What ships with agent-qa
@@ -150,19 +152,24 @@ Success signal: bootstrap ends with `[bootstrap:default-user] ready (...)`; `pro
 #    Setup/teardown setup (seed N entities, flip a feature flag, run a gql
 #    mutation before step 0 / after the run) lives inline in `scenario.json` as
 #    `setup` / `teardown`. The phase 7 cutover removed `--prep`.
-SID=$(agent-qa start "sign in and assert the dashboard loads")
+SESSION=default-user-session
+SID=$(agent-qa start "sign in and assert the dashboard loads" --session "$SESSION")
 
 # 2. Navigate to the entry route. `record-step navigation` records the
 #    intent; `agent-browser open` actually drives the tab.
-agent-browser --session default-user-session open 'https://example.com/'
+agent-browser --session "$SESSION" open 'https://example.com/'
 agent-qa record-step navigation '{"route":"https://example.com/"}'
 
 # 3. Drive the form ONE GESTURE AT A TIME, recording after each.
 #    smart-click both drives and records when role+name resolves cleanly.
 agent-qa smart-click "Sign in"
 
-agent-qa fill-unique "Email"    --template "qa-{{vars._unique}}@example.com" --save-as email
-agent-qa fill-unique "Password" --template "hunter2" --save-as pw
+# Unique newly-created values: use fill-unique. The template MUST contain {{vars._unique}}.
+agent-qa fill-unique "Email" --template "qa-{{vars._unique}}@example.com" --save-as email
+
+# Fixed credentials / existing values: drive the fill, then record a literal fillByLabel step.
+agent-browser --session "$SESSION" fill "Password" "hunter2"
+agent-qa record-step action '{"method":"fillByLabel","args":["Password","hunter2"]}'
 
 agent-qa smart-click "Submit"     # the submit
 

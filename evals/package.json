@@ -1,0 +1,14 @@
+{
+  "name": "agent-qa-evals",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "eval": "bun run saucedemo.ts",
+    "eval:saucedemo": "bun run saucedemo.ts",
+    "eval:json": "bun run saucedemo.ts --json"
+  },
+  "devDependencies": {
+    "bun-types": "^1.3.12"
+  }
+}
