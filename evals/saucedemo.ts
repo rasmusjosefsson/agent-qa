@@ -34,11 +34,17 @@ const repoRoot = resolve(__dirname, "..");
 const defaultModel = process.env.AGENT_QA_EVAL_MODEL || "github-copilot/gpt-5.1-mini";
 const defaultProvider = (process.env.AGENT_QA_EVAL_PROVIDER || "opencode") as Provider;
 
-const USER_PROMPT = `use the agent-qa skill, go to https://www.saucedemo.com/ login as standard user, shop one item, checkout and finish the checkout record the full flow
+const USER_PROMPT = `Use the agent-qa skill to record and replay this full checkout flow:
 
-when we face issue we need to stop, as we maybe need to improve our agent-qa framework...
-
-in short im trying to improve the agent-qa framework here, and need a way to improve it...`;
+1. Navigate to https://www.saucedemo.com/
+2. Log in with username standard_user and password secret_sauce.
+3. Add exactly one item to the cart.
+4. Open the cart.
+5. Start checkout.
+6. Fill checkout information with first name Test, last name User, and postal code 12345.
+7. Continue checkout.
+8. Finish checkout.
+9. Verify the final checkout confirmation page is reached.`;
 
 function parseArgs(args: string[]): Options {
   const options: Options = {
