@@ -58,7 +58,7 @@ Usage:
 Kinds and payload shapes:
   navigation   {{\"route\":\"<url>\"}}
   action       {{\"method\":\"<m>\",\"args\":[...]}}
-  wait         {{\"condition\":{{\"kind\":\"<duration|selector|text|url>\",...}}}}
+  wait         {{\"condition\":{{\"kind\":\"<duration|selector|selectorAbsent|text|url>\",...}}}}
   assert       {{\"kind\":\"<present|absent|url>\",\"args\":[...],\"intent\":\"...\"}}
 
 Allow-listed action methods:

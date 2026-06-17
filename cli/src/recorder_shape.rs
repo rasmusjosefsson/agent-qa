@@ -75,7 +75,8 @@ pub const RECORDER_ACTION_METHODS: &[&str] = &[
 pub const RECORDER_ASSERT_KINDS: &[&str] = &["present", "absent", "url"];
 
 /// Allow-listed wait condition kinds.
-pub const WAIT_CONDITION_KINDS: &[&str] = &["duration", "selector", "text", "url"];
+pub const WAIT_CONDITION_KINDS: &[&str] =
+    &["duration", "selector", "selectorAbsent", "text", "url"];
 
 /// Validate a trigger payload at record time. Cheap structural checks
 /// only — the canonical translation lives in [`map_row`] and runs at
@@ -385,6 +386,22 @@ fn map_wait(p: &Json, step_id: &str) -> Result<Json> {
                 }),
             ))
         }
+        "selectorAbsent" => {
+            let sel = cond
+                .get("selector")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    anyhow!("wait condition selectorAbsent requires 'selector' string")
+                })?;
+            Ok(make_check(
+                step_id,
+                intent.unwrap_or_else(|| format!("wait for css selector '{sel}' to be hidden")),
+                json!({
+                    "subject": { "element": raw_locator("css", sel, "recorder waited on selector absence") },
+                    "predicate": "isHidden",
+                }),
+            ))
+        }
         "text" => {
             let text = cond
                 .get("text")
@@ -629,6 +646,19 @@ mod tests {
         assert_eq!(step["claim"]["subject"]["url"], true);
         assert_eq!(step["claim"]["predicate"], "matches");
         assert_eq!(step["claim"]["value"], "/sport");
+    }
+
+    #[test]
+    fn map_wait_selector_absent_emits_raw_css_ishidden() {
+        let row = json!({"condition": {"kind": "selectorAbsent", "selector": "[data-testid=add-account-button]"}});
+        let step = map_row("wait", &row, "s4").unwrap();
+        assert_eq!(step["kind"], "check");
+        assert_eq!(step["claim"]["subject"]["element"]["raw"]["kind"], "css");
+        assert_eq!(
+            step["claim"]["subject"]["element"]["raw"]["value"],
+            "[data-testid=add-account-button]"
+        );
+        assert_eq!(step["claim"]["predicate"], "isHidden");
     }
 
     #[test]

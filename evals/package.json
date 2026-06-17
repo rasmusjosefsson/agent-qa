@@ -4,9 +4,20 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "eval": "bun run saucedemo.ts",
+    "eval": "bun run run.ts",
     "eval:saucedemo": "bun run saucedemo.ts",
-    "eval:json": "bun run saucedemo.ts --json"
+    "eval:qaplayground": "bun run run.ts --suite qaplayground",
+    "golden:forms:tc01": "bun run golden/forms-tc01.ts",
+    "golden:forms:tc02": "bun run golden/forms-tc02.ts",
+    "golden:forms:tc03": "bun run golden/forms-tc03.ts",
+    "golden:forms:tc04": "bun run golden/forms-tc04.ts",
+    "golden:forms:tc05": "bun run golden/forms-tc05.ts",
+    "golden:bank:login:tc01": "bun run golden/bank-login-tc01.ts",
+    "golden:bank:login:tc02": "bun run golden/bank-login-tc02.ts",
+    "golden:bank:login:tc03": "bun run golden/bank-login-tc03.ts",
+    "golden:bank:login:tc04": "bun run golden/bank-login-tc04.ts",
+    "golden:bank:login:tc05": "bun run golden/bank-login-tc05.ts",
+    "eval:json": "bun run run.ts --json"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"

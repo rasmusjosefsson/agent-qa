@@ -80,7 +80,7 @@ Four trigger kinds; `flush` translates each row into a scenario/2 step.
 |--------------|----------------------------------------------------------------------------|
 | `navigation` | `{"route":"<url>"}`                                                        |
 | `action`     | `{"method":"<m>","args":[…],"intent":"<optional>"}`                          |
-| `wait`       | `{"condition":{"kind":"duration\|selector\|text\|url",…}}`                     |
+| `wait`       | `{"condition":{"kind":"duration\|selector\|selectorAbsent\|text\|url",…}}`     |
 | `assert`     | `{"kind":"present\|absent\|url","args":[…],"intent":"<required>"}`             |
 
 **Allow-listed action methods:** `clickRole`, `clickByText`, `clickByLabel`, `clickSelector`, `fillByLabel`, `fillBySelector`, `pressKey`, `submit`, `selectByRole`, `scrollIntoViewByText`, `navigate`. Anything else fails at record time.

@@ -560,6 +560,34 @@ fn try_named_control_click(session: &str, role: &str, name: &str) -> anyhow::Res
     Ok(out.trim() == "true")
 }
 
+/// agent-browser's top-level `click <selector>` can report success for a
+/// submit button without dispatching the form's submit path. Prefer the
+/// browser-native mouse/click sequence for native controls, then let the
+/// caller fall back to agent-browser for ordinary DOM targets.
+fn try_selector_native_click(session: &str, selector: &str) -> anyhow::Result<bool> {
+    let expr = format!(
+        r#"(() => {{
+  const el = document.querySelector({selector_lit});
+  if (!el) return false;
+  const tag = el.tagName;
+  const type = (el.getAttribute('type') || '').toLowerCase();
+  const role = (el.getAttribute('role') || '').toLowerCase();
+  const isNativeControl = tag === 'BUTTON'
+    || tag === 'A'
+    || (tag === 'INPUT' && ['submit', 'button', 'reset', 'checkbox', 'radio'].includes(type))
+    || ['button', 'checkbox', 'radio', 'link'].includes(role);
+  if (!isNativeControl) return false;
+  el.dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true, cancelable: true, view: window }}));
+  el.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true, cancelable: true, view: window }}));
+  el.click();
+  return true;
+}})()"#,
+        selector_lit = json_str(selector)
+    );
+    let out = browser::eval_expression(session, &expr)?;
+    Ok(out.trim() == "true")
+}
+
 /// Final replay-side fallback: snapshot the page, find
 /// `<role> "<name>" [ref=eN]`, click `@eN`. Same rationale as
 /// `smart_click::try_snapshot_fallback` — see that for the why.
@@ -663,14 +691,25 @@ fn act_on_locator(
             let v = crate::value::substitute_scenario_vars(&raw.raw.value, scope);
             match &raw.raw.kind {
                 RawLocatorKind::Css => {
-                    browser::selector_act(session, &v, act, value)?;
+                    if matches!(act, RoleAct::Click) && try_selector_native_click(session, &v)? {
+                        eprintln!(
+                            "[v2-replay] css selector '{}' activated via native DOM click",
+                            v
+                        );
+                    } else {
+                        browser::selector_act(session, &v, act, value)?;
+                    }
                 }
                 RawLocatorKind::Xpath => {
                     browser::find_xpath_act(session, &v, act, value)?;
                 }
                 RawLocatorKind::TestId => {
                     let css = format!("[data-testid=\"{}\"]", v.replace('"', "\\\""));
-                    browser::selector_act(session, &css, act, value)?;
+                    if matches!(act, RoleAct::Click) && try_selector_native_click(session, &css)? {
+                        eprintln!("[v2-replay] testId '{}' activated via native DOM click", v);
+                    } else {
+                        browser::selector_act(session, &css, act, value)?;
+                    }
                 }
                 RawLocatorKind::Text => {
                     // agent-browser's `find text` doesn't support focus; for
@@ -918,6 +957,27 @@ mod tests {
             out.contains("--session sess click button.save"),
             "got: {out}"
         );
+    }
+
+    #[test]
+    fn raw_css_click_prefers_native_dom_click_when_selector_resolves() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake_eval_true(tmp.path(), &log);
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "click",
+            "on": { "raw": { "kind": "css", "value": "button[type=submit]" }, "reason": "no aria role" }
+        }));
+        let ctx = DoContext { session: "sess" };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        assert!(out.contains("--session sess eval"), "got: {out}");
+        assert!(out.contains("MouseEvent"), "got: {out}");
+        assert!(!out.contains("click button[type=submit]"), "got: {out}");
     }
 
     #[test]

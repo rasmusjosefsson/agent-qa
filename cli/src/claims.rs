@@ -236,14 +236,14 @@ fn locator_resolves(session: &str, loc: &Locator, scope: &mut ValueScope) -> Res
             let v = substitute_scenario_vars(&raw.raw.value, scope);
             match &raw.raw.kind {
                 RawLocatorKind::Css => {
-                    browser::find_css_act(session, &v, RoleAct::Focus, None)?;
+                    css_presence_probe(session, &v)?;
                 }
                 RawLocatorKind::Xpath => {
                     browser::find_xpath_act(session, &v, RoleAct::Focus, None)?;
                 }
                 RawLocatorKind::TestId => {
                     let css = format!("[data-testid=\"{}\"]", v.replace('"', "\\\""));
-                    browser::find_css_act(session, &css, RoleAct::Focus, None)?;
+                    css_presence_probe(session, &css)?;
                 }
                 RawLocatorKind::Text => {
                     // `find text` in agent-browser doesn't support focus.
@@ -261,6 +261,15 @@ fn locator_resolves(session: &str, loc: &Locator, scope: &mut ValueScope) -> Res
             Ok(())
         }
     }
+}
+
+fn css_presence_probe(session: &str, selector: &str) -> Result<()> {
+    let expr = format!(
+        "(() => {{ const selector = {q}; const hit = document.querySelector(selector); if (!hit) throw new Error('selector not found: ' + selector); }})()",
+        q = serde_json::to_string(selector).expect("string serializes")
+    );
+    browser::eval_expression(session, &expr)?;
+    Ok(())
 }
 
 /// Presence probe by visible text. Tries the full name first, then each
