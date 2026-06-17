@@ -818,7 +818,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let log = tmp.path().join("ab.log");
         install_fake(tmp.path(), &log);
-        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
         let mut scope = ValueScope::default();
         let _out = dispatch_do(s, &ctx, &mut scope).unwrap();
         let lines = fs::read_to_string(&log).unwrap();
@@ -849,7 +852,10 @@ mod tests {
             "id": "s1", "intent": "x", "kind": "do", "verb": "click",
             "on": { "role": "button", "name": "Save" }
         }));
-        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
 
@@ -879,7 +885,10 @@ mod tests {
             "id": "s1", "intent": "x", "kind": "do", "verb": "click",
             "on": { "role": "button", "name": "Login" }
         }));
-        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
 
@@ -925,7 +934,10 @@ mod tests {
             "on": { "role": "textbox", "name": "Username" },
             "value": { "from": "literal", "literal": "standard_user" }
         }));
-        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
 
@@ -1003,7 +1015,10 @@ mod tests {
             "id": "s1", "intent": "x", "kind": "do", "verb": "click",
             "on": { "raw": { "kind": "css", "value": "button[type=submit]" }, "reason": "no aria role" }
         }));
-        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
 
@@ -1067,7 +1082,10 @@ mod tests {
         let _g = lock_env();
         let tmp = TempDir::new().unwrap();
         install_fake(tmp.path(), &tmp.path().join("ab.log"));
-        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         clear_fake();
@@ -1097,7 +1115,10 @@ mod tests {
             "id": "s1", "intent": "x", "kind": "do", "verb": "read",
             "on": { "raw": { "kind": "css", "value": ".banner" }, "reason": "" }
         }));
-        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
         let mut scope = ValueScope::default();
         let saved = dispatch_do(&s, &ctx, &mut scope).unwrap();
         assert_eq!(saved, Some(serde_json::Value::String("hello world".into())));
@@ -1115,7 +1136,10 @@ mod tests {
         let _g = lock_env();
         let tmp = TempDir::new().unwrap();
         install_fake(tmp.path(), &tmp.path().join("ab.log"));
-        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         clear_fake();
@@ -1149,7 +1173,10 @@ mod tests {
             "id": "s1", "intent": "x", "kind": "do", "verb": "callGql",
             "params": { "url": "https://api/graphql", "query": "query A { x }" }
         }));
-        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
         let mut scope = ValueScope::default();
         let saved = dispatch_do(&s, &ctx, &mut scope).unwrap();
         // Returned value is the parsed body; data.x == 1.
@@ -1169,7 +1196,7 @@ mod tests {
         }));
         let out = run_one(&s);
         assert!(out.contains("select#country"), "got: {out}");
-        assert!(out.contains("el.value = \"US\""), "got: {out}");
+        assert!(out.contains("values.includes(option.value)"), "got: {out}");
         assert!(out.contains("new Event('change'"), "got: {out}");
     }
 
@@ -1183,7 +1210,10 @@ mod tests {
         let _g = lock_env();
         let tmp = TempDir::new().unwrap();
         install_fake(tmp.path(), &tmp.path().join("ab.log"));
-        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         clear_fake();
@@ -1205,13 +1235,19 @@ mod tests {
             "on": { "raw": { "kind": "css", "value": "input#file" }, "reason": "" },
             "value": { "from": "literal", "literal": file.display().to_string() }
         }));
-        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
         let out = std::fs::read_to_string(tmp.path().join("ab.log")).unwrap();
         clear_fake();
         let expected = file.canonicalize().unwrap();
-        assert!(out.contains(&format!("upload input#file {}", expected.display())), "got: {out}");
+        assert!(
+            out.contains(&format!("upload input#file {}", expected.display())),
+            "got: {out}"
+        );
     }
 
     #[test]
@@ -1226,13 +1262,19 @@ mod tests {
             "on": { "raw": { "kind": "testId", "value": "file-input" }, "reason": "" },
             "value": { "from": "literal", "literal": file.display().to_string() }
         }));
-        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
         let out = std::fs::read_to_string(tmp.path().join("ab.log")).unwrap();
         clear_fake();
         assert!(
-            out.contains(&format!("upload [data-testid=\"file-input\"] {}", file.canonicalize().unwrap().display())),
+            out.contains(&format!(
+                "upload [data-testid=\"file-input\"] {}",
+                file.canonicalize().unwrap().display()
+            )),
             "got: {out}"
         );
     }
@@ -1251,13 +1293,20 @@ mod tests {
             "on": { "raw": { "kind": "css", "value": "input#file" }, "reason": "" },
             "value": { "from": "literal", "literal": [file_a.display().to_string(), file_b.display().to_string()] }
         }));
-        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
         let out = std::fs::read_to_string(tmp.path().join("ab.log")).unwrap();
         clear_fake();
         assert!(
-            out.contains(&format!("upload input#file {} {}", file_a.canonicalize().unwrap().display(), file_b.canonicalize().unwrap().display())),
+            out.contains(&format!(
+                "upload input#file {} {}",
+                file_a.canonicalize().unwrap().display(),
+                file_b.canonicalize().unwrap().display()
+            )),
             "got: {out}"
         );
     }
@@ -1278,13 +1327,22 @@ mod tests {
             "on": { "raw": { "kind": "css", "value": "input#file" }, "reason": "" },
             "value": { "from": "literal", "literal": "evals/fixtures/upload-valid.txt" }
         }));
-        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
         let out = std::fs::read_to_string(tmp.path().join("ab.log")).unwrap();
         clear_fake();
         std::env::remove_var("AGENT_QA_REPO_ROOT");
-        assert!(out.contains(&format!("upload input#file {}", file.canonicalize().unwrap().display())), "got: {out}");
+        assert!(
+            out.contains(&format!(
+                "upload input#file {}",
+                file.canonicalize().unwrap().display()
+            )),
+            "got: {out}"
+        );
     }
 
     #[test]
@@ -1297,7 +1355,10 @@ mod tests {
         let _g = lock_env();
         let tmp = TempDir::new().unwrap();
         install_fake(tmp.path(), &tmp.path().join("ab.log"));
-        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         clear_fake();
@@ -1317,7 +1378,10 @@ mod tests {
         let _g = lock_env();
         let tmp = TempDir::new().unwrap();
         install_fake(tmp.path(), &tmp.path().join("ab.log"));
-        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         clear_fake();
@@ -1337,7 +1401,10 @@ mod tests {
         let _g = lock_env();
         let tmp = TempDir::new().unwrap();
         install_fake(tmp.path(), &tmp.path().join("ab.log"));
-        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         clear_fake();

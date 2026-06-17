@@ -312,7 +312,9 @@ fn spawn_once(
     } else {
         cmd.stderr(Stdio::inherit());
     }
-    let mut child = cmd.spawn().map_err(|e| AgentBrowserError::Spawn { source: e })?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| AgentBrowserError::Spawn { source: e })?;
     let started = Instant::now();
     loop {
         if child
@@ -350,7 +352,9 @@ fn spawn_once(
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    let status = child.wait().map_err(|e| AgentBrowserError::Spawn { source: e })?;
+    let status = child
+        .wait()
+        .map_err(|e| AgentBrowserError::Spawn { source: e })?;
     let stdout = read_capture_file(stdout_path.as_deref());
     let stderr = read_capture_file(stderr_path.as_deref());
     cleanup_capture_file(stdout_path.as_deref());

@@ -174,7 +174,11 @@ fn record(opts: &Opts) -> Result<StepRow> {
     // Best-effort sidecar capture under <sid>/recording/.
     // Evals can disable this so a slow snapshot/screenshot never blocks
     // recording the scenario contract itself.
-    if std::env::var("AGENT_QA_RECORD_SKIP_SIDECARS").ok().as_deref() != Some("1") {
+    if std::env::var("AGENT_QA_RECORD_SKIP_SIDECARS")
+        .ok()
+        .as_deref()
+        != Some("1")
+    {
         let scenario_dir = paths::scenario_dir(&sid)?;
         let _ = capture_recording_sidecars(&scenario_dir, &row.step_id, &session);
     }

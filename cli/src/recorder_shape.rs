@@ -318,7 +318,9 @@ fn map_action(p: &Json, step_id: &str) -> Result<Json> {
                         .map(|item| {
                             item.as_str()
                                 .map(|s| Json::String(s.to_string()))
-                                .ok_or_else(|| anyhow!("uploadBySelector file paths must be strings"))
+                                .ok_or_else(|| {
+                                    anyhow!("uploadBySelector file paths must be strings")
+                                })
                         })
                         .collect::<Result<Vec<_>>>()?,
                 ),
@@ -330,7 +332,11 @@ fn map_action(p: &Json, step_id: &str) -> Result<Json> {
                 "upload",
                 intent.unwrap_or_else(|| format!("upload file(s) to css '{sel}'")),
                 DoBody {
-                    on: Some(raw_locator("css", &sel, "recorder captured a CSS file input")),
+                    on: Some(raw_locator(
+                        "css",
+                        &sel,
+                        "recorder captured a CSS file input",
+                    )),
                     value: Some(json!({ "from": "literal", "literal": value })),
                     params: None,
                 },
