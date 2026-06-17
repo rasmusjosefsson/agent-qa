@@ -59,10 +59,14 @@ pub const RECORDER_ACTION_METHODS: &[&str] = &[
     "clickByText",
     "clickByLabel",
     "clickSelector",
+    "focusSelector",
     "fillByLabel",
     "fillBySelector",
+    "uploadBySelector",
     "pressKey",
+    "pressSelector",
     "submit",
+    "selectBySelector",
     "selectByRole",
     "scrollIntoViewByText",
     "navigate",
@@ -75,8 +79,14 @@ pub const RECORDER_ACTION_METHODS: &[&str] = &[
 pub const RECORDER_ASSERT_KINDS: &[&str] = &["present", "absent", "url"];
 
 /// Allow-listed wait condition kinds.
-pub const WAIT_CONDITION_KINDS: &[&str] =
-    &["duration", "selector", "selectorAbsent", "text", "url"];
+pub const WAIT_CONDITION_KINDS: &[&str] = &[
+    "duration",
+    "selector",
+    "selectorAbsent",
+    "selectorText",
+    "text",
+    "url",
+];
 
 /// Validate a trigger payload at record time. Cheap structural checks
 /// only — the canonical translation lives in [`map_row`] and runs at
@@ -255,6 +265,19 @@ fn map_action(p: &Json, step_id: &str) -> Result<Json> {
                 },
             ))
         }
+        "focusSelector" => {
+            let sel = first_str(args)?;
+            Ok(make_do(
+                step_id,
+                "focus",
+                intent.unwrap_or_else(|| format!("focus css selector '{sel}'")),
+                DoBody {
+                    on: Some(raw_locator("css", &sel, "recorder captured a CSS selector")),
+                    value: None,
+                    params: None,
+                },
+            ))
+        }
         "fillByLabel" => {
             let (label, value) = pair(args)?;
             let value_str = value.unwrap_or_default();
@@ -283,6 +306,36 @@ fn map_action(p: &Json, step_id: &str) -> Result<Json> {
                 },
             ))
         }
+        "uploadBySelector" => {
+            let sel = arg_str(args, 0)?;
+            let files = args
+                .get(1)
+                .ok_or_else(|| anyhow!("uploadBySelector requires selector and file path(s)"))?;
+            let value = match files {
+                Json::Array(items) => Json::Array(
+                    items
+                        .iter()
+                        .map(|item| {
+                            item.as_str()
+                                .map(|s| Json::String(s.to_string()))
+                                .ok_or_else(|| anyhow!("uploadBySelector file paths must be strings"))
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                ),
+                Json::String(value) => Json::String(value.clone()),
+                _ => bail!("uploadBySelector file path must be a string or string array"),
+            };
+            Ok(make_do(
+                step_id,
+                "upload",
+                intent.unwrap_or_else(|| format!("upload file(s) to css '{sel}'")),
+                DoBody {
+                    on: Some(raw_locator("css", &sel, "recorder captured a CSS file input")),
+                    value: Some(json!({ "from": "literal", "literal": value })),
+                    params: None,
+                },
+            ))
+        }
         "pressKey" => {
             let key = first_str(args)?;
             Ok(make_do(
@@ -292,6 +345,20 @@ fn map_action(p: &Json, step_id: &str) -> Result<Json> {
                 DoBody {
                     on: None,
                     value: Some(literal_value(&key)),
+                    params: None,
+                },
+            ))
+        }
+        "pressSelector" => {
+            let (sel, key) = pair(args)?;
+            let key_str = key.unwrap_or_default();
+            Ok(make_do(
+                step_id,
+                "press",
+                intent.unwrap_or_else(|| format!("press {key_str} on css selector '{sel}'")),
+                DoBody {
+                    on: Some(raw_locator("css", &sel, "recorder captured a CSS selector")),
+                    value: Some(literal_value(&key_str)),
                     params: None,
                 },
             ))
@@ -306,6 +373,34 @@ fn map_action(p: &Json, step_id: &str) -> Result<Json> {
                 params: None,
             },
         )),
+        "selectBySelector" => {
+            let sel = arg_str(args, 0)?;
+            let option = match args
+                .get(1)
+                .ok_or_else(|| anyhow!("selectBySelector requires selector and option value"))?
+            {
+                Json::Array(items) => items
+                    .iter()
+                    .map(|item| {
+                        item.as_str()
+                            .ok_or_else(|| anyhow!("selectBySelector array values must be strings"))
+                    })
+                    .collect::<Result<Vec<_>>>()?
+                    .join(","),
+                Json::String(value) => value.clone(),
+                _ => bail!("selectBySelector option value must be a string or string array"),
+            };
+            Ok(make_do(
+                step_id,
+                "select",
+                intent.unwrap_or_else(|| format!("select option from css '{sel}'")),
+                DoBody {
+                    on: Some(raw_locator("css", &sel, "recorder captured a CSS select")),
+                    value: Some(literal_value(&option)),
+                    params: None,
+                },
+            ))
+        }
         "selectByRole" => {
             let role = arg_str(args, 0)?;
             let name = arg_str(args, 1).ok();
@@ -399,6 +494,27 @@ fn map_wait(p: &Json, step_id: &str) -> Result<Json> {
                 json!({
                     "subject": { "element": raw_locator("css", sel, "recorder waited on selector absence") },
                     "predicate": "isHidden",
+                }),
+            ))
+        }
+        "selectorText" => {
+            let sel = cond
+                .get("selector")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("wait condition selectorText requires 'selector' string"))?;
+            let text = cond
+                .get("text")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("wait condition selectorText requires 'text' string"))?;
+            Ok(make_check(
+                step_id,
+                intent.unwrap_or_else(|| {
+                    format!("wait for css selector '{sel}' to contain '{text}'")
+                }),
+                json!({
+                    "subject": { "element": raw_locator("css", sel, "recorder waited on selector text"), "attribute": "text" },
+                    "predicate": "contains",
+                    "value": text,
                 }),
             ))
         }
@@ -631,6 +747,67 @@ mod tests {
     }
 
     #[test]
+    fn map_action_upload_by_selector_emits_upload() {
+        let row = json!({
+            "method": "uploadBySelector",
+            "args": ["#file-upload", "evals/fixtures/upload-valid.txt"],
+        });
+        let step = map_row("action", &row, "s2").unwrap();
+        assert_eq!(step["verb"], "upload");
+        assert_eq!(step["on"]["raw"]["kind"], "css");
+        assert_eq!(step["on"]["raw"]["value"], "#file-upload");
+        assert_eq!(step["value"]["literal"], "evals/fixtures/upload-valid.txt");
+    }
+
+    #[test]
+    fn map_action_upload_by_selector_accepts_multiple_files() {
+        let row = json!({
+            "method": "uploadBySelector",
+            "args": ["#file-upload", ["one.txt", "two.txt"]],
+        });
+        let step = map_row("action", &row, "s2").unwrap();
+        assert_eq!(step["verb"], "upload");
+        assert_eq!(step["value"]["literal"], json!(["one.txt", "two.txt"]));
+    }
+
+    #[test]
+    fn map_action_focus_by_selector_emits_raw_css_focus() {
+        let row = json!({"method": "focusSelector", "args": ["#dropdown-fruit"]});
+        let step = map_row("action", &row, "s2").unwrap();
+        assert_eq!(step["verb"], "focus");
+        assert_eq!(step["on"]["raw"]["kind"], "css");
+        assert_eq!(step["on"]["raw"]["value"], "#dropdown-fruit");
+    }
+
+    #[test]
+    fn map_action_press_selector_emits_raw_css_press() {
+        let row = json!({"method": "pressSelector", "args": ["#dropdown-fruit", "Enter"]});
+        let step = map_row("action", &row, "s2").unwrap();
+        assert_eq!(step["verb"], "press");
+        assert_eq!(step["on"]["raw"]["kind"], "css");
+        assert_eq!(step["on"]["raw"]["value"], "#dropdown-fruit");
+        assert_eq!(step["value"]["literal"], "Enter");
+    }
+
+    #[test]
+    fn map_action_select_by_selector_emits_raw_css_select() {
+        let row = json!({"method": "selectBySelector", "args": ["#dropdown-fruit", "apple"]});
+        let step = map_row("action", &row, "s2").unwrap();
+        assert_eq!(step["verb"], "select");
+        assert_eq!(step["on"]["raw"]["kind"], "css");
+        assert_eq!(step["on"]["raw"]["value"], "#dropdown-fruit");
+        assert_eq!(step["value"]["literal"], "apple");
+    }
+
+    #[test]
+    fn map_action_select_by_selector_joins_literal_array() {
+        let row = json!({"method": "selectBySelector", "args": ["#dropdown-heroes", ["ant-man", "batman"]]});
+        let step = map_row("action", &row, "s2").unwrap();
+        assert_eq!(step["verb"], "select");
+        assert_eq!(step["value"]["literal"], "ant-man,batman");
+    }
+
+    #[test]
     fn map_wait_duration_emits_do_wait_with_params_ms() {
         let row = json!({"condition": {"kind": "duration", "ms": 250}});
         let step = map_row("wait", &row, "s3").unwrap();
@@ -659,6 +836,18 @@ mod tests {
             "[data-testid=add-account-button]"
         );
         assert_eq!(step["claim"]["predicate"], "isHidden");
+    }
+
+    #[test]
+    fn map_wait_selector_text_emits_raw_css_text_contains() {
+        let row = json!({"condition": {"kind": "selectorText", "selector": "main", "text": "Data Loaded!"}});
+        let step = map_row("wait", &row, "s4").unwrap();
+        assert_eq!(step["kind"], "check");
+        assert_eq!(step["claim"]["subject"]["element"]["raw"]["kind"], "css");
+        assert_eq!(step["claim"]["subject"]["element"]["raw"]["value"], "main");
+        assert_eq!(step["claim"]["subject"]["attribute"], "text");
+        assert_eq!(step["claim"]["predicate"], "contains");
+        assert_eq!(step["claim"]["value"], "Data Loaded!");
     }
 
     #[test]

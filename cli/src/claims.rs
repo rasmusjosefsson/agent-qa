@@ -53,10 +53,18 @@ pub fn dispatch_check(
             attribute,
             of_kind,
         } => {
-            if attribute.is_some() || of_kind.is_some() {
-                bail!("element claim with attribute/ofKind is not yet supported");
+            if of_kind.is_some() {
+                bail!("element claim with ofKind is not yet supported");
             }
-            check_element(element, &claim.predicate, ctx, scope, timeout)
+            check_element(
+                element,
+                attribute.as_deref(),
+                &claim.predicate,
+                claim.value.as_ref(),
+                ctx,
+                scope,
+                timeout,
+            )
         }
         ClaimSubject::Url { url: _ } => {
             check_url(&claim.predicate, claim.value.as_ref(), ctx, scope, timeout)
@@ -154,11 +162,42 @@ fn check_flag(
 
 fn check_element(
     loc: &Locator,
+    attribute: Option<&str>,
     predicate: &Predicate,
+    expected: Option<&Json>,
     ctx: &CheckContext,
     scope: &mut ValueScope,
     timeout: Duration,
 ) -> Result<()> {
+    if let Some(attribute) = attribute {
+        if attribute != "text" {
+            bail!("element claim with attribute {attribute:?} is not yet supported");
+        }
+        let expected = expected.ok_or_else(|| {
+            anyhow!("element text claim with predicate '{predicate:?}' requires 'value'")
+        })?;
+        let need = substitute_scenario_vars(&value_to_string(expected), scope);
+        let deadline = Instant::now() + timeout;
+        let mut last_text = String::new();
+        let mut last_err: Option<anyhow::Error> = None;
+        while Instant::now() < deadline {
+            match read_element_text(ctx.session, loc, scope) {
+                Ok(actual) => {
+                    last_text = actual.clone();
+                    match compare_string(predicate, &actual, &need) {
+                        Ok(()) => return Ok(()),
+                        Err(err) => last_err = Some(err),
+                    }
+                }
+                Err(err) => last_err = Some(err),
+            }
+            thread::sleep(POLL_INTERVAL);
+        }
+        return Err(last_err.unwrap_or_else(|| {
+            anyhow!("element text claim timed out; last seen text={last_text:?}")
+        }));
+    }
+
     match predicate {
         Predicate::IsVisible | Predicate::Exists => {
             poll_until(timeout, |_| locator_resolves(ctx.session, loc, scope))
@@ -175,6 +214,26 @@ fn check_element(
             bail!("expected {predicate:?}, but element still present");
         }
         other => bail!("element subject does not yet support predicate '{other:?}'"),
+    }
+}
+
+fn read_element_text(session: &str, loc: &Locator, scope: &mut ValueScope) -> Result<String> {
+    match loc {
+        Locator::Raw(raw) => {
+            let v = substitute_scenario_vars(&raw.raw.value, scope);
+            let selector = match &raw.raw.kind {
+                RawLocatorKind::Css => v,
+                RawLocatorKind::TestId => format!("[data-testid=\"{}\"]", v.replace('"', "\\\"")),
+                other => bail!("element text claims do not support raw locator kind {other:?}"),
+            };
+            let expr = format!(
+                "(() => {{ const el = document.querySelector({q}); if (!el) throw new Error('selector not found: ' + {q}); return (el.textContent || '').trim(); }})()",
+                q = serde_json::to_string(&selector).expect("string serializes")
+            );
+            let raw = browser::eval_expression(session, &expr)?;
+            Ok(decode_json_string(raw.trim()))
+        }
+        _ => bail!("element text claims currently require a raw css or testId locator"),
     }
 }
 
@@ -469,7 +528,12 @@ fn compare_string(predicate: &Predicate, actual: &str, need: &str) -> Result<()>
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use crate::browser as ab;
+    use crate::test_util::lock_env;
     use serde_json::json;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use tempfile::TempDir;
 
     fn pred_from_json(j: serde_json::Value) -> Predicate {
         serde_json::from_value(j).unwrap()
@@ -560,6 +624,36 @@ mod tests {
         .unwrap();
         let ctx = CheckContext { session: "s" };
         dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+    }
+
+    #[test]
+    fn element_text_contains_reads_raw_css_text() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let bin = tmp.path().join("agent-browser");
+        fs::write(
+            &bin,
+            "#!/bin/sh\nif [ \"$3\" = eval ]; then printf '%s\\n' '\"Data Loaded!\"'; exit 0; fi\nexit 1\n",
+        )
+        .unwrap();
+        let mut perm = fs::metadata(&bin).unwrap().permissions();
+        perm.set_mode(0o755);
+        fs::set_permissions(&bin, perm).unwrap();
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "element": { "raw": { "kind": "css", "value": "main" }, "reason": "test" }, "attribute": "text" },
+            "predicate": "contains",
+            "value": "Loaded"
+        }))
+        .unwrap();
+        let mut scope = ValueScope::default();
+        let ctx = CheckContext { session: "s" };
+        dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+
+        std::env::remove_var(ab::BIN_ENV);
+        ab::_reset_bin_cache_for_tests();
     }
 
     #[test]

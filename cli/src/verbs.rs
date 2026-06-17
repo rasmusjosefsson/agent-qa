@@ -21,6 +21,7 @@
 
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value as Json;
+use std::path::{Path, PathBuf};
 
 use crate::browser::{self, RoleAct};
 use crate::scenario::{Locator, NameMatch, RawLocatorKind, Step, Value, Verb};
@@ -30,6 +31,7 @@ use crate::verb_shape::assert_verb_shape;
 #[derive(Debug, Clone)]
 pub struct DoContext<'a> {
     pub session: &'a str,
+    pub scenario_dir: &'a Path,
 }
 
 /// Dispatch a single `do` step. Returns `Ok(Some(saved))` if the verb
@@ -114,6 +116,9 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
         }
         Verb::Press => {
             let key = resolve_literal_string(value, scope, "press.value")?;
+            if let Some(loc) = on {
+                act_on_locator(ctx.session, loc, scope, RoleAct::Focus, None)?;
+            }
             browser::press_key(ctx.session, &key)?;
             Ok(None)
         }
@@ -184,9 +189,9 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
         }
         Verb::Upload => {
             let v = resolve_value(value.unwrap(), scope)?;
-            let files =
-                upload_files_from_value(&v).map_err(|e| anyhow!("step '{id}' upload: {e}"))?;
             let selector = upload_selector(on.unwrap(), scope)
+                .map_err(|e| anyhow!("step '{id}' upload: {e}"))?;
+            let files = upload_files_from_value(&v, ctx.scenario_dir)
                 .map_err(|e| anyhow!("step '{id}' upload: {e}"))?;
             browser::upload(ctx.session, &selector, &files)?;
             Ok(None)
@@ -210,11 +215,13 @@ fn select_option(
 ) -> anyhow::Result<()> {
     use anyhow::bail;
     let value_lit = json_str(value);
+    let option_lit = json_str(value);
     let body = |selector_lit: String| -> String {
         format!(
-            "(() => {{ const el = document.querySelector({sel}); if (!el) return; el.value = {val}; el.dispatchEvent(new Event('input', {{ bubbles: true }})); el.dispatchEvent(new Event('change', {{ bubbles: true }})); }})()",
+            "(() => new Promise((resolve, reject) => {{ const el = document.querySelector({sel}); if (!el) return reject(new Error('selector not found: ' + {sel})); if (el.tagName === 'SELECT') {{ const raw = String({val}); const values = raw.includes(',') ? raw.split(',').map((item) => item.trim()).filter(Boolean) : [raw]; for (const option of el.options) option.selected = values.includes(option.value) || values.includes(option.text); el.dispatchEvent(new Event('input', {{ bubbles: true }})); el.dispatchEvent(new Event('change', {{ bubbles: true }})); return resolve(true); }} el.focus(); el.dispatchEvent(new KeyboardEvent('keydown', {{ key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }})); el.dispatchEvent(new KeyboardEvent('keyup', {{ key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }})); setTimeout(() => {{ try {{ const want = {opt}; const options = Array.from(document.querySelectorAll('[role=\"option\"]')); const hit = options.find((node) => (node.textContent || '').trim() === want && node.getClientRects().length > 0); if (!hit) throw new Error('option not found: ' + want); hit.dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true, cancelable: true, view: window }})); hit.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true, cancelable: true, view: window }})); hit.click(); resolve(true); }} catch (err) {{ reject(err); }} }}, 50); }}))()",
             sel = selector_lit,
-            val = value_lit
+            val = value_lit,
+            opt = option_lit,
         )
     };
     let expr = match loc {
@@ -389,7 +396,7 @@ fn upload_selector(loc: &Locator, scope: &mut ValueScope) -> Result<String> {
 /// - JSON string → single-element list
 /// - JSON array of strings → list as-is
 /// - empty string / empty array / other shapes → error
-fn upload_files_from_value(v: &serde_json::Value) -> Result<Vec<String>> {
+fn upload_files_from_value(v: &serde_json::Value, scenario_dir: &Path) -> Result<Vec<String>> {
     let files: Vec<String> = match v {
         serde_json::Value::String(s) => {
             if s.is_empty() {
@@ -420,7 +427,34 @@ fn upload_files_from_value(v: &serde_json::Value) -> Result<Vec<String>> {
     if files.is_empty() {
         bail!("at least one file path is required");
     }
-    Ok(files)
+    files
+        .into_iter()
+        .map(|file| resolve_upload_file(&file, scenario_dir))
+        .collect()
+}
+
+fn resolve_upload_file(file: &str, scenario_dir: &Path) -> Result<String> {
+    let path = PathBuf::from(file);
+    let candidates = if path.is_absolute() {
+        vec![path]
+    } else {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let mut out = vec![cwd.join(&path), scenario_dir.join(&path)];
+        if let Ok(repo_root) = std::env::var("AGENT_QA_REPO_ROOT") {
+            out.push(PathBuf::from(repo_root).join(&path));
+        }
+        out
+    };
+    for candidate in candidates {
+        if candidate.is_file() {
+            return Ok(candidate
+                .canonicalize()
+                .unwrap_or(candidate)
+                .display()
+                .to_string());
+        }
+    }
+    bail!("upload file not found: {file}")
 }
 
 fn json_kind(v: &serde_json::Value) -> &'static str {
@@ -784,7 +818,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let log = tmp.path().join("ab.log");
         install_fake(tmp.path(), &log);
-        let ctx = DoContext { session: "sess" };
+        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
         let mut scope = ValueScope::default();
         let _out = dispatch_do(s, &ctx, &mut scope).unwrap();
         let lines = fs::read_to_string(&log).unwrap();
@@ -815,7 +849,7 @@ mod tests {
             "id": "s1", "intent": "x", "kind": "do", "verb": "click",
             "on": { "role": "button", "name": "Save" }
         }));
-        let ctx = DoContext { session: "sess" };
+        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
 
@@ -845,7 +879,7 @@ mod tests {
             "id": "s1", "intent": "x", "kind": "do", "verb": "click",
             "on": { "role": "button", "name": "Login" }
         }));
-        let ctx = DoContext { session: "sess" };
+        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
 
@@ -891,7 +925,7 @@ mod tests {
             "on": { "role": "textbox", "name": "Username" },
             "value": { "from": "literal", "literal": "standard_user" }
         }));
-        let ctx = DoContext { session: "sess" };
+        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
 
@@ -969,7 +1003,7 @@ mod tests {
             "id": "s1", "intent": "x", "kind": "do", "verb": "click",
             "on": { "raw": { "kind": "css", "value": "button[type=submit]" }, "reason": "no aria role" }
         }));
-        let ctx = DoContext { session: "sess" };
+        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
 
@@ -1033,7 +1067,7 @@ mod tests {
         let _g = lock_env();
         let tmp = TempDir::new().unwrap();
         install_fake(tmp.path(), &tmp.path().join("ab.log"));
-        let ctx = DoContext { session: "sess" };
+        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         clear_fake();
@@ -1063,7 +1097,7 @@ mod tests {
             "id": "s1", "intent": "x", "kind": "do", "verb": "read",
             "on": { "raw": { "kind": "css", "value": ".banner" }, "reason": "" }
         }));
-        let ctx = DoContext { session: "sess" };
+        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
         let mut scope = ValueScope::default();
         let saved = dispatch_do(&s, &ctx, &mut scope).unwrap();
         assert_eq!(saved, Some(serde_json::Value::String("hello world".into())));
@@ -1081,7 +1115,7 @@ mod tests {
         let _g = lock_env();
         let tmp = TempDir::new().unwrap();
         install_fake(tmp.path(), &tmp.path().join("ab.log"));
-        let ctx = DoContext { session: "sess" };
+        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         clear_fake();
@@ -1115,7 +1149,7 @@ mod tests {
             "id": "s1", "intent": "x", "kind": "do", "verb": "callGql",
             "params": { "url": "https://api/graphql", "query": "query A { x }" }
         }));
-        let ctx = DoContext { session: "sess" };
+        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
         let mut scope = ValueScope::default();
         let saved = dispatch_do(&s, &ctx, &mut scope).unwrap();
         // Returned value is the parsed body; data.x == 1.
@@ -1149,7 +1183,7 @@ mod tests {
         let _g = lock_env();
         let tmp = TempDir::new().unwrap();
         install_fake(tmp.path(), &tmp.path().join("ab.log"));
-        let ctx = DoContext { session: "sess" };
+        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         clear_fake();
@@ -1161,41 +1195,96 @@ mod tests {
 
     #[test]
     fn upload_raw_css_dispatches_files() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("a.pdf");
+        std::fs::write(&file, "fixture").unwrap();
+        install_fake(tmp.path(), &tmp.path().join("ab.log"));
         let s = parse(json!({
             "id": "s1", "intent": "attach", "kind": "do", "verb": "upload",
             "on": { "raw": { "kind": "css", "value": "input#file" }, "reason": "" },
-            "value": { "from": "literal", "literal": "/tmp/a.pdf" }
+            "value": { "from": "literal", "literal": file.display().to_string() }
         }));
-        let out = run_one(&s);
-        assert!(out.contains("upload input#file /tmp/a.pdf"), "got: {out}");
+        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+        let out = std::fs::read_to_string(tmp.path().join("ab.log")).unwrap();
+        clear_fake();
+        let expected = file.canonicalize().unwrap();
+        assert!(out.contains(&format!("upload input#file {}", expected.display())), "got: {out}");
     }
 
     #[test]
     fn upload_testid_locator_translates_to_attr_selector() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("a.pdf");
+        std::fs::write(&file, "fixture").unwrap();
+        install_fake(tmp.path(), &tmp.path().join("ab.log"));
         let s = parse(json!({
             "id": "s1", "intent": "attach", "kind": "do", "verb": "upload",
             "on": { "raw": { "kind": "testId", "value": "file-input" }, "reason": "" },
-            "value": { "from": "literal", "literal": "/tmp/a.pdf" }
+            "value": { "from": "literal", "literal": file.display().to_string() }
         }));
-        let out = run_one(&s);
+        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+        let out = std::fs::read_to_string(tmp.path().join("ab.log")).unwrap();
+        clear_fake();
         assert!(
-            out.contains("upload [data-testid=\"file-input\"] /tmp/a.pdf"),
+            out.contains(&format!("upload [data-testid=\"file-input\"] {}", file.canonicalize().unwrap().display())),
             "got: {out}"
         );
     }
 
     #[test]
     fn upload_array_value_passes_multiple_files() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let file_a = tmp.path().join("a.pdf");
+        let file_b = tmp.path().join("b.png");
+        std::fs::write(&file_a, "a").unwrap();
+        std::fs::write(&file_b, "b").unwrap();
+        install_fake(tmp.path(), &tmp.path().join("ab.log"));
         let s = parse(json!({
             "id": "s1", "intent": "attach", "kind": "do", "verb": "upload",
             "on": { "raw": { "kind": "css", "value": "input#file" }, "reason": "" },
-            "value": { "from": "literal", "literal": ["/tmp/a.pdf", "/tmp/b.png"] }
+            "value": { "from": "literal", "literal": [file_a.display().to_string(), file_b.display().to_string()] }
         }));
-        let out = run_one(&s);
+        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+        let out = std::fs::read_to_string(tmp.path().join("ab.log")).unwrap();
+        clear_fake();
         assert!(
-            out.contains("upload input#file /tmp/a.pdf /tmp/b.png"),
+            out.contains(&format!("upload input#file {} {}", file_a.canonicalize().unwrap().display(), file_b.canonicalize().unwrap().display())),
             "got: {out}"
         );
+    }
+
+    #[test]
+    fn upload_relative_file_can_resolve_against_repo_root() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        let fixtures = repo.join("evals/fixtures");
+        std::fs::create_dir_all(&fixtures).unwrap();
+        let file = fixtures.join("upload-valid.txt");
+        std::fs::write(&file, "fixture").unwrap();
+        install_fake(tmp.path(), &tmp.path().join("ab.log"));
+        std::env::set_var("AGENT_QA_REPO_ROOT", &repo);
+        let s = parse(json!({
+            "id": "s1", "intent": "attach", "kind": "do", "verb": "upload",
+            "on": { "raw": { "kind": "css", "value": "input#file" }, "reason": "" },
+            "value": { "from": "literal", "literal": "evals/fixtures/upload-valid.txt" }
+        }));
+        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+        let out = std::fs::read_to_string(tmp.path().join("ab.log")).unwrap();
+        clear_fake();
+        std::env::remove_var("AGENT_QA_REPO_ROOT");
+        assert!(out.contains(&format!("upload input#file {}", file.canonicalize().unwrap().display())), "got: {out}");
     }
 
     #[test]
@@ -1208,7 +1297,7 @@ mod tests {
         let _g = lock_env();
         let tmp = TempDir::new().unwrap();
         install_fake(tmp.path(), &tmp.path().join("ab.log"));
-        let ctx = DoContext { session: "sess" };
+        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         clear_fake();
@@ -1228,7 +1317,7 @@ mod tests {
         let _g = lock_env();
         let tmp = TempDir::new().unwrap();
         install_fake(tmp.path(), &tmp.path().join("ab.log"));
-        let ctx = DoContext { session: "sess" };
+        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         clear_fake();
@@ -1248,7 +1337,7 @@ mod tests {
         let _g = lock_env();
         let tmp = TempDir::new().unwrap();
         install_fake(tmp.path(), &tmp.path().join("ab.log"));
-        let ctx = DoContext { session: "sess" };
+        let ctx = DoContext { session: "sess", scenario_dir: tmp.path() };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         clear_fake();

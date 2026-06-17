@@ -80,6 +80,16 @@ evals/golden/bank-login-tc04.ts
 evals/golden/bank-login-tc05.ts
 ```
 
+Golden deterministic Dynamic Waits runners:
+
+```bash
+evals/golden/dynamic-waits-tc01.ts
+evals/golden/dynamic-waits-tc02.ts
+evals/golden/dynamic-waits-tc03.ts
+evals/golden/dynamic-waits-tc04.ts
+evals/golden/dynamic-waits-tc05.ts
+```
+
 ## Current Catalog
 
 QA Playground is split to documented test-case level.
@@ -318,6 +328,53 @@ Notes:
 - Framework fix: added `record-step wait` condition kind `selectorAbsent`, mapped to raw CSS `isHidden`, because role/name absent fell back to broad text and matched the docs copy `Add New Account`.
 - Updated embedded core skill and `record-step` help to document `selectorAbsent`.
 
+Dynamic Waits TC01-TC05 golden runners passed end-to-end.
+
+Commands:
+
+```bash
+cd evals
+bun run golden:dynamic-waits:tc01
+bun run golden:dynamic-waits:tc02
+bun run golden:dynamic-waits:tc03
+bun run golden:dynamic-waits:tc04
+bun run golden:dynamic-waits:tc05
+```
+
+Results:
+
+```text
+TC01 SUMMARY: 4/4 (PASS)
+TC02 SUMMARY: 4/4 (PASS)
+TC03 SUMMARY: 4/4 (PASS)
+TC04 SUMMARY: 3/3 (PASS)
+TC05 SUMMARY: 5/5 (PASS)
+```
+
+Artifacts/SIDs:
+
+```text
+TC01 root: evals/results/golden-dynamic-waits-tc01-2026-06-17T08-59-57-569Z
+TC01 sid:  s-2026-06-17T08-59-58-315Z__c0c4dd59
+TC02 root: evals/results/golden-dynamic-waits-tc02-2026-06-17T09-01-11-334Z
+TC02 sid:  s-2026-06-17T09-01-11-379Z__fedf2480
+TC03 root: evals/results/golden-dynamic-waits-tc03-2026-06-17T09-02-44-522Z
+TC03 sid:  s-2026-06-17T09-02-44-561Z__0357b297
+TC04 root: evals/results/golden-dynamic-waits-tc04-2026-06-17T09-03-19-945Z
+TC04 sid:  s-2026-06-17T09-03-19-981Z__7c4d4836
+TC05 root: evals/results/golden-dynamic-waits-tc05-2026-06-17T09-05-17-548Z
+TC05 sid:  s-2026-06-17T09-05-17-599Z__dde10839
+```
+
+Notes:
+- Added detailed agent-qa prompts for Dynamic Waits TC01-TC05, replacing Selenium/Playwright implementation instructions with record/replay flows.
+- TC01 proves the delayed alert path does not timeout by waiting past the delay and asserting the page remains responsive.
+- TC02 uses `[data-testid="delayed-element"]` and `selectorText` for `Element is now visible!`.
+- TC03 uses a precise DOM click on `[data-testid="btn-activate-trigger"]`; replay uses native selector click and waits for `[data-testid="btn-enable-after-delay"]:not([disabled])`.
+- TC04 uses `selectorText` scoped to `main` for `Data Loaded!` because the live page does not expose the documented `load-status` test id.
+- TC05 uses `[data-testid="spinner-done"]` with `Done! Spinner gone.` plus selector absence for spinner selectors.
+- Framework fix: added `record-step wait` condition kind `selectorText`, plus replay support for raw CSS/test-id element text claims.
+
 ## Model Eval Issues Observed
 
 The cheap-model eval initially had several orchestration failures:
@@ -385,8 +442,9 @@ Current recorder assertion note:
 
 - `record-step assert` supports `present`, `absent`, `url`.
 - `present` / `absent` map to role/name, not CSS selector.
-- `record-step wait` supports `selector`, `selectorAbsent`, `text`, and `url`; TC02 uses text waits for validation copy.
+- `record-step wait` supports `selector`, `selectorAbsent`, `selectorText`, `text`, and `url`; TC02 uses text waits for validation copy.
 - Prefer `selectorAbsent` over role/name `assert absent` when the page includes documentation text that can match the absent element name.
+- Prefer `selectorText` over broad text waits when the page includes docs/tutorial copy containing the same expected text.
 
 ## Recommended Next-Agent Workflow
 

@@ -21,14 +21,14 @@ Goal: every QA Playground practice page has agent-qa eval coverage that records,
 | Forms | `/practice/forms` | page-load + TC01-TC15 | deep | Golden TC01-TC05 record, verify, and replay pass. Need exact steps for TC06-TC15. |
 | Dropdowns | `/practice/dropdowns` | page-load + TC01-TC10 | cataloged | Need exact step prompts and select/multi-select replay validation. |
 | Data Table | `/practice/data-table` | page-load + TC01-TC06 | cataloged | Need deterministic table assertions despite dynamic faker data. |
-| Alerts & Dialogs | `/practice/alerts-dialogs` | page-load + TC01-TC10 | cataloged/blocked | TC09 replay failed at dismissed-dialog assert. Native alert cases need dialog support. |
+| Alerts & Dialogs | `/practice/alerts-dialogs` | page-load + TC01-TC10 | deep/blocked | Exact TC01-TC10 prompts added. TC01-TC06 are native-dialog framework gaps until dialog actions/policy exist; golden TC07-TC09 cover DOM toast/modal/dialog paths. |
 | Radio & Checkbox | `/practice/radio-checkbox` | page-load + TC01-TC15 | cataloged | Need exact step prompts and checked/disabled assertions. |
 | Date Picker | `/practice/date-picker` | page-load + TC01-TC05 | cataloged | Need exact date values and value assertions. |
 | Links | `/practice/links` | page-load + TC01-TC12 | cataloged | Need exact step prompts and new-tab/broken-link support decisions. |
 | Tabs & Windows | `/practice/tabs-windows` | page-load + TC01-TC05 | cataloged | Need multi-tab/window support coverage. |
-| Dynamic Waits | `/practice/dynamic-waits` | page-load + TC01-TC05 | cataloged | Native delayed alert needs dialog support; other waits need replay validation. |
+| Dynamic Waits | `/practice/dynamic-waits` | page-load + TC01-TC05 | complete | Golden TC01-TC05 record, verify, and replay pass with agent-qa flows. |
 | Multi Select | `/practice/multi-select` | page-load + TC01-TC05 | cataloged | Need exact selecting/deselecting prompts. |
-| File Upload | `/practice/file-upload` | page-load + Upload TC01-TC15 + Download TC01-TC14 | cataloged | Need upload fixtures and download support decisions. |
+| File Upload | `/practice/file-upload` | page-load + Upload TC01-TC02 + Upload TC06-TC15 + Download TC01-TC14 | deep | Exact prompts and small upload fixtures added. Upload TC01-TC02 replay pass via uploadBySelector with canonicalized fixture paths. Upload TC03-TC05 intentionally excluded because the live widget has no upload button after file selection. Need broader upload/download replay validation. |
 
 Current catalog size:
 
@@ -74,13 +74,14 @@ Acceptance:
 
 ### Ticket 3: Alerts & Dialogs In-Page Cases
 
-- Keep native browser alert/confirm/prompt cases out until dialog support exists.
-- Start with TC09 advanced dialog and TC07 toast.
-- Fix replay failure for dismissed in-page dialogs.
+- Keep native browser alert/confirm/prompt cases explicit as framework-gap evals until dialog support exists.
+- Maintain exact prompts for TC01-TC10.
+- Keep golden runners for TC07 toast, TC08 sweet alert modal, and TC09 advanced share dialog.
 
 Acceptance:
 - TC09 records, verifies, and replays pass.
 - TC07 records, verifies, and replays pass.
+- TC08 records, verifies, and replays pass.
 - Failure artifacts identify missing framework capabilities when they do not pass.
 
 ### Ticket 4: Assertion Capability Upgrade
@@ -157,9 +158,11 @@ Acceptance:
 
 ### Ticket 11: File Upload Coverage
 
-- Add a small fixture file under `evals/fixtures/`.
-- Add upload eval.
-- Add download eval only if deterministic and supported.
+- Added small fixture files under `evals/fixtures/`.
+- Added exact upload eval prompts for Upload TC01-TC02 and Upload TC06-TC15.
+- Added exact download eval prompts for Download TC01-TC14, with explicit support-gap reporting for download capture, cross-browser, viewport, keyboard, accessibility, and network-header checks.
+- Added recorder support for `uploadBySelector`; Upload TC01-TC02 replay pass after canonicalizing fixture paths.
+- Upload TC03-TC05 are intentionally excluded because `/practice/file-upload` exposes only `#file-upload` plus download buttons; no upload submit button/progress/success flow exists before or after file selection.
 
 Acceptance:
 - Upload scenario records and replays without absolute machine-specific paths leaking into portable scenarios, or documents the portability gap.

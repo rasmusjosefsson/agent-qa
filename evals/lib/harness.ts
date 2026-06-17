@@ -69,7 +69,7 @@ export function parseArgs(args: string[]): RunOptions {
     json: false,
     list: false,
     continueOnFailure: false,
-    timeoutMs: 10 * 60 * 1000,
+    timeoutMs: 4 * 60 * 1000,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -135,7 +135,7 @@ Options:
   --continue-on-failure
                      Run every selected case instead of stopping on first failure
   --json             Print JSON report
-  --timeout-ms <ms>  Timeout per case (default: 600000)
+  --timeout-ms <ms>  Timeout per case (default: 240000)
   --help, -h         Show help`);
 }
 
@@ -174,6 +174,7 @@ Eval constraints:
 - Do not use plain \`agent-qa\`; use \`${agentQaBin}\` exactly.
 - Use \`${agentBrowserBin}\` for every browser action in this eval.
 - Do not use plain \`agent-browser\`; use \`${agentBrowserBin}\` exactly.
+- Every \`${agentBrowserBin}\` call is hard-capped by the eval wrapper. If a browser command times out, stop immediately and report that command/output. Do not retry it, do not increase its timeout, and do not run doctor/session-list diagnostics.
 - Set AGENT_QA_SCENARIOS_DIR=${scenariosRoot} and AGENT_QA_RECORD_DIR=${recordRoot} for every agent-qa command.
 - Use one explicit browser session for the whole recording: \`${sessionName}\`.
 - Start with exactly this shape: \`AGENT_QA_SCENARIOS_DIR=${scenariosRoot} AGENT_QA_RECORD_DIR=${recordRoot} ${agentQaBin} start "<intent>" --session ${sessionName}\`.
@@ -182,6 +183,7 @@ Eval constraints:
 - Do not pass \`--session\` to \`record-step\`, \`flush\`, or \`verify\`.
 - If recording succeeds, run flush, verify, and replay.
 - Stop at the first framework issue and report the command/output.
+- Do not inspect repository files, grep examples, or read existing scenarios before recording. The skill output and this prompt are the only instructions for the eval.
 - Do not edit generated artifacts by hand: no scenario.json edits, no scenario.steps.jsonl edits, and no replay artifact edits.
 - If replay fails, stop and report. Do not patch generated artifacts to make replay pass.
 ${extra}
@@ -241,7 +243,27 @@ function createEvalBin(agentQaTarget: string, agentBrowserTarget: string): { bin
   const agentQa = resolve(binDir, "agent-qa");
   const agentBrowser = resolve(binDir, "agent-browser");
   writeFileSync(agentQa, `#!/bin/sh\nexec ${JSON.stringify(agentQaTarget)} "$@"\n`, "utf-8");
-  writeFileSync(agentBrowser, `#!/bin/sh\nexec ${JSON.stringify(agentBrowserTarget)} "$@"\n`, "utf-8");
+  writeFileSync(agentBrowser, `#!/bin/sh
+timeout_ms=\${AGENT_QA_EVAL_AGENT_BROWSER_TIMEOUT_MS:-45000}
+timeout_sec=$(( (timeout_ms + 999) / 1000 ))
+${JSON.stringify(agentBrowserTarget)} "$@" &
+child=$!
+(
+  sleep "$timeout_sec"
+  if kill -0 "$child" 2>/dev/null; then
+    printf '%s\n' "[eval-agent-browser] timed out after \${timeout_ms}ms: ${agentBrowserTarget} $*" >&2
+    kill "$child" 2>/dev/null
+    sleep 2
+    kill -9 "$child" 2>/dev/null
+  fi
+) &
+watcher=$!
+wait "$child"
+status=$?
+kill "$watcher" 2>/dev/null
+wait "$watcher" 2>/dev/null
+exit "$status"
+`, "utf-8");
   chmodSync(agentQa, 0o755);
   chmodSync(agentBrowser, 0o755);
   return { binDir, agentQa, agentBrowser };
@@ -276,7 +298,7 @@ function forbiddenAgentBehavior(stdout: string, stderr: string): string | undefi
   const patterns: Array<[RegExp, string]> = [
     [/apply_patch/i, "agent attempted to patch files during eval"],
     [/updated scenario file/i, "agent edited generated scenario.json"],
-    [/scenario\.json edits/i, "agent relied on scenario.json edits"],
+    [/relied on scenario\.json edits|preserving manual scenario edits|manual scenario\.json edit/i, "agent relied on scenario.json edits"],
     [/manual edits/i, "agent relied on manual artifact edits"],
     [/fixed .*flushed scenario/i, "agent fixed the flushed scenario instead of re-recording"],
     [/move scenario\.json edits/i, "agent suggested preserving manual scenario edits"],
@@ -350,6 +372,10 @@ export async function runCase(evalCase: EvalCase, options: RunOptions): Promise<
     AGENT_QA_SCENARIOS_DIR: scenariosRoot,
     AGENT_QA_RECORD_DIR: recordRoot,
     AGENT_QA_EVAL_SESSION: sessionName,
+    AGENT_QA_REPO_ROOT: repoRoot,
+    AGENT_QA_EVAL_AGENT_BROWSER_TIMEOUT_MS: process.env.AGENT_QA_EVAL_AGENT_BROWSER_TIMEOUT_MS || "45000",
+    AGENT_QA_AGENT_BROWSER_TIMEOUT_MS: process.env.AGENT_QA_AGENT_BROWSER_TIMEOUT_MS || "45000",
+    AGENT_QA_RECORD_SKIP_SIDECARS: process.env.AGENT_QA_RECORD_SKIP_SIDECARS || "1",
     PATH: `${evalBin.binDir}:${resolve(repoRoot, "cli/target/debug")}:${process.env.PATH || ""}`,
     NO_COLOR: "1",
   };

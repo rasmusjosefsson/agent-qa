@@ -207,3 +207,47 @@ What we learned:
 Follow-ups:
 - Continue Forms TC06 if returning to the prior linear Forms track.
 - For future absence checks on pages that include documentation text, prefer `record-step wait` with `selectorAbsent` over role/name `assert absent` unless the accessible target is isolated from docs copy.
+
+## 2026-06-17 - Dynamic Waits TC01-TC05
+
+Result: golden pass with framework fix.
+
+Commands:
+- `bun run run.ts --suite qaplayground --page dynamic-waits --list`
+- `bun run golden:dynamic-waits:tc01`
+- `bun run golden:dynamic-waits:tc02`
+- `bun run golden:dynamic-waits:tc03`
+- `bun run golden:dynamic-waits:tc04`
+- `bun run golden:dynamic-waits:tc05`
+- `cargo test --locked`
+
+Artifact:
+- TC01 root: `evals/results/golden-dynamic-waits-tc01-2026-06-17T08-59-57-569Z`
+- TC01 sid: `s-2026-06-17T08-59-58-315Z__c0c4dd59`
+- TC02 root: `evals/results/golden-dynamic-waits-tc02-2026-06-17T09-01-11-334Z`
+- TC02 sid: `s-2026-06-17T09-01-11-379Z__fedf2480`
+- TC03 root: `evals/results/golden-dynamic-waits-tc03-2026-06-17T09-02-44-522Z`
+- TC03 sid: `s-2026-06-17T09-02-44-561Z__0357b297`
+- TC04 root: `evals/results/golden-dynamic-waits-tc04-2026-06-17T09-03-19-945Z`
+- TC04 sid: `s-2026-06-17T09-03-19-981Z__7c4d4836`
+- TC05 root: `evals/results/golden-dynamic-waits-tc05-2026-06-17T09-05-17-548Z`
+- TC05 sid: `s-2026-06-17T09-05-17-599Z__dde10839`
+
+What changed:
+- Added detailed agent-qa prompts for Dynamic Waits TC01-TC05, replacing Selenium/Playwright implementation instructions with record/replay flows.
+- Added `evals/golden/dynamic-waits-lib.ts` and deterministic golden runners for TC01-TC05.
+- Added `golden:dynamic-waits:tc01` through `golden:dynamic-waits:tc05` scripts.
+- Added recorder support for `wait` condition kind `selectorText`, mapped to a raw CSS element text `contains` check.
+- Added raw CSS/test-id element text claim support in replay and focused Rust tests.
+
+What we learned:
+- TC01's delayed native alert fires, and the current replay can prove the path does not timeout by waiting past the delay and asserting the page remains responsive.
+- TC02 uses stable `[data-testid="delayed-element"]` with text `Element is now visible!`.
+- TC03 raw selector click did not reliably start the countdown during inspection; the runner drives a precise DOM click on `[data-testid="btn-activate-trigger"]` and replay uses native selector click.
+- TC04 has no documented `load-status` test id in live DOM; the live result appears as `Data Loaded!` in main content, so the runner uses `selectorText` scoped to `main`.
+- TC05 exposes `[data-testid="spinner-done"]` with `Done! Spinner gone.` after the spinner disappears.
+- This docs-heavy page contains Selenium/Playwright tutorial text and test-case text, so broad text waits can produce false positives.
+
+Follow-ups:
+- Continue Forms TC06 if returning to the original Forms track, or pick the next QA Playground page to deepen.
+- Prefer `selectorText` and stable result nodes on docs-heavy pages instead of broad text waits.
