@@ -1,0 +1,2 @@
+agent-qa upload fixture
+This small text file is used by QA Playground file-upload eval prompts.

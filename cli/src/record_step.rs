@@ -58,12 +58,12 @@ Usage:
 Kinds and payload shapes:
   navigation   {{\"route\":\"<url>\"}}
   action       {{\"method\":\"<m>\",\"args\":[...]}}
-  wait         {{\"condition\":{{\"kind\":\"<duration|selector|text|url>\",...}}}}
+  wait         {{\"condition\":{{\"kind\":\"<duration|selector|selectorAbsent|selectorText|text|url>\",...}}}}
   assert       {{\"kind\":\"<present|absent|url>\",\"args\":[...],\"intent\":\"...\"}}
 
 Allow-listed action methods:
   clickRole, clickByText, clickByLabel, clickSelector,
-  fillByLabel, fillBySelector, pressKey, submit, selectByRole,
+  focusSelector, fillByLabel, fillBySelector, uploadBySelector, pressKey, pressSelector, submit, selectBySelector, selectByRole,
   scrollIntoViewByText, navigate
 
 Examples:
@@ -172,8 +172,16 @@ fn record(opts: &Opts) -> Result<StepRow> {
     append_jsonl(&buf_path, &row)?;
 
     // Best-effort sidecar capture under <sid>/recording/.
-    let scenario_dir = paths::scenario_dir(&sid)?;
-    let _ = capture_recording_sidecars(&scenario_dir, &row.step_id, &session);
+    // Evals can disable this so a slow snapshot/screenshot never blocks
+    // recording the scenario contract itself.
+    if std::env::var("AGENT_QA_RECORD_SKIP_SIDECARS")
+        .ok()
+        .as_deref()
+        != Some("1")
+    {
+        let scenario_dir = paths::scenario_dir(&sid)?;
+        let _ = capture_recording_sidecars(&scenario_dir, &row.step_id, &session);
+    }
 
     Ok(row)
 }

@@ -195,6 +195,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     } else {
         let do_ctx = DoContext {
             session: &opts.session_name,
+            scenario_dir: &scenario_dir,
         };
         let check_ctx = CheckContext {
             session: &opts.session_name,

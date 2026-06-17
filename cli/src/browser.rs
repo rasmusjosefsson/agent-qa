@@ -25,9 +25,11 @@
 
 use std::env;
 use std::ffi::OsStr;
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use thiserror::Error;
 use which::which;
@@ -190,6 +192,9 @@ pub struct RunOpts {
     /// When true, stderr is captured into the returned struct. Default false
     /// (stderr is inherited so the user sees agent-browser's own logs live).
     pub capture_stderr: bool,
+    /// When true, stdout is captured into the returned struct. Default false
+    /// so daemonised agent-browser grandchildren cannot keep our pipe open.
+    pub capture_stdout: bool,
 }
 
 impl RunOpts {
@@ -197,10 +202,12 @@ impl RunOpts {
         Self {
             throw_on_error: true,
             capture_stderr: false,
+            capture_stdout: false,
         }
     }
     pub fn capture(mut self) -> Self {
         self.capture_stderr = true;
+        self.capture_stdout = true;
         self
     }
     pub fn lenient(mut self) -> Self {
@@ -242,7 +249,7 @@ fn run_with_bin(
         .map(|a| a.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    let mut first = spawn_once(bin, session, args, opts.capture_stderr)?;
+    let mut first = spawn_once(bin, session, args, opts.capture_stdout, opts.capture_stderr)?;
 
     if first.exit_code != 0
         && !auto_recovery_disabled()
@@ -259,7 +266,7 @@ fn run_with_bin(
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
-        first = spawn_once(bin, session, args, opts.capture_stderr)?;
+        first = spawn_once(bin, session, args, opts.capture_stdout, opts.capture_stderr)?;
     }
 
     if opts.throw_on_error && first.exit_code != 0 {
@@ -282,24 +289,111 @@ fn spawn_once(
     bin: &Path,
     session: &str,
     args: &[std::ffi::OsString],
+    capture_stdout: bool,
     capture_stderr: bool,
 ) -> Result<RunResult, AgentBrowserError> {
+    let timeout = agent_browser_timeout();
     let mut cmd = Command::new(bin);
     cmd.arg("--session").arg(session).args(args);
-    cmd.stdin(Stdio::null()).stdout(Stdio::piped());
+    cmd.stdin(Stdio::null());
+    let stdout_path = capture_stdout.then(|| temp_capture_path("stdout"));
+    let stderr_path = capture_stderr.then(|| temp_capture_path("stderr"));
+    if capture_stdout {
+        let path = stdout_path.as_ref().expect("stdout path exists");
+        let file = fs::File::create(path).map_err(|e| AgentBrowserError::Spawn { source: e })?;
+        cmd.stdout(Stdio::from(file));
+    } else {
+        cmd.stdout(Stdio::inherit());
+    }
     if capture_stderr {
-        cmd.stderr(Stdio::piped());
+        let path = stderr_path.as_ref().expect("stderr path exists");
+        let file = fs::File::create(path).map_err(|e| AgentBrowserError::Spawn { source: e })?;
+        cmd.stderr(Stdio::from(file));
     } else {
         cmd.stderr(Stdio::inherit());
     }
-    let out = cmd
-        .output()
+    let mut child = cmd
+        .spawn()
         .map_err(|e| AgentBrowserError::Spawn { source: e })?;
+    let started = Instant::now();
+    loop {
+        if child
+            .try_wait()
+            .map_err(|e| AgentBrowserError::Spawn { source: e })?
+            .is_some()
+        {
+            break;
+        }
+        if let Some(limit) = timeout {
+            if started.elapsed() >= limit {
+                let _ = child.kill();
+                let _ = child.wait();
+                let stdout = read_capture_file(stdout_path.as_deref());
+                let verb = args
+                    .first()
+                    .map(|a| a.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "<unknown>".into());
+                let mut stderr = read_capture_file(stderr_path.as_deref());
+                if !stderr.is_empty() {
+                    stderr.push('\n');
+                }
+                stderr.push_str(&format!(
+                    "[agent-browser] timed out after {}ms running verb={verb} session={session}",
+                    limit.as_millis()
+                ));
+                cleanup_capture_file(stdout_path.as_deref());
+                cleanup_capture_file(stderr_path.as_deref());
+                return Ok(RunResult {
+                    stdout,
+                    stderr,
+                    exit_code: 124,
+                });
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let status = child
+        .wait()
+        .map_err(|e| AgentBrowserError::Spawn { source: e })?;
+    let stdout = read_capture_file(stdout_path.as_deref());
+    let stderr = read_capture_file(stderr_path.as_deref());
+    cleanup_capture_file(stdout_path.as_deref());
+    cleanup_capture_file(stderr_path.as_deref());
     Ok(RunResult {
-        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-        exit_code: out.status.code().unwrap_or(-1),
+        stdout,
+        stderr,
+        exit_code: exit_code(status),
     })
+}
+
+fn temp_capture_path(label: &str) -> PathBuf {
+    let stamp = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
+    env::temp_dir().join(format!(
+        "agent-qa-agent-browser-{label}-{}-{stamp}.log",
+        std::process::id()
+    ))
+}
+
+fn read_capture_file(path: Option<&Path>) -> String {
+    path.and_then(|p| fs::read(p).ok())
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .unwrap_or_default()
+}
+
+fn cleanup_capture_file(path: Option<&Path>) {
+    if let Some(path) = path {
+        let _ = fs::remove_file(path);
+    }
+}
+
+fn exit_code(status: ExitStatus) -> i32 {
+    status.code().unwrap_or(-1)
+}
+
+fn agent_browser_timeout() -> Option<Duration> {
+    let raw = env::var("AGENT_QA_AGENT_BROWSER_TIMEOUT_MS").ok()?;
+    let ms = raw.parse::<u64>().ok()?;
+    (ms > 0).then(|| Duration::from_millis(ms))
 }
 
 fn socket_stall_hint(stderr: &str, stdout: &str, verb: &str, session: &str) -> String {

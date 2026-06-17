@@ -1,0 +1,2 @@
+agent-qa unsupported-extension fixture
+This is plain text with an .exe extension so upload validation can reject by filename/type without storing a binary.
