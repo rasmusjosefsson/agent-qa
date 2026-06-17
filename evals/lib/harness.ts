@@ -21,6 +21,7 @@ export interface RunOptions {
   list: boolean;
   continueOnFailure: boolean;
   timeoutMs: number;
+  maxCases?: number;
   caseId?: string;
   suite?: string;
   page?: string;
@@ -102,6 +103,9 @@ export function parseArgs(args: string[]): RunOptions {
       case "--timeout-ms":
         options.timeoutMs = Number(args[++i] || options.timeoutMs);
         break;
+      case "--max-cases":
+        options.maxCases = Number(args[++i] || "0");
+        break;
       case "--help":
       case "-h":
         printUsage();
@@ -116,6 +120,9 @@ export function parseArgs(args: string[]): RunOptions {
   }
   if (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0) {
     throw new Error("--timeout-ms must be a positive number");
+  }
+  if (options.maxCases !== undefined && (!Number.isFinite(options.maxCases) || options.maxCases <= 0)) {
+    throw new Error("--max-cases must be a positive number");
   }
   return options;
 }
@@ -136,6 +143,7 @@ Options:
                      Run every selected case instead of stopping on first failure
   --json             Print JSON report
   --timeout-ms <ms>  Timeout per case (default: 240000)
+  --max-cases <n>    Limit selected cases, useful for paced suite execution
   --help, -h         Show help`);
 }
 
@@ -174,12 +182,14 @@ Eval constraints:
 - Do not use plain \`agent-qa\`; use \`${agentQaBin}\` exactly.
 - Use \`${agentBrowserBin}\` for every browser action in this eval.
 - Do not use plain \`agent-browser\`; use \`${agentBrowserBin}\` exactly.
-- Every \`${agentBrowserBin}\` call is hard-capped by the eval wrapper. If a browser command times out, stop immediately and report that command/output. Do not retry it, do not increase its timeout, and do not run doctor/session-list diagnostics.
+- Every \`${agentBrowserBin}\` call is hard-capped by the eval wrapper. You may run multiple browser commands in sequence for a scenario. If one browser command exits non-zero or times out, stop immediately and report that command/output. Do not retry the same failed command, do not increase its timeout, and do not run doctor/session-list diagnostics.
 - Set AGENT_QA_SCENARIOS_DIR=${scenariosRoot} and AGENT_QA_RECORD_DIR=${recordRoot} for every agent-qa command.
 - Use one explicit browser session for the whole recording: \`${sessionName}\`.
 - Start with exactly this shape: \`AGENT_QA_SCENARIOS_DIR=${scenariosRoot} AGENT_QA_RECORD_DIR=${recordRoot} ${agentQaBin} start "<intent>" --session ${sessionName}\`.
 - Drive browser actions with exactly this shape: \`${agentBrowserBin} --session ${sessionName} <verb> ...\`.
 - Record actions with exactly this shape: \`AGENT_QA_SCENARIOS_DIR=${scenariosRoot} AGENT_QA_RECORD_DIR=${recordRoot} ${agentQaBin} record-step <kind> '<json>'\`.
+- Action method names such as clickSelector, clickRole, fillBySelector, and selectBySelector are record-step payload methods, not ${agentBrowserBin} verbs.
+- Waits are recorded with ${agentQaBin} record-step wait payloads. Do not run ${agentBrowserBin} wait-for-selector, waitForSelector, or wait commands; those are not eval browser verbs.
 - Do not pass \`--session\` to \`record-step\`, \`flush\`, or \`verify\`.
 - If recording succeeds, run flush, verify, and replay.
 - Stop at the first framework issue and report the command/output.
@@ -242,19 +252,22 @@ function createEvalBin(agentQaTarget: string, agentBrowserTarget: string): { bin
   mkdirSync(binDir, { recursive: true });
   const agentQa = resolve(binDir, "agent-qa");
   const agentBrowser = resolve(binDir, "agent-browser");
-  writeFileSync(agentQa, `#!/bin/sh\nexec ${JSON.stringify(agentQaTarget)} "$@"\n`, "utf-8");
+  const resolvedAgentQaTarget = resolveExecutableTarget(agentQaTarget);
+  const resolvedAgentBrowserTarget = resolveExecutableTarget(agentBrowserTarget);
+  writeFileSync(agentQa, `#!/bin/sh\nexec ${JSON.stringify(resolvedAgentQaTarget)} "$@"\n`, "utf-8");
   writeFileSync(agentBrowser, `#!/bin/sh
 timeout_ms=\${AGENT_QA_EVAL_AGENT_BROWSER_TIMEOUT_MS:-45000}
 timeout_sec=$(( (timeout_ms + 999) / 1000 ))
-${JSON.stringify(agentBrowserTarget)} "$@" &
+${JSON.stringify(resolvedAgentBrowserTarget)} "$@" &
 child=$!
 (
   sleep "$timeout_sec"
   if kill -0 "$child" 2>/dev/null; then
-    printf '%s\n' "[eval-agent-browser] timed out after \${timeout_ms}ms: ${agentBrowserTarget} $*" >&2
+    printf '%s\n' "[eval-agent-browser] timed out after \${timeout_ms}ms: ${resolvedAgentBrowserTarget} $*" >&2
     kill "$child" 2>/dev/null
     sleep 2
     kill -9 "$child" 2>/dev/null
+    exit 124
   fi
 ) &
 watcher=$!
@@ -267,6 +280,11 @@ exit "$status"
   chmodSync(agentQa, 0o755);
   chmodSync(agentBrowser, 0o755);
   return { binDir, agentQa, agentBrowser };
+}
+
+function resolveExecutableTarget(target: string): string {
+  if (target.includes("/")) return target;
+  return Bun.which(target) || target;
 }
 
 function writeStatus(resultRoot: string, status: Record<string, unknown>): void {
@@ -295,6 +313,8 @@ function replayPassed(replayJson: unknown): boolean {
 
 function forbiddenAgentBehavior(stdout: string, stderr: string): string | undefined {
   const output = `${stdout}\n${stderr}`;
+  const browserTimeouts = output.match(/\[eval-agent-browser\] timed out after/g) || [];
+  if (browserTimeouts.length > 1) return "agent retried agent-browser after an eval-wrapper timeout";
   const patterns: Array<[RegExp, string]> = [
     [/apply_patch/i, "agent attempted to patch files during eval"],
     [/updated scenario file/i, "agent edited generated scenario.json"],
@@ -304,6 +324,7 @@ function forbiddenAgentBehavior(stdout: string, stderr: string): string | undefi
     [/move scenario\.json edits/i, "agent suggested preserving manual scenario edits"],
     [/\$\s+agent-qa\s/i, "agent used plain agent-qa instead of eval wrapper"],
     [/\$\s+agent-browser\s/i, "agent used plain agent-browser instead of eval wrapper"],
+    [/Unknown command: (launch|clickSelector|wait-for-selector|waitForSelector|wait)\b/i, "agent used an unsupported agent-browser verb"],
   ];
   for (const [pattern, reason] of patterns) {
     if (pattern.test(output)) return reason;

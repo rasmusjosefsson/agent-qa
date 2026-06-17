@@ -17,6 +17,13 @@ interface DetailedCase {
   extraConstraints?: string[];
 }
 
+interface AutomationExerciseTestCase {
+  tc: string;
+  title: string;
+  steps: string[];
+  extraConstraints?: string[];
+}
+
 const practicePages: PracticePage[] = [
   {
     slug: "bank",
@@ -1137,6 +1144,604 @@ const qaplaygroundCases = practicePages.flatMap((page) => [
   ...page.cases.map((title) => qaplaygroundCase(page, title)),
 ]);
 
+const automationExerciseUrl = "https://www.automationexercise.com";
+const automationExerciseUploadFixture = "evals/fixtures/upload-valid.txt";
+
+const automationExerciseSelectorHints = [
+  "Known stable Automation Exercise selectors: Signup/Login link a[href=\"/login\"], Products link a[href=\"/products\"], Cart link a[href=\"/view_cart\"], Contact Us link a[href=\"/contact_us\"], Test Cases link a[href=\"/test_cases\"].",
+  "Known login selectors: input[data-qa=\"login-email\"], input[data-qa=\"login-password\"], button[data-qa=\"login-button\"].",
+  "Known signup selectors: input[data-qa=\"signup-name\"], input[data-qa=\"signup-email\"], button[data-qa=\"signup-button\"].",
+  "Known account form selectors: input[data-qa=\"password\"], select[data-qa=\"days\"], select[data-qa=\"months\"], select[data-qa=\"years\"], input[data-qa=\"first_name\"], input[data-qa=\"last_name\"], input[data-qa=\"company\"], input[data-qa=\"address\"], input[data-qa=\"address2\"], select[data-qa=\"country\"], input[data-qa=\"state\"], input[data-qa=\"city\"], input[data-qa=\"zipcode\"], input[data-qa=\"mobile_number\"], button[data-qa=\"create-account\"].",
+  "Known contact selectors: input[data-qa=\"name\"], input[data-qa=\"email\"], input[data-qa=\"subject\"], textarea[data-qa=\"message\"], input[name=\"upload_file\"], input[data-qa=\"submit-button\"].",
+  "Known product/search selectors: #search_product, #submit_search, a[href^=\"/product_details/\"], a[data-product-id].",
+  "Use agent-browser eval to click a CSS selector only when agent-browser has no direct selector verb for that action; then record the corresponding record-step action method such as clickSelector.",
+];
+
+const disposableAccountConstraints = [
+  "Use a unique disposable email address for each run, for example agent-qa+<timestamp>@example.com, so replay is not coupled to previous site state.",
+  "If a documented flow needs a correct login and no seeded credentials are provided, create a disposable account as setup in the same scenario, then run the documented login steps with that account.",
+  "When the documented case deletes the account, finish by verifying ACCOUNT DELETED! and do not reuse that account in later evals.",
+];
+
+function automationExerciseCase(testCase: AutomationExerciseTestCase): EvalCase {
+  const numberedSteps = testCase.steps.map((step, index) => `${index + 1}. ${step}`).join("\n");
+  const idSuffix = slugify(testCase.title);
+  return {
+    id: `automation-exercise-${testCase.tc.toLowerCase()}-${idSuffix}`,
+    suite: "automation-exercise",
+    page: "automationexercise.com",
+    name: `Automation Exercise ${testCase.tc}: ${testCase.title}`,
+    prompt: `Use the agent-qa skill to record and replay this Automation Exercise test case:
+
+${testCase.tc}: ${testCase.title}
+
+${numberedSteps}
+
+Do not write Selenium or Playwright code. Use agent-qa and agent-browser only. Record the strongest replayable assertions for the visible page state, URL, cart state, account state, or success message named by the test case.`,
+    extraConstraints: [
+      "This eval case should cover exactly one documented Automation Exercise test case, not the full site catalog.",
+      "Start from the public site only. Do not bootstrap private profiles or vendor-specific state.",
+      "Prefer stable selectors such as data-qa attributes, form field names, visible link/button names, and route URLs over brittle generated CSS selectors.",
+      "Do not assert static test-case documentation text as a substitute for the live page state after interacting with the site.",
+      "For account, checkout, subscription, contact, review, and cart mutations, use disposable eval data and avoid real personal/payment information.",
+      ...automationExerciseSelectorHints,
+      ...(testCase.extraConstraints || []),
+    ],
+    scenarioMatches(scenario: unknown): boolean {
+      const text = textOf(scenario);
+      const titleWords = testCase.title
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((word) => word.length >= 4)
+        .slice(0, 5);
+      return text.includes("automationexercise.com") &&
+        titleWords.some((word) => text.includes(word));
+    },
+  };
+}
+
+const automationExerciseTestCases: AutomationExerciseTestCase[] = [
+  {
+    tc: "TC01",
+    title: "Register User",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Verify that home page is visible successfully.",
+      "Click on Signup / Login button.",
+      "Verify New User Signup! is visible.",
+      "Enter a disposable name and unique email address.",
+      "Click Signup button.",
+      "Verify that ENTER ACCOUNT INFORMATION is visible.",
+      "Fill details: Title, Name, Email, Password, Date of birth.",
+      "Select checkbox Sign up for our newsletter!.",
+      "Select checkbox Receive special offers from our partners!.",
+      "Fill details: First name, Last name, Company, Address, Address2, Country, State, City, Zipcode, Mobile Number.",
+      "Click Create Account button.",
+      "Verify that ACCOUNT CREATED! is visible.",
+      "Click Continue button.",
+      "Verify that Logged in as username is visible.",
+      "Click Delete Account button.",
+      "Verify that ACCOUNT DELETED! is visible and click Continue button.",
+    ],
+    extraConstraints: disposableAccountConstraints,
+  },
+  {
+    tc: "TC02",
+    title: "Login User with correct email and password",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Verify that home page is visible successfully.",
+      "Click on Signup / Login button.",
+      "Verify Login to your account is visible.",
+      "Enter correct email address and password.",
+      "Click login button.",
+      "Verify that Logged in as username is visible.",
+      "Click Delete Account button.",
+      "Verify that ACCOUNT DELETED! is visible.",
+    ],
+    extraConstraints: disposableAccountConstraints,
+  },
+  {
+    tc: "TC03",
+    title: "Login User with incorrect email and password",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Verify that home page is visible successfully.",
+      "Click on Signup / Login button.",
+      "Verify Login to your account is visible.",
+      "Enter incorrect email address and password.",
+      "Click login button.",
+      "Verify error Your email or password is incorrect! is visible.",
+    ],
+    extraConstraints: [
+      "Use credentials that are intentionally invalid and unique-looking, not a real user's email or password.",
+      "Do not snapshot the home page to discover Signup / Login. After recording the home-page navigation, navigate directly to https://www.automationexercise.com/login with agent-browser open and record a navigation step for that route; do not click a[href=\"/login\"] for this eval.",
+      "Before filling, record and satisfy a wait for selector input[data-qa=\"login-email\"] or verify it live with agent-browser eval. Do not fill immediately after route change without waiting for the selector.",
+      "Use agent-browser eval to set input[data-qa=\"login-email\"] and input[data-qa=\"login-password\"] values and dispatch input/change events, then record fillBySelector actions for those same selectors.",
+      "Use agent-browser eval to click button[data-qa=\"login-button\"], then record clickSelector for button[data-qa=\"login-button\"].",
+      "Record the final check as a wait/assert for visible text Your email or password is incorrect!, then flush, verify, and replay. Do not add extra page discovery after the login form is visible.",
+    ],
+  },
+  {
+    tc: "TC04",
+    title: "Logout User",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Verify that home page is visible successfully.",
+      "Click on Signup / Login button.",
+      "Verify Login to your account is visible.",
+      "Enter correct email address and password.",
+      "Click login button.",
+      "Verify that Logged in as username is visible.",
+      "Click Logout button.",
+      "Verify that user is navigated to login page.",
+    ],
+    extraConstraints: disposableAccountConstraints,
+  },
+  {
+    tc: "TC05",
+    title: "Register User with existing email",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Verify that home page is visible successfully.",
+      "Click on Signup / Login button.",
+      "Verify New User Signup! is visible.",
+      "Enter name and already registered email address.",
+      "Click Signup button.",
+      "Verify error Email Address already exist! is visible.",
+    ],
+    extraConstraints: [
+      ...disposableAccountConstraints,
+      "Create the disposable account as setup if needed, log out, then attempt signup again with the same email to trigger the existing-email error.",
+      "After verifying the existing-email error, log in with the disposable account and delete it so replay can recreate the same account.",
+    ],
+  },
+  {
+    tc: "TC06",
+    title: "Contact Us Form",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Verify that home page is visible successfully.",
+      "Click on Contact Us button.",
+      "Verify GET IN TOUCH is visible.",
+      "Enter name, email, subject and message.",
+      `Upload file ${automationExerciseUploadFixture}.`,
+      "Click Submit button.",
+      "Click OK button on the confirmation dialog.",
+      "Verify success message Success! Your details have been submitted successfully. is visible.",
+      "Click Home button and verify that landed to home page successfully.",
+    ],
+    extraConstraints: [
+      `Use the repo-relative fixture ${automationExerciseUploadFixture}; do not hard-code an absolute machine-specific path.`,
+      "Native confirmation dialog handling is a framework boundary. If replay cannot represent OK/accept, report that exact gap instead of faking success.",
+      "Known deterministic golden records the filled contact form and upload selection, then stops before the native confirm because replayable native-confirm acceptance is not stable in this harness.",
+    ],
+  },
+  {
+    tc: "TC07",
+    title: "Verify Test Cases Page",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Verify that home page is visible successfully.",
+      "Click on Test Cases button.",
+      "Verify user is navigated to test cases page successfully.",
+    ],
+    extraConstraints: [
+      "Use agent-qa smart-click \"Test Cases\" or drive a DOM click on selector a[href=\"/test_cases\"] if visible-text click is ambiguous because the navbar includes icon glyphs.",
+      "Do not run agent-browser clickSelector; clickSelector is only a record-step action method after the browser action has already been driven.",
+      "A known-good deterministic recording uses navigation to https://www.automationexercise.com, clickSelector a[href=\"/test_cases\"], URL assert /test_cases, and visible text Test Cases.",
+    ],
+  },
+  {
+    tc: "TC08",
+    title: "Verify All Products and product detail page",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Verify that home page is visible successfully.",
+      "Click on Products button.",
+      "Verify user is navigated to ALL PRODUCTS page successfully.",
+      "Verify the products list is visible.",
+      "Click on View Product of first product.",
+      "Verify user is landed to product detail page.",
+      "Verify that product detail is visible: product name, category, price, availability, condition, brand.",
+    ],
+    extraConstraints: [
+      "Do not run agent-browser launch; opening the URL launches the browser session.",
+      "Do not snapshot the full home/products page unless a named selector fails; the products page is large and snapshots are expensive.",
+      "After recording the home-page navigation, navigate directly to https://www.automationexercise.com/products with agent-browser open and record a navigation step for that route; do not click a[href=\"/products\"] for this eval.",
+      "Before interacting with products, record and satisfy a wait for selector a[href^=\"/product_details/\"]. Do not snapshot the full products page unless that selector is missing.",
+      "Assert /products URL, visible text ALL PRODUCTS, and presence of a[href^=\"/product_details/\"].",
+      "Click the first product detail link with selector a[href^=\"/product_details/\"], record clickSelector, then assert /product_details/ URL plus visible texts Category:, Availability:, Condition:, and Brand:.",
+    ],
+  },
+  {
+    tc: "TC09",
+    title: "Search Product",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Verify that home page is visible successfully.",
+      "Click on Products button.",
+      "Verify user is navigated to ALL PRODUCTS page successfully.",
+      "Enter product name in search input and click search button.",
+      "Verify SEARCHED PRODUCTS is visible.",
+      "Verify all the products related to search are visible.",
+    ],
+    extraConstraints: [
+      "Use a product keyword visible on the product list, such as dress, top, tshirt, or jeans, and assert the searched-products section rather than site documentation.",
+      "Prefer the keyword jeans for deterministic results.",
+      "After recording the home-page navigation, navigate directly to https://www.automationexercise.com/products with agent-browser open and record a navigation step for that route.",
+      "Wait for #search_product before filling. Fill #search_product with jeans, record fillBySelector, click #submit_search, and record clickSelector.",
+      "Assert SEARCHED PRODUCTS is visible and that .features_items contains Soft Stretch Jeans or another visible jeans product.",
+    ],
+  },
+  {
+    tc: "TC10",
+    title: "Verify Subscription in home page",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Verify that home page is visible successfully.",
+      "Scroll down to footer.",
+      "Verify text SUBSCRIPTION.",
+      "Enter email address in input and click arrow button.",
+      "Verify success message You have been successfully subscribed! is visible.",
+    ],
+    extraConstraints: [
+      "Use a unique disposable subscription email for each run.",
+      "Use footer selectors #footer, #footer .single-widget h2, #susbscribe_email, #subscribe, and #success-subscribe. The email input id is intentionally misspelled susbscribe on the site.",
+      "Do not assert only global text You have been successfully subscribed!, because the success container can exist hidden before submit. Require #success-subscribe:not(.hide) plus selectorText on #success-subscribe.",
+      "Known replay caveat: the visible success state can be server/timing-sensitive on replay. Verify #success-subscribe:not(.hide) and exact success text live before flushing, but record the replay-stable selector wait #success-subscribe if the visible-state wait is flaky.",
+      "Use agent-browser eval to scroll #footer into view, fill #susbscribe_email, and click #subscribe; then record scroll/fill/click actions and selector waits.",
+    ],
+  },
+  {
+    tc: "TC11",
+    title: "Verify Subscription in Cart page",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Verify that home page is visible successfully.",
+      "Click Cart button.",
+      "Scroll down to footer.",
+      "Verify text SUBSCRIPTION.",
+      "Enter email address in input and click arrow button.",
+      "Verify success message You have been successfully subscribed! is visible.",
+    ],
+    extraConstraints: [
+      "Use a unique disposable subscription email for each run.",
+      "Use Cart selector a[href=\"/view_cart\"] and verify URL /view_cart plus #cart_items .breadcrumb containing Shopping Cart before footer subscription actions.",
+      "Reuse the TC10 subscription selectors and caveats: #footer, #footer .single-widget h2, #susbscribe_email, #subscribe, #success-subscribe, and live-only #success-subscribe:not(.hide).",
+      "Verify the exact success message live after submit, then record replay-stable wait #success-subscribe if visible-state replay is flaky.",
+    ],
+  },
+  {
+    tc: "TC12",
+    title: "Add Products in Cart",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Verify that home page is visible successfully.",
+      "Click Products button.",
+      "Hover over first product and click Add to cart.",
+      "Click Continue Shopping button.",
+      "Hover over second product and click Add to cart.",
+      "Click View Cart button.",
+      "Verify both products are added to Cart.",
+      "Verify their prices, quantity and total price.",
+    ],
+    extraConstraints: [
+      "If hover-specific recording is unsupported, use the visible Add to cart buttons exposed for the first two product cards and report the hover capability gap.",
+      "Use direct navigation to https://www.automationexercise.com/products after the home-page navigation.",
+      "Use visible non-overlay selectors .features_items .productinfo a.add-to-cart[data-product-id=\"1\"] and [data-product-id=\"2\"] to avoid hover dependence.",
+      "Wait for #cartModal.show after each add; use #cartModal.show .close-modal for Continue Shopping and #cartModal.show a[href=\"/view_cart\"] for View Cart.",
+      "Verify cart rows #product-1 and #product-2 with names Blue Top and Men Tshirt, prices Rs. 500/Rs. 400, quantities 1, and matching totals.",
+    ],
+  },
+  {
+    tc: "TC13",
+    title: "Verify Product quantity in Cart",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Verify that home page is visible successfully.",
+      "Click View Product for any product on home page.",
+      "Verify product detail is opened.",
+      "Increase quantity to 4.",
+      "Click Add to cart button.",
+      "Click View Cart button.",
+      "Verify that product is displayed in cart page with exact quantity.",
+    ],
+    extraConstraints: [
+      "Use product 1 for determinism: .features_items .choose a[href=\"/product_details/1\"], expected name Blue Top, price Rs. 500, cart row #product-1.",
+      "Set #quantity to 4 with agent-browser eval/fill and record fillBySelector [\"#quantity\", \"4\"].",
+      "Use .product-information button.cart to add to cart, #cartModal.show a[href=\"/view_cart\"] to open cart, and verify #product-1 quantity text 4 plus total Rs. 2000.",
+      "Run in a fresh browser session/cart; existing cart state can make quantity assertions nondeterministic.",
+    ],
+  },
+  {
+    tc: "TC14",
+    title: "Place Order: Register while Checkout",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Verify that home page is visible successfully.",
+      "Add products to cart.",
+      "Click Cart button.",
+      "Verify that cart page is displayed.",
+      "Click Proceed To Checkout.",
+      "Click Register / Login button.",
+      "Fill all details in Signup and create account.",
+      "Verify ACCOUNT CREATED! and click Continue button.",
+      "Verify Logged in as username at top.",
+      "Click Cart button.",
+      "Click Proceed To Checkout button.",
+      "Verify Address Details and Review Your Order.",
+      "Enter description in comment text area and click Place Order.",
+      "Enter payment details: Name on Card, Card Number, CVC, Expiration date.",
+      "Click Pay and Confirm Order button.",
+      "Verify success message Your order has been placed successfully!.",
+      "Click Delete Account button.",
+      "Verify ACCOUNT DELETED! and click Continue button.",
+    ],
+    extraConstraints: disposableAccountConstraints,
+  },
+  {
+    tc: "TC15",
+    title: "Place Order: Register before Checkout",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Verify that home page is visible successfully.",
+      "Click Signup / Login button.",
+      "Fill all details in Signup and create account.",
+      "Verify ACCOUNT CREATED! and click Continue button.",
+      "Verify Logged in as username at top.",
+      "Add products to cart.",
+      "Click Cart button.",
+      "Verify that cart page is displayed.",
+      "Click Proceed To Checkout.",
+      "Verify Address Details and Review Your Order.",
+      "Enter description in comment text area and click Place Order.",
+      "Enter payment details: Name on Card, Card Number, CVC, Expiration date.",
+      "Click Pay and Confirm Order button.",
+      "Verify success message Your order has been placed successfully!.",
+      "Click Delete Account button.",
+      "Verify ACCOUNT DELETED! and click Continue button.",
+    ],
+    extraConstraints: [
+      ...disposableAccountConstraints,
+      "Use the proven TC14 account/payment selectors, but create the account before adding products to cart.",
+      "Use product 1 Blue Top and checkout selectors .check_out, #address_delivery, #cart_info, #ordermsg textarea[name=\"message\"], a[href=\"/payment\"].check_out, and payment data-qa fields.",
+    ],
+  },
+  {
+    tc: "TC16",
+    title: "Place Order: Login before Checkout",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Verify that home page is visible successfully.",
+      "Click Signup / Login button.",
+      "Fill email, password and click Login button.",
+      "Verify Logged in as username at top.",
+      "Add products to cart.",
+      "Click Cart button.",
+      "Verify that cart page is displayed.",
+      "Click Proceed To Checkout.",
+      "Verify Address Details and Review Your Order.",
+      "Enter description in comment text area and click Place Order.",
+      "Enter payment details: Name on Card, Card Number, CVC, Expiration date.",
+      "Click Pay and Confirm Order button.",
+      "Verify success message Your order has been placed successfully!.",
+      "Click Delete Account button.",
+      "Verify ACCOUNT DELETED! and click Continue button.",
+    ],
+    extraConstraints: [
+      ...disposableAccountConstraints,
+      "Because the public site has no seeded credentials, create a disposable account as setup in the same scenario, log out, then perform the documented login-before-checkout flow with that account.",
+      "Use the proven TC14/TC15 account, login, cart, checkout, payment, and delete selectors.",
+    ],
+  },
+  {
+    tc: "TC17",
+    title: "Remove Products From Cart",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Verify that home page is visible successfully.",
+      "Add products to cart.",
+      "Click Cart button.",
+      "Verify that cart page is displayed.",
+      "Click X button corresponding to particular product.",
+      "Verify that product is removed from the cart.",
+    ],
+    extraConstraints: [
+      "Use product 1 Blue Top and remove it with #product-1 a.cart_quantity_delete.",
+      "After removal, assert #empty_cart and visible text Cart is empty! rather than only absence of product text.",
+    ],
+  },
+  {
+    tc: "TC18",
+    title: "View Category Products",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Verify that categories are visible on left side bar.",
+      "Click on Women category.",
+      "Click on any category link under Women category, for example Dress.",
+      "Verify that category page is displayed and confirm text WOMEN - TOPS PRODUCTS.",
+      "On left side bar, click on any sub-category link of Men category.",
+      "Verify that user is navigated to that category page.",
+    ],
+    extraConstraints: [
+      "The source steps mix Women > Dress with expected text WOMEN - TOPS PRODUCTS. Prefer following the visible subcategory selected and assert the matching category heading; report the source-test mismatch if the expected text does not match the clicked subcategory.",
+      "For deterministic coverage, use Women > Tops via #Women a[href=\"/category_products/2\"] to satisfy the documented WOMEN - TOPS PRODUCTS heading, then Men > Tshirts via #Men a[href=\"/category_products/3\"].",
+      "Record selectorText headings using DOM text case: Women - Tops Products and Men - Tshirts Products, because CSS uppercases the visual text.",
+    ],
+  },
+  {
+    tc: "TC19",
+    title: "View & Cart Brand Products",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Click on Products button.",
+      "Verify that Brands are visible on left side bar.",
+      "Click on any brand name.",
+      "Verify that user is navigated to brand page and brand products are displayed.",
+      "On left side bar, click on any other brand link.",
+      "Verify that user is navigated to that brand page and can see products.",
+    ],
+    extraConstraints: [
+      "Use Products page then brand sidebar selectors .brands_products, a[href=\"/brand_products/Polo\"], and a[href=\"/brand_products/H&M\"].",
+      "Record selectorText headings with DOM text case: Brand - Polo Products and Brand - H&M Products.",
+      "Assert .features_items a[href^=\"/product_details/\"] exists on each brand page.",
+    ],
+  },
+  {
+    tc: "TC20",
+    title: "Search Products and Verify Cart After Login",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Click on Products button.",
+      "Verify user is navigated to ALL PRODUCTS page successfully.",
+      "Enter product name in search input and click search button.",
+      "Verify SEARCHED PRODUCTS is visible.",
+      "Verify all the products related to search are visible.",
+      "Add those products to cart.",
+      "Click Cart button and verify that products are visible in cart.",
+      "Click Signup / Login button and submit login details.",
+      "Again, go to Cart page.",
+      "Verify that those products are visible in cart after login as well.",
+    ],
+    extraConstraints: disposableAccountConstraints,
+  },
+  {
+    tc: "TC21",
+    title: "Add review on product",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Click on Products button.",
+      "Verify user is navigated to ALL PRODUCTS page successfully.",
+      "Click on View Product button.",
+      "Verify Write Your Review is visible.",
+      "Enter name, email and review.",
+      "Click Submit button.",
+      "Verify success message Thank you for your review. is visible.",
+    ],
+    extraConstraints: [
+      "Use disposable review data and a unique email address.",
+    ],
+  },
+  {
+    tc: "TC22",
+    title: "Add to cart from Recommended items",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Scroll to bottom of page.",
+      "Verify RECOMMENDED ITEMS are visible.",
+      "Click on Add To Cart on Recommended product.",
+      "Click on View Cart button.",
+      "Verify that product is displayed in cart page.",
+    ],
+  },
+  {
+    tc: "TC23",
+    title: "Verify address details in checkout page",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Verify that home page is visible successfully.",
+      "Click Signup / Login button.",
+      "Fill all details in Signup and create account.",
+      "Verify ACCOUNT CREATED! and click Continue button.",
+      "Verify Logged in as username at top.",
+      "Add products to cart.",
+      "Click Cart button.",
+      "Verify that cart page is displayed.",
+      "Click Proceed To Checkout.",
+      "Verify that the delivery address is same address filled at the time registration of account.",
+      "Verify that the billing address is same address filled at the time registration of account.",
+      "Click Delete Account button.",
+      "Verify ACCOUNT DELETED! and click Continue button.",
+    ],
+    extraConstraints: disposableAccountConstraints,
+  },
+  {
+    tc: "TC24",
+    title: "Download Invoice after purchase order",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Verify that home page is visible successfully.",
+      "Add products to cart.",
+      "Click Cart button.",
+      "Verify that cart page is displayed.",
+      "Click Proceed To Checkout.",
+      "Click Register / Login button.",
+      "Fill all details in Signup and create account.",
+      "Verify ACCOUNT CREATED! and click Continue button.",
+      "Verify Logged in as username at top.",
+      "Click Cart button.",
+      "Click Proceed To Checkout button.",
+      "Verify Address Details and Review Your Order.",
+      "Enter description in comment text area and click Place Order.",
+      "Enter payment details: Name on Card, Card Number, CVC, Expiration date.",
+      "Click Pay and Confirm Order button.",
+      "Verify success message Your order has been placed successfully!.",
+      "Click Download Invoice button and verify invoice is downloaded successfully.",
+      "Click Continue button.",
+      "Click Delete Account button.",
+      "Verify ACCOUNT DELETED! and click Continue button.",
+    ],
+    extraConstraints: [
+      ...disposableAccountConstraints,
+      "Use the isolated eval result directory for download verification when supported. Do not rely on the user's default Downloads folder.",
+      "If download capture is unsupported, report that framework gap after verifying the order-success page and Download Invoice control are visible.",
+    ],
+  },
+  {
+    tc: "TC25",
+    title: "Verify Scroll Up using Arrow button and Scroll Down functionality",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Verify that home page is visible successfully.",
+      "Scroll down page to bottom.",
+      "Verify SUBSCRIPTION is visible.",
+      "Click on arrow at bottom right side to move upward.",
+      "Verify that page is scrolled up and Full-Fledged practice website for Automation Engineers text is visible on screen.",
+    ],
+  },
+  {
+    tc: "TC26",
+    title: "Verify Scroll Up without Arrow button and Scroll Down functionality",
+    steps: [
+      "Launch browser.",
+      `Navigate to ${automationExerciseUrl}.`,
+      "Verify that home page is visible successfully.",
+      "Scroll down page to bottom.",
+      "Verify SUBSCRIPTION is visible.",
+      "Scroll up page to top.",
+      "Verify that page is scrolled up and Full-Fledged practice website for Automation Engineers text is visible on screen.",
+    ],
+  },
+];
+
+const automationExerciseCases = automationExerciseTestCases.map(automationExerciseCase);
+
 export const cases: EvalCase[] = [
   {
     id: "saucedemo-checkout",
@@ -1168,6 +1773,7 @@ export const cases: EvalCase[] = [
     },
   },
   ...qaplaygroundCases,
+  ...automationExerciseCases,
 ];
 
 export function selectCases(caseId?: string, suite?: string, page?: string): EvalCase[] {
