@@ -80,10 +80,10 @@ Four trigger kinds; `flush` translates each row into a scenario/2 step.
 |--------------|----------------------------------------------------------------------------|
 | `navigation` | `{"route":"<url>"}`                                                        |
 | `action`     | `{"method":"<m>","args":[…],"intent":"<optional>"}`                          |
-| `wait`       | `{"condition":{"kind":"duration\|selector\|text\|url",…}}`                     |
+| `wait`       | `{"condition":{"kind":"duration\|selector\|selectorAbsent\|selectorText\|text\|url",…}}` |
 | `assert`     | `{"kind":"present\|absent\|url","args":[…],"intent":"<required>"}`             |
 
-**Allow-listed action methods:** `clickRole`, `clickByText`, `clickByLabel`, `clickSelector`, `fillByLabel`, `fillBySelector`, `pressKey`, `submit`, `selectByRole`, `scrollIntoViewByText`, `navigate`. Anything else fails at record time.
+**Allow-listed action methods:** `clickRole`, `clickByText`, `clickByLabel`, `clickSelector`, `focusSelector`, `fillByLabel`, `fillBySelector`, `uploadBySelector`, `pressKey`, `pressSelector`, `submit`, `selectBySelector`, `selectByRole`, `scrollIntoViewByText`, `navigate`. Anything else fails at record time.
 
 **Allow-listed assert kinds:** `present`, `absent`, `url`. (Replay-side dispatch for `text`/`count`/`value` isn't wired yet — they're refused at the boundary to avoid emitting self-failing scenarios.)
 
