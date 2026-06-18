@@ -348,7 +348,6 @@ async function runOpencode(
 
   let timedOut = false;
   let idleTimedOut = false;
-  let sawCommand = false;
   let lastOutputAt = Date.now();
   let lastCommand: string | undefined;
   appendEvent(eventsPath, { stream: "harness", event: "spawn", command });
@@ -360,7 +359,6 @@ async function runOpencode(
 
   const idleTimer = options.idleTimeoutMs > 0
     ? setInterval(() => {
-        if (!sawCommand) return;
         const idleMs = Date.now() - lastOutputAt;
         if (idleMs < options.idleTimeoutMs) return;
         idleTimedOut = true;
@@ -373,7 +371,6 @@ async function runOpencode(
     lastOutputAt = Date.now();
     appendEvent(eventsPath, { stream, event: "chunk", text: chunk });
     for (const commandLine of commandLines(chunk)) {
-      sawCommand = true;
       lastCommand = commandLine;
       appendEvent(eventsPath, { stream: "harness", event: "command", command: commandLine });
     }
@@ -391,7 +388,7 @@ async function runOpencode(
   if (idleTimedOut) {
     return {
       stdout,
-      stderr: `${stderr}\n[eval] idle timed out after ${options.idleTimeoutMs}ms without output after command${lastCommand ? `: ${lastCommand}` : ""}`,
+      stderr: `${stderr}\n[eval] idle timed out after ${options.idleTimeoutMs}ms without output${lastCommand ? ` after command: ${lastCommand}` : " before first command"}`,
       exitCode: exitCode || 124,
       command,
       idleTimedOut,
