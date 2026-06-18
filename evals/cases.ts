@@ -22,6 +22,7 @@ interface AutomationExerciseTestCase {
   title: string;
   steps: string[];
   extraConstraints?: string[];
+  fastPath?: string[];
 }
 
 const practicePages: PracticePage[] = [
@@ -1163,6 +1164,117 @@ const disposableAccountConstraints = [
   "When the documented case deletes the account, finish by verifying ACCOUNT DELETED! and do not reuse that account in later evals.",
 ];
 
+const automationExerciseGoldenConstraints: Record<string, string[]> = {
+  TC01: [
+    "Golden flow: open home, then navigate directly to https://www.automationexercise.com/login; do not snapshot the home page to discover Signup/Login.",
+    "Use signup/account selectors input[data-qa=\"signup-name\"], input[data-qa=\"signup-email\"], button[data-qa=\"signup-button\"], #id_gender1, input[data-qa=\"password\"], select[data-qa=\"days\"], select[data-qa=\"months\"], select[data-qa=\"years\"], #newsletter, #optin, address data-qa fields, and button[data-qa=\"create-account\"].",
+    "Record waits/assertions for input[data-qa=\"signup-email\"], ENTER ACCOUNT INFORMATION, h2[data-qa=\"account-created\"] containing Account Created!, Logged in as the unique name, and h2[data-qa=\"account-deleted\"] containing Account Deleted!.",
+  ],
+  TC02: [
+    "Golden flow: create a disposable account as setup on /login, log out with a[href=\"/logout\"], then perform the documented login with that same email/password and delete the account.",
+    "Use login selectors input[data-qa=\"login-email\"], input[data-qa=\"login-password\"], and button[data-qa=\"login-button\"]. Record /login after logout, Logged in as the unique name, and Account Deleted!.",
+  ],
+  TC03: [
+    "Golden flow: open home, then navigate directly to https://www.automationexercise.com/login; do not snapshot the home page or click through navigation for this case.",
+    "Use intentionally invalid unique-looking credentials, wait for input[data-qa=\"login-email\"], fill the two login data-qa fields, click button[data-qa=\"login-button\"], then record a visible text wait for Your email or password is incorrect!.",
+  ],
+  TC04: [
+    "Golden flow: start directly at https://www.automationexercise.com/login, create a disposable account, verify Logged in as the unique name, click a[href=\"/logout\"], assert /login and Login to your account, then log back in only for cleanup deletion.",
+    "Do not stop after logout if a disposable account was created; clean it up with login data-qa fields, a[href=\"/delete_account\"], and h2[data-qa=\"account-deleted\"].",
+  ],
+  TC05: [
+    "Golden flow: create a disposable account on /login, log out, attempt signup again with the same email, verify Email Address already exist!, then log in and delete the account for cleanup.",
+    "Use signup/login data-qa selectors and a[href=\"/logout\"]/a[href=\"/delete_account\"]; do not use a real or pre-existing email address.",
+  ],
+  TC06: [
+    "Golden boundary: record the filled contact form, upload selection, and submit-button availability only. Do not click Submit or try to accept the native confirm in replay; it is not replay-stable in this harness.",
+    `Use route https://www.automationexercise.com/contact_us via Contact Us link or direct navigation, fill input[data-qa=\"name\"], input[data-qa=\"email\"], input[data-qa=\"subject\"], textarea[data-qa=\"message\"], and upload ${automationExerciseUploadFixture} with input[name=\"upload_file\"] as uploadBySelector.`,
+    "Record waits for /contact_us, GET IN TOUCH, and input[data-qa=\"submit-button\"] presence/availability. Verify the selected filename live before flushing if needed.",
+  ],
+  TC07: [
+    "Golden flow: open home, click selector a[href=\"/test_cases\"] using agent-browser eval or smart-click, record clickSelector, then assert URL /test_cases and record a text wait for Test Cases. Do not invent selectorText on main; this page does not guarantee a main element.",
+    "Do not record present/absent asserts with CSS selectors encoded as roles. For the page content check, use record-step wait text Test Cases or selectorText on a stable selector instead.",
+  ],
+  TC08: [
+    "Golden flow: after home navigation, navigate directly to https://www.automationexercise.com/products; do not snapshot the huge products page unless selector checks fail.",
+    "Wait for and assert ALL PRODUCTS plus a[href^=\"/product_details/\"], click the first product detail link, then assert /product_details/ URL and visible detail markers Category:, Availability:, Condition:, and Brand:.",
+  ],
+  TC09: [
+    "Golden flow: after home navigation, navigate directly to https://www.automationexercise.com/products; do not click through or snapshot the product catalog.",
+    "Minimal command sequence after start: open home and record navigation; open /products and record navigation; record wait selector #search_product; fill #search_product with jeans and record fillBySelector; click #submit_search and record clickSelector; record wait text SEARCHED PRODUCTS; record wait selectorText .features_items Soft Stretch Jeans; flush, verify, replay.",
+    "Do not add extra snapshots, product-list discovery, option counting, or duplicate URL assertions for this case.",
+  ],
+  TC10: [
+    "Golden flow: stay on home, scroll #footer into view with agent-browser eval, fill #susbscribe_email with a unique disposable subscription email, and click #subscribe.",
+    "Use footer selectors #footer, #footer .single-widget h2, #susbscribe_email, #subscribe, and #success-subscribe; the input id is misspelled susbscribe on the site.",
+    "Verify #success-subscribe:not(.hide) and the exact success text live before flushing, but record replay-stable #success-subscribe if visible-state replay is flaky.",
+  ],
+  TC11: [
+    "Golden flow: click a[href=\"/view_cart\"], assert /view_cart and #cart_items .breadcrumb containing Shopping Cart, then perform the footer subscription flow.",
+    "Reuse TC10 selectors and caveat: #footer, #susbscribe_email, #subscribe, #success-subscribe, live-only #success-subscribe:not(.hide), and a unique disposable subscription email.",
+  ],
+  TC12: [
+    "Golden flow: navigate directly to https://www.automationexercise.com/products, add product ids 1 and 2 using .features_items .productinfo a.add-to-cart[data-product-id=\"1\"] and [data-product-id=\"2\"].",
+    "After each add, record a wait for #cartModal.show; use #cartModal.show .close-modal for Continue Shopping and #cartModal.show a[href=\"/view_cart\"] for View Cart.",
+    "After clicking Continue Shopping, verify the first modal has closed before adding product 2; after adding product 2, verify #cartModal.show a[href=\"/view_cart\"] is live-visible before clicking it.",
+    "Verify #product-1 and #product-2 rows with Blue Top/Men Tshirt, prices Rs. 500/Rs. 400, quantities 1, and matching totals.",
+  ],
+  TC13: [
+    "Golden flow: use product 1 for determinism, either click .features_items .choose a[href=\"/product_details/1\"] from home or navigate to https://www.automationexercise.com/product_details/1 after home.",
+    "Set #quantity to 4, record fillBySelector [\"#quantity\", \"4\"], click .product-information button.cart, wait for #cartModal.show, open #cartModal.show a[href=\"/view_cart\"], and verify #product-1 quantity 4 plus total Rs. 2000.",
+  ],
+  TC14: [
+    "Golden flow: add Blue Top before registration, open cart, click .check_out while logged out, use #checkoutModal.show a[href=\"/login\"] to register during checkout, then return to cart and checkout.",
+    "Use product selector .features_items .productinfo a.add-to-cart[data-product-id=\"1\"], modal selectors #cartModal.show and #checkoutModal.show, checkout selectors .check_out, #address_delivery, #cart_info, #ordermsg textarea[name=\"message\"], and a[href=\"/payment\"].check_out.",
+    "Use payment selectors input[data-qa=\"name-on-card\"], input[data-qa=\"card-number\"], input[data-qa=\"cvc\"], input[data-qa=\"expiry-month\"], input[data-qa=\"expiry-year\"], and button[data-qa=\"pay-button\"]. Delete the disposable account after order success.",
+  ],
+  TC15: [
+    "Golden flow: create the disposable account first on /login, then navigate directly to /products, add Blue Top, checkout, pay, and delete the account.",
+    "Use the same account, product, checkout, payment, and delete selectors as TC14; assert #address_delivery contains Agent QA and #cart_info contains Blue Top before payment.",
+  ],
+  TC16: [
+    "Golden flow: create a disposable account as setup on /login, log out, log back in with input[data-qa=\"login-email\"] and input[data-qa=\"login-password\"], then add Blue Top, checkout, pay, and delete the account.",
+    "Use the same product, checkout, payment, and delete selectors as TC14/TC15. Do not assume public seeded credentials exist.",
+  ],
+  TC17: [
+    "Golden flow: navigate directly to /products, add product 1 Blue Top, wait #cartModal.show, open cart, then remove with #product-1 a.cart_quantity_delete.",
+    "Assert #empty_cart and visible text Cart is empty! after removal rather than relying only on absence of product text.",
+  ],
+  TC18: [
+    "Golden flow: use the category sidebar accordion, click #accordian a[href=\"#Women\"], then #Women a[href=\"/category_products/2\"] for Women - Tops Products; then click #accordian a[href=\"#Men\"] and #Men a[href=\"/category_products/3\"] for Men - Tshirts Products.",
+    "Record selectorText waits using DOM text case Women - Tops Products and Men - Tshirts Products. The source steps mention Women > Dress but expect Tops; choose Tops to satisfy the expected heading and report that source mismatch if needed.",
+  ],
+  TC19: [
+    "Golden flow: navigate directly to /products, assert .brands_products, click a[href=\"/brand_products/Polo\"], verify Brand - Polo Products and product detail links, then click a[href=\"/brand_products/H&M\"] and verify Brand - H&M Products.",
+    "Use exact href selectors for brands; H&M contains an ampersand in the href and should not be URL-escaped in the CSS selector.",
+  ],
+  TC20: [
+    "Golden flow: create a disposable account first on /login, stay logged in, navigate directly to /products, search jeans, add searched product id 33, verify cart, then delete the account.",
+    "Use #search_product, #submit_search, .features_items text Soft Stretch Jeans, .features_items .productinfo a.add-to-cart[data-product-id=\"33\"], #cartModal.show a[href=\"/view_cart\"], #cart_info, and a[href=\"/delete_account\"].",
+  ],
+  TC21: [
+    "Golden flow: navigate directly to /products, click a[href^=\"/product_details/\"] for product 1, wait for Write Your Review, fill #name, #email, and #review, click #button-review, then assert Thank you for your review.",
+    "Use disposable review data and a unique email address. Do not submit broad page feedback or tutorial text as the review assertion.",
+  ],
+  TC22: [
+    "Golden flow: scroll .recommended_items into view with agent-browser eval, assert RECOMMENDED ITEMS, click .recommended_items a.add-to-cart[data-product-id], wait #cartModal.show, open #cartModal.show a[href=\"/view_cart\"], then assert a tr[id^=\"product-\"] exists in cart.",
+  ],
+  TC23: [
+    "Golden flow: create a disposable account on /login using address 123 Example Street, navigate directly to /products, add Blue Top, open /view_cart directly after the modal, checkout, verify delivery and billing addresses, then delete the account.",
+    "Assert #address_delivery and #address_invoice contain the registered address. Use #product-1 and #cart_items .breadcrumb to prove the cart before checkout.",
+  ],
+  TC24: [
+    "Golden flow: register during checkout like TC14, pay successfully, verify the order-success page and invoice link a[href^=\"/download_invoice/\"], click it, continue, then delete the account.",
+    "Download boundary: click the invoice link and report the download-capture gap if the framework cannot inspect the saved file. Do not depend on the user's default Downloads folder.",
+  ],
+  TC25: [
+    "Golden flow: scroll #footer into view with agent-browser eval, assert SUBSCRIPTION, click #scrollUp, then assert the top hero text Full-Fledged practice website for Automation Engineers is visible.",
+  ],
+  TC26: [
+    "Golden flow: scroll #footer into view with agent-browser eval, assert SUBSCRIPTION, then use a replayable scroll action or agent-browser eval window.scrollTo(0, 0) and record the corresponding scroll intent; assert the top hero text Full-Fledged practice website for Automation Engineers is visible.",
+  ],
+};
+
 function automationExerciseCase(testCase: AutomationExerciseTestCase): EvalCase {
   const numberedSteps = testCase.steps.map((step, index) => `${index + 1}. ${step}`).join("\n");
   const idSuffix = slugify(testCase.title);
@@ -1184,9 +1296,13 @@ Do not write Selenium or Playwright code. Use agent-qa and agent-browser only. R
       "Prefer stable selectors such as data-qa attributes, form field names, visible link/button names, and route URLs over brittle generated CSS selectors.",
       "Do not assert static test-case documentation text as a substitute for the live page state after interacting with the site.",
       "For account, checkout, subscription, contact, review, and cart mutations, use disposable eval data and avoid real personal/payment information.",
+      "Avoid broad snapshots on Automation Exercise home/products/search/category pages. Use direct routes and selector waits from this prompt before interacting with large pages.",
+      "Do not run agent-browser launch, clickSelector, clickRole, fillBySelector, selectBySelector, uploadBySelector, wait-for-selector, waitForSelector, or wait as browser verbs. Those method names belong in agent-qa record-step payloads; waits are agent-qa record-step wait payloads.",
       ...automationExerciseSelectorHints,
+      ...(automationExerciseGoldenConstraints[testCase.tc] || []),
       ...(testCase.extraConstraints || []),
     ],
+    fastPath: testCase.fastPath,
     scenarioMatches(scenario: unknown): boolean {
       const text = textOf(scenario);
       const titleWords = testCase.title
@@ -1260,9 +1376,27 @@ const automationExerciseTestCases: AutomationExerciseTestCase[] = [
       "Use credentials that are intentionally invalid and unique-looking, not a real user's email or password.",
       "Do not snapshot the home page to discover Signup / Login. After recording the home-page navigation, navigate directly to https://www.automationexercise.com/login with agent-browser open and record a navigation step for that route; do not click a[href=\"/login\"] for this eval.",
       "Before filling, record and satisfy a wait for selector input[data-qa=\"login-email\"] or verify it live with agent-browser eval. Do not fill immediately after route change without waiting for the selector.",
-      "Use agent-browser eval to set input[data-qa=\"login-email\"] and input[data-qa=\"login-password\"] values and dispatch input/change events, then record fillBySelector actions for those same selectors.",
-      "Use agent-browser eval to click button[data-qa=\"login-button\"], then record clickSelector for button[data-qa=\"login-button\"].",
+      "Use agent-browser fill with quoted CSS selectors for input[data-qa=\"login-email\"] and input[data-qa=\"login-password\"], then record fillBySelector actions for those same selectors.",
+      "Use agent-browser click with quoted CSS selector button[data-qa=\"login-button\"], then record clickSelector for button[data-qa=\"login-button\"].",
       "Record the final check as a wait/assert for visible text Your email or password is incorrect!, then flush, verify, and replay. Do not add extra page discovery after the login form is visible.",
+    ],
+    fastPath: [
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} start "TC03 invalid login" --session {session}`,
+      `{browser} --session {session} open ${automationExerciseUrl}`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} record-step navigation '{"route":"${automationExerciseUrl}/"}'`,
+      `{browser} --session {session} open ${automationExerciseUrl}/login`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} record-step navigation '{"route":"${automationExerciseUrl}/login"}'`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} record-step wait '{"condition":{"kind":"selector","selector":"input[data-qa=\\"login-email\\"]"},"intent":"login email field visible"}'`,
+      `{browser} --session {session} fill 'input[data-qa="login-email"]' invalid-agent-qa@example.com`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} record-step action '{"method":"fillBySelector","args":["input[data-qa=\\"login-email\\"]","invalid-agent-qa@example.com"],"intent":"enter invalid email"}'`,
+      `{browser} --session {session} fill 'input[data-qa="login-password"]' not-the-password`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} record-step action '{"method":"fillBySelector","args":["input[data-qa=\\"login-password\\"]","not-the-password"],"intent":"enter invalid password"}'`,
+      `{browser} --session {session} click 'button[data-qa="login-button"]'`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} record-step action '{"method":"clickSelector","args":["button[data-qa=\\"login-button\\"]"],"intent":"submit invalid login"}'`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} record-step wait '{"condition":{"kind":"text","text":"Your email or password is incorrect!"},"intent":"invalid login error visible"}'`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} flush`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} verify`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} replay <sid> --session {session}-replay`,
     ],
   },
   {
@@ -1338,6 +1472,18 @@ const automationExerciseTestCases: AutomationExerciseTestCase[] = [
       "Do not run agent-browser clickSelector; clickSelector is only a record-step action method after the browser action has already been driven.",
       "A known-good deterministic recording uses navigation to https://www.automationexercise.com, clickSelector a[href=\"/test_cases\"], URL assert /test_cases, and visible text Test Cases.",
     ],
+    fastPath: [
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} start "TC07 test cases page" --session {session}`,
+      `{browser} --session {session} open ${automationExerciseUrl}`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} record-step navigation '{"route":"${automationExerciseUrl}"}'`,
+      `{browser} --session {session} click 'a[href="/test_cases"]'`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} record-step action '{"method":"clickSelector","args":["a[href=\\"/test_cases\\"]"],"intent":"open test cases page"}'`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} record-step assert '{"kind":"url","args":["/test_cases"],"intent":"test cases URL reached"}'`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} record-step wait '{"condition":{"kind":"text","text":"Test Cases"},"intent":"test cases page visible"}'`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} flush`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} verify`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} replay <sid> --session {session}-replay`,
+    ],
   },
   {
     tc: "TC08",
@@ -1381,6 +1527,23 @@ const automationExerciseTestCases: AutomationExerciseTestCase[] = [
       "After recording the home-page navigation, navigate directly to https://www.automationexercise.com/products with agent-browser open and record a navigation step for that route.",
       "Wait for #search_product before filling. Fill #search_product with jeans, record fillBySelector, click #submit_search, and record clickSelector.",
       "Assert SEARCHED PRODUCTS is visible and that .features_items contains Soft Stretch Jeans or another visible jeans product.",
+    ],
+    fastPath: [
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} start "TC09 search product" --session {session}`,
+      `{browser} --session {session} open ${automationExerciseUrl}`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} record-step navigation '{"route":"${automationExerciseUrl}/"}'`,
+      `{browser} --session {session} open ${automationExerciseUrl}/products`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} record-step navigation '{"route":"${automationExerciseUrl}/products"}'`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} record-step wait '{"condition":{"kind":"selector","selector":"#search_product"},"intent":"search input visible"}'`,
+      `{browser} --session {session} fill '#search_product' jeans`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} record-step action '{"method":"fillBySelector","args":["#search_product","jeans"],"intent":"enter jeans search"}'`,
+      `{browser} --session {session} click '#submit_search'`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} record-step action '{"method":"clickSelector","args":["#submit_search"],"intent":"submit product search"}'`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} record-step wait '{"condition":{"kind":"text","text":"SEARCHED PRODUCTS"},"intent":"searched products visible"}'`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} record-step wait '{"condition":{"kind":"selectorText","selector":".features_items","text":"Soft Stretch Jeans"},"intent":"jeans result visible"}'`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} flush`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} verify`,
+      `AGENT_QA_SCENARIOS_DIR={scenarios} AGENT_QA_RECORD_DIR={record} {qa} replay <sid> --session {session}-replay`,
     ],
   },
   {

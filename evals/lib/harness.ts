@@ -11,6 +11,7 @@ export interface EvalCase {
   name: string;
   prompt: string;
   extraConstraints?: string[];
+  fastPath?: string[];
   scenarioMatches(scenario: unknown): boolean;
 }
 
@@ -20,7 +21,9 @@ export interface RunOptions {
   json: boolean;
   list: boolean;
   continueOnFailure: boolean;
+  scriptedFastPath: boolean;
   timeoutMs: number;
+  idleTimeoutMs: number;
   maxCases?: number;
   caseId?: string;
   suite?: string;
@@ -70,7 +73,9 @@ export function parseArgs(args: string[]): RunOptions {
     json: false,
     list: false,
     continueOnFailure: false,
+    scriptedFastPath: false,
     timeoutMs: 4 * 60 * 1000,
+    idleTimeoutMs: Number(process.env.AGENT_QA_EVAL_IDLE_TIMEOUT_MS || "60000"),
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -100,8 +105,14 @@ export function parseArgs(args: string[]): RunOptions {
       case "--continue-on-failure":
         options.continueOnFailure = true;
         break;
+      case "--scripted-fast-path":
+        options.scriptedFastPath = true;
+        break;
       case "--timeout-ms":
         options.timeoutMs = Number(args[++i] || options.timeoutMs);
+        break;
+      case "--idle-timeout-ms":
+        options.idleTimeoutMs = Number(args[++i] || options.idleTimeoutMs);
         break;
       case "--max-cases":
         options.maxCases = Number(args[++i] || "0");
@@ -120,6 +131,9 @@ export function parseArgs(args: string[]): RunOptions {
   }
   if (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0) {
     throw new Error("--timeout-ms must be a positive number");
+  }
+  if (!Number.isFinite(options.idleTimeoutMs) || options.idleTimeoutMs < 0) {
+    throw new Error("--idle-timeout-ms must be zero or a positive number");
   }
   if (options.maxCases !== undefined && (!Number.isFinite(options.maxCases) || options.maxCases <= 0)) {
     throw new Error("--max-cases must be a positive number");
@@ -140,9 +154,13 @@ Options:
   --model <model>    Model to use (default: github-copilot/gpt-5-mini)
   --list             List matching cases without running them
   --continue-on-failure
-                     Run every selected case instead of stopping on first failure
+                      Run every selected case instead of stopping on first failure
+  --scripted-fast-path
+                      Execute a case fastPath directly instead of invoking a model
   --json             Print JSON report
   --timeout-ms <ms>  Timeout per case (default: 240000)
+  --idle-timeout-ms <ms>
+                      Kill after no output for this long after first command (default: 60000)
   --max-cases <n>    Limit selected cases, useful for paced suite execution
   --help, -h         Show help`);
 }
@@ -163,7 +181,7 @@ function sessionNameFor(evalCase: EvalCase): string {
   return `eval-${prefix}-${tc}-${suffix}`.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 48);
 }
 
-function buildPrompt(
+export function buildPrompt(
   evalCase: EvalCase,
   agentQaBin: string,
   agentBrowserBin: string,
@@ -172,27 +190,64 @@ function buildPrompt(
   recordRoot: string,
 ): string {
   const extra = evalCase.extraConstraints?.map((line) => `- ${line}`).join("\n") || "";
+  const fastPathCommands = evalCase.fastPath?.map((line) => line
+    .replaceAll("{qa}", agentQaBin)
+    .replaceAll("{browser}", agentBrowserBin)
+    .replaceAll("{session}", sessionName)
+    .replaceAll("{scenarios}", scenariosRoot)
+    .replaceAll("{record}", recordRoot));
+
+  if (fastPathCommands?.length) {
+    const script = fastPathScript(fastPathCommands, agentQaBin);
+    return `Run this agent-qa eval by executing the commands below in order.
+
+Case: ${evalCase.name}
+Success target: flushed matching scenario.json plus passing replay artifact.
+
+Rules:
+- Execute exactly one shell command: the script block below.
+- Do not split it into separate commands.
+- Do not explain, plan, inspect files, run diagnostics, or discover alternatives.
+- Do not run Selenium, Playwright, Puppeteer, snapshots, help, version, session-list, or doctor commands.
+- The script uses set -euo pipefail, captures <sid>, and stops at the first non-zero command.
+- Use exactly these binaries: \`${agentQaBin}\` and \`${agentBrowserBin}\`.
+- Quote CSS selectors exactly as shown.
+
+\`\`\`bash
+${script}
+\`\`\`
+`;
+  }
+
   return `${evalCase.prompt}
 
 Eval constraints:
 - Work in ${repoRoot}.
 - Use agent-qa/agent-browser only. Do not use Playwright, Puppeteer, Selenium, or custom browser scripts.
 - First run \`${agentQaBin} skills get core\` and follow it.
+- Do not load opencode skills or any non-agent-qa skill. The agent-qa core skill output and this prompt are the only instructions for the eval.
+- Do not probe tool versions, available verbs, help output, session lists, or diagnostics. The allowed command shapes are already listed here.
 - Use \`${agentQaBin}\` for every agent-qa command in this eval.
 - Do not use plain \`agent-qa\`; use \`${agentQaBin}\` exactly.
 - Use \`${agentBrowserBin}\` for every browser action in this eval.
 - Do not use plain \`agent-browser\`; use \`${agentBrowserBin}\` exactly.
 - Every \`${agentBrowserBin}\` call is hard-capped by the eval wrapper. You may run multiple browser commands in sequence for a scenario. If one browser command exits non-zero or times out, stop immediately and report that command/output. Do not retry the same failed command, do not increase its timeout, and do not run doctor/session-list diagnostics.
+- Do not narrate progress between commands. Execute the next required command immediately.
+- Do not print a plan, recap, diagnosis, or suggested fix before flush/verify/replay finishes or fails.
 - Set AGENT_QA_SCENARIOS_DIR=${scenariosRoot} and AGENT_QA_RECORD_DIR=${recordRoot} for every agent-qa command.
 - Use one explicit browser session for the whole recording: \`${sessionName}\`.
 - Start with exactly this shape: \`AGENT_QA_SCENARIOS_DIR=${scenariosRoot} AGENT_QA_RECORD_DIR=${recordRoot} ${agentQaBin} start "<intent>" --session ${sessionName}\`.
 - Drive browser actions with exactly this shape: \`${agentBrowserBin} --session ${sessionName} <verb> ...\`.
 - Record actions with exactly this shape: \`AGENT_QA_SCENARIOS_DIR=${scenariosRoot} AGENT_QA_RECORD_DIR=${recordRoot} ${agentQaBin} record-step <kind> '<json>'\`.
+- After every manual agent-browser action, immediately run the matching record-step before any explanation or further browser command. Do not add a duplicate record-step after agent-qa helpers that already auto-record, such as smart-click or fill-unique.
 - Action method names such as clickSelector, clickRole, fillBySelector, and selectBySelector are record-step payload methods, not ${agentBrowserBin} verbs.
 - Waits are recorded with ${agentQaBin} record-step wait payloads. Do not run ${agentBrowserBin} wait-for-selector, waitForSelector, or wait commands; those are not eval browser verbs.
 - Do not pass \`--session\` to \`record-step\`, \`flush\`, or \`verify\`.
 - If recording succeeds, run flush, verify, and replay.
+- Keep the scenario minimal. Do not record duplicate checks for the same fact; one URL check plus one stable visible-state check is enough for simple navigation cases.
 - Stop at the first framework issue and report the command/output.
+- Stop after the first non-zero command. Do not try a corrected command, do not repair the buffer, and do not continue after parse/validation errors.
+- Payload JSON keys must match the examples exactly: navigation uses route, wait uses condition.kind plus selector/text/pattern fields, action uses method plus args, assert uses kind plus args plus intent.
 - Do not inspect repository files, grep examples, or read existing scenarios before recording. The skill output and this prompt are the only instructions for the eval.
 - Do not edit generated artifacts by hand: no scenario.json edits, no scenario.steps.jsonl edits, and no replay artifact edits.
 - If replay fails, stop and report. Do not patch generated artifacts to make replay pass.
@@ -204,7 +259,76 @@ Success target:
 `;
 }
 
-async function runOpencode(options: RunOptions, prompt: string, env: Record<string, string>): Promise<{ stdout: string; stderr: string; exitCode: number; command: string[] }> {
+async function streamToString(
+  stream: ReadableStream<Uint8Array>,
+  onChunk: (chunk: string) => void,
+): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let output = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = decoder.decode(value, { stream: true });
+    output += chunk;
+    onChunk(chunk);
+  }
+  const finalChunk = decoder.decode();
+  if (finalChunk) {
+    output += finalChunk;
+    onChunk(finalChunk);
+  }
+  return output;
+}
+
+function appendEvent(eventsPath: string, event: Record<string, unknown>): void {
+  writeFileSync(eventsPath, `${JSON.stringify({ ts: new Date().toISOString(), ...event })}\n`, {
+    encoding: "utf-8",
+    flag: "a",
+  });
+}
+
+function commandLines(chunk: string): string[] {
+  return chunk
+    .split("\n")
+    .map((line) => line.replace(/\u001b\[[0-9;]*m/g, ""))
+    .filter((line) => /^\$\s+/.test(line.trim()))
+    .map((line) => line.trim().replace(/^\$\s+/, ""));
+}
+
+function shellSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+function fastPathScript(commands: string[], agentQaBin: string): string {
+  const lines = [
+    "set -euo pipefail",
+    `printf '$ %s\\n' ${shellSingleQuote(`${agentQaBin} skills get core`)}`,
+    `${agentQaBin} skills get core`,
+    "sid=",
+  ];
+
+  for (const command of commands) {
+    lines.push(`printf '$ %s\\n' ${shellSingleQuote(command)}`);
+    if (/\sstart\s/.test(command)) {
+      lines.push(`start_output=$(${command} 2>&1)`);
+      lines.push(`printf '%s\\n' "$start_output"`);
+      lines.push(`sid=$(printf '%s\\n' "$start_output" | sed -n 's/^started sid=\\([^[:space:]]*\\).*$/\\1/p' | head -n 1)`);
+      lines.push(`test -n "$sid"`);
+    } else {
+      lines.push(command.replace("replay <sid>", 'replay "$sid"'));
+    }
+  }
+
+  return lines.join("\n");
+}
+
+async function runOpencode(
+  options: RunOptions,
+  prompt: string,
+  env: Record<string, string>,
+  eventsPath: string,
+): Promise<{ stdout: string; stderr: string; exitCode: number; command: string[]; idleTimedOut?: boolean; lastCommand?: string }> {
   const command = [
     "opencode",
     "run",
@@ -223,17 +347,57 @@ async function runOpencode(options: RunOptions, prompt: string, env: Record<stri
   });
 
   let timedOut = false;
+  let idleTimedOut = false;
+  let sawCommand = false;
+  let lastOutputAt = Date.now();
+  let lastCommand: string | undefined;
+  appendEvent(eventsPath, { stream: "harness", event: "spawn", command });
   const timer = setTimeout(() => {
     timedOut = true;
+    appendEvent(eventsPath, { stream: "harness", event: "timeout", timeoutMs: options.timeoutMs, lastCommand });
     proc.kill();
   }, options.timeoutMs);
 
+  const idleTimer = options.idleTimeoutMs > 0
+    ? setInterval(() => {
+        if (!sawCommand) return;
+        const idleMs = Date.now() - lastOutputAt;
+        if (idleMs < options.idleTimeoutMs) return;
+        idleTimedOut = true;
+        appendEvent(eventsPath, { stream: "harness", event: "idle-timeout", idleMs, idleTimeoutMs: options.idleTimeoutMs, lastCommand });
+        proc.kill();
+      }, Math.min(options.idleTimeoutMs, 5_000))
+    : undefined;
+
+  const onChunk = (stream: "stdout" | "stderr", chunk: string) => {
+    lastOutputAt = Date.now();
+    appendEvent(eventsPath, { stream, event: "chunk", text: chunk });
+    for (const commandLine of commandLines(chunk)) {
+      sawCommand = true;
+      lastCommand = commandLine;
+      appendEvent(eventsPath, { stream: "harness", event: "command", command: commandLine });
+    }
+  };
+
   const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
+    streamToString(proc.stdout, (chunk) => onChunk("stdout", chunk)),
+    streamToString(proc.stderr, (chunk) => onChunk("stderr", chunk)),
     proc.exited,
   ]);
   clearTimeout(timer);
+  if (idleTimer) clearInterval(idleTimer);
+  appendEvent(eventsPath, { stream: "harness", event: "exit", exitCode, timedOut, idleTimedOut, lastCommand });
+
+  if (idleTimedOut) {
+    return {
+      stdout,
+      stderr: `${stderr}\n[eval] idle timed out after ${options.idleTimeoutMs}ms without output after command${lastCommand ? `: ${lastCommand}` : ""}`,
+      exitCode: exitCode || 124,
+      command,
+      idleTimedOut,
+      lastCommand,
+    };
+  }
 
   if (timedOut) {
     return {
@@ -241,10 +405,41 @@ async function runOpencode(options: RunOptions, prompt: string, env: Record<stri
       stderr: `${stderr}\n[eval] timed out after ${options.timeoutMs}ms`,
       exitCode: exitCode || 124,
       command,
+      lastCommand,
     };
   }
 
-  return { stdout, stderr, exitCode, command };
+  return { stdout, stderr, exitCode, command, lastCommand };
+}
+
+async function runScriptedFastPath(
+  script: string,
+  env: Record<string, string>,
+  eventsPath: string,
+): Promise<{ stdout: string; stderr: string; exitCode: number; command: string[]; lastCommand?: string }> {
+  const command = ["/bin/bash", "-lc", script];
+  appendEvent(eventsPath, { stream: "harness", event: "spawn-scripted-fast-path", command });
+  const proc = Bun.spawn(command, {
+    cwd: repoRoot,
+    stdout: "pipe",
+    stderr: "pipe",
+    env,
+  });
+  let lastCommand: string | undefined;
+  const onChunk = (stream: "stdout" | "stderr", chunk: string) => {
+    appendEvent(eventsPath, { stream, event: "chunk", text: chunk });
+    for (const commandLine of commandLines(chunk)) {
+      lastCommand = commandLine;
+      appendEvent(eventsPath, { stream: "harness", event: "command", command: commandLine });
+    }
+  };
+  const [stdout, stderr, exitCode] = await Promise.all([
+    streamToString(proc.stdout, (chunk) => onChunk("stdout", chunk)),
+    streamToString(proc.stderr, (chunk) => onChunk("stderr", chunk)),
+    proc.exited,
+  ]);
+  appendEvent(eventsPath, { stream: "harness", event: "exit", exitCode, scriptedFastPath: true, lastCommand });
+  return { stdout, stderr, exitCode, command, lastCommand };
 }
 
 function createEvalBin(agentQaTarget: string, agentBrowserTarget: string): { binDir: string; agentQa: string; agentBrowser: string } {
@@ -254,7 +449,54 @@ function createEvalBin(agentQaTarget: string, agentBrowserTarget: string): { bin
   const agentBrowser = resolve(binDir, "agent-browser");
   const resolvedAgentQaTarget = resolveExecutableTarget(agentQaTarget);
   const resolvedAgentBrowserTarget = resolveExecutableTarget(agentBrowserTarget);
-  writeFileSync(agentQa, `#!/bin/sh\nexec ${JSON.stringify(resolvedAgentQaTarget)} "$@"\n`, "utf-8");
+  writeFileSync(agentQa, `#!/bin/sh
+if [ "\${AGENT_QA_EVAL_COMPACT_SKILL:-1}" = "1" ] && [ "$1" = "skills" ] && [ "$2" = "get" ] && [ "$3" = "core" ]; then
+  cat <<'EOF'
+# agent-qa core eval contract
+
+Record one replayable browser scenario. Use only these command shapes.
+
+Start:
+AGENT_QA_SCENARIOS_DIR=<dir> AGENT_QA_RECORD_DIR=<dir> agent-qa start "<intent>" --session <session>
+
+Browser actions:
+agent-browser --session <session> open <url>
+agent-browser --session <session> click <visible text or CSS selector>
+agent-browser --session <session> fill <CSS selector> <value>
+agent-browser --session <session> upload <CSS selector> <file>
+agent-browser --session <session> eval '<js expression>'
+
+Do not use agent-browser launch, snapshot, wait, wait-for-selector, clickSelector, fillBySelector, selectBySelector, uploadBySelector, or clickRole as browser verbs. Do not add --url to open or --js to eval; pass the URL/expression as the next positional argument.
+Quote CSS selectors that contain #, [, ], quotes, spaces, or shell metacharacters, for example agent-browser --session <session> fill '#search_product' jeans and agent-browser --session <session> click 'a[href="/test_cases"]'.
+
+Record immediately after each manual browser action:
+agent-qa record-step navigation '{"route":"https://example.com/path"}'
+agent-qa record-step action '{"method":"clickSelector","args":["#selector"],"intent":"click target"}'
+agent-qa record-step action '{"method":"fillBySelector","args":["#selector","value"],"intent":"fill target"}'
+agent-qa record-step action '{"method":"selectBySelector","args":["#selector","value"],"intent":"select option"}'
+agent-qa record-step action '{"method":"uploadBySelector","args":["#selector","evals/fixtures/file.txt"],"intent":"upload file"}'
+
+Waits/checks:
+agent-qa record-step wait '{"condition":{"kind":"selector","selector":"#selector"},"intent":"selector visible"}'
+agent-qa record-step wait '{"condition":{"kind":"selectorText","selector":"#selector","text":"Expected text"},"intent":"text visible"}'
+agent-qa record-step wait '{"condition":{"kind":"text","text":"Expected text"},"intent":"text visible"}'
+agent-qa record-step wait '{"condition":{"kind":"url","pattern":"/path"},"intent":"url reached"}'
+agent-qa record-step assert '{"kind":"url","args":["/path"],"intent":"url reached"}'
+
+No aliases or invented keys: navigation not nav, route not url, condition.kind not selector at top level, text not pattern for text waits. Do not add notes or timeout keys.
+CSS selectors do not go in assert present/absent args; use wait selector/selectorText for CSS checks.
+Do not record duplicate steps after smart-click/fill-unique if you use them; prefer manual browser action plus record-step in evals.
+Stop after the first non-zero command. Do not repair, retry, truncate, or continue.
+
+Finish:
+agent-qa flush
+agent-qa verify
+agent-qa replay <sid> --session <session>-replay
+EOF
+  exit 0
+fi
+exec ${JSON.stringify(resolvedAgentQaTarget)} "$@"
+`, "utf-8");
   writeFileSync(agentBrowser, `#!/bin/sh
 timeout_ms=\${AGENT_QA_EVAL_AGENT_BROWSER_TIMEOUT_MS:-45000}
 timeout_sec=$(( (timeout_ms + 999) / 1000 ))
@@ -315,16 +557,28 @@ function forbiddenAgentBehavior(stdout: string, stderr: string): string | undefi
   const output = `${stdout}\n${stderr}`;
   const browserTimeouts = output.match(/\[eval-agent-browser\] timed out after/g) || [];
   if (browserTimeouts.length > 1) return "agent retried agent-browser after an eval-wrapper timeout";
+  const shellFailure = output.match(/(?:zsh:\d+: no matches found: [^\n]+|Missing arguments for: [^\n]+|Usage: agent-browser [^\n]+)/)?.[0];
+  if (shellFailure) return `agent browser command failed and was not handled as terminal: ${shellFailure}`;
+  const firstCliError = output.match(/agent-qa record-step: [^\n]+|Unknown command: [^\n]+|agent-qa flush: [^\n]+|agent-qa verify: [^\n]+|agent-qa replay: [^\n]+/i)?.[0];
+  if (firstCliError) return `agent continued after CLI error: ${firstCliError}`;
+  const unsupportedBrowserFlag = output.match(/^.*\$\s+.*(?:\S*agent-browser|\/tmp\/agent-qa-eval-bin\/agent-browser).*\s(--url|--js)\b/im)?.[1];
+  if (unsupportedBrowserFlag) return `agent used unsupported agent-browser flag ${unsupportedBrowserFlag}`;
+  const agentBrowserCommand = /^.*\$\s+.*(?:\S*agent-browser|\/tmp\/agent-qa-eval-bin\/agent-browser)\s+(?:--session\s+\S+\s+)?(clickSelector|clickRole|fillBySelector|selectBySelector|uploadBySelector|wait-for-selector|waitForSelector|wait)\b/im;
+  if (agentBrowserCommand.test(output)) {
+    return "agent used a record-step method or unsupported wait as an agent-browser verb";
+  }
   const patterns: Array<[RegExp, string]> = [
     [/apply_patch/i, "agent attempted to patch files during eval"],
+    [/\$\s+.*agent-browser\s+--session\s+\S+\s+snapshot\b/i, "agent used a broad agent-browser snapshot during eval instead of selector checks"],
     [/updated scenario file/i, "agent edited generated scenario.json"],
     [/relied on scenario\.json edits|preserving manual scenario edits|manual scenario\.json edit/i, "agent relied on scenario.json edits"],
     [/manual edits/i, "agent relied on manual artifact edits"],
     [/fixed .*flushed scenario/i, "agent fixed the flushed scenario instead of re-recording"],
     [/move scenario\.json edits/i, "agent suggested preserving manual scenario edits"],
+    [/shall i .*\?|do you want me to|if you confirm/i, "agent stopped to ask for confirmation instead of completing or failing the eval"],
     [/\$\s+agent-qa\s/i, "agent used plain agent-qa instead of eval wrapper"],
     [/\$\s+agent-browser\s/i, "agent used plain agent-browser instead of eval wrapper"],
-    [/Unknown command: (launch|clickSelector|wait-for-selector|waitForSelector|wait)\b/i, "agent used an unsupported agent-browser verb"],
+    [/Unknown command: (launch|clickSelector|clickRole|fillBySelector|selectBySelector|uploadBySelector|wait-for-selector|waitForSelector|wait)\b/i, "agent used an unsupported agent-browser verb"],
   ];
   for (const [pattern, reason] of patterns) {
     if (pattern.test(output)) return reason;
@@ -361,11 +615,27 @@ function inspectArtifacts(evalCase: EvalCase, scenariosRoot: string): { scenario
   return { error: `no flushed scenario matched ${evalCase.id}` };
 }
 
+function inspectRecordProgress(recordRoot: string): string {
+  const stepsPath = resolve(recordRoot, "scenario.steps.jsonl");
+  if (!existsSync(stepsPath)) return "no record steps were written";
+  const content = readFileSync(stepsPath, "utf-8").trim();
+  if (!content) return "record steps file is empty";
+  return `${content.split("\n").length} record step(s) were written before failure`;
+}
+
+function timeoutDetail(recordRoot: string, artifacts: { scenario?: string; error?: string }): string {
+  if (artifacts.scenario) {
+    return `${artifacts.error || "timed out after scenario creation"}; scenario=${artifacts.scenario}`;
+  }
+  return inspectRecordProgress(recordRoot);
+}
+
 export async function runCase(evalCase: EvalCase, options: RunOptions): Promise<EvalReport> {
   const runId = mintRunId(evalCase);
   const resultRoot = resolve(evalsRoot, "results", runId);
   const scenariosRoot = resolve(resultRoot, "scenarios");
   const recordRoot = resolve(resultRoot, "record");
+  const eventsPath = resolve(resultRoot, "events.jsonl");
   const sessionName = sessionNameFor(evalCase);
   mkdirSync(scenariosRoot, { recursive: true });
   mkdirSync(recordRoot, { recursive: true });
@@ -376,6 +646,12 @@ export async function runCase(evalCase: EvalCase, options: RunOptions): Promise<
   const evalBin = createEvalBin(agentQaTarget, agentBrowserTarget);
   const agentQaBin = evalBin.agentQa;
   const agentBrowserBin = evalBin.agentBrowser;
+  const fastPathCommands = evalCase.fastPath?.map((line) => line
+    .replaceAll("{qa}", agentQaBin)
+    .replaceAll("{browser}", agentBrowserBin)
+    .replaceAll("{session}", sessionName)
+    .replaceAll("{scenarios}", scenariosRoot)
+    .replaceAll("{record}", recordRoot));
   const prompt = buildPrompt(evalCase, agentQaBin, agentBrowserBin, sessionName, scenariosRoot, recordRoot);
   writeFileSync(resolve(resultRoot, "prompt.txt"), prompt, "utf-8");
   writeStatus(resultRoot, {
@@ -432,7 +708,9 @@ export async function runCase(evalCase: EvalCase, options: RunOptions): Promise<
       recordRoot,
       sessionName,
     });
-    const result = await runOpencode(options, prompt, env);
+    const result = options.scriptedFastPath && fastPathCommands?.length
+      ? await runScriptedFastPath(fastPathScript(fastPathCommands, agentQaBin), env, eventsPath)
+      : await runOpencode(options, prompt, env, eventsPath);
     stdout = result.stdout;
     stderr = result.stderr;
     exitCode = result.exitCode;
@@ -448,11 +726,21 @@ export async function runCase(evalCase: EvalCase, options: RunOptions): Promise<
 
   const artifacts = inspectArtifacts(evalCase, scenariosRoot);
   const forbiddenBehavior = forbiddenAgentBehavior(stdout, stderr);
+  const timeoutMatch = stderr.match(/\[eval\] timed out after \d+ms/);
+  const idleTimeoutMatch = stderr.match(/\[eval\] idle timed out after \d+ms[^\n]*/);
+  const completedArtifacts = Boolean(artifacts.scenario && artifacts.replay && !artifacts.error);
   const pass = !error &&
-    exitCode === 0 &&
     !forbiddenBehavior &&
-    !artifacts.error &&
-    Boolean(artifacts.scenario && artifacts.replay);
+    completedArtifacts &&
+    (exitCode === 0 || Boolean(timeoutMatch) || Boolean(idleTimeoutMatch));
+  const failureError = pass
+    ? undefined
+    : error ||
+      forbiddenBehavior ||
+      idleTimeoutMatch?.[0] ||
+      (!completedArtifacts && timeoutMatch ? `${timeoutMatch[0]} (${timeoutDetail(recordRoot, artifacts)})` : undefined) ||
+      artifacts.error ||
+      (exitCode === 0 ? undefined : `agent exited ${exitCode}`);
   const report: EvalReport = {
     pass,
     caseId: evalCase.id,
@@ -469,10 +757,7 @@ export async function runCase(evalCase: EvalCase, options: RunOptions): Promise<
     replay: artifacts.replay,
     command,
     forbiddenBehavior,
-    error: error ||
-      forbiddenBehavior ||
-      artifacts.error ||
-      (exitCode === 0 ? undefined : `agent exited ${exitCode}`),
+    error: failureError,
     stdout,
     stderr,
   };
