@@ -414,7 +414,7 @@ async function runScriptedFastPath(
   env: Record<string, string>,
   eventsPath: string,
 ): Promise<{ stdout: string; stderr: string; exitCode: number; command: string[]; lastCommand?: string }> {
-  const command = ["/bin/bash", "-lc", script];
+  const command = ["/bin/bash", "-c", script];
   appendEvent(eventsPath, { stream: "harness", event: "spawn-scripted-fast-path", command });
   const proc = Bun.spawn(command, {
     cwd: repoRoot,
