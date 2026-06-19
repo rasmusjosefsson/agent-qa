@@ -16,6 +16,9 @@ bun run eval:saucedemo
 # Run QA Playground cases
 bun run eval:qaplayground
 
+# Run Automation Exercise cases
+bun run eval:automation-exercise
+
 # Run one QA Playground page
 bun run run.ts --suite qaplayground --page forms
 
@@ -27,6 +30,9 @@ bun run golden:forms:tc02
 
 # Run one case
 bun run run.ts --case qaplayground-alerts-dialogs-tc09-advanced-dialog-close
+
+# Run one Automation Exercise case
+bun run run.ts --case automation-exercise-tc07-verify-test-cases-page
 
 # List cases without running models
 bun run run.ts --suite qaplayground --list
@@ -72,6 +78,29 @@ Native alert/confirm/prompt cases should be added after agent-qa has explicit di
 Use `QA_PLAYGROUND_RUNBOOK.md` when advancing the catalog one `TCxx` at a time and updating `HANDOFF.md` for the next agent. Use `QA_PLAYGROUND_LOG.md` as the running history of fixes, discoveries, artifacts, and follow-ups.
 
 See `PRACTICE_SITES.md` for external practice sites queued for later suites.
+
+## Automation Exercise
+
+Includes the 26 public web UI cases from `https://www.automationexercise.com`, covering registration, login, contact, products, search, subscription, cart, checkout, categories, brands, reviews, invoice download, and scroll behavior.
+
+List cases:
+
+```bash
+bun run run.ts --suite automation-exercise --list
+```
+
+Start execution with low-risk cases before account/cart mutations:
+
+```bash
+bun run run.ts --case automation-exercise-tc07-verify-test-cases-page
+bun run run.ts --case automation-exercise-tc08-verify-all-products-and-product-detail-page
+```
+
+Deterministic framework/site proof:
+
+```bash
+bun run golden:automation-exercise:tc07
+```
 
 Defaults:
 
