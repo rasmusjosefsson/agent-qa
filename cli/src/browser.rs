@@ -414,8 +414,38 @@ fn socket_stall_hint(stderr: &str, stdout: &str, verb: &str, session: &str) -> S
 
 /// Open a URL in the named session's live tab.
 pub fn open(session: &str, url: &str) -> Result<(), AgentBrowserError> {
-    run(session, ["open", url], RunOpts::new())?;
+    let mut last_err = None;
+    for attempt in 1..=3 {
+        match run(session, ["open", url], RunOpts::new().capture()) {
+            Ok(_) => return Ok(()),
+            Err(err) if is_transient_navigation_error(&err) && attempt < 3 => {
+                eprintln!(
+                    "[agent-browser] transient navigation error opening {url}; retrying attempt {}/3: {err}",
+                    attempt + 1
+                );
+                std::thread::sleep(Duration::from_millis(500 * attempt as u64));
+                last_err = Some(err);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    if let Some(err) = last_err {
+        return Err(err);
+    }
     Ok(())
+}
+
+fn is_transient_navigation_error(err: &AgentBrowserError) -> bool {
+    match err {
+        AgentBrowserError::NonZero { verb, stderr, .. } if verb == "open" => {
+            stderr.is_empty()
+                || stderr.contains("net::ERR_HTTP_RESPONSE_CODE_FAILURE")
+                || stderr.contains("net::ERR_CONNECTION_RESET")
+                || stderr.contains("net::ERR_TIMED_OUT")
+                || stderr.contains("Navigation failed")
+        }
+        _ => false,
+    }
 }
 
 /// Wait `ms` milliseconds.
@@ -1059,6 +1089,50 @@ mod tests {
             invocation.contains("--session default open https://example.com"),
             "got {invocation:?}"
         );
+        clear_bin();
+    }
+
+    #[test]
+    fn open_retries_transient_navigation_failures() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let state = tmp.path().join("count");
+        let body = format!(
+            "#!/bin/sh\nCOUNT_FILE='{}'\n\
+            N=$( ([ -f \"$COUNT_FILE\" ] && cat \"$COUNT_FILE\") || echo 0)\n\
+            N=$((N+1))\n\
+            echo \"$N\" > \"$COUNT_FILE\"\n\
+            if [ \"$N\" -eq 1 ]; then\n  echo 'Navigation failed: net::ERR_HTTP_RESPONSE_CODE_FAILURE' 1>&2\n  exit 1\nfi\n\
+            echo 'ok'\nexit 0\n",
+            state.display()
+        );
+        let bin = fake_browser(tmp.path(), &body);
+        set_bin(&bin);
+        open("default", "https://example.com").unwrap();
+        let n: u32 = fs::read_to_string(&state).unwrap().trim().parse().unwrap();
+        assert_eq!(n, 2, "expected one transient navigation retry");
+        clear_bin();
+    }
+
+    #[test]
+    fn open_retries_empty_open_failures() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let state = tmp.path().join("count");
+        let body = format!(
+            "#!/bin/sh\nCOUNT_FILE='{}'\n\
+            N=$( ([ -f \"$COUNT_FILE\" ] && cat \"$COUNT_FILE\") || echo 0)\n\
+            N=$((N+1))\n\
+            echo \"$N\" > \"$COUNT_FILE\"\n\
+            if [ \"$N\" -eq 1 ]; then exit 1; fi\n\
+            echo 'ok'\nexit 0\n",
+            state.display()
+        );
+        let bin = fake_browser(tmp.path(), &body);
+        set_bin(&bin);
+        open("default", "https://example.com").unwrap();
+        let n: u32 = fs::read_to_string(&state).unwrap().trim().parse().unwrap();
+        assert_eq!(n, 2, "expected one empty open failure retry");
         clear_bin();
     }
 

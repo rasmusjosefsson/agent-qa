@@ -3,7 +3,7 @@ import { parseArgs, printReport, runCase, type EvalReport, type RunSummary } fro
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
-  const selected = selectCases(options.caseId, options.suite, options.page);
+  const selected = selectCases(options.caseId, options.suite, options.page).slice(0, options.maxCases);
 
   if (selected.length === 0) {
     console.error("No eval cases matched.");
