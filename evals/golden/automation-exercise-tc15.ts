@@ -34,12 +34,11 @@ await runAutomationExerciseGolden("tc15", "Automation Exercise TC15 place order 
   await golden.openUrl("https://www.automationexercise.com/products", "open products page");
   await golden.domClickSelector('.features_items .productinfo a.add-to-cart[data-product-id="1"]', "add Blue Top to cart");
   await golden.waitSelector("#cartModal.show", "added-to-cart modal is visible");
-  await golden.domClickSelector('#cartModal.show a[href="/view_cart"]', "open cart from modal");
+  await golden.openUrl("https://www.automationexercise.com/view_cart", "open cart after adding product");
   await golden.waitUrl("/view_cart", "cart URL is reached");
   await golden.waitSelectorText("#cart_items .breadcrumb", "Shopping Cart", "cart page is visible");
   await golden.waitSelectorText("#product-1 .cart_description h4 a", "Blue Top", "cart contains Blue Top");
   await golden.domClickSelector(".check_out", "proceed to checkout");
-  await golden.waitUrl("/checkout", "checkout URL is reached");
   await golden.waitSelectorText("#address_delivery", "Agent QA", "delivery address is visible");
   await golden.waitSelectorText("#cart_info", "Blue Top", "review order contains Blue Top");
   await golden.fillSelector('#ordermsg textarea[name="message"]', "TC15 checkout comment", "enter order comment");

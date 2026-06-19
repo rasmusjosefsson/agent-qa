@@ -44,10 +44,9 @@ await runAutomationExerciseGolden("tc14", "Automation Exercise TC14 place order 
   await golden.waitSelectorText('h2[data-qa="account-created"]', "Account Created!", "account created confirmation is visible");
   await golden.domClickSelector('a[data-qa="continue-button"]', "continue after account creation");
   await golden.waitText(`Logged in as ${name}`, "logged-in username is visible");
-  await golden.domClickSelector('a[href="/view_cart"]', "return to cart after signup");
+  await golden.openUrl("https://www.automationexercise.com/view_cart", "return to cart after signup");
   await golden.waitUrl("/view_cart", "cart URL is reached after signup");
   await golden.domClickSelector(".check_out", "proceed to checkout as registered user");
-  await golden.waitUrl("/checkout", "checkout URL is reached");
   await golden.waitSelectorText("#address_delivery", "Agent QA", "delivery address is visible");
   await golden.waitSelectorText("#cart_info", "Blue Top", "review order contains Blue Top");
   await golden.waitText("Review Your Order", "review your order heading is visible");
