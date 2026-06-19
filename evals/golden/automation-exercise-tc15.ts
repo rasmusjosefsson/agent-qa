@@ -31,7 +31,8 @@ await runAutomationExerciseGolden("tc15", "Automation Exercise TC15 place order 
   await golden.waitSelectorText('h2[data-qa="account-created"]', "Account Created!", "account created confirmation is visible");
   await golden.domClickSelector('a[data-qa="continue-button"]', "continue after account creation");
   await golden.waitText(`Logged in as ${name}`, "logged-in username is visible");
-  await golden.openUrl("https://www.automationexercise.com/products", "open products page");
+  await golden.domClickSelector('a[href="/"]', "return home before adding product");
+  await golden.waitSelectorText("#slider", "AutomationExercise", "home page is visible after registration");
   await golden.domClickSelector('.features_items .productinfo a.add-to-cart[data-product-id="1"]', "add Blue Top to cart");
   await golden.waitSelector("#cartModal.show", "added-to-cart modal is visible");
   await golden.openUrl("https://www.automationexercise.com/view_cart", "open cart after adding product");

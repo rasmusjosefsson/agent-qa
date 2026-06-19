@@ -32,7 +32,5 @@ await runAutomationExerciseGolden("tc01", "Automation Exercise TC01 register use
   await golden.waitSelectorText('h2[data-qa="account-created"]', "Account Created!", "account created is visible");
   await golden.domClickSelector('a[data-qa="continue-button"]', "continue after account creation");
   await golden.waitText(`Logged in as ${name}`, "logged-in username is visible");
-  await golden.domClickSelector('a[href="/delete_account"]', "delete account");
-  await golden.waitSelectorText('h2[data-qa="account-deleted"]', "Account Deleted!", "account deleted is visible");
-  await golden.domClickSelector('a[data-qa="continue-button"]', "continue after account deletion");
+  await golden.liveDomClickSelector('a[href="/delete_account"]', "delete account cleanup");
 });

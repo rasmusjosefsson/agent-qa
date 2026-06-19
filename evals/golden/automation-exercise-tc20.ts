@@ -5,10 +5,12 @@ await runAutomationExerciseGolden("tc20", "Automation Exercise TC20 search produ
   const unique = Date.now();
   const name = `Agent QA ${unique}`;
   const email = `agent-qa-${unique}@example.com`;
+  const replayName = "Agent QA {{vars._unique}}";
+  const replayEmail = "agent-qa-{{vars._unique}}@example.com";
   const password = "Password123!";
   await golden.openUrl("https://www.automationexercise.com/login", "open signup login page");
-  await golden.fillSelector('input[data-qa="signup-name"]', name, "enter signup name");
-  await golden.fillSelector('input[data-qa="signup-email"]', email, "enter signup email");
+  await golden.fillSelectorReplayValue('input[data-qa="signup-name"]', name, replayName, "enter signup name");
+  await golden.fillSelectorReplayValue('input[data-qa="signup-email"]', email, replayEmail, "enter signup email");
   await golden.domClickSelector('button[data-qa="signup-button"]', "submit signup form");
   await golden.waitText("ENTER ACCOUNT INFORMATION", "account information is visible");
   await golden.domClickSelector("#id_gender1", "select title Mr");

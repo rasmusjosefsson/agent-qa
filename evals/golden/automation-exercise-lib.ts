@@ -34,7 +34,9 @@ export interface AutomationExerciseGolden extends GoldenContext {
   openUrl(url: string, intent: string): Promise<void>;
   clickText(text: string, intent: string): Promise<void>;
   domClickSelector(selector: string, intent: string): Promise<void>;
+  liveDomClickSelector(selector: string, intent: string): Promise<void>;
   fillSelector(selector: string, value: string, intent: string): Promise<void>;
+  fillSelectorReplayValue(selector: string, liveValue: string, replayValue: string, intent: string): Promise<void>;
   uploadSelector(selector: string, fixtureName: string, intent: string): Promise<void>;
   selectSelector(selector: string, value: string, intent: string): Promise<void>;
   waitUrl(path: string, intent: string): Promise<void>;
@@ -137,6 +139,15 @@ export async function runAutomationExerciseGolden(
       ]);
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
+    async liveDomClickSelector(selector, stepIntent) {
+      await run(ctx, `live dom click ${selector}`, [
+        ctx.agentBrowser,
+        "--session",
+        ctx.session,
+        "eval",
+        `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) throw new Error("selector not found"); el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window })); el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window })); el.click(); return true; })()`,
+      ]);
+    },
     async fillSelector(selector, value, stepIntent) {
       await run(ctx, `fill ${selector}`, [
         ctx.agentBrowser,
@@ -146,6 +157,16 @@ export async function runAutomationExerciseGolden(
         `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) throw new Error("selector not found"); el.focus(); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`,
       ]);
       await record(ctx, "action", { method: "fillBySelector", args: [selector, value], intent: stepIntent });
+    },
+    async fillSelectorReplayValue(selector, liveValue, replayValue, stepIntent) {
+      await run(ctx, `fill ${selector}`, [
+        ctx.agentBrowser,
+        "--session",
+        ctx.session,
+        "eval",
+        `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) throw new Error("selector not found"); el.focus(); el.value = ${JSON.stringify(liveValue)}; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`,
+      ]);
+      await record(ctx, "action", { method: "fillBySelector", args: [selector, replayValue], intent: stepIntent });
     },
     async uploadSelector(selector, fixtureName, stepIntent) {
       const path = resolve(repoRoot, "evals/fixtures", fixtureName);
