@@ -9,11 +9,20 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | --- | --- |
 | `start` | Mint a new scenario directory + skeleton `scenario.json` |
 | `record-step` | Append one step to the in-flight scenario via the recorder |
+| `run-step <kind> <payload>` | Dispatch ONE trigger payload against the live session for author-time feedback, without recording. Same payload shapes as `record-step`; prints a `{ok,…}` JSON line. `--session`. |
+| `aria-snapshot` | Dump the live page's accessibility tree (element-picker data). Flags: `--interactive`, `--json`, `--session`. |
+| `cdp-url [--session] [--json]` | Print the live session's CDP WebSocket endpoint. Powers the editor's inline live-browser pane (screencast + click-to-record). Read-only. |
+| `buffer list \| delete <i> \| move <from> <to> \| clear` | Inspect / reorder / delete rows in the in-flight buffer; delete + move re-index `s0,s1,…` so `flush` stays clean. `list --json`. |
 | `fill-unique` | Locator-uniqueness helper for `type`/`fill` style do steps |
 | `smart-click` | High-level click that resolves a label to a unique locator |
 | `truncate` | Drop the trailing N steps from the in-flight scenario |
 | `flush` | Persist the recorder buffer to `scenario.json` |
 | `verify` | Cross-check the on-disk scenario against recorder sidecars |
+
+> `run-step`, `aria-snapshot`, and `buffer` are the primitives the local
+> **authoring editor** (`agent-qa report view` → the *Editor* tab) shells
+> to build a scenario by targeting the UI. The editor is hosted by the
+> Node launcher; the Rust CLI still owns every record/run/flush mutation.
 
 ## Replay
 
