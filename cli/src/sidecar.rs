@@ -283,6 +283,91 @@ pub fn write_run_audit(run: &RunPaths, audit: &RunAudit) -> Result<()> {
     atomic_write_file(&run.run_root.join("audit.json"), body.as_bytes())
 }
 
+// ---------- event stream (events.jsonl + status.json) ----------
+
+/// One row appended to `<run_root>/events.jsonl`.
+///
+/// This is the per-step event stream introduced as an additive primitive
+/// (it does not change replay behaviour or the existing stderr trace). It
+/// is an append-only lifecycle log: a `running` row is written when a step
+/// starts and a terminal `pass`/`fail` row when it finishes. Consumers
+/// that only want the result history filter to terminal rows; a live
+/// tailer renders `running` rows as in-flight. The cheap "where is the run
+/// right now" poll lives in [`RunStatus`] so a watcher need not re-parse
+/// the whole stream.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StepEvent {
+    /// 1-based position of the step within the flattened run.
+    pub idx: u32,
+    /// Total number of steps in the flattened run (fixed for the run).
+    pub total: u32,
+    /// Literal step id (matches the sidecar `<stepId>` keying).
+    pub id: String,
+    /// The step's `intent` string, copied verbatim.
+    pub intent: String,
+    /// Dispatch-kind label, e.g. `do:click` or `check`.
+    pub kind: String,
+    /// `running` | `pass` | `fail`.
+    pub status: String,
+    /// Wall-clock duration of the step in milliseconds (terminal rows).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ms: Option<u64>,
+    /// Failure message (`fail` rows only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Run-root-relative path to the per-step screenshot, when captured
+    /// (e.g. `screenshots/<id>.png`). Absent under `--no-sidecars`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screenshot: Option<String>,
+    /// Run-root-relative path to the per-step ARIA snapshot, when captured
+    /// (e.g. `snapshots/<id>.txt`). Absent under `--no-sidecars`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<String>,
+}
+
+/// Append one event row to `<run_root>/events.jsonl` — one compact JSON
+/// object per line. Opened in append mode so the stream is durable while
+/// the run is in flight (a tailer can read completed rows immediately).
+pub fn append_event(run: &RunPaths, ev: &StepEvent) -> Result<()> {
+    let path = run.run_root.join("events.jsonl");
+    use std::fs::OpenOptions;
+    let mut f = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("open {}", path.display()))?;
+    let line = format!("{}\n", serde_json::to_string(ev)?);
+    f.write_all(line.as_bytes())
+        .with_context(|| format!("append {}", path.display()))?;
+    Ok(())
+}
+
+/// Live run status, overwritten atomically on each transition. Kept tiny
+/// on purpose: a watcher polls this single small file for "which step is
+/// current" instead of re-parsing `events.jsonl`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunStatus {
+    /// `running` | `done`.
+    pub state: String,
+    /// 1-based index of the step currently running (or the last step
+    /// reached); `0` before the first step executes.
+    pub current_idx: u32,
+    /// Total number of steps in the flattened run.
+    pub total: u32,
+    /// `null` while `running`; the run verdict once `state == "done"`.
+    /// Serialised explicitly (not skipped) so the field is always present.
+    pub ok: Option<bool>,
+}
+
+/// Overwrite `<run_root>/status.json` atomically (`<path>.tmp` → rename).
+pub fn write_run_status(run: &RunPaths, status: &RunStatus) -> Result<()> {
+    let mut body = serde_json::to_string_pretty(status)?;
+    body.push('\n');
+    atomic_write_file(&run.run_root.join("status.json"), body.as_bytes())
+}
+
 // ---------- latest pointer ----------
 
 /// Write `<scenario_dir>/replays/latest.txt` carrying the single `runId`.

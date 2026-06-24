@@ -108,7 +108,73 @@ function resolveAgentBrowserBin() {
   }
 }
 
+// `report view` is a read-only, localhost-only viewer hosted by this Node
+// launcher (no new Rust crate). It is a pure consumer of the per-run sidecar
+// tree — it never drives a browser, never writes, never runs as a daemon.
+// Every OTHER verb passes straight through to the Rust binary below.
+function parseReportViewArgs(argv) {
+  const opts = { port: 7878, open: true, root: undefined };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--port' || a === '-p') {
+      opts.port = parseInt(argv[++i], 10);
+    } else if (a.startsWith('--port=')) {
+      opts.port = parseInt(a.slice('--port='.length), 10);
+    } else if (a === '--root') {
+      opts.root = argv[++i];
+    } else if (a.startsWith('--root=')) {
+      opts.root = a.slice('--root='.length);
+    } else if (a === '--no-open') {
+      opts.open = false;
+    } else if (a === '-h' || a === '--help' || a === 'help') {
+      opts.help = true;
+    } else {
+      throw new Error(`agent-qa report view: unknown argument ${JSON.stringify(a)}`);
+    }
+  }
+  if (!Number.isInteger(opts.port) || opts.port <= 0 || opts.port > 65535) {
+    throw new Error('agent-qa report view: --port expects an integer in 1..65535');
+  }
+  return opts;
+}
+
+function maybeRunReportView(argv) {
+  if (argv[0] !== 'report' || argv[1] !== 'view') return false;
+  const opts = parseReportViewArgs(argv.slice(2));
+  if (opts.help) {
+    console.log(
+      'agent-qa report view — localhost read-only run viewer\n\n' +
+        'Usage:\n' +
+        '  agent-qa report view [--port <N>] [--root <dir>] [--no-open]\n\n' +
+        'Flags:\n' +
+        '  --port <N>    Port to bind on 127.0.0.1 (default 7878)\n' +
+        '  --root <dir>  Scenarios root to view (default: AGENT_QA_SCENARIOS_DIR,\n' +
+        '                agent-qa.toml [paths].scenarios_root, or\n' +
+        '                <cwd>/tmp/agent-qa-scenarios)\n' +
+        '  --no-open     Do not auto-open the browser',
+    );
+    return true;
+  }
+  // eslint-disable-next-line global-require
+  const { start } = require('../lib/report-server.js');
+  // Resolve the Rust binary + agent-browser so the editor's write surface
+  // can shell the CLI. Non-fatal if the platform package is missing — the
+  // viewer still works; only the editor tab is disabled.
+  let agentQaBin;
+  try {
+    agentQaBin = resolveAgentQaBinary();
+  } catch {
+    agentQaBin = undefined;
+  }
+  const agentBrowserBin = resolveAgentBrowserBin() || undefined;
+  start({ ...opts, agentQaBin, agentBrowserBin });
+  return true;
+}
+
 try {
+  if (maybeRunReportView(process.argv.slice(2))) {
+    return;
+  }
   const binary = resolveAgentQaBinary();
   const env = { ...process.env };
   const ab = resolveAgentBrowserBin();
