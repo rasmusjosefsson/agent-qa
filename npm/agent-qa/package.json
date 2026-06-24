@@ -14,12 +14,10 @@
     "agent-qa": "bin/agent-qa.js"
   },
   "scripts": {
-    "postinstall": "node bin/postinstall.js",
-    "test": "node --test test/*.test.js"
+    "postinstall": "node bin/postinstall.js"
   },
   "files": [
     "bin/",
-    "lib/",
     "skills/",
     "README.md"
   ],

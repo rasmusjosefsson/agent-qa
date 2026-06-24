@@ -10,9 +10,7 @@
 //!      other kind raises a structured `not-implemented` boundary so
 //!      consumers don't silently no-op.
 //!   6. Iterate `steps[]`. Each step:
-//!        a. render a live progress line to stderr (N/M counter +
-//!           pass/fail glyph in a TTY; a durable plain line when piped;
-//!           nothing under `--quiet`)
+//!        a. write `[v2-replay] step <id>: <intent>` to stderr
 //!        b. dispatch on `kind` — this path ships a placeholder that
 //!           always reports success and writes no sidecars. The real
 //!           `do` dispatcher and `check` handling live in the runner.
@@ -27,7 +25,6 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -36,12 +33,11 @@ use crate::browser;
 use crate::claims::{dispatch_check, CheckContext};
 use crate::env_ops;
 use crate::paths;
-use crate::scenario::{InputDecl, InputType, Locator, NameMatch, Scenario, Step};
+use crate::scenario::{InputDecl, InputType, Scenario, Step};
 use crate::schema;
 use crate::sidecar::{
-    append_event, hash_scenario_bytes, mint_run_id, prepare_run_root, update_latest_pointer,
-    write_run_audit, write_run_status, InputType as AuditInputType, ParameterSource, RunAudit,
-    RunAuditParameter, RunStatus, StepEvent,
+    hash_scenario_bytes, mint_run_id, prepare_run_root, update_latest_pointer, write_run_audit,
+    InputType as AuditInputType, ParameterSource, RunAudit, RunAuditParameter,
 };
 use crate::value::ValueScope;
 use crate::verbs::{dispatch_do, DoContext};
@@ -76,15 +72,11 @@ pub struct RunOptions {
     /// audit.json is still written. Useful when running with `--runs N`
     /// for flake detection where the per-step forensics aren't needed.
     pub no_sidecars: bool,
-    /// `--quiet` — suppress per-step progress lines. The failure block
-    /// and the final SUMMARY still print, so CI logs stay scannable
-    /// without burying the actual failure under N progress lines.
+    /// `--quiet` — suppress per-step `[v2-replay] step <id>: ...` log
+    /// lines. Failures and the final summary still print, so CI logs
+    /// stay scannable without burying the actual failure under N
+    /// step-trace lines.
     pub quiet: bool,
-    /// `--plain` — force the plain, escape-code-free progress output even
-    /// on a TTY. Mirrors what piped/CI output gets automatically (the
-    /// runner already falls back to plain when stderr is not a terminal).
-    /// Purely cosmetic; changes nothing about replay behaviour.
-    pub plain: bool,
     /// `--tag <label>` — free-form label stored in `audit.tag`. Used
     /// for grouping runs across replays (e.g. 'pre-deploy', 'nightly',
     /// 'smoke'). Not enforced by anything; tooling can group/filter
@@ -119,209 +111,6 @@ impl RunSummary {
             if self.ok { "PASS" } else { "FAIL" }
         )
     }
-}
-
-// ---------- L1 legible terminal (progress + failure pointer) ----------
-
-/// How per-step progress is rendered to stderr, resolved once per run from
-/// `--quiet`, `--plain`, and whether stderr is a TTY. Pure presentation —
-/// it never changes replay behaviour, the event stream, or the SUMMARY
-/// line (other tooling depends on those staying byte-stable).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProgressMode {
-    /// `--quiet`: no per-step lines at all (the failure block still prints).
-    Quiet,
-    /// Non-TTY (piped/CI) or `--plain`: one durable ASCII line per finished
-    /// step, no escape codes — logs stay clean and greppable.
-    Plain,
-    /// Interactive TTY: a live `…` line per step, overwritten in place by a
-    /// `✓`/`✗` terminal line.
-    Pretty,
-}
-
-fn resolve_progress_mode(opts: &RunOptions) -> ProgressMode {
-    if opts.quiet {
-        ProgressMode::Quiet
-    } else if opts.plain || !std::io::stderr().is_terminal() {
-        ProgressMode::Plain
-    } else {
-        ProgressMode::Pretty
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum StepState {
-    Running,
-    Pass,
-    Fail,
-}
-
-/// `[ 5/12]` — right-aligned index, width derived from `total` so the
-/// counter column stays fixed for the whole run.
-fn fmt_counter(idx: u32, total: u32) -> String {
-    let w = total.max(1).to_string().len();
-    format!("[{idx:>w$}/{total}]")
-}
-
-/// Human-friendly step duration: `850ms` under a second, `1.2s` above.
-fn fmt_duration(ms: u64) -> String {
-    if ms < 1000 {
-        format!("{ms}ms")
-    } else {
-        format!("{:.1}s", ms as f64 / 1000.0)
-    }
-}
-
-/// One progress line's text (no carriage-return / no ANSI — the printer
-/// adds those in pretty mode). Glyphs differ by mode so plain/CI logs
-/// stay ASCII.
-fn fmt_progress(
-    mode: ProgressMode,
-    idx: u32,
-    total: u32,
-    state: StepState,
-    label: &str,
-    ms: Option<u64>,
-) -> String {
-    let glyph = match (mode, state) {
-        (ProgressMode::Pretty, StepState::Running) => "…",
-        (ProgressMode::Pretty, StepState::Pass) => "✓",
-        (ProgressMode::Pretty, StepState::Fail) => "✗",
-        (_, StepState::Running) => "·",
-        (_, StepState::Pass) => "PASS",
-        (_, StepState::Fail) => "FAIL",
-    };
-    let dur = ms
-        .map(|m| format!("  ({})", fmt_duration(m)))
-        .unwrap_or_default();
-    format!("{} {glyph} {label}{dur}", fmt_counter(idx, total))
-}
-
-/// Concise, vendor-neutral label for a step's progress line. Uses the
-/// verb + targeted accessible-name when present (`click "Submit"`), and
-/// falls back to the author's intent for untargeted verbs and checks.
-fn progress_label(step: &Step) -> String {
-    match step {
-        Step::Do {
-            verb, on, intent, ..
-        } => {
-            let v = format!("{verb:?}").to_ascii_lowercase();
-            match locator_name(on.as_ref()) {
-                Some(name) => format!("{v} \"{name}\""),
-                None if !intent.trim().is_empty() => format!("{v} — {intent}"),
-                None => v,
-            }
-        }
-        Step::Check { intent, .. } => {
-            if intent.trim().is_empty() {
-                "check".to_string()
-            } else {
-                format!("check — {intent}")
-            }
-        }
-    }
-}
-
-/// The accessible-name of a role locator (or its pattern / i18n key), used
-/// only for the human progress label. Raw selectors are omitted to keep
-/// the line legible.
-fn locator_name(loc: Option<&Locator>) -> Option<String> {
-    match loc? {
-        Locator::Role(r) => match r.name.as_ref()? {
-            NameMatch::Plain(s) => Some(s.clone()),
-            NameMatch::Pattern { pattern, .. } => Some(pattern.clone()),
-            NameMatch::I18n { i18n_key } => Some(i18n_key.clone()),
-        },
-        Locator::Raw(_) => None,
-    }
-}
-
-/// Emit the in-flight `…` line for a step (pretty/TTY only). It is
-/// overwritten in place by [`emit_step_done`]; plain and quiet modes show
-/// nothing until the step finishes.
-fn emit_step_start(mode: ProgressMode, idx: u32, total: u32, label: &str) {
-    if mode == ProgressMode::Pretty {
-        // `\r` returns to column 0; `\x1b[K` erases to end-of-line so a
-        // shorter terminal line leaves no leftover characters behind.
-        eprint!(
-            "\r\x1b[K{}",
-            fmt_progress(mode, idx, total, StepState::Running, label, None)
-        );
-        let _ = std::io::stderr().flush();
-    }
-}
-
-/// Emit the terminal `✓`/`✗` (or `PASS`/`FAIL`) line for a finished step.
-fn emit_step_done(mode: ProgressMode, idx: u32, total: u32, ok: bool, label: &str, ms: u64) {
-    let state = if ok { StepState::Pass } else { StepState::Fail };
-    match mode {
-        ProgressMode::Quiet => {}
-        ProgressMode::Pretty => eprintln!(
-            "\r\x1b[K{}",
-            fmt_progress(mode, idx, total, state, label, Some(ms))
-        ),
-        ProgressMode::Plain => {
-            eprintln!("{}", fmt_progress(mode, idx, total, state, label, Some(ms)))
-        }
-    }
-}
-
-/// The fields of a failure pointer, grouped so the renderer stays under
-/// the argument-count lint and the call site reads as named fields.
-struct FailurePointer<'a> {
-    idx: u32,
-    total: u32,
-    intent: &'a str,
-    kind: &'a str,
-    reason: &'a str,
-    screenshot: Option<&'a str>,
-    snapshot: Option<&'a str>,
-    run_dir: &'a str,
-}
-
-/// The scannable failure block printed once at the first failing step.
-/// Paths are absolute + copy-pasteable and follow the stable sidecar
-/// convention in `docs/specs/scenario-sidecar-tree.md`.
-fn render_failure_block(p: &FailurePointer) -> String {
-    let shot = p.screenshot.unwrap_or("(not captured — --no-sidecars)");
-    let snap = p.snapshot.unwrap_or("(not captured — --no-sidecars)");
-    // Collapse the dispatch error to a single clean line so a stray
-    // trailing newline (common from agent-browser stderr) doesn't punch a
-    // blank gap into the block. The raw error is preserved verbatim on the
-    // `fail` event row; this is display-only.
-    let reason = p.reason.split_whitespace().collect::<Vec<_>>().join(" ");
-    let FailurePointer {
-        idx,
-        total,
-        intent,
-        kind,
-        run_dir,
-        ..
-    } = *p;
-    format!(
-        "\n✗ FAILED at step {idx}/{total}  \"{intent}\"  ({kind})\n  \
-         reason:     {reason}\n  \
-         screenshot: {shot}\n  \
-         snapshot:   {snap}\n  \
-         run dir:    {run_dir}"
-    )
-}
-
-/// Make a path absolute + copy-pasteable for display. Prefers the
-/// canonical form when the file exists (capture succeeded); otherwise
-/// joins the cwd so the printed path is still absolute.
-fn abs_display(p: &Path) -> String {
-    if let Ok(abs) = std::fs::canonicalize(p) {
-        return abs.display().to_string();
-    }
-    if p.is_absolute() {
-        return p.display().to_string();
-    }
-    std::env::current_dir()
-        .map(|cwd| cwd.join(p))
-        .unwrap_or_else(|_| p.to_path_buf())
-        .display()
-        .to_string()
 }
 
 // ---------- entry point ----------
@@ -426,67 +215,17 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 Vec::new()
             }
         };
-        // L0 event stream: `total` is fixed once the run is flattened; the
-        // live status file and the events stream both key off it. All of
-        // this is additive — the per-step stderr trace below is unchanged.
-        let total = flat.len() as u32;
-        // L1: resolve once how per-step progress is rendered (quiet /
-        // plain-or-piped / pretty-TTY). Pure formatting; no behaviour change.
-        let progress_mode = resolve_progress_mode(opts);
-        if let Err(e) = write_run_status(
-            &run,
-            &RunStatus {
-                state: "running".to_string(),
-                current_idx: 0,
-                total,
-                ok: None,
-            },
-        ) {
-            eprintln!("[v2-replay] status.json init failed: {e}");
-        }
         for step in &flat {
             summary.total += 1;
-            let idx = summary.total;
             let id = step.id();
             let intent = step.intent();
             let kind_label = match step {
                 Step::Do { verb, .. } => format!("do:{verb:?}").to_ascii_lowercase(),
                 Step::Check { .. } => "check".to_string(),
             };
-            // L1: a concise, vendor-neutral label for the progress line.
-            let label = progress_label(step);
-            // L1: live progress — a `…` running line in pretty/TTY mode
-            // (overwritten in place by the terminal line), nothing in
-            // plain/quiet mode. Replaces the old flat `[v2-replay] step`
-            // trace; `--quiet` still silences per-step output entirely.
-            emit_step_start(progress_mode, idx, total, &label);
-            // L0: mark this step in-flight in status.json and append a
-            // `running` row to events.jsonl, then time the dispatch.
-            let _ = write_run_status(
-                &run,
-                &RunStatus {
-                    state: "running".to_string(),
-                    current_idx: idx,
-                    total,
-                    ok: None,
-                },
-            );
-            let _ = append_event(
-                &run,
-                &StepEvent {
-                    idx,
-                    total,
-                    id: id.to_string(),
-                    intent: intent.to_string(),
-                    kind: kind_label.clone(),
-                    status: "running".to_string(),
-                    ms: None,
-                    error: None,
-                    screenshot: None,
-                    snapshot: None,
-                },
-            );
-            let step_started = std::time::Instant::now();
+            if !opts.quiet {
+                eprintln!("[v2-replay] step {id}: {intent} ({kind_label})");
+            }
             // Apply heal-from-run override BEFORE dispatch, by mutating a
             // local copy of the step. The override carries the corrected
             // literal; we replace the step's value with
@@ -509,113 +248,22 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 },
                 Step::Check { claim, .. } => dispatch_check(claim, &check_ctx, &mut scope, None),
             };
-            let step_ms = step_started.elapsed().as_millis() as u64;
-            // L0: when sidecars are enabled the runner captures a
-            // screenshot + ARIA snapshot per step at stable, convention
-            // paths; record those run-root-relative paths on the terminal
-            // event so a consumer can find them by path without
-            // re-deriving the sidecar tree convention.
-            let (screenshot, snapshot) = if opts.no_sidecars {
-                (None, None)
-            } else {
-                (
-                    Some(format!("screenshots/{id}.png")),
-                    Some(format!("snapshots/{id}.txt")),
-                )
-            };
             match result {
                 Ok(()) => {
                     if !opts.no_sidecars {
                         capture_step_sidecars(&run, id, &opts.session_name);
                     }
                     summary.passed += 1;
-                    emit_step_done(progress_mode, idx, total, true, &label, step_ms);
-                    let _ = append_event(
-                        &run,
-                        &StepEvent {
-                            idx,
-                            total,
-                            id: id.to_string(),
-                            intent: intent.to_string(),
-                            kind: kind_label.clone(),
-                            status: "pass".to_string(),
-                            ms: Some(step_ms),
-                            error: None,
-                            screenshot,
-                            snapshot,
-                        },
-                    );
                 }
                 Err(e) => {
                     if !opts.no_sidecars {
                         capture_step_sidecars(&run, id, &opts.session_name);
                     }
                     summary.ok = false;
-                    let reason = format!("{e:#}");
-                    emit_step_done(progress_mode, idx, total, false, &label, step_ms);
-                    // L1 failure pointer: a scannable end block with
-                    // absolute, copy-pasteable paths to the captured
-                    // screenshot/snapshot + the run dir. Printed in every
-                    // mode (including --quiet) since it IS the failure
-                    // output. Paths follow scenario-sidecar-tree.md.
-                    let (shot_abs, snap_abs) = if opts.no_sidecars {
-                        (None, None)
-                    } else {
-                        (
-                            Some(abs_display(
-                                &run.run_root.join("screenshots").join(format!("{id}.png")),
-                            )),
-                            Some(abs_display(
-                                &run.run_root.join("snapshots").join(format!("{id}.txt")),
-                            )),
-                        )
-                    };
-                    eprintln!(
-                        "{}",
-                        render_failure_block(&FailurePointer {
-                            idx,
-                            total,
-                            intent,
-                            kind: &kind_label,
-                            reason: &reason,
-                            screenshot: shot_abs.as_deref(),
-                            snapshot: snap_abs.as_deref(),
-                            run_dir: &abs_display(&run.run_root),
-                        })
-                    );
-                    let _ = append_event(
-                        &run,
-                        &StepEvent {
-                            idx,
-                            total,
-                            id: id.to_string(),
-                            intent: intent.to_string(),
-                            kind: kind_label.clone(),
-                            status: "fail".to_string(),
-                            ms: Some(step_ms),
-                            error: Some(reason),
-                            screenshot,
-                            snapshot,
-                        },
-                    );
                     first_failure.get_or_insert_with(|| format!("step {id}: {e}"));
                     break;
                 }
             }
-        }
-        // L0: the step phase is finished; finalise the live status with
-        // the run verdict. env.close (teardown) runs after this and is
-        // intentionally not counted as a step.
-        if let Err(e) = write_run_status(
-            &run,
-            &RunStatus {
-                state: "done".to_string(),
-                current_idx: summary.total,
-                total,
-                ok: Some(summary.ok),
-            },
-        ) {
-            eprintln!("[v2-replay] status.json finalise failed: {e}");
         }
     }
 
@@ -1070,12 +718,6 @@ fn capture_step_sidecars(run: &crate::sidecar::RunPaths, step_id: &str, session:
         eprintln!("[v2-replay] skip sidecars for unsafe stepId {step_id:?}");
         return;
     }
-    // Let the page settle after the step's action before capturing, so a
-    // navigating click / async render is reflected in the screenshot + ARIA
-    // snapshot rather than a half-loaded frame. Soft-fail: a page that is
-    // already idle (or a networkidle timeout on a chatty page) must never
-    // fail the run — this only governs artifact fidelity.
-    let _ = browser::wait_for_load(session, "networkidle");
     match browser::snapshot_full(session) {
         Ok(text) => {
             if let Err(e) =
@@ -1182,7 +824,6 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut dry_run = false;
     let mut no_sidecars = false;
     let mut quiet = false;
-    let mut plain = false;
     let mut tag: Option<String> = None;
     let mut output_audit: Option<PathBuf> = None;
     let mut input_overrides: BTreeMap<String, String> = BTreeMap::new();
@@ -1205,7 +846,6 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             "--dry-run" => dry_run = true,
             "--no-sidecars" => no_sidecars = true,
             "--quiet" | "-q" => quiet = true,
-            "--plain" => plain = true,
             "--tag" => tag = it.next().cloned().or_else(|| bail_missing("--tag")),
             s if s.starts_with("--tag=") => tag = Some(s["--tag=".len()..].to_string()),
             "--output-audit" => {
@@ -1264,7 +904,6 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         dry_run,
         no_sidecars,
         quiet,
-        plain,
         tag,
         output_audit,
     })
@@ -1287,8 +926,7 @@ Usage:
                   [--profile <p>] [--session <name>]
                   [--param name=value] [-p name=value]
                   [--heal-from-run <runId>] [--dry-run]
-                  [--no-sidecars] [--quiet | -q] [--plain]
-                  [--tag <label>] [--output-audit <path>]
+                  [--no-sidecars] [--quiet | -q] [--tag <label>] [--output-audit <path>]
                   [--runs <N>]
 
 Loads + validates the scenario, mints a run id, prepares
@@ -1318,13 +956,9 @@ replays/latest.txt.
 --no-sidecars            Skip per-step ARIA snapshot + screenshot
                          capture. audit.json is still written. Useful
                          when running with --runs N.
---quiet, -q              Suppress per-step progress lines. The failure
-                         block and the final SUMMARY still print, so CI
-                         logs stay scannable.
---plain                  Force plain, escape-code-free per-step output
-                         even on a TTY (the default on a non-TTY/pipe).
-                         Use when the live in-place '…' progress confuses
-                         a wrapping tool.
+--quiet, -q              Suppress per-step '[v2-replay] step <id>:'
+                         log lines. Failures and the final SUMMARY
+                         still print, so CI logs stay scannable.
 --tag <label>            Free-form label stamped into audit.tag.
                          Useful for grouping runs across replays
                          (e.g. 'pre-deploy', 'nightly', 'smoke').
@@ -1405,7 +1039,6 @@ mod tests {
             dry_run: false,
             no_sidecars: false,
             quiet: false,
-            plain: false,
             tag: None,
             output_audit: None,
         };
@@ -1459,7 +1092,6 @@ mod tests {
             dry_run: false,
             no_sidecars: false,
             quiet: false,
-            plain: false,
             tag: None,
             output_audit: None,
         };
@@ -1501,7 +1133,6 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             dry_run: false,
             no_sidecars: false,
             quiet: false,
-            plain: false,
             tag: None,
             output_audit: None,
         };
@@ -1558,7 +1189,6 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             dry_run: false,
             no_sidecars: false,
             quiet: false,
-            plain: false,
             tag: None,
             output_audit: None,
         };
@@ -1927,7 +1557,6 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             dry_run: true,
             no_sidecars: false,
             quiet: false,
-            plain: false,
             tag: None,
             output_audit: None,
         };
@@ -2008,7 +1637,6 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             dry_run: false,
             no_sidecars: false,
             quiet: false,
-            plain: false,
             tag: None,
             output_audit: None,
         };
@@ -2089,426 +1717,5 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             ok: false,
         };
         assert_eq!(s.render(), "SUMMARY: 1/3 (FAIL)");
-    }
-
-    // ----- L0 event stream (events.jsonl + status.json) -----
-
-    /// Read every row of `<run>/events.jsonl` as parsed JSON values.
-    fn read_events(run_dir: &Path) -> Vec<serde_json::Value> {
-        let body = fs::read_to_string(run_dir.join("events.jsonl")).unwrap_or_default();
-        body.lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(|l| serde_json::from_str(l).expect("events.jsonl row is valid JSON"))
-            .collect()
-    }
-
-    fn run_dir_for(jdir: &Path) -> PathBuf {
-        let latest = fs::read_to_string(jdir.join("replays").join("latest.txt")).unwrap();
-        jdir.join("replays").join(latest.trim())
-    }
-
-    #[test]
-    fn replay_emits_event_stream_on_pass() {
-        // Acceptance (pass half): after a replay, events.jsonl has one
-        // terminal row per executed step with the correct status, and
-        // status.json ends in { state: done, ok: true }.
-        let _g = lock_env();
-        let work = TempDir::new().unwrap();
-        let log = work.path().join("ab.log");
-        install_fake_browser(work.path(), &log);
-
-        let jdir = work.path().join("sid");
-        fs::create_dir_all(&jdir).unwrap();
-        let jfile = jdir.join("scenario.json");
-        fs::write(&jfile, minimal_scenario()).unwrap();
-
-        let opts = RunOptions {
-            source: ScenarioSource::Path(jfile),
-            profile: None,
-            session_name: "evt".into(),
-            heal_from_run: None,
-            input_overrides: BTreeMap::new(),
-            dry_run: false,
-            no_sidecars: false,
-            quiet: false,
-            plain: false,
-            tag: None,
-            output_audit: None,
-        };
-        let summary = run(&opts).unwrap();
-        assert!(summary.ok);
-
-        let run_dir = run_dir_for(&jdir);
-        let events = read_events(&run_dir);
-        // Lifecycle: a `running` row then a terminal `pass` row for s1.
-        let terminal: Vec<&serde_json::Value> = events
-            .iter()
-            .filter(|e| e["status"] == "pass" || e["status"] == "fail")
-            .collect();
-        assert_eq!(
-            terminal.len(),
-            1,
-            "one terminal row per executed step; got {events:?}"
-        );
-        assert_eq!(terminal[0]["status"], "pass");
-        assert_eq!(terminal[0]["id"], "s1");
-        assert_eq!(terminal[0]["idx"], 1);
-        assert_eq!(terminal[0]["total"], 1);
-        assert_eq!(terminal[0]["kind"], "check");
-        assert!(terminal[0]["ms"].is_number());
-        assert_eq!(terminal[0]["screenshot"], "screenshots/s1.png");
-        assert_eq!(terminal[0]["snapshot"], "snapshots/s1.txt");
-        // A `running` row preceded the terminal row.
-        assert!(
-            events
-                .iter()
-                .any(|e| e["status"] == "running" && e["id"] == "s1"),
-            "expected a running row for s1; got {events:?}"
-        );
-
-        // status.json ends done + ok:true.
-        let status: serde_json::Value =
-            serde_json::from_slice(&fs::read(run_dir.join("status.json")).unwrap()).unwrap();
-        assert_eq!(status["state"], "done");
-        assert_eq!(status["ok"], serde_json::json!(true));
-        assert_eq!(status["currentIdx"], 1);
-        assert_eq!(status["total"], 1);
-        clear_fake_browser();
-    }
-
-    #[test]
-    fn replay_emits_fail_event_with_error_and_screenshot_paths() {
-        // Acceptance (fail half): on the failing step, the terminal row
-        // carries `error` + `screenshot`/`snapshot` paths, and status.json
-        // ends in { state: done, ok: false }. s1 (url exists) passes; s2
-        // (data binding that was never saved) fails at dispatch.
-        let _g = lock_env();
-        let work = TempDir::new().unwrap();
-        let log = work.path().join("ab.log");
-        install_fake_browser(work.path(), &log);
-
-        let jdir = work.path().join("sid");
-        fs::create_dir_all(&jdir).unwrap();
-        let jfile = jdir.join("scenario.json");
-        fs::write(
-            &jfile,
-            r#"{
-                "schema": "scenario/2", "id": "evt-fail", "intent": "fail stream",
-                "env": { "open": [{ "kind": "nav", "url": "https://example.com/", "intent": "land" }] },
-                "steps": [
-                    { "id": "s1", "intent": "url exists", "kind": "check",
-                      "claim": { "subject": { "url": true }, "predicate": "exists" } },
-                    { "id": "s2", "intent": "missing data", "kind": "check",
-                      "claim": { "subject": { "data": "nope" }, "predicate": "exists" } }
-                ]
-            }"#,
-        )
-        .unwrap();
-
-        let opts = RunOptions {
-            source: ScenarioSource::Path(jfile),
-            profile: None,
-            session_name: "evtf".into(),
-            heal_from_run: None,
-            input_overrides: BTreeMap::new(),
-            dry_run: false,
-            no_sidecars: false,
-            quiet: false,
-            plain: false,
-            tag: None,
-            output_audit: None,
-        };
-        // The run bails at the failing step; events/status are written
-        // before the bail.
-        let err = run(&opts).unwrap_err();
-        assert!(format!("{err}").contains("s2"), "got: {err}");
-
-        let run_dir = run_dir_for(&jdir);
-        let events = read_events(&run_dir);
-        let terminal: Vec<&serde_json::Value> = events
-            .iter()
-            .filter(|e| e["status"] == "pass" || e["status"] == "fail")
-            .collect();
-        // s1 pass + s2 fail; the run stopped at s2 (one terminal row each).
-        assert_eq!(terminal.len(), 2, "got {events:?}");
-        assert_eq!(terminal[0]["id"], "s1");
-        assert_eq!(terminal[0]["status"], "pass");
-        let fail = terminal[1];
-        assert_eq!(fail["id"], "s2");
-        assert_eq!(fail["status"], "fail");
-        assert_eq!(fail["idx"], 2);
-        assert_eq!(fail["total"], 2);
-        assert!(
-            fail["error"].as_str().unwrap().contains("nope"),
-            "fail row must carry the dispatch error; got {fail:?}"
-        );
-        assert_eq!(fail["screenshot"], "screenshots/s2.png");
-        assert_eq!(fail["snapshot"], "snapshots/s2.txt");
-
-        let status: serde_json::Value =
-            serde_json::from_slice(&fs::read(run_dir.join("status.json")).unwrap()).unwrap();
-        assert_eq!(status["state"], "done");
-        assert_eq!(status["ok"], serde_json::json!(false));
-        assert_eq!(status["currentIdx"], 2);
-        assert_eq!(status["total"], 2);
-        clear_fake_browser();
-    }
-
-    #[test]
-    fn replay_no_sidecars_omits_artifact_paths_but_keeps_events() {
-        // --no-sidecars still emits the event stream + status, but the
-        // terminal rows omit screenshot/snapshot (no capture happened).
-        let _g = lock_env();
-        let work = TempDir::new().unwrap();
-        install_fake_browser(work.path(), &work.path().join("ab.log"));
-
-        let jdir = work.path().join("sid");
-        fs::create_dir_all(&jdir).unwrap();
-        let jfile = jdir.join("scenario.json");
-        fs::write(&jfile, minimal_scenario()).unwrap();
-
-        let opts = RunOptions {
-            source: ScenarioSource::Path(jfile),
-            profile: None,
-            session_name: "evtn".into(),
-            heal_from_run: None,
-            input_overrides: BTreeMap::new(),
-            dry_run: false,
-            no_sidecars: true,
-            quiet: false,
-            plain: false,
-            tag: None,
-            output_audit: None,
-        };
-        run(&opts).unwrap();
-
-        let run_dir = run_dir_for(&jdir);
-        let events = read_events(&run_dir);
-        let terminal = events.iter().find(|e| e["status"] == "pass").unwrap();
-        assert!(terminal.get("screenshot").is_none() || terminal["screenshot"].is_null());
-        assert!(terminal.get("snapshot").is_none() || terminal["snapshot"].is_null());
-        let status: serde_json::Value =
-            serde_json::from_slice(&fs::read(run_dir.join("status.json")).unwrap()).unwrap();
-        assert_eq!(status["state"], "done");
-        assert_eq!(status["ok"], serde_json::json!(true));
-        clear_fake_browser();
-    }
-
-    #[test]
-    fn replay_dry_run_emits_no_event_stream() {
-        // --dry-run skips dispatch entirely, so there is no event stream
-        // or status file (meaningful absence per the sidecar spec).
-        let _g = lock_env();
-        let work = TempDir::new().unwrap();
-        install_fake_browser(work.path(), &work.path().join("ab.log"));
-
-        let jdir = work.path().join("sid");
-        fs::create_dir_all(&jdir).unwrap();
-        let jfile = jdir.join("scenario.json");
-        fs::write(&jfile, minimal_scenario()).unwrap();
-
-        let opts = RunOptions {
-            source: ScenarioSource::Path(jfile),
-            profile: None,
-            session_name: "evtd".into(),
-            heal_from_run: None,
-            input_overrides: BTreeMap::new(),
-            dry_run: true,
-            no_sidecars: false,
-            quiet: false,
-            plain: false,
-            tag: None,
-            output_audit: None,
-        };
-        run(&opts).unwrap();
-        let run_dir = run_dir_for(&jdir);
-        assert!(!run_dir.join("events.jsonl").exists());
-        assert!(!run_dir.join("status.json").exists());
-        clear_fake_browser();
-    }
-
-    // ----- L1 legible terminal: pure formatters -----
-
-    fn parse_step(json: &str) -> Step {
-        serde_json::from_str(json).expect("valid step json")
-    }
-
-    #[test]
-    fn fmt_counter_right_aligns_to_total_width() {
-        assert_eq!(fmt_counter(5, 12), "[ 5/12]");
-        assert_eq!(fmt_counter(12, 12), "[12/12]");
-        assert_eq!(fmt_counter(1, 9), "[1/9]");
-        // width tracks the widest index so the column stays fixed.
-        assert_eq!(fmt_counter(3, 100), "[  3/100]");
-    }
-
-    #[test]
-    fn fmt_duration_splits_at_one_second() {
-        assert_eq!(fmt_duration(850), "850ms");
-        assert_eq!(fmt_duration(0), "0ms");
-        assert_eq!(fmt_duration(1000), "1.0s");
-        assert_eq!(fmt_duration(1234), "1.2s");
-    }
-
-    #[test]
-    fn progress_label_uses_verb_and_targeted_name() {
-        let step = parse_step(
-            r#"{ "kind": "do", "id": "s", "intent": "open the menu",
-                "verb": "click", "on": { "role": "button", "name": "Submit" } }"#,
-        );
-        assert_eq!(progress_label(&step), "click \"Submit\"");
-    }
-
-    #[test]
-    fn progress_label_falls_back_to_intent_when_untargeted() {
-        let step = parse_step(
-            r#"{ "kind": "do", "id": "s", "intent": "reload the page", "verb": "reload" }"#,
-        );
-        assert_eq!(progress_label(&step), "reload — reload the page");
-    }
-
-    #[test]
-    fn progress_label_for_check_uses_intent() {
-        let step = parse_step(
-            r#"{ "kind": "check", "id": "c", "intent": "url is the home page",
-                "claim": { "subject": { "url": true }, "predicate": "exists" } }"#,
-        );
-        assert_eq!(progress_label(&step), "check — url is the home page");
-    }
-
-    #[test]
-    fn fmt_progress_glyphs_differ_by_mode() {
-        // Pretty mode uses glyphs + a duration suffix.
-        assert_eq!(
-            fmt_progress(
-                ProgressMode::Pretty,
-                5,
-                12,
-                StepState::Pass,
-                "click \"Login\"",
-                Some(1234)
-            ),
-            "[ 5/12] ✓ click \"Login\"  (1.2s)"
-        );
-        assert_eq!(
-            fmt_progress(
-                ProgressMode::Pretty,
-                6,
-                12,
-                StepState::Running,
-                "type \"email\"",
-                None
-            ),
-            "[ 6/12] … type \"email\""
-        );
-        // Plain mode stays ASCII so piped/CI logs are clean + greppable.
-        assert_eq!(
-            fmt_progress(
-                ProgressMode::Plain,
-                5,
-                12,
-                StepState::Fail,
-                "submit",
-                Some(800)
-            ),
-            "[ 5/12] FAIL submit  (800ms)"
-        );
-    }
-
-    #[test]
-    fn render_failure_block_has_aligned_labels_and_paths() {
-        let block = render_failure_block(&FailurePointer {
-            idx: 5,
-            total: 12,
-            intent: "click the Login button",
-            kind: "do:click",
-            reason: "no element matched role=button name=\"Login\"",
-            screenshot: Some("/abs/replays/r1/screenshots/openDialog.png"),
-            snapshot: Some("/abs/replays/r1/snapshots/openDialog.txt"),
-            run_dir: "/abs/replays/r1",
-        });
-        assert!(block.contains("✗ FAILED at step 5/12  \"click the Login button\"  (do:click)"));
-        assert!(block.contains("\n  reason:     no element matched"));
-        assert!(block.contains("\n  screenshot: /abs/replays/r1/screenshots/openDialog.png"));
-        assert!(block.contains("\n  snapshot:   /abs/replays/r1/snapshots/openDialog.txt"));
-        assert!(block.contains("\n  run dir:    /abs/replays/r1"));
-        // Label columns line up under the longest key ("screenshot:").
-        for key in ["reason:", "screenshot:", "snapshot:", "run dir:"] {
-            let line = block
-                .lines()
-                .find(|l| l.trim_start().starts_with(key))
-                .unwrap();
-            assert_eq!(&line[..2], "  ", "two-space indent for {key}");
-            let colon = line.find(':').unwrap();
-            // value starts at a fixed column (12 from the indent).
-            assert_eq!(
-                line[colon + 1..].find(|c: char| c != ' ').unwrap() + colon + 1,
-                14
-            );
-        }
-    }
-
-    #[test]
-    fn render_failure_block_marks_missing_capture() {
-        let block = render_failure_block(&FailurePointer {
-            idx: 1,
-            total: 1,
-            intent: "do a thing",
-            kind: "do:click",
-            reason: "boom",
-            screenshot: None,
-            snapshot: None,
-            run_dir: "/abs/r",
-        });
-        assert!(block.contains("screenshot: (not captured"));
-        assert!(block.contains("snapshot:   (not captured"));
-    }
-
-    #[test]
-    fn render_failure_block_collapses_reason_whitespace() {
-        // A trailing newline / inner wrap (common from agent-browser stderr)
-        // must not punch a blank gap into the block.
-        let block = render_failure_block(&FailurePointer {
-            idx: 1,
-            total: 1,
-            intent: "do a thing",
-            kind: "do:click",
-            reason: "element not found.\n  verify the selector\n",
-            screenshot: None,
-            snapshot: None,
-            run_dir: "/abs/r",
-        });
-        assert!(block.contains("reason:     element not found. verify the selector\n"));
-        assert!(!block.contains("reason:     element not found.\n"));
-    }
-
-    #[test]
-    fn resolve_progress_mode_honours_quiet_and_plain() {
-        let mk = |quiet: bool, plain: bool| RunOptions {
-            source: ScenarioSource::Path("j.json".into()),
-            profile: None,
-            session_name: "s".into(),
-            heal_from_run: None,
-            input_overrides: BTreeMap::new(),
-            dry_run: false,
-            no_sidecars: false,
-            quiet,
-            plain,
-            tag: None,
-            output_audit: None,
-        };
-        assert_eq!(resolve_progress_mode(&mk(true, false)), ProgressMode::Quiet);
-        // quiet wins over plain.
-        assert_eq!(resolve_progress_mode(&mk(true, true)), ProgressMode::Quiet);
-        // --plain forces Plain even if stderr were a TTY.
-        assert_eq!(resolve_progress_mode(&mk(false, true)), ProgressMode::Plain);
-    }
-
-    #[test]
-    fn parse_args_plain_flag() {
-        let opts = parse_args(&["./j.json".into(), "--plain".into()]).unwrap();
-        assert!(opts.plain);
-        let opts = parse_args(&["./j.json".into()]).unwrap();
-        assert!(!opts.plain);
     }
 }
