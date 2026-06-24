@@ -191,7 +191,7 @@ test('editor endpoints shell the right CLI argv', async (t) => {
     assert.equal(res.status, 200);
     const body = await res.json();
     assert.equal(body.result.nodes[0].role, 'button');
-    assert.deepEqual(calls.at(-1), ['aria-snapshot', '--json', '--interactive']);
+    assert.deepEqual(calls.at(-1), ['aria-snapshot', '--interactive']);
   });
 
   await t.test('POST /api/edit/delete + move pass indices', async () => {

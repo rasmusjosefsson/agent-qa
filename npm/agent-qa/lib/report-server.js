@@ -606,7 +606,7 @@ async function handleEdit(req, res, deps, seg) {
   }
   if (route === 'snapshot' && method === 'GET') {
     const url = new URL(req.url, 'http://127.0.0.1');
-    const args = ['aria-snapshot', '--json'];
+    const args = ['aria-snapshot'];
     if (url.searchParams.get('interactive') === '1') args.push('--interactive');
     const r = await deps.runCli(args);
     return sendCliResult(res, r);

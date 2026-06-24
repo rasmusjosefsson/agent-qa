@@ -5,19 +5,19 @@
 //! as a stable, deterministic target — agent-qa's accessibility-first
 //! targeting, with no runtime-AI resolution.
 //!
-//! It is a thin, read-only wrapper over agent-browser's snapshot output
-//! (`browser::snapshot_full` / `snapshot_interactive`). With `--json` it
-//! parses the indented `- role "name" [… ref=eN]` lines into structured
-//! rows the editor can render and pick from.
+//! It is a thin, read-only adapter over agent-browser's snapshot output
+//! (`browser::snapshot_full` / `snapshot_interactive`): it parses the
+//! indented `- role "name" [… ref=eN]` text into the structured rows the
+//! editor's picker renders. (For the raw text, use `agent-browser snapshot`.)
 //!
 //! CLI shape:
 //!
-//!   agent-qa aria-snapshot [--session <name>] [--interactive] [--json]
+//!   agent-qa aria-snapshot [--session <name>] [--interactive]
 //!
 //! `--interactive` limits the tree to actionable elements (smaller, the
-//! default pick surface); without it the full tree is returned. `--json`
-//! emits `{ "session": "...", "nodes": [ {depth, role, name, ref, attrs} ] }`;
-//! otherwise the raw snapshot text is printed verbatim.
+//! default pick surface); without it the full tree is returned. Output is
+//! always `{ "session": "...", "interactive": bool,
+//!   "nodes": [ {depth, role, name, ref, pickable, attrs} ] }`.
 
 use std::fs;
 
@@ -36,22 +36,15 @@ pub fn run(args: &[String]) -> Result<u8> {
     } else {
         browser::snapshot_full(&session)?
     };
-    if opts.json {
-        let nodes = parse_snapshot(&snapshot);
-        println!(
-            "{}",
-            serde_json::to_string(&json!({
-                "session": session,
-                "interactive": opts.interactive,
-                "nodes": nodes,
-            }))?
-        );
-    } else {
-        print!("{snapshot}");
-        if !snapshot.ends_with('\n') {
-            println!();
-        }
-    }
+    let nodes = parse_snapshot(&snapshot);
+    println!(
+        "{}",
+        serde_json::to_string(&json!({
+            "session": session,
+            "interactive": opts.interactive,
+            "nodes": nodes,
+        }))?
+    );
     Ok(0)
 }
 
@@ -60,17 +53,19 @@ fn print_help() {
         "agent-qa aria-snapshot — dump the live page's accessibility tree
 
 Usage:
-  agent-qa aria-snapshot [--session <name>] [--interactive] [--json]
+  agent-qa aria-snapshot [--session <name>] [--interactive]
 
 Reads the ARIA tree from the live agent-browser session. The authoring
 editor's element picker renders this so you can pick a node and capture
 its role + accessible name as a deterministic target.
 
+Always emits structured JSON rows (for raw text use `agent-browser snapshot`):
+  {{\"session\":\"…\",\"interactive\":false,\"nodes\":[
+    {{\"depth\":0,\"role\":\"button\",\"name\":\"Login\",\"ref\":\"e5\",
+     \"pickable\":true,\"attrs\":\"…\"}}]}}
+
 Flags:
   --interactive   Limit to actionable elements (smaller pick surface).
-  --json          Emit structured rows instead of the raw snapshot text:
-                  {{\"session\":\"…\",\"nodes\":[{{\"depth\":0,\"role\":\"button\",
-                   \"name\":\"Login\",\"ref\":\"e5\",\"attrs\":\"…\"}}]}}
 
 Read-only: aria-snapshot never drives the page or records anything."
     );
@@ -80,7 +75,6 @@ Read-only: aria-snapshot never drives the page or records anything."
 struct Opts {
     session: Option<String>,
     interactive: bool,
-    json: bool,
 }
 
 fn parse_args(args: &[String]) -> Result<Opts> {
@@ -97,7 +91,6 @@ fn parse_args(args: &[String]) -> Result<Opts> {
                 opts.session = Some(s["--session=".len()..].to_string())
             }
             "--interactive" => opts.interactive = true,
-            "--json" => opts.json = true,
             other => bail!("unknown flag {other:?}"),
         }
     }
@@ -241,16 +234,9 @@ mod tests {
 
     #[test]
     fn parse_args_flags() {
-        let o = parse_args(&[
-            "--session".into(),
-            "sx".into(),
-            "--interactive".into(),
-            "--json".into(),
-        ])
-        .unwrap();
+        let o = parse_args(&["--session".into(), "sx".into(), "--interactive".into()]).unwrap();
         assert_eq!(o.session.as_deref(), Some("sx"));
         assert!(o.interactive);
-        assert!(o.json);
     }
 
     #[test]
