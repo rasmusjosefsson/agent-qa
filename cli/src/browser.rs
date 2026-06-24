@@ -764,6 +764,14 @@ pub fn screenshot(
 
 /// Take an interactive a11y snapshot — returns the human-readable text
 /// agent-browser prints to stdout.
+/// Return the session's CDP WebSocket endpoint (`agent-browser get cdp-url`).
+/// The authoring editor's live-browser pane connects to this to screencast
+/// the running session and forward input. Read-only.
+pub fn cdp_url(session: &str) -> Result<String, AgentBrowserError> {
+    let r = run(session, ["get", "cdp-url"], RunOpts::new().capture())?;
+    Ok(r.stdout.trim().to_string())
+}
+
 pub fn snapshot_interactive(session: &str) -> Result<String, AgentBrowserError> {
     let r = run(session, ["snapshot", "-i"], RunOpts::new().capture())?;
     Ok(r.stdout)
