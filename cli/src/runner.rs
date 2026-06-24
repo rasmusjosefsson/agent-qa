@@ -1070,6 +1070,12 @@ fn capture_step_sidecars(run: &crate::sidecar::RunPaths, step_id: &str, session:
         eprintln!("[v2-replay] skip sidecars for unsafe stepId {step_id:?}");
         return;
     }
+    // Let the page settle after the step's action before capturing, so a
+    // navigating click / async render is reflected in the screenshot + ARIA
+    // snapshot rather than a half-loaded frame. Soft-fail: a page that is
+    // already idle (or a networkidle timeout on a chatty page) must never
+    // fail the run — this only governs artifact fidelity.
+    let _ = browser::wait_for_load(session, "networkidle");
     match browser::snapshot_full(session) {
         Ok(text) => {
             if let Err(e) =
