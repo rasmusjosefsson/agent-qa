@@ -36,8 +36,9 @@ use crate::paths;
 use crate::scenario::{InputDecl, InputType, Scenario, Step};
 use crate::schema;
 use crate::sidecar::{
-    hash_scenario_bytes, mint_run_id, prepare_run_root, update_latest_pointer, write_run_audit,
-    InputType as AuditInputType, ParameterSource, RunAudit, RunAuditParameter,
+    append_event, hash_scenario_bytes, mint_run_id, prepare_run_root, update_latest_pointer,
+    write_run_audit, write_run_status, InputType as AuditInputType, ParameterSource, RunAudit,
+    RunAuditParameter, RunStatus, StepEvent,
 };
 use crate::value::ValueScope;
 use crate::verbs::{dispatch_do, DoContext};
@@ -215,8 +216,24 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 Vec::new()
             }
         };
+        // L0 event stream: `total` is fixed once the run is flattened; the
+        // live status file and the events stream both key off it. All of
+        // this is additive — the per-step stderr trace below is unchanged.
+        let total = flat.len() as u32;
+        if let Err(e) = write_run_status(
+            &run,
+            &RunStatus {
+                state: "running".to_string(),
+                current_idx: 0,
+                total,
+                ok: None,
+            },
+        ) {
+            eprintln!("[v2-replay] status.json init failed: {e}");
+        }
         for step in &flat {
             summary.total += 1;
+            let idx = summary.total;
             let id = step.id();
             let intent = step.intent();
             let kind_label = match step {
@@ -226,6 +243,33 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             if !opts.quiet {
                 eprintln!("[v2-replay] step {id}: {intent} ({kind_label})");
             }
+            // L0: mark this step in-flight in status.json and append a
+            // `running` row to events.jsonl, then time the dispatch.
+            let _ = write_run_status(
+                &run,
+                &RunStatus {
+                    state: "running".to_string(),
+                    current_idx: idx,
+                    total,
+                    ok: None,
+                },
+            );
+            let _ = append_event(
+                &run,
+                &StepEvent {
+                    idx,
+                    total,
+                    id: id.to_string(),
+                    intent: intent.to_string(),
+                    kind: kind_label.clone(),
+                    status: "running".to_string(),
+                    ms: None,
+                    error: None,
+                    screenshot: None,
+                    snapshot: None,
+                },
+            );
+            let step_started = std::time::Instant::now();
             // Apply heal-from-run override BEFORE dispatch, by mutating a
             // local copy of the step. The override carries the corrected
             // literal; we replace the step's value with
@@ -248,22 +292,80 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 },
                 Step::Check { claim, .. } => dispatch_check(claim, &check_ctx, &mut scope, None),
             };
+            let step_ms = step_started.elapsed().as_millis() as u64;
+            // L0: when sidecars are enabled the runner captures a
+            // screenshot + ARIA snapshot per step at stable, convention
+            // paths; record those run-root-relative paths on the terminal
+            // event so a consumer can find them by path without
+            // re-deriving the sidecar tree convention.
+            let (screenshot, snapshot) = if opts.no_sidecars {
+                (None, None)
+            } else {
+                (
+                    Some(format!("screenshots/{id}.png")),
+                    Some(format!("snapshots/{id}.txt")),
+                )
+            };
             match result {
                 Ok(()) => {
                     if !opts.no_sidecars {
                         capture_step_sidecars(&run, id, &opts.session_name);
                     }
                     summary.passed += 1;
+                    let _ = append_event(
+                        &run,
+                        &StepEvent {
+                            idx,
+                            total,
+                            id: id.to_string(),
+                            intent: intent.to_string(),
+                            kind: kind_label.clone(),
+                            status: "pass".to_string(),
+                            ms: Some(step_ms),
+                            error: None,
+                            screenshot,
+                            snapshot,
+                        },
+                    );
                 }
                 Err(e) => {
                     if !opts.no_sidecars {
                         capture_step_sidecars(&run, id, &opts.session_name);
                     }
                     summary.ok = false;
+                    let _ = append_event(
+                        &run,
+                        &StepEvent {
+                            idx,
+                            total,
+                            id: id.to_string(),
+                            intent: intent.to_string(),
+                            kind: kind_label.clone(),
+                            status: "fail".to_string(),
+                            ms: Some(step_ms),
+                            error: Some(format!("{e:#}")),
+                            screenshot,
+                            snapshot,
+                        },
+                    );
                     first_failure.get_or_insert_with(|| format!("step {id}: {e}"));
                     break;
                 }
             }
+        }
+        // L0: the step phase is finished; finalise the live status with
+        // the run verdict. env.close (teardown) runs after this and is
+        // intentionally not counted as a step.
+        if let Err(e) = write_run_status(
+            &run,
+            &RunStatus {
+                state: "done".to_string(),
+                current_idx: summary.total,
+                total,
+                ok: Some(summary.ok),
+            },
+        ) {
+            eprintln!("[v2-replay] status.json finalise failed: {e}");
         }
     }
 
@@ -1717,5 +1819,237 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             ok: false,
         };
         assert_eq!(s.render(), "SUMMARY: 1/3 (FAIL)");
+    }
+
+    // ----- L0 event stream (events.jsonl + status.json) -----
+
+    /// Read every row of `<run>/events.jsonl` as parsed JSON values.
+    fn read_events(run_dir: &Path) -> Vec<serde_json::Value> {
+        let body = fs::read_to_string(run_dir.join("events.jsonl")).unwrap_or_default();
+        body.lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str(l).expect("events.jsonl row is valid JSON"))
+            .collect()
+    }
+
+    fn run_dir_for(jdir: &Path) -> PathBuf {
+        let latest = fs::read_to_string(jdir.join("replays").join("latest.txt")).unwrap();
+        jdir.join("replays").join(latest.trim())
+    }
+
+    #[test]
+    fn replay_emits_event_stream_on_pass() {
+        // Acceptance (pass half): after a replay, events.jsonl has one
+        // terminal row per executed step with the correct status, and
+        // status.json ends in { state: done, ok: true }.
+        let _g = lock_env();
+        let work = TempDir::new().unwrap();
+        let log = work.path().join("ab.log");
+        install_fake_browser(work.path(), &log);
+
+        let jdir = work.path().join("sid");
+        fs::create_dir_all(&jdir).unwrap();
+        let jfile = jdir.join("scenario.json");
+        fs::write(&jfile, minimal_scenario()).unwrap();
+
+        let opts = RunOptions {
+            source: ScenarioSource::Path(jfile),
+            profile: None,
+            session_name: "evt".into(),
+            heal_from_run: None,
+            input_overrides: BTreeMap::new(),
+            dry_run: false,
+            no_sidecars: false,
+            quiet: false,
+            tag: None,
+            output_audit: None,
+        };
+        let summary = run(&opts).unwrap();
+        assert!(summary.ok);
+
+        let run_dir = run_dir_for(&jdir);
+        let events = read_events(&run_dir);
+        // Lifecycle: a `running` row then a terminal `pass` row for s1.
+        let terminal: Vec<&serde_json::Value> = events
+            .iter()
+            .filter(|e| e["status"] == "pass" || e["status"] == "fail")
+            .collect();
+        assert_eq!(
+            terminal.len(),
+            1,
+            "one terminal row per executed step; got {events:?}"
+        );
+        assert_eq!(terminal[0]["status"], "pass");
+        assert_eq!(terminal[0]["id"], "s1");
+        assert_eq!(terminal[0]["idx"], 1);
+        assert_eq!(terminal[0]["total"], 1);
+        assert_eq!(terminal[0]["kind"], "check");
+        assert!(terminal[0]["ms"].is_number());
+        assert_eq!(terminal[0]["screenshot"], "screenshots/s1.png");
+        assert_eq!(terminal[0]["snapshot"], "snapshots/s1.txt");
+        // A `running` row preceded the terminal row.
+        assert!(
+            events
+                .iter()
+                .any(|e| e["status"] == "running" && e["id"] == "s1"),
+            "expected a running row for s1; got {events:?}"
+        );
+
+        // status.json ends done + ok:true.
+        let status: serde_json::Value =
+            serde_json::from_slice(&fs::read(run_dir.join("status.json")).unwrap()).unwrap();
+        assert_eq!(status["state"], "done");
+        assert_eq!(status["ok"], serde_json::json!(true));
+        assert_eq!(status["currentIdx"], 1);
+        assert_eq!(status["total"], 1);
+        clear_fake_browser();
+    }
+
+    #[test]
+    fn replay_emits_fail_event_with_error_and_screenshot_paths() {
+        // Acceptance (fail half): on the failing step, the terminal row
+        // carries `error` + `screenshot`/`snapshot` paths, and status.json
+        // ends in { state: done, ok: false }. s1 (url exists) passes; s2
+        // (data binding that was never saved) fails at dispatch.
+        let _g = lock_env();
+        let work = TempDir::new().unwrap();
+        let log = work.path().join("ab.log");
+        install_fake_browser(work.path(), &log);
+
+        let jdir = work.path().join("sid");
+        fs::create_dir_all(&jdir).unwrap();
+        let jfile = jdir.join("scenario.json");
+        fs::write(
+            &jfile,
+            r#"{
+                "schema": "scenario/2", "id": "evt-fail", "intent": "fail stream",
+                "env": { "open": [{ "kind": "nav", "url": "https://example.com/", "intent": "land" }] },
+                "steps": [
+                    { "id": "s1", "intent": "url exists", "kind": "check",
+                      "claim": { "subject": { "url": true }, "predicate": "exists" } },
+                    { "id": "s2", "intent": "missing data", "kind": "check",
+                      "claim": { "subject": { "data": "nope" }, "predicate": "exists" } }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let opts = RunOptions {
+            source: ScenarioSource::Path(jfile),
+            profile: None,
+            session_name: "evtf".into(),
+            heal_from_run: None,
+            input_overrides: BTreeMap::new(),
+            dry_run: false,
+            no_sidecars: false,
+            quiet: false,
+            tag: None,
+            output_audit: None,
+        };
+        // The run bails at the failing step; events/status are written
+        // before the bail.
+        let err = run(&opts).unwrap_err();
+        assert!(format!("{err}").contains("s2"), "got: {err}");
+
+        let run_dir = run_dir_for(&jdir);
+        let events = read_events(&run_dir);
+        let terminal: Vec<&serde_json::Value> = events
+            .iter()
+            .filter(|e| e["status"] == "pass" || e["status"] == "fail")
+            .collect();
+        // s1 pass + s2 fail; the run stopped at s2 (one terminal row each).
+        assert_eq!(terminal.len(), 2, "got {events:?}");
+        assert_eq!(terminal[0]["id"], "s1");
+        assert_eq!(terminal[0]["status"], "pass");
+        let fail = terminal[1];
+        assert_eq!(fail["id"], "s2");
+        assert_eq!(fail["status"], "fail");
+        assert_eq!(fail["idx"], 2);
+        assert_eq!(fail["total"], 2);
+        assert!(
+            fail["error"].as_str().unwrap().contains("nope"),
+            "fail row must carry the dispatch error; got {fail:?}"
+        );
+        assert_eq!(fail["screenshot"], "screenshots/s2.png");
+        assert_eq!(fail["snapshot"], "snapshots/s2.txt");
+
+        let status: serde_json::Value =
+            serde_json::from_slice(&fs::read(run_dir.join("status.json")).unwrap()).unwrap();
+        assert_eq!(status["state"], "done");
+        assert_eq!(status["ok"], serde_json::json!(false));
+        assert_eq!(status["currentIdx"], 2);
+        assert_eq!(status["total"], 2);
+        clear_fake_browser();
+    }
+
+    #[test]
+    fn replay_no_sidecars_omits_artifact_paths_but_keeps_events() {
+        // --no-sidecars still emits the event stream + status, but the
+        // terminal rows omit screenshot/snapshot (no capture happened).
+        let _g = lock_env();
+        let work = TempDir::new().unwrap();
+        install_fake_browser(work.path(), &work.path().join("ab.log"));
+
+        let jdir = work.path().join("sid");
+        fs::create_dir_all(&jdir).unwrap();
+        let jfile = jdir.join("scenario.json");
+        fs::write(&jfile, minimal_scenario()).unwrap();
+
+        let opts = RunOptions {
+            source: ScenarioSource::Path(jfile),
+            profile: None,
+            session_name: "evtn".into(),
+            heal_from_run: None,
+            input_overrides: BTreeMap::new(),
+            dry_run: false,
+            no_sidecars: true,
+            quiet: false,
+            tag: None,
+            output_audit: None,
+        };
+        run(&opts).unwrap();
+
+        let run_dir = run_dir_for(&jdir);
+        let events = read_events(&run_dir);
+        let terminal = events.iter().find(|e| e["status"] == "pass").unwrap();
+        assert!(terminal.get("screenshot").is_none() || terminal["screenshot"].is_null());
+        assert!(terminal.get("snapshot").is_none() || terminal["snapshot"].is_null());
+        let status: serde_json::Value =
+            serde_json::from_slice(&fs::read(run_dir.join("status.json")).unwrap()).unwrap();
+        assert_eq!(status["state"], "done");
+        assert_eq!(status["ok"], serde_json::json!(true));
+        clear_fake_browser();
+    }
+
+    #[test]
+    fn replay_dry_run_emits_no_event_stream() {
+        // --dry-run skips dispatch entirely, so there is no event stream
+        // or status file (meaningful absence per the sidecar spec).
+        let _g = lock_env();
+        let work = TempDir::new().unwrap();
+        install_fake_browser(work.path(), &work.path().join("ab.log"));
+
+        let jdir = work.path().join("sid");
+        fs::create_dir_all(&jdir).unwrap();
+        let jfile = jdir.join("scenario.json");
+        fs::write(&jfile, minimal_scenario()).unwrap();
+
+        let opts = RunOptions {
+            source: ScenarioSource::Path(jfile),
+            profile: None,
+            session_name: "evtd".into(),
+            heal_from_run: None,
+            input_overrides: BTreeMap::new(),
+            dry_run: true,
+            no_sidecars: false,
+            quiet: false,
+            tag: None,
+            output_audit: None,
+        };
+        run(&opts).unwrap();
+        let run_dir = run_dir_for(&jdir);
+        assert!(!run_dir.join("events.jsonl").exists());
+        assert!(!run_dir.join("status.json").exists());
+        clear_fake_browser();
     }
 }
