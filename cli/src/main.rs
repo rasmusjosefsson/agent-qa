@@ -8,12 +8,9 @@
 
 use std::process::ExitCode;
 
-mod aria_snapshot;
 mod audit;
 mod browser;
-mod buffer;
 mod byo_doctor;
-mod cdp_url;
 mod claims;
 mod compare;
 mod config;
@@ -38,7 +35,6 @@ mod profile_list;
 mod profile_status;
 mod record_step;
 mod recorder_shape;
-mod run_step;
 mod runner;
 mod scenario;
 mod scenario_cli;
@@ -90,10 +86,6 @@ fn main() -> ExitCode {
         "audit" => audit::run(rest),
         "start" => start::run(rest),
         "record-step" => record_step::run(rest),
-        "run-step" => run_step::run(rest),
-        "aria-snapshot" => aria_snapshot::run(rest),
-        "cdp-url" => cdp_url::run(rest),
-        "buffer" => buffer::run(rest),
         "flush" => flush::run(rest),
         "verify" => verify::run(rest),
         "truncate" => truncate::run(rest),
@@ -111,7 +103,7 @@ fn main() -> ExitCode {
         "heal-list" => heal_list::run(rest),
         _ => {
             eprintln!(
-                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, audit, start, record-step, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list."
+                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, audit, start, record-step, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list."
             );
             eprintln!("Run `agent-qa --help` for usage.");
             return ExitCode::from(2);
@@ -187,10 +179,6 @@ Verbs:
   diff                          (alias of `compare`)
   start \"<intent>\"             Begin a new recording session
   record-step <do|check> <json> Append a step to the in-flight buffer
-  run-step <kind> <payload-json>   Dispatch ONE step against the live session
-  aria-snapshot [--json]        Dump the live ARIA tree (element picker data)
-  cdp-url [--json]              Print the live session's CDP WebSocket endpoint
-  buffer list|delete|move|clear Inspect / reorder / delete the in-flight buffer
   flush                         Assemble scenario.json from the buffer
   verify                        Sanity-check the in-flight buffer
   truncate <N> [--archive-tag <slug>]   Drop steps ≥ N + archive sidecars

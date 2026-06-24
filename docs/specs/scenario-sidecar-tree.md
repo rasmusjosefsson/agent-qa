@@ -51,8 +51,6 @@ The on-disk tree for one scenario:
     ├── latest.txt                             # pointer file: one line, the `<runId>` of the most recent replay
     └── <runId>/                               # one directory per replay run
         ├── audit.json                         #   run-level metadata: runId, startedAt, finishedAt, exitCode, summary line
-        ├── events.jsonl                       #   per-step lifecycle stream (running + terminal rows); append-only
-        ├── status.json                        #   tiny live cursor: state, currentIdx, total, ok (overwritten each transition)
         ├── heal.jsonl                         #   per-step heal events: locator candidates tried, accept/reject, diffs vs contract
         ├── heal-requests/<stepId>.json        #   caller-driven heal request (replay exit 7)
         ├── heal-responses/<stepId>.json       #   correction loaded via `replay --heal-from-run`
@@ -85,47 +83,6 @@ If a scenario is hand-authored (`producedBy.producer = "llm-author"` / `"human"`
 One per replay run. The first action of a replay is to mint a `runId` and create `replays/<runId>/audit.json` with `startedAt`. The last action (success or failure) is to write `finishedAt`, `exitCode`, and the literal `summary` line the runner emitted to stderr (e.g. `SUMMARY: 9/9 (PASS)`).
 
 `replays/latest.txt` is a one-line pointer file whose content is the `<runId>` of the most recent replay. Tools that want "show me the latest run" read this file; they MUST NOT sort directory entries by timestamp (the directory may be on a filesystem that does not preserve sort order, and a fresh run that has only written `audit.json` may legitimately be the latest while still mid-flight).
-
-### `events.jsonl` + `status.json` (live run progress)
-
-`audit.json` is written exactly twice — empty at run start, final at run end — so nothing can observe a run *while it is in flight*. `events.jsonl` and `status.json` fill that gap. They are an **additive** primitive: they do not change replay behaviour, and the existing per-step stderr trace and `audit.json` are untouched. Both are written under `replays/<runId>/` while steps execute. They are absent for `--dry-run` replays (which skip step dispatch entirely) — absence is meaningful, not an error.
-
-**`events.jsonl`** — an append-only, one-object-per-line lifecycle stream of the step loop. Each step contributes a `running` row when it starts and a terminal `pass`/`fail` row when it finishes (the run stops at the first `fail`). A consumer that only wants the *result history* filters to terminal rows (`status in {pass, fail}`); a live tailer renders `running` rows as in-flight and replaces them when the terminal row lands. Row shape:
-
-```json
-{
-  "idx": 5,
-  "total": 12,
-  "id": "openDialog",
-  "intent": "open the login dialog",
-  "kind": "do:click",
-  "status": "fail",
-  "ms": 1234,
-  "error": "no element matched role=button name=\"Login\"",
-  "screenshot": "screenshots/openDialog.png",
-  "snapshot": "snapshots/openDialog.txt"
-}
-```
-
-- `idx` — 1-based position of the step within the **flattened** run (groups / templates / loops are already expanded). `total` is the fixed step count for the run.
-- `id` / `intent` — copied verbatim from the step; `id` matches the sidecar `<stepId>` keying so a consumer can resolve artifacts by path.
-- `kind` — dispatch-kind label: `do:<verb>` (e.g. `do:click`, `do:type`) or `check`.
-- `status` — `running` on the start row; `pass` or `fail` on the terminal row.
-- `ms` — wall-clock duration of the step in milliseconds (terminal rows only; omitted on `running`).
-- `error` — present on `fail` rows only: the dispatch error message.
-- `screenshot` / `snapshot` — **run-root-relative** paths to the per-step screenshot and ARIA snapshot (`screenshots/<id>.png`, `snapshots/<id>.txt`). Present on terminal rows when per-step sidecars are captured; omitted under `--no-sidecars`. They follow the same path convention as every other sidecar — a consumer resolves them against `replays/<runId>/` and tolerates a missing file (capture is best-effort; absence is not an error).
-
-**`status.json`** — a tiny file overwritten atomically on each transition so a watcher can poll one small file for "where is the run right now" instead of re-parsing the whole stream. Shape:
-
-```json
-{ "state": "running", "currentIdx": 5, "total": 12, "ok": null }
-```
-
-- `state` — `running` while steps execute; `done` once the step phase finishes (before `env.close` teardown, which is not counted as a step).
-- `currentIdx` — 1-based index of the step currently running, or the last step reached; `0` before the first step executes.
-- `ok` — `null` while `running`; the run verdict (`true`/`false`) once `state == "done"`. The final write always carries an explicit boolean.
-
-These files are part of the stable replay tree (`.jsonl` for the stream, `.json` for the cursor). Adding them is non-breaking per the [Stability guarantee](#stability-guarantee): a consumer that does not know about them simply does not look.
 
 ### `recording/failed/`
 
@@ -228,7 +185,7 @@ These rules are intentionally short and unambiguous. A producer that writes a si
 - **Step-keyed files use `<stepId>.<ext>`.** The `<stepId>` is the literal `id` field on the step in `scenario.json` (regex `^[A-Za-z0-9._-]+$` per schema). One file per step per sidecar kind, no zero-padding, no synthetic index. Example: a step with `id: "openDialog"` writes `replays/<runId>/snapshots/openDialog.txt`.
   - This is the deliberate departure from v1's `000.txt` / `001.txt` zero-padded index naming. `stepId` is stable across reorderings; positional indices are not. v1 recordings are not converted (hard cut per `plan.md`'s validation strategy).
 - **Run-keyed directories use `<runId>` of the form `<isoTimestamp>__<shortHash>`.** The timestamp matches the SID format (`YYYY-MM-DDTHH-mm-ss-sssZ`, colons replaced with dashes for filesystem safety) and the short hash is 8 lowercase hex chars. Example: `replays/2026-05-19T12-54-21-471Z__a1b2c3d4/`. Producers MAY append a profile label as a third segment for human readability (`__a1b2c3d4__default`), but tooling MUST identify a run by directory name as a whole, not by parsing segments out.
-- **Extensions are fixed per sidecar kind.** `.json` for probes / perf / audit / network / `status.json`, `.txt` for ARIA snapshots, `.png` for screenshots, `.jsonl` for heal events and the `events.jsonl` step stream. A consumer can decide how to parse a file from its kind directory + extension without sniffing content. (Earlier drafts of this spec named `.har` as the network extension; that was aspirational — no producer ever wrote HAR. See § `network/` for the actual shape.)
+- **Extensions are fixed per sidecar kind.** `.json` for probes / perf / audit / network, `.txt` for ARIA snapshots, `.png` for screenshots, `.jsonl` for heal events. A consumer can decide how to parse a file from its kind directory + extension without sniffing content. (Earlier drafts of this spec named `.har` as the network extension; that was aspirational — no producer ever wrote HAR. See § `network/` for the actual shape.)
 - **Sidecar paths are case-sensitive lowercase for directory names** (`snapshots/`, `screenshots/`, `network/`, `probes/`, `perf/`, `replays/`, `recording/`). File names inherit case from the step `id`, which is author-controlled — producers MUST preserve the author's casing verbatim.
 - **Sidecar files are written atomically when possible** (write to `<path>.tmp`, then rename). Readers that find a `.tmp` file MUST treat it as in-flight, not as canonical data. This rule matters most for `heal.jsonl` and `audit.json`, which are written incrementally during a long-running replay.
 
