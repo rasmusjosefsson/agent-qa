@@ -210,11 +210,13 @@ test('report viewer endpoints', async (t) => {
     }
   });
 
-  await t.test('static index.html is served', async () => {
+  await t.test('static index.html (React runs entry) is served', async () => {
     const res = await fetch(`${base}/`);
     assert.equal(res.status, 200);
     assert.match(res.headers.get('content-type'), /text\/html/);
-    assert.match(await res.text(), /report view/);
+    const html = await res.text();
+    assert.match(html, /agent-qa · runs/);
+    assert.match(html, /\/assets\/[A-Za-z0-9._-]+\.js/);
   });
 
   await t.test('GET /scenario returns the recorded definition', async () => {
@@ -359,4 +361,32 @@ test('in-flight run is surfaced before latest.txt flips', async (t) => {
   const activeRow = runs.find((r) => r.runId === activeRun);
   assert.equal(activeRow.state, 'running');
   assert.equal(activeRow.summary, null);
+});
+
+test('serves the React app at /, /editor, /chat with hashed /assets', async (t) => {
+  const fx = makeFixture();
+  const { server, base } = await boot(fx.root);
+  t.after(() => server.close());
+
+  // /chat page route → the built React entry HTML referencing /assets.
+  const page = await fetch(`${base}/chat`);
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get('content-type') || '', /text\/html/);
+  const html = await page.text();
+  assert.match(html, /\/assets\//);
+
+  // a hashed JS asset under /assets resolves with a JS content-type.
+  const m = html.match(/\/assets\/[A-Za-z0-9._-]+\.js/);
+  assert.ok(m, 'expected an /assets/*.js reference in the built HTML');
+  const asset = await fetch(`${base}${m[0]}`);
+  assert.equal(asset.status, 200);
+  assert.match(asset.headers.get('content-type') || '', /javascript/);
+
+  // /, /editor, /chat all serve the built entries.
+  assert.equal((await fetch(`${base}/`)).status, 200);
+  assert.equal((await fetch(`${base}/editor`)).status, 200);
+
+  // traversal out of the assets subtree is rejected.
+  const evil = await fetch(`${base}/assets/..%2F..%2Freport-server.js`);
+  assert.equal(evil.status, 404);
 });

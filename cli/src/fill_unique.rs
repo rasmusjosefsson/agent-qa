@@ -73,6 +73,11 @@ pub fn run(args: &[String]) -> Result<u8> {
             "recordedAt": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
         });
         append_jsonl(&buffer, &row)?;
+        // Keyframe the filled state so this step shows a screenshot in the
+        // recording view, just like record-step does.
+        if let Some(sid) = extract(&env_body, "SID") {
+            crate::record_step::capture_step_sidecars(&sid, &session, &step_id);
+        }
         println!(
             "filled {} (step {step_id}) → {}",
             opts.label,

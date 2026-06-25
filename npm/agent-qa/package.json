@@ -15,7 +15,9 @@
   },
   "scripts": {
     "postinstall": "node bin/postinstall.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "build:web": "npm --prefix web ci && npm --prefix web run build",
+    "build:cli": "node ../../scripts/build-local-cli.js"
   },
   "files": [
     "bin/",
@@ -27,6 +29,7 @@
     "agent-browser": "0.27.0"
   },
   "optionalDependencies": {
+    "@earendil-works/pi-coding-agent": "0.80.2",
     "@rasmusjosefsson/agent-qa-darwin-arm64": "0.0.0",
     "@rasmusjosefsson/agent-qa-darwin-x64": "0.0.0"
   },
