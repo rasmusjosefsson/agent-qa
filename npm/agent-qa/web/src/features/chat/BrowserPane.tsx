@@ -32,7 +32,11 @@ export function BrowserPane({ available, chatId, navigate }: BrowserPaneProps) {
   const [status, setStatus] = useState<Status>(
     available ? { text: 'idle', tone: 'idle' } : { text: 'off', tone: 'idle' }
   )
-  const [showHint, setShowHint] = useState(!available)
+  // The canvas is blank until a frame paints, so the hint starts visible and is
+  // only hidden once a real frame renders (img.onload). Starting it hidden when
+  // available made it blink on every chat-switch remount: hidden → bridge-error
+  // → visible. Starting visible keeps it steady across switches of idle panes.
+  const [showHint, setShowHint] = useState(true)
 
   // Follow this chat's active session + keep the picker's option list fresh.
   useEffect(() => {
@@ -76,7 +80,14 @@ export function BrowserPane({ available, chatId, navigate }: BrowserPaneProps) {
       return
     }
     let connected = false
-    setStatus({ text: 'connecting…', tone: 'busy' })
+    let settled = false
+    // Don't flash "connecting…" for the common idle/fast-connect cases: the
+    // resting state is "idle", and a no-page session resolves to idle (or a
+    // live one to a frame) within a few ms. Only surface "connecting…" if
+    // neither verdict arrives within a beat — i.e. it's genuinely connecting.
+    const connectingTimer = window.setTimeout(() => {
+      if (!connected && !settled) setStatus({ text: 'connecting…', tone: 'busy' })
+    }, 300)
     const img = (imgRef.current = new Image())
     const es = new EventSource('/api/chat/browser-stream?session=' + encodeURIComponent(effective))
 
@@ -85,6 +96,7 @@ export function BrowserPane({ available, chatId, navigate }: BrowserPaneProps) {
         const f = JSON.parse((e as MessageEvent).data)
         if (!f.data) return
         connected = true
+        window.clearTimeout(connectingTimer)
         setStatus({ text: 'live', tone: 'ok' })
         img.onload = () => {
           const cv = canvasRef.current
@@ -110,14 +122,23 @@ export function BrowserPane({ available, chatId, navigate }: BrowserPaneProps) {
       }
     })
     es.addEventListener('bridge-error', () => {
-      if (!connected) setStatus({ text: 'idle', tone: 'idle' })
-      setShowHint(true)
+      settled = true
+      window.clearTimeout(connectingTimer)
+      // Only surface the "idle" hint if we never rendered a frame. Once a frame
+      // has shown, the canvas keeps it — a transient bridge-error on the SSE's
+      // periodic reconnect must not re-show the hint (that's the blink).
+      if (!connected) {
+        setStatus({ text: 'idle', tone: 'idle' })
+        setShowHint(true)
+      }
     })
     es.onerror = () => {
-      if (!connected) setStatus({ text: 'waiting…', tone: 'idle' })
+      // Don't flap back to "waiting…" once we've connected or settled to idle.
+      if (!connected && !settled) setStatus({ text: 'waiting…', tone: 'idle' })
     }
 
     return () => {
+      window.clearTimeout(connectingTimer)
       try {
         es.close()
       } catch {
@@ -169,7 +190,7 @@ export function BrowserPane({ available, chatId, navigate }: BrowserPaneProps) {
           value={manualSession}
           onChange={(e) => setManualSession(e.target.value)}
           title="Which agent-browser session to mirror"
-          className="max-w-[8.5rem] shrink-0 truncate rounded-md border border-border bg-background px-1.5 py-1 text-xs text-muted-foreground outline-none focus:border-ring"
+          className="w-[8.5rem] shrink-0 truncate rounded-md border border-border bg-background px-1.5 py-1 text-xs text-muted-foreground outline-none focus:border-ring"
         >
           <option value="">auto</option>
           {options.map((s) => (
@@ -180,7 +201,9 @@ export function BrowserPane({ available, chatId, navigate }: BrowserPaneProps) {
         </select>
         <span
           className={cn(
-            'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide',
+            // Fixed min-width + right-align so swapping status text
+            // (idle ↔ connecting… ↔ live) never reflows the header / URL bar.
+            'shrink-0 rounded px-1.5 py-0.5 text-right text-[10px] font-medium uppercase tracking-wide tabular-nums min-w-[6rem]',
             status.tone === 'ok' && 'text-emerald-400',
             status.tone === 'busy' && 'text-amber-400',
             status.tone === 'err' && 'text-destructive',

@@ -3,6 +3,8 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  Suspense,
+  useTransition,
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 import { Loader2Icon, PlusIcon, XIcon } from 'lucide-react'
@@ -22,6 +24,7 @@ import {
   type ChatMeta,
   type RecordingState,
 } from '@/lib/api'
+import { prefetchChatState, dropChatState } from '@/lib/resources'
 
 const SPLIT_KEY = 'aqa-chat-split'
 
@@ -66,6 +69,7 @@ const SUGGESTIONS: { title: string; prompt: string }[] = [
 export function ChatPage() {
   const [chats, setChats] = useState<ChatMeta[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
+  const [isPending, startTransition] = useTransition()
 
   useEffect(() => {
     let mounted = true
@@ -77,8 +81,10 @@ export function ChatPage() {
         if (!mounted) return
         list = c ? [c] : []
       }
+      const firstId = list[0]?.id ?? null
+      if (firstId) prefetchChatState(firstId)
       setChats(list)
-      setActiveId((cur) => cur ?? list[0]?.id ?? null)
+      setActiveId((cur) => cur ?? firstId)
     })()
     return () => {
       mounted = false
@@ -88,8 +94,9 @@ export function ChatPage() {
   const onNew = async () => {
     const c = await createChat()
     if (!c) return
+    prefetchChatState(c.id)
     setChats((cs) => [...cs, c])
-    setActiveId(c.id)
+    startTransition(() => setActiveId(c.id))
   }
 
   const onDelete = async (id: string) => {
@@ -97,7 +104,13 @@ export function ChatPage() {
     await deleteChat(id)
     const remaining = chats.filter((c) => c.id !== id)
     setChats(remaining)
-    if (id === activeId) setActiveId(remaining[0]?.id ?? null)
+    if (id === activeId) {
+      // Still mounted until the transition commits — let the switch drop it;
+      // evicting its resource here would re-suspend the outgoing view.
+      startTransition(() => setActiveId(remaining[0]?.id ?? null))
+    } else {
+      dropChatState(id) // not mounted — safe to evict now
+    }
   }
 
   return (
@@ -119,7 +132,7 @@ export function ChatPage() {
               >
                 <button
                   type="button"
-                  onClick={() => setActiveId(c.id)}
+                  onClick={() => startTransition(() => setActiveId(c.id))}
                   title={`session: ${c.session}`}
                   className="max-w-[12rem] truncate"
                 >
@@ -154,7 +167,22 @@ export function ChatPage() {
       </div>
 
       {activeId ? (
-        <ChatConversation key={activeId} cid={activeId} />
+        <div
+          className={cn(
+            'flex min-h-0 flex-1 flex-col transition-opacity',
+            isPending && 'pointer-events-none opacity-60'
+          )}
+        >
+          <Suspense
+            fallback={
+              <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+                <Loader2Icon className="mr-2 size-4 animate-spin" /> Loading chat…
+              </div>
+            }
+          >
+            <ChatConversation key={activeId} cid={activeId} />
+          </Suspense>
+        </div>
       ) : (
         <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
           <Loader2Icon className="mr-2 size-4 animate-spin" /> Loading chats…
@@ -272,13 +300,7 @@ function ChatConversation({ cid }: { cid: string }) {
       style={isDesktop ? { flexBasis: `${leftPct}%`, flexGrow: 0, flexShrink: 0 } : undefined}
     >
           <div className="flex items-center justify-between gap-3 px-1">
-            {state.hydrated ? (
-              <div className="truncate text-xs text-muted-foreground">{metaParts.join(' · ')}</div>
-            ) : (
-              <div className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Loader2Icon className="size-3.5 animate-spin" /> Connecting…
-              </div>
-            )}
+            <div className="truncate text-xs text-muted-foreground">{metaParts.join(' · ')}</div>
             <Button
               variant="ghost"
               size="sm"
