@@ -119,7 +119,9 @@ fn parse_args(args: &[String]) -> Result<Opts> {
 }
 
 /// Resolve the session name: explicit `--session` wins, else the SESSION
-/// line from the active recording env, else `default`.
+/// line from the active recording env, else the ambient
+/// `AGENT_BROWSER_SESSION` (the host's per-chat browser binding), else
+/// `default`.
 fn resolve_session(explicit: Option<&str>) -> String {
     if let Some(s) = explicit {
         return s.to_string();
@@ -129,6 +131,12 @@ fn resolve_session(explicit: Option<&str>) -> String {
             if !s.is_empty() {
                 return s;
             }
+        }
+    }
+    if let Ok(s) = std::env::var("AGENT_BROWSER_SESSION") {
+        let s = s.trim().to_string();
+        if !s.is_empty() {
+            return s;
         }
     }
     "default".to_string()
@@ -329,6 +337,9 @@ mod tests {
     #[test]
     fn resolve_session_prefers_explicit_then_env_then_default() {
         let _g = lock_env();
+        // Ambient AGENT_BROWSER_SESSION must not leak into the file/default
+        // precedence assertions below.
+        std::env::remove_var("AGENT_BROWSER_SESSION");
         let tmp = TempDir::new().unwrap();
         let rec = tmp.path().join("rec");
         std::env::set_var(paths::RECORD_DIR_ENV, &rec);

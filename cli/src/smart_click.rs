@@ -122,6 +122,11 @@ pub fn run(args: &[String]) -> Result<u8> {
             }),
         };
         append_jsonl(&buffer, &row)?;
+        // Keyframe the resulting page so this step shows a screenshot in the
+        // recording view, just like record-step does.
+        if let Some(sid) = extract(&env_body, "SID") {
+            crate::record_step::capture_step_sidecars(&sid, &session, &step_id);
+        }
         match &recovery {
             Recovery::None => println!(
                 "clicked {} (step {step_id}) — role={} name={:?}",

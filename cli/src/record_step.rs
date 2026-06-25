@@ -174,16 +174,30 @@ fn record(opts: &Opts) -> Result<StepRow> {
     // Best-effort sidecar capture under <sid>/recording/.
     // Evals can disable this so a slow snapshot/screenshot never blocks
     // recording the scenario contract itself.
+    capture_step_sidecars(&sid, &session, &row.step_id);
+
+    Ok(row)
+}
+
+/// Best-effort keyframe capture for a freshly recorded step. Shared by
+/// `record-step`, `smart-click`, and `fill-unique` so every recorded step —
+/// however it was driven — gets a matching
+/// `<sid>/recording/{snapshots,screenshots}/<stepId>.{txt,png}` keyframe.
+/// No-ops when AGENT_QA_RECORD_SKIP_SIDECARS=1 (evals).
+pub(crate) fn capture_step_sidecars(sid: &str, session: &str, step_id: &str) {
     if std::env::var("AGENT_QA_RECORD_SKIP_SIDECARS")
         .ok()
         .as_deref()
-        != Some("1")
+        == Some("1")
     {
-        let scenario_dir = paths::scenario_dir(&sid)?;
-        let _ = capture_recording_sidecars(&scenario_dir, &row.step_id, &session);
+        return;
     }
-
-    Ok(row)
+    match paths::scenario_dir(sid) {
+        Ok(scenario_dir) => {
+            let _ = capture_recording_sidecars(&scenario_dir, step_id, session);
+        }
+        Err(e) => eprintln!("[record] sidecar capture: resolve scenario dir failed: {e}"),
+    }
 }
 
 fn parse_sid(env: &str) -> Option<String> {
