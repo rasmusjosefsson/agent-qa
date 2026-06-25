@@ -254,7 +254,7 @@ function renderSaved(state: ChatUIState, m: ChatMessage): ChatUIState {
   return state;
 }
 
-function rehydrate(payload: ChatState): ChatUIState {
+export function rehydrate(payload: ChatState): ChatUIState {
   let s: ChatUIState = {
     ...initialState,
     available: !!payload.available,
