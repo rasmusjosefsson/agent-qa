@@ -327,7 +327,7 @@ test('editor is gated off when no CLI runner is configured', async (t) => {
   assert.equal(root2.editor, false);
 });
 
-test('static editor.html + editor.js are served', async (t) => {
+test('static editor.html (React editor entry) is served', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-edit-static-'));
   const stub = makeStub();
   const server = srv.createServer(root, { recordRoot: root, runCli: stub.runCli });
@@ -339,9 +339,13 @@ test('static editor.html + editor.js are served', async (t) => {
   const html = await fetch(`${base}/editor`);
   assert.equal(html.status, 200);
   assert.match(html.headers.get('content-type'), /text\/html/);
-  assert.match(await html.text(), /editor/i);
+  const body = await html.text();
+  assert.match(body, /editor/i);
 
-  const js = await fetch(`${base}/editor.js`);
+  // the entry references a hashed JS asset under /assets which resolves as JS.
+  const m = body.match(/\/assets\/[A-Za-z0-9._-]+\.js/);
+  assert.ok(m, 'expected an /assets/*.js reference in editor.html');
+  const js = await fetch(`${base}${m[0]}`);
   assert.equal(js.status, 200);
   assert.match(js.headers.get('content-type'), /javascript/);
 

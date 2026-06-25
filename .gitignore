@@ -21,3 +21,6 @@ npm/agent-qa/skills/
 
 # Runtime scenario / record output
 tmp/
+
+# Runtime replay output
+npm/agent-qa/replays/

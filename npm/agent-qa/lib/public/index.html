@@ -1,48 +1,14 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="dark">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>agent-qa · report view</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>agent-qa · runs</title>
+    <script type="module" crossorigin src="/assets/index-Ci-L6trz.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/AppShell-DZVzTaEw.js">
+    <link rel="stylesheet" crossorigin href="/assets/AppShell-C_qWSP6O.css">
   </head>
   <body>
-    <header class="topbar">
-      <div class="brand">agent-qa <span class="muted">· report view</span></div>
-      <nav class="tabnav">
-        <a href="/" class="tablink active">Runs</a>
-        <a href="/editor" class="tablink">Editor</a>
-      </nav>
-      <div class="root muted" id="rootLabel"></div>
-      <div class="live-toggle">
-        <label><input type="checkbox" id="liveToggle" checked /> live</label>
-      </div>
-    </header>
-
-    <main class="layout">
-      <!-- left: scenarios + run history -->
-      <nav class="sidebar" id="sidebar">
-        <div class="sidebar-head">
-          <span>Scenarios</span>
-          <button id="refreshBtn" title="Refresh" class="icon-btn">⟳</button>
-        </div>
-        <ul id="scenarioList" class="scenario-list"></ul>
-      </nav>
-
-      <!-- middle: step list for the selected run -->
-      <section class="steps-pane">
-        <div class="run-header" id="runHeader">
-          <div class="empty">Select a run from the left.</div>
-        </div>
-        <ol id="stepList" class="step-list"></ol>
-      </section>
-
-      <!-- right: selected step detail -->
-      <section class="detail-pane" id="detailPane">
-        <div class="empty">Select a step to see details.</div>
-      </section>
-    </main>
-
-    <script src="/app.js"></script>
+    <div id="root"></div>
   </body>
 </html>

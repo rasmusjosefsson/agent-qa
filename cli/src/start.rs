@@ -97,7 +97,19 @@ fn parse_args(args: &[String]) -> Result<Opts> {
     let intent = intent.ok_or_else(|| {
         anyhow!("usage: start \"<intent>\" [--session <n>] [--open <url>] [--profile <p>] [--keep-session]")
     })?;
-    let session_name = session.unwrap_or_else(|| DEFAULT_SESSION.to_string());
+    // Session precedence: explicit --session, else the ambient
+    // AGENT_BROWSER_SESSION (e.g. a per-chat browser the host binds so the
+    // recording lands in the same browser the agent is driving), else
+    // "default". Bare `agent-browser` already honors AGENT_BROWSER_SESSION, so
+    // honoring it here keeps record + browse in one session.
+    let session_name = session
+        .or_else(|| {
+            std::env::var("AGENT_BROWSER_SESSION")
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or_else(|| DEFAULT_SESSION.to_string());
     Ok(Opts {
         intent,
         session_name,
