@@ -1409,6 +1409,26 @@ function createRequestHandler(root, deps, chat) {
         return sendJson(res, 202, { ok: true, sid, started: true });
       }
 
+      // Delete a recorded scenario (POST): remove its dir + all replays via the
+      // Rust CLI `scenario delete <sid> --yes`. Requires deps.runCli.
+      if (
+        req.method === 'POST' &&
+        segAll[0] === 'api' &&
+        segAll[1] === 'scenarios' &&
+        segAll[3] === 'delete' &&
+        segAll.length === 4
+      ) {
+        if (!deps || !deps.runCli) {
+          return sendJson(res, 503, { error: 'delete unavailable: agent-qa CLI not resolved' });
+        }
+        const sid = decodeURIComponent(segAll[2]);
+        if (!isSafeSegment(sid)) return badRequest(res, 'unsafe sid');
+        const r = await deps.runCli(['scenario', 'delete', sid, '--yes']);
+        if (r.spawnError) return sendJson(res, 503, { error: 'agent-qa CLI not runnable' });
+        if (r.code !== 0) return sendJson(res, 500, { error: (r.stderr || '').trim() || 'delete failed' });
+        return sendJson(res, 200, { ok: true, sid, deleted: true });
+      }
+
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         return sendJson(res, 405, { error: 'method not allowed' });
       }

@@ -1,6 +1,17 @@
 // web/src/features/runs/components/ScenarioSidebar.tsx
 import { cn } from '@/lib/utils'
-import { RefreshCwIcon } from 'lucide-react'
+import { RefreshCwIcon, Trash2Icon } from 'lucide-react'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
 import { cleanSummary, scenarioVerdict, verdictTone } from '../rows'
 import type { RunsApi } from '../useRuns'
 
@@ -43,18 +54,44 @@ export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
           const open = expanded.has(sc.sid)
           const list = runsBySid[sc.sid]
           return (
-            <li key={sc.sid} className="mb-0.5">
-              <button
-                type="button"
-                onClick={() => void runs.toggleScenario(sc.sid)}
-                className="w-full rounded-md px-2 py-1.5 text-left hover:bg-muted/50"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="truncate text-sm">{sc.scenarioId || sc.sid}</span>
-                  {verdict && <Badge tone={verdict}>{verdict}</Badge>}
-                </div>
-                <div className="truncate text-xs text-muted-foreground">{sc.intent || sc.sid}</div>
-              </button>
+            <li key={sc.sid} className="group mb-0.5">
+              <div className="flex items-stretch rounded-md hover:bg-muted/50">
+                <button
+                  type="button"
+                  onClick={() => void runs.toggleScenario(sc.sid)}
+                  className="min-w-0 flex-1 px-2 py-1.5 text-left"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-sm">{sc.scenarioId || sc.sid}</span>
+                    {verdict && <Badge tone={verdict}>{verdict}</Badge>}
+                  </div>
+                  <div className="truncate text-xs text-muted-foreground">{sc.intent || sc.sid}</div>
+                </button>
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label="Delete scenario"
+                      title="Delete scenario"
+                      className="my-1 mr-1 grid shrink-0 place-items-center rounded p-1 text-muted-foreground/40 opacity-0 transition hover:bg-muted hover:text-destructive group-hover:opacity-100"
+                    >
+                      <Trash2Icon className="size-3.5" />
+                    </button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Delete this scenario?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        Permanently removes “{sc.scenarioId || sc.sid}” and all its replay runs. This can’t be undone.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction onClick={() => void runs.deleteScenario(sc.sid)}>Delete</AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </div>
               {open && (
                 <div className="ml-2 mt-0.5 border-l border-border pl-2">
                   {!list && <div className="px-1 py-1 text-xs text-muted-foreground">loading…</div>}
