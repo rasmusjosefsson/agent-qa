@@ -1,5 +1,6 @@
 // web/src/features/editor/components/LiveCanvas.tsx
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { ChevronLeftIcon, ChevronRightIcon, CircleDotIcon, CrosshairIcon, MousePointer2Icon, RotateCwIcon } from 'lucide-react'
 import {
   Select,
   SelectContent,
@@ -192,11 +193,11 @@ export function LiveCanvas({
   const tone = liveStatus.tone
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <div className="flex items-center gap-1.5 border-b border-border px-2 py-1.5">
-        <NavBtn label="‹" title="Back" onClick={() => sendInput({ type: 'back' })} />
-        <NavBtn label="›" title="Forward" onClick={() => sendInput({ type: 'forward' })} />
-        <NavBtn label="↻" title="Reload" onClick={reload} />
+        <NavBtn icon={<ChevronLeftIcon className="size-4" />} title="Back" onClick={() => sendInput({ type: 'back' })} />
+        <NavBtn icon={<ChevronRightIcon className="size-4" />} title="Forward" onClick={() => sendInput({ type: 'forward' })} />
+        <NavBtn icon={<RotateCwIcon className="size-3.5" />} title="Reload" onClick={reload} />
         <input
           value={addr}
           onChange={(e) => setAddr(e.target.value)}
@@ -229,9 +230,9 @@ export function LiveCanvas({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="interact">🖱 interact</SelectItem>
-            <SelectItem value="record">⏺ auto-record</SelectItem>
-            <SelectItem value="pick">🎯 pick element</SelectItem>
+            <SelectItem value="interact"><span className="flex items-center gap-1.5"><MousePointer2Icon className="size-3.5" /> Browse</span></SelectItem>
+            <SelectItem value="record"><span className="flex items-center gap-1.5"><CircleDotIcon className="size-3.5 text-red-400" /> Record</span></SelectItem>
+            <SelectItem value="pick"><span className="flex items-center gap-1.5"><CrosshairIcon className="size-3.5" /> Pick element</span></SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -266,15 +267,16 @@ export function LiveCanvas({
   )
 }
 
-function NavBtn({ label, title, onClick }: { label: string; title: string; onClick: () => void }) {
+function NavBtn({ icon, title, onClick }: { icon: ReactNode; title: string; onClick: () => void }) {
   return (
     <button
       type="button"
       title={title}
+      aria-label={title}
       onClick={onClick}
-      className="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-border bg-background text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+      className="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
     >
-      {label}
+      {icon}
     </button>
   )
 }

@@ -8,6 +8,9 @@ import { ElementPicker } from './components/ElementPicker'
 import { composePayload } from './compose'
 import { EMPTY_FORM, type AriaNode, type ClickMode, type ComposeForm, type PickedElement, type RunResult } from './types'
 import { cn } from '@/lib/utils'
+import { RefreshCwIcon } from 'lucide-react'
+import { Panel, PanelGroup } from 'react-resizable-panels'
+import { ResizeHandle } from '@/components/ResizeHandle'
 
 const PICK_VERBS = ['click', 'type', 'assertPresent', 'assertAbsent']
 
@@ -58,7 +61,7 @@ export function EditorPage() {
       <div className="flex min-h-0 flex-1 flex-col gap-3">
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
           Editor unavailable — the agent-qa CLI binary could not be resolved. Launch via{' '}
-          <code className="font-mono">agent-qa report view</code> with the platform package installed, or set{' '}
+          <code className="font-mono">agent-qa web</code> with the platform package installed, or set{' '}
           <code className="font-mono">AGENT_QA_BINARY_PATH</code>.
         </div>
       </div>
@@ -66,35 +69,28 @@ export function EditorPage() {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2">
-      <div className="flex h-5 items-center justify-between">
-        <div className="truncate text-xs text-muted-foreground">{ed.scenariosRoot}</div>
-        {ed.flashMsg && (
-          <div className={cn('text-xs', ed.flashMsg.error ? 'text-destructive' : 'text-emerald-400')}>
-            {ed.flashMsg.text}
-          </div>
-        )}
-      </div>
-
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 lg:grid-cols-[20rem_minmax(0,1fr)_18rem]">
-        {/* left: session + steps + composer */}
-        <div className="flex min-h-0 flex-col gap-3 overflow-auto">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <PanelGroup direction="horizontal" autoSaveId="aqa-editor-cols" className="min-h-0 flex-1">
+        {/* left: session + steps + composer — flat sections divided by hairlines */}
+        <Panel defaultSize={26} minSize={16} className="min-h-0">
+          <div className="flex h-full min-h-0 flex-col overflow-auto">
           <SessionBox
             buffer={ed.buffer}
             onStart={(intent, url) => void ed.startSession(intent, url)}
             onFlush={() => void ed.flushScenario()}
             onCancel={() => void ed.cancelScenario()}
           />
-          <div className="rounded-lg border border-border bg-card p-2">
+          <div className="border-b border-border p-3">
             <div className="mb-1 flex items-center justify-between px-1">
               <span className="text-xs font-medium text-muted-foreground">Steps</span>
               <button
                 type="button"
                 title="Refresh"
+                aria-label="Refresh"
                 onClick={() => void ed.refreshBuffer()}
                 className="grid h-5 w-5 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
               >
-                ⟳
+                <RefreshCwIcon className="size-3.5" />
               </button>
             </div>
             <StepList rows={ed.buffer.rows} onMove={ed.moveRow} onDelete={ed.deleteRow} />
@@ -107,10 +103,12 @@ export function EditorPage() {
             onRecord={() => void onRecord()}
             runResult={runResult}
           />
-        </div>
+          </div>
+        </Panel>
+        <ResizeHandle />
 
         {/* center: live browser */}
-        <div className="min-h-0">
+        <Panel defaultSize={50} minSize={30} className="min-h-0">
           <LiveCanvas
             subscribeFrame={ed.subscribeFrame}
             sendInput={ed.sendInput}
@@ -124,10 +122,11 @@ export function EditorPage() {
             onClickModeChange={setClickMode}
             onCanvasPick={applyCanvasPick}
           />
-        </div>
+        </Panel>
+        <ResizeHandle />
 
         {/* right: element picker */}
-        <div className="min-h-0">
+        <Panel defaultSize={24} minSize={16} className="min-h-0">
           <ElementPicker
             nodes={ed.ariaNodes}
             interactiveOnly={ed.interactiveOnly}
@@ -135,7 +134,17 @@ export function EditorPage() {
             onSnapshot={() => void ed.snapshot()}
             onPick={applyTreePick}
           />
-        </div>
+        </Panel>
+      </PanelGroup>
+
+      {/* Bottom status stripe — scenarios root + flash */}
+      <div className="flex h-7 shrink-0 items-center justify-between gap-3 border-t border-border px-4 text-xs text-muted-foreground">
+        <div className="truncate font-mono">{ed.scenariosRoot}</div>
+        {ed.flashMsg && (
+          <div className={cn('shrink-0', ed.flashMsg.error ? 'text-destructive' : 'text-emerald-400')}>
+            {ed.flashMsg.text}
+          </div>
+        )}
       </div>
     </div>
   )

@@ -67,7 +67,7 @@ export interface RunDetail {
   events: RunEvent[]
 }
 
-export type DetailTab = 'step' | 'context' | 'network' | 'html' | 'console'
+export type DetailTab = 'step' | 'scenario' | 'context' | 'network' | 'html' | 'console'
 
 export interface Selection {
   sid: string | null

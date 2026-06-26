@@ -1,5 +1,6 @@
 // web/src/features/runs/components/ScenarioSidebar.tsx
 import { cn } from '@/lib/utils'
+import { RefreshCwIcon } from 'lucide-react'
 import { cleanSummary, scenarioVerdict, verdictTone } from '../rows'
 import type { RunsApi } from '../useRuns'
 
@@ -20,16 +21,17 @@ function Badge({ tone, children }: { tone: string; children: React.ReactNode }) 
 export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
   const { scenarios, expanded, runsBySid, sel } = runs
   return (
-    <nav className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card">
+    <nav className="flex h-full min-h-0 flex-col overflow-hidden">
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
         <span className="text-xs font-medium text-muted-foreground">Scenarios</span>
         <button
           type="button"
           title="Refresh"
+          aria-label="Refresh"
           onClick={runs.refresh}
           className="grid h-5 w-5 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
         >
-          ⟳
+          <RefreshCwIcon className="size-3.5" />
         </button>
       </div>
       <ul className="min-h-0 flex-1 overflow-auto p-1.5">

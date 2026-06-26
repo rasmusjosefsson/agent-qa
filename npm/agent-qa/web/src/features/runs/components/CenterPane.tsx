@@ -157,5 +157,5 @@ export function CenterPane({ runs, onReplay }: { runs: RunsApi; onReplay: (sid: 
 }
 
 function Pane({ children }: { children: React.ReactNode }) {
-  return <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card">{children}</section>
+  return <section className="flex h-full min-h-0 flex-col overflow-hidden">{children}</section>
 }

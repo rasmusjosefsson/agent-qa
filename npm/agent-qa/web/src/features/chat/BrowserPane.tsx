@@ -1,6 +1,6 @@
 // web/src/features/chat/BrowserPane.tsx
-import { useEffect, useRef, useState } from 'react'
-import { Loader2Icon } from 'lucide-react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { ChevronLeftIcon, ChevronRightIcon, Loader2Icon, RotateCwIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 type Status = { text: string; tone: 'idle' | 'busy' | 'ok' | 'err' }
@@ -214,11 +214,11 @@ export function BrowserPane({ available, chatId, navigate, initialSession }: Bro
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
       <div className="flex items-center gap-1.5 border-b border-border px-2 py-1.5">
-        <NavBtn label="‹" title="Back" onClick={() => browserAction({ action: 'back' })} />
-        <NavBtn label="›" title="Forward" onClick={() => browserAction({ action: 'forward' })} />
-        <NavBtn label="⟳" title="Reload" onClick={() => browserAction({ action: 'reload' })} />
+        <NavBtn icon={<ChevronLeftIcon className="size-4" />} title="Back" onClick={() => browserAction({ action: 'back' })} />
+        <NavBtn icon={<ChevronRightIcon className="size-4" />} title="Forward" onClick={() => browserAction({ action: 'forward' })} />
+        <NavBtn icon={<RotateCwIcon className="size-3.5" />} title="Reload" onClick={() => browserAction({ action: 'reload' })} />
         <form
           className="flex-1"
           onSubmit={(e) => {
@@ -274,15 +274,16 @@ export function BrowserPane({ available, chatId, navigate, initialSession }: Bro
   )
 }
 
-function NavBtn({ label, title, onClick }: { label: string; title: string; onClick: () => void }) {
+function NavBtn({ icon, title, onClick }: { icon: ReactNode; title: string; onClick: () => void }) {
   return (
     <button
       type="button"
       title={title}
+      aria-label={title}
       onClick={onClick}
-      className="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-border bg-background text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+      className="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
     >
-      {label}
+      {icon}
     </button>
   )
 }
