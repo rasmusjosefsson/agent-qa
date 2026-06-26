@@ -180,7 +180,11 @@ export function ChatPage() {
               </div>
             }
           >
-            <ChatConversation key={activeId} cid={activeId} />
+            <ChatConversation
+            key={activeId}
+            cid={activeId}
+            session={chats.find((c) => c.id === activeId)?.session ?? null}
+          />
           </Suspense>
         </div>
       ) : (
@@ -193,7 +197,7 @@ export function ChatPage() {
 }
 
 // One conversation: bound to a single chat id. Re-mounted on switch via `key`.
-function ChatConversation({ cid }: { cid: string }) {
+function ChatConversation({ cid, session }: { cid: string; session: string | null }) {
   const { state, root, sendPrompt, abort, newChat, setModel, setThinking, navigateBrowser } =
     useChat(cid)
   const [text, setText] = useState('')
@@ -384,7 +388,12 @@ function ChatConversation({ cid }: { cid: string }) {
   )
 
   const liveBrowserPane = (
-    <BrowserPane available={!!root.liveBrowser} chatId={cid} navigate={navigateBrowser} />
+    <BrowserPane
+      available={!!root.liveBrowser}
+      chatId={cid}
+      navigate={navigateBrowser}
+      initialSession={session ?? undefined}
+    />
   )
   const hasRecording = !!(rec && rec.sid)
 

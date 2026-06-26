@@ -8,6 +8,10 @@ export interface BrowserPaneProps {
   available: boolean
   chatId: string | null
   navigate: (payload: unknown) => Promise<Response>
+  // This chat's own session, so we follow it from the first frame instead of
+  // briefly connecting to the shared 'default' session (which shows another
+  // chat's page) until the active-session poll catches up.
+  initialSession?: string
 }
 
 // Read-only (plus URL-bar steer) view of the agent-browser session the chat
@@ -16,13 +20,13 @@ export interface BrowserPaneProps {
 // recorder session while it records, else its bound browser tab — polled from
 // /api/chat/c/<id>/active-session). The user can also pin a specific session
 // from the picker, which overrides follow until they switch back to "auto".
-export function BrowserPane({ available, chatId, navigate }: BrowserPaneProps) {
+export function BrowserPane({ available, chatId, navigate, initialSession }: BrowserPaneProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const urlRef = useRef<HTMLInputElement | null>(null)
   const imgRef = useRef<HTMLImageElement | null>(null)
   const [url, setUrl] = useState('')
   // The agent's auto-followed session, and an optional manual pin ('' = follow).
-  const [autoSession, setAutoSession] = useState('default')
+  const [autoSession, setAutoSession] = useState(initialSession || 'default')
   const [autoRecording, setAutoRecording] = useState(false)
   const [manualSession, setManualSession] = useState('')
   const [sessions, setSessions] = useState<string[]>([])
@@ -116,7 +120,10 @@ export function BrowserPane({ available, chatId, navigate }: BrowserPaneProps) {
     es.addEventListener('url', (e) => {
       try {
         const { url: u } = JSON.parse((e as MessageEvent).data)
-        if (document.activeElement !== urlRef.current) setUrl(u || '')
+        // A blank page (about:blank) is "no URL" — keep the placeholder rather
+        // than flashing the literal "about:blank" into the bar.
+        const clean = u && u !== 'about:blank' ? u : ''
+        if (document.activeElement !== urlRef.current) setUrl(clean)
       } catch {
         /* ignore */
       }
