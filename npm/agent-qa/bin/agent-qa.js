@@ -108,11 +108,11 @@ function resolveAgentBrowserBin() {
   }
 }
 
-// `report view` is a read-only, localhost-only viewer hosted by this Node
-// launcher (no new Rust crate). It is a pure consumer of the per-run sidecar
-// tree — it never drives a browser, never writes, never runs as a daemon.
-// Every OTHER verb passes straight through to the Rust binary below.
-function parseReportViewArgs(argv) {
+// `web` (formerly `report view`) is a localhost-only run viewer + authoring
+// editor + chat, hosted by this Node launcher (no new Rust crate). The viewer
+// is a pure consumer of the per-run sidecar tree; the editor/chat tabs shell
+// the CLI. Every OTHER verb passes straight through to the Rust binary below.
+function parseWebArgs(argv) {
   const opts = { port: 7878, open: true, root: undefined };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -129,29 +129,39 @@ function parseReportViewArgs(argv) {
     } else if (a === '-h' || a === '--help' || a === 'help') {
       opts.help = true;
     } else {
-      throw new Error(`agent-qa report view: unknown argument ${JSON.stringify(a)}`);
+      throw new Error(`agent-qa web: unknown argument ${JSON.stringify(a)}`);
     }
   }
   if (!Number.isInteger(opts.port) || opts.port <= 0 || opts.port > 65535) {
-    throw new Error('agent-qa report view: --port expects an integer in 1..65535');
+    throw new Error('agent-qa web: --port expects an integer in 1..65535');
   }
   return opts;
 }
 
-function maybeRunReportView(argv) {
-  if (argv[0] !== 'report' || argv[1] !== 'view') return false;
-  const opts = parseReportViewArgs(argv.slice(2));
+function maybeRunWeb(argv) {
+  let rest;
+  if (argv[0] === 'web') {
+    rest = argv.slice(1);
+  } else if (argv[0] === 'report' && argv[1] === 'view') {
+    // Deprecated alias kept for back-compat with earlier releases / scripts.
+    console.error('agent-qa: `report view` is deprecated — use `agent-qa web`.');
+    rest = argv.slice(2);
+  } else {
+    return false;
+  }
+  const opts = parseWebArgs(rest);
   if (opts.help) {
     console.log(
-      'agent-qa report view — localhost read-only run viewer\n\n' +
+      'agent-qa web — localhost run viewer + authoring editor + chat\n\n' +
         'Usage:\n' +
-        '  agent-qa report view [--port <N>] [--root <dir>] [--no-open]\n\n' +
+        '  agent-qa web [--port <N>] [--root <dir>] [--no-open]\n\n' +
         'Flags:\n' +
         '  --port <N>    Port to bind on 127.0.0.1 (default 7878)\n' +
         '  --root <dir>  Scenarios root to view (default: AGENT_QA_SCENARIOS_DIR,\n' +
         '                agent-qa.toml [paths].scenarios_root, or\n' +
         '                <cwd>/tmp/agent-qa-scenarios)\n' +
-        '  --no-open     Do not auto-open the browser',
+        '  --no-open     Do not auto-open the browser\n\n' +
+        'Alias: `agent-qa report view` (deprecated).',
     );
     return true;
   }
@@ -203,7 +213,7 @@ try {
   if (maybeRunVersion(process.argv.slice(2))) {
     return;
   }
-  if (maybeRunReportView(process.argv.slice(2))) {
+  if (maybeRunWeb(process.argv.slice(2))) {
     return;
   }
   const binary = resolveAgentQaBinary();

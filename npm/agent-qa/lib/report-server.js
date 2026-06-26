@@ -1615,17 +1615,17 @@ function start(opts = {}) {
 
   server.on('error', (err) => {
     if (err && err.code === 'EADDRINUSE') {
-      console.error(`agent-qa report view: port ${port} is already in use on ${host}.`);
-      console.error('Pass a different port: agent-qa report view --port <N>');
+      console.error(`agent-qa web: port ${port} is already in use on ${host}.`);
+      console.error('Pass a different port: agent-qa web --port <N>');
     } else {
-      console.error(`agent-qa report view: ${err.message || err}`);
+      console.error(`agent-qa web: ${err.message || err}`);
     }
     process.exit(1);
   });
 
   server.listen(port, host, () => {
     const url = `http://${host}:${port}/`;
-    console.error(`agent-qa report view — read-only viewer + editor`);
+    console.error(`agent-qa web — run viewer + authoring editor + chat`);
     console.error(`  scenarios root: ${root}`);
     console.error(`  serving:        ${url}`);
     if (deps) {
