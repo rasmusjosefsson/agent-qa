@@ -1102,7 +1102,14 @@ function createChatManager(deps) {
   }
 
   function dispose() {
-    for (const e of chats.values()) e.dispose();
+    // Close each chat's agent-browser daemon too (mirrors remove()). Without
+    // this, quitting the server (SIGINT/SIGTERM) disposed the agents but left
+    // every chat-<id> browser daemon running — they survived and piled up in
+    // the session picker on the next run.
+    for (const e of chats.values()) {
+      e.dispose();
+      closeBrowserSession(deps && deps.agentBrowserBin, e.browser.name);
+    }
     chats.clear();
   }
 
