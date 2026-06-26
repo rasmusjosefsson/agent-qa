@@ -13,7 +13,17 @@ import BrowserPane from './BrowserPane'
 import { Message } from './components/Message'
 import { PromptInput } from './components/PromptInput'
 import RecordingView from './components/RecordingView'
-import { Button } from '@/components/ui/button'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
 import { cn } from '@/lib/utils'
 import { useMediaQuery } from '@/lib/useMediaQuery'
 import {
@@ -159,17 +169,32 @@ export function ChatPage() {
                   {c.title && c.title !== 'New chat' ? c.title : `Chat ${i + 1}`}
                 </button>
                 {chats.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => void onDelete(c.id)}
-                    aria-label="Close chat"
-                    className={cn(
-                      'rounded p-0.5 text-muted-foreground/50 transition-opacity hover:bg-muted hover:text-foreground',
-                      isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-                    )}
-                  >
-                    <XIcon className="size-3.5" />
-                  </button>
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <button
+                        type="button"
+                        aria-label="Close chat"
+                        className={cn(
+                          'rounded p-0.5 text-muted-foreground/50 transition-opacity hover:bg-muted hover:text-foreground',
+                          isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                        )}
+                      >
+                        <XIcon className="size-3.5" />
+                      </button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Close this chat?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          This permanently deletes the conversation and closes its browser session.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={() => void onDelete(c.id)}>Delete</AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
                 )}
               </div>
             )
@@ -230,7 +255,7 @@ function ChatConversation({
   seedPrompt?: string
   onSeeded?: () => void
 }) {
-  const { state, root, sendPrompt, abort, newChat, setModel, setThinking, navigateBrowser } =
+  const { state, root, sendPrompt, abort, setModel, setThinking, navigateBrowser } =
     useChat(cid)
   const [text, setText] = useState('')
   const threadRef = useRef<HTMLDivElement | null>(null)
@@ -340,18 +365,6 @@ function ChatConversation({
       className="flex min-h-0 min-w-0 flex-1 flex-col"
       style={isDesktop ? { flexBasis: `${leftPct}%`, flexGrow: 0, flexShrink: 0 } : undefined}
     >
-          <div className="flex items-center justify-end border-b border-border px-4 py-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => void newChat()}
-              disabled={!state.available || empty}
-              title="Clear this conversation and start fresh in a new browser"
-            >
-              Reset
-            </Button>
-          </div>
-
           <div
             ref={threadRef}
             onScroll={onScroll}
