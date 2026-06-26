@@ -27,9 +27,13 @@ const STATUS_TONE: Record<string, string> = {
 // (on.role / on.name) and value — the events stream doesn't, so we join them.
 function targetSummary(s?: ScenarioStep): string {
   if (!s) return ''
+  const on = s.on
+  // Raw selector (recorder fell back to css/xpath) takes priority — it's the
+  // literal thing that was clicked.
+  if (on?.raw?.value) return `${on.raw.kind || 'selector'} ${on.raw.value}`
   const parts: string[] = []
-  if (s.on?.role) parts.push(s.on.role)
-  if (s.on?.name) parts.push(`“${s.on.name}”`)
+  if (on?.role) parts.push(on.role)
+  if (on?.name) parts.push(`“${on.name}”`)
   return parts.join(' ')
 }
 
@@ -209,6 +213,8 @@ function TabBody({
     if (defStep?.verb) rows.push(['verb', defStep.verb])
     if (defStep?.on?.role) rows.push(['target role', defStep.on.role])
     if (defStep?.on?.name) rows.push(['target name', defStep.on.name])
+    if (defStep?.on?.raw?.value)
+      rows.push(['target', `${defStep.on.raw.kind || 'selector'}: ${defStep.on.raw.value}`])
     if (defStep?.value?.literal != null) rows.push(['value', String(defStep.value.literal)])
     rows.push(
       ['id', step.id || ''],

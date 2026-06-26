@@ -31,7 +31,7 @@ export interface ScenarioStep {
   id?: string
   verb?: string
   intent?: string
-  on?: { role?: string; name?: string }
+  on?: { role?: string; name?: string; raw?: { kind?: string; value?: string }; reason?: string }
   value?: { literal?: unknown }
   [k: string]: unknown
 }
