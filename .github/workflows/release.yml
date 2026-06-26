@@ -58,6 +58,8 @@ jobs:
           rm -f cli/Cargo.lock
       - name: cargo build --release
         working-directory: cli
+        env:
+          AGENT_QA_RELEASE: "1" # clean version (no +gSHA suffix) for published builds
         run: cargo build --release --target ${{ matrix.target }}
       - name: stage platform package
         shell: bash

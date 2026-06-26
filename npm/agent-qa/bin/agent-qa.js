@@ -171,7 +171,38 @@ function maybeRunReportView(argv) {
   return true;
 }
 
+// Answer `--version` / `-v` from the launcher so it works even when the
+// platform binary can't be resolved. On a published install the umbrella
+// package.json carries the real version (e.g. 0.0.17); in the source tree it
+// is 0.0.0, so we fall back to the binary's own (truthful) version string.
+function maybeRunVersion(argv) {
+  if (!argv.length || !['-v', '-V', '--version', 'version'].includes(argv[0])) {
+    return false;
+  }
+  const wantJson = argv.includes('--json');
+
+  let pkgV = null;
+  try { pkgV = require('../package.json').version; } catch { /* ignore */ }
+
+  let cliV = null;
+  try {
+    const line = execFileSync(resolveAgentQaBinary(), ['--version'], { encoding: 'utf8' }).trim();
+    cliV = line.replace(/^agent-qa\s+/, '') || null; // "agent-qa 0.0.1+gSHA" -> "0.0.1+gSHA"
+  } catch { /* binary unresolved — fall back to pkg version */ }
+
+  const version = pkgV && pkgV !== '0.0.0' ? pkgV : (cliV || pkgV || 'unknown');
+  if (wantJson) {
+    console.log(JSON.stringify({ name: 'agent-qa', version, cli: cliV }));
+  } else {
+    console.log(`agent-qa ${version}${cliV && cliV !== version ? ` (cli ${cliV})` : ''}`);
+  }
+  return true;
+}
+
 try {
+  if (maybeRunVersion(process.argv.slice(2))) {
+    return;
+  }
   if (maybeRunReportView(process.argv.slice(2))) {
     return;
   }
