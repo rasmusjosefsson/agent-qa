@@ -1,8 +1,36 @@
 // web/src/features/chat/BrowserPane.tsx
 import { useEffect, useRef, useState } from 'react'
+import { Loader2Icon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 type Status = { text: string; tone: 'idle' | 'busy' | 'ok' | 'err' }
+// Center-pane phase — drives the overlay (spinner vs. short hint vs. nothing):
+//   live       a frame is painted (cached or streamed) — no overlay
+//   blank      connecting but too early to show anything (<300ms) — no overlay
+//   connecting still connecting after a beat — show a spinner
+//   idle       settled with no page open — show a one-line hint
+//   off        live browser unavailable
+type Phase = 'off' | 'blank' | 'connecting' | 'idle' | 'live'
+
+// Last screencast frame per session (data URL). The pane is remounted on every
+// chat-tab switch (ChatConversation is keyed by chat id), which drops the
+// canvas. Caching the last frame lets a re-mounted pane repaint instantly — and
+// start in the "live" state — instead of flashing the idle hint while the
+// screencast SSE reconnects. Bounded by the number of sessions opened this page.
+const lastFrame = new Map<string, string>()
+
+function drawToCanvas(canvas: HTMLCanvasElement | null, src: string) {
+  if (!canvas) return
+  const img = new Image()
+  img.onload = () => {
+    if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
+      canvas.width = img.naturalWidth
+      canvas.height = img.naturalHeight
+    }
+    canvas.getContext('2d')?.drawImage(img, 0, 0, canvas.width, canvas.height)
+  }
+  img.src = src
+}
 
 export interface BrowserPaneProps {
   available: boolean
@@ -21,26 +49,33 @@ export interface BrowserPaneProps {
 // /api/chat/c/<id>/active-session). The user can also pin a specific session
 // from the picker, which overrides follow until they switch back to "auto".
 export function BrowserPane({ available, chatId, navigate, initialSession }: BrowserPaneProps) {
+  const initialSessionKey = initialSession || 'default'
+  // True when we already have a cached frame for the session this pane follows
+  // first — i.e. we've shown it before and a remount can repaint immediately.
+  const seeded = available && lastFrame.has(initialSessionKey)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const urlRef = useRef<HTMLInputElement | null>(null)
   const imgRef = useRef<HTMLImageElement | null>(null)
   const [url, setUrl] = useState('')
   // The agent's auto-followed session, and an optional manual pin ('' = follow).
-  const [autoSession, setAutoSession] = useState(initialSession || 'default')
+  const [autoSession, setAutoSession] = useState(initialSessionKey)
   const [autoRecording, setAutoRecording] = useState(false)
   const [manualSession, setManualSession] = useState('')
   const [sessions, setSessions] = useState<string[]>([])
   const effective = manualSession || autoSession
   const sessionRef = useRef(effective)
   sessionRef.current = effective
-  const [status, setStatus] = useState<Status>(
-    available ? { text: 'idle', tone: 'idle' } : { text: 'off', tone: 'idle' }
+  const [status, setStatus] = useState<Status>(() =>
+    !available
+      ? { text: 'off', tone: 'idle' }
+      : seeded
+        ? { text: 'live', tone: 'ok' }
+        : { text: 'idle', tone: 'idle' }
   )
-  // The canvas is blank until a frame paints, so the hint starts visible and is
-  // only hidden once a real frame renders (img.onload). Starting it hidden when
-  // available made it blink on every chat-switch remount: hidden → bridge-error
-  // → visible. Starting visible keeps it steady across switches of idle panes.
-  const [showHint, setShowHint] = useState(true)
+  // Center-overlay phase. A cached frame starts us straight at "live" (no flash
+  // on tab switch); otherwise "blank" until we learn whether the session is
+  // connecting, idle (no page), or live.
+  const [phase, setPhase] = useState<Phase>(() => (!available ? 'off' : seeded ? 'live' : 'blank'))
 
   // Follow this chat's active session + keep the picker's option list fresh.
   useEffect(() => {
@@ -80,17 +115,32 @@ export function BrowserPane({ available, chatId, navigate, initialSession }: Bro
   useEffect(() => {
     if (!available) {
       setStatus({ text: 'off', tone: 'idle' })
-      setShowHint(true)
+      setPhase('off')
       return
     }
     let connected = false
     let settled = false
+    // Repaint the last frame for this session right away so a remount (tab
+    // switch) doesn't flash the idle hint while the screencast reconnects.
+    // `hasFrame` then suppresses the idle/connecting/waiting fallbacks below —
+    // there's already something on the canvas.
+    let hasFrame = lastFrame.has(effective)
+    if (hasFrame) {
+      drawToCanvas(canvasRef.current, lastFrame.get(effective)!)
+      setPhase('live')
+      setStatus({ text: 'live', tone: 'ok' })
+    } else {
+      setPhase('blank')
+    }
     // Don't flash "connecting…" for the common idle/fast-connect cases: the
     // resting state is "idle", and a no-page session resolves to idle (or a
     // live one to a frame) within a few ms. Only surface "connecting…" if
     // neither verdict arrives within a beat — i.e. it's genuinely connecting.
     const connectingTimer = window.setTimeout(() => {
-      if (!connected && !settled) setStatus({ text: 'connecting…', tone: 'busy' })
+      if (!connected && !settled && !hasFrame) {
+        setStatus({ text: 'connecting…', tone: 'busy' })
+        setPhase('connecting')
+      }
     }, 300)
     const img = (imgRef.current = new Image())
     const es = new EventSource('/api/chat/browser-stream?session=' + encodeURIComponent(effective))
@@ -102,6 +152,7 @@ export function BrowserPane({ available, chatId, navigate, initialSession }: Bro
         connected = true
         window.clearTimeout(connectingTimer)
         setStatus({ text: 'live', tone: 'ok' })
+        const src = 'data:image/jpeg;base64,' + f.data
         img.onload = () => {
           const cv = canvasRef.current
           if (!cv) return
@@ -110,9 +161,11 @@ export function BrowserPane({ available, chatId, navigate, initialSession }: Bro
             cv.height = img.naturalHeight
           }
           cv.getContext('2d')?.drawImage(img, 0, 0, cv.width, cv.height)
-          setShowHint(false)
+          setPhase('live')
+          hasFrame = true
+          lastFrame.set(effective, src) // cache for instant repaint on remount
         }
-        img.src = 'data:image/jpeg;base64,' + f.data
+        img.src = src
       } catch {
         /* keep-alive comment */
       }
@@ -131,17 +184,22 @@ export function BrowserPane({ available, chatId, navigate, initialSession }: Bro
     es.addEventListener('bridge-error', () => {
       settled = true
       window.clearTimeout(connectingTimer)
-      // Only surface the "idle" hint if we never rendered a frame. Once a frame
-      // has shown, the canvas keeps it — a transient bridge-error on the SSE's
+      // Only surface the "idle" hint if nothing is painted — no live frame this
+      // connection AND no cached frame from a previous view. Once a frame has
+      // shown, the canvas keeps it; a transient bridge-error on the SSE's
       // periodic reconnect must not re-show the hint (that's the blink).
-      if (!connected) {
+      if (!connected && !hasFrame) {
         setStatus({ text: 'idle', tone: 'idle' })
-        setShowHint(true)
+        setPhase('idle')
       }
     })
     es.onerror = () => {
-      // Don't flap back to "waiting…" once we've connected or settled to idle.
-      if (!connected && !settled) setStatus({ text: 'waiting…', tone: 'idle' })
+      // Still trying — keep the spinner (not the idle hint) unless we've already
+      // connected, settled, or have a cached frame painted.
+      if (!connected && !settled && !hasFrame) {
+        setStatus({ text: 'waiting…', tone: 'idle' })
+        setPhase('connecting')
+      }
     }
 
     return () => {
@@ -222,11 +280,20 @@ export function BrowserPane({ available, chatId, navigate, initialSession }: Bro
       </div>
       <div className="relative flex min-h-0 flex-1 items-center justify-center bg-black">
         <canvas ref={canvasRef} width={1280} height={800} className="max-h-full max-w-full object-contain" />
-        {showHint && (
+        {phase === 'connecting' && (
+          <div className="absolute inset-0 flex items-center justify-center gap-2 text-xs text-muted-foreground">
+            <Loader2Icon className="size-4 animate-spin" />
+            Connecting to the browser…
+          </div>
+        )}
+        {phase === 'idle' && (
           <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-xs text-muted-foreground">
-            {available
-              ? "The agent's browser appears here when it opens a page. It follows the agent's active session automatically — or pick a specific session from the dropdown."
-              : 'Live browser unavailable — launch via the agent-qa CLI to watch the agent drive a browser here.'}
+            No page open yet — type a URL above, or ask the agent to open one.
+          </div>
+        )}
+        {phase === 'off' && (
+          <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-xs text-muted-foreground">
+            Live browser unavailable — launch via the agent-qa CLI.
           </div>
         )}
       </div>
