@@ -335,18 +335,12 @@ function ChatConversation({
     void sendPrompt(prompt)
   }
 
-  const metaParts: string[] = []
-  if (state.model?.label || state.model?.id) metaParts.push(state.model.label || state.model.id!)
-  if (state.thinkingLevel && state.thinkingLevel !== 'off')
-    metaParts.push('thinking: ' + state.thinkingLevel)
-
   const conversationColumn = (
     <div
       className="flex min-h-0 min-w-0 flex-1 flex-col"
       style={isDesktop ? { flexBasis: `${leftPct}%`, flexGrow: 0, flexShrink: 0 } : undefined}
     >
-          <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2">
-            <div className="truncate text-xs text-muted-foreground">{metaParts.join(' · ')}</div>
+          <div className="flex items-center justify-end border-b border-border px-4 py-2">
             <Button
               variant="ghost"
               size="sm"
