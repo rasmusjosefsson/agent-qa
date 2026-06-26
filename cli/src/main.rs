@@ -63,9 +63,10 @@ fn main() -> ExitCode {
         print_help();
         return ExitCode::from(0);
     }
-    if matches!(args[0].as_str(), "-V" | "--version" | "version") {
+    if matches!(args[0].as_str(), "-v" | "-V" | "--version" | "version") {
         let want_json = args.iter().any(|a| a == "--json");
-        let v = env!("CARGO_PKG_VERSION");
+        // Set by build.rs: crate version in release, version+gSHA[.dirty] in dev.
+        let v = option_env!("AGENT_QA_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"));
         if want_json {
             println!("{{\"name\":\"agent-qa\",\"version\":\"{v}\"}}");
         } else {
