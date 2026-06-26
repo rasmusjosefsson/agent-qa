@@ -88,13 +88,28 @@ export function LiveCanvas({
     if (!cv) return
     cv.tabIndex = 0
 
-    const norm = (ev: MouseEvent) => {
+    // The canvas paints its frame with object-contain, so the live page is
+    // letterboxed inside the element box. Map against the *rendered* frame rect
+    // (centered, aspect-preserved) — otherwise clicks/picks land in the bars and
+    // resolve to a wrapper ("generic") or nothing ("no node at location").
+    const frameRect = () => {
       const r = cv.getBoundingClientRect()
+      const bw = cv.width || 1
+      const bh = cv.height || 1
       if (!r.width || !r.height) return null
-      return {
-        nx: Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width)),
-        ny: Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height)),
-      }
+      const scale = Math.min(r.width / bw, r.height / bh)
+      const w = bw * scale
+      const h = bh * scale
+      return { left: r.left + (r.width - w) / 2, top: r.top + (r.height - h) / 2, width: w, height: h }
+    }
+
+    const norm = (ev: MouseEvent) => {
+      const fr = frameRect()
+      if (!fr) return null
+      const nx = (ev.clientX - fr.left) / fr.width
+      const ny = (ev.clientY - fr.top) / fr.height
+      if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return null // outside the frame (letterbox bar)
+      return { nx, ny }
     }
 
     const hideHover = () => setOverlay((o) => (o.hidden ? o : HIDDEN_OVERLAY))
@@ -103,18 +118,19 @@ export function LiveCanvas({
       const box = el && el.box
       const stage = stageRef.current
       if (!box || !stage) return hideHover()
-      const r = cv.getBoundingClientRect()
+      const fr = frameRect()
       const s = stage.getBoundingClientRect()
-      const offX = r.left - s.left + stage.scrollLeft
-      const offY = r.top - s.top + stage.scrollTop
+      if (!fr) return hideHover()
+      const offX = fr.left - s.left + stage.scrollLeft
+      const offY = fr.top - s.top + stage.scrollTop
       const recordable = el.interactive !== false
       const tail = !recordable && bag.current.clickMode === 'record' ? '  (not recordable)' : ''
       setOverlay({
         hidden: false,
-        left: offX + box.nx * r.width,
-        top: offY + box.ny * r.height,
-        width: Math.max(2, box.nw * r.width),
-        height: Math.max(2, box.nh * r.height),
+        left: offX + box.nx * fr.width,
+        top: offY + box.ny * fr.height,
+        width: Math.max(2, box.nw * fr.width),
+        height: Math.max(2, box.nh * fr.height),
         label: (el.role || '?') + (el.name ? ' · ' + el.name : '') + tail,
         noninteractive: !recordable,
       })
