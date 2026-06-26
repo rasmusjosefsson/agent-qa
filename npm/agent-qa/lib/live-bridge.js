@@ -260,6 +260,13 @@ function createLiveBridge({
     // Page finished loading -> tell the editor to refresh the element picker
     // (covers same-URL reloads and pages whose DOM settles after navigation).
     if (msg.method === 'Page.loadEventFired' || msg.method === 'Page.frameStoppedLoading') {
+      // New document after a navigation: re-arm the viewport metrics (so click
+      // coords map against the NEW page, not the previous one) and grab a fresh
+      // frame, then tell the editor to refresh the element picker. Without the
+      // metrics refresh, the first interactions on the new page use stale css
+      // dimensions — which is how a navigating click made recording "stop".
+      requestMetrics();
+      requestFrame();
       broadcastEvent('loaded', {});
       return;
     }
