@@ -502,6 +502,23 @@ function makeSessionFactory(sdk, config = {}, shared = {}) {
     }
 
     const { session } = await createAgentSession(opts);
+
+    // Default to a cheaper model for debugging (the UI can still switch). Prefer
+    // AGENT_QA_CHAT_MODEL (substring match on provider/id/label), else the first
+    // Haiku; if neither matches, keep the SDK default. Also ensures /state
+    // reports a concrete model instead of an empty picker.
+    try {
+      const avail =
+        (typeof modelRegistry.getAvailable === 'function' ? modelRegistry.getAvailable() : []) || [];
+      const want = (process.env.AGENT_QA_CHAT_MODEL || '').toLowerCase();
+      const key = (m) =>
+        `${m?.provider || ''}/${m?.id || ''} ${m?.label || m?.name || ''}`.toLowerCase();
+      const pick = avail.find((m) => (want ? key(m).includes(want) : /haiku/.test(key(m))));
+      if (pick && typeof session.setModel === 'function') await session.setModel(pick);
+    } catch {
+      /* keep the SDK default */
+    }
+
     return session;
   };
 }
