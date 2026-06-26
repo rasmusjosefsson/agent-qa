@@ -43,11 +43,10 @@ export interface BrowserPaneProps {
 }
 
 // Read-only (plus URL-bar steer) view of the agent-browser session the chat
-// agent is driving, streamed as base64 JPEG frames over SSE. The session is not
-// fixed: by default we "follow" this chat's own session (mirror its active
-// recorder session while it records, else its bound browser tab — polled from
-// /api/chat/c/<id>/active-session). The user can also pin a specific session
-// from the picker, which overrides follow until they switch back to "auto".
+// agent is driving, streamed as base64 JPEG frames over SSE. The pane always
+// follows this chat's own session — its active recorder session while it
+// records, else its bound browser tab — polled from
+// /api/chat/c/<id>/active-session.
 export function BrowserPane({ available, chatId, navigate, initialSession }: BrowserPaneProps) {
   const initialSessionKey = initialSession || 'default'
   // True when we already have a cached frame for the session this pane follows
@@ -57,12 +56,11 @@ export function BrowserPane({ available, chatId, navigate, initialSession }: Bro
   const urlRef = useRef<HTMLInputElement | null>(null)
   const imgRef = useRef<HTMLImageElement | null>(null)
   const [url, setUrl] = useState('')
-  // The agent's auto-followed session, and an optional manual pin ('' = follow).
+  // The session this pane follows: this chat's active session (its browser, or
+  // its recorder while recording). Updated by the active-session poll below.
   const [autoSession, setAutoSession] = useState(initialSessionKey)
   const [autoRecording, setAutoRecording] = useState(false)
-  const [manualSession, setManualSession] = useState('')
-  const [sessions, setSessions] = useState<string[]>([])
-  const effective = manualSession || autoSession
+  const effective = autoSession
   const sessionRef = useRef(effective)
   sessionRef.current = effective
   const [status, setStatus] = useState<Status>(() =>
@@ -77,27 +75,19 @@ export function BrowserPane({ available, chatId, navigate, initialSession }: Bro
   // connecting, idle (no page), or live.
   const [phase, setPhase] = useState<Phase>(() => (!available ? 'off' : seeded ? 'live' : 'blank'))
 
-  // Follow this chat's active session + keep the picker's option list fresh.
+  // Follow this chat's active session (its browser, or its recorder while recording).
   useEffect(() => {
     if (!available || !chatId) return
     let alive = true
     const tick = async () => {
       try {
-        const [a, s] = await Promise.all([
-          fetch(`/api/chat/c/${encodeURIComponent(chatId)}/active-session`).then((r) =>
-            r.ok ? r.json() : null
-          ),
-          fetch('/api/chat/sessions').then((r) => (r.ok ? r.json() : null)),
-        ])
+        const a = await fetch(`/api/chat/c/${encodeURIComponent(chatId)}/active-session`).then((r) =>
+          r.ok ? r.json() : null
+        )
         if (!alive) return
         if (a && a.session) {
           setAutoSession(a.session)
           setAutoRecording(!!a.recording)
-        }
-        if (s && Array.isArray(s.sessions)) {
-          setSessions(s.sessions)
-          // If the pinned session vanished (daemon closed), fall back to follow.
-          setManualSession((m) => (m && !s.sessions.includes(m) ? '' : m))
         }
       } catch {
         /* keep current */
@@ -223,10 +213,6 @@ export function BrowserPane({ available, chatId, navigate, initialSession }: Bro
     }
   }
 
-  // Build the picker options: "auto" + every live session (effective shown
-  // even if the list hasn't caught up yet).
-  const options = Array.from(new Set([...sessions, effective]))
-
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-card">
       <div className="flex items-center gap-1.5 border-b border-border px-2 py-1.5">
@@ -251,19 +237,6 @@ export function BrowserPane({ available, chatId, navigate, initialSession }: Bro
             className="w-full rounded-md border border-border bg-background px-2 py-1 text-xs outline-none focus:border-ring"
           />
         </form>
-        <select
-          value={manualSession}
-          onChange={(e) => setManualSession(e.target.value)}
-          title="Which agent-browser session to mirror"
-          className="w-[8.5rem] shrink-0 truncate rounded-md border border-border bg-background px-1.5 py-1 text-xs text-muted-foreground outline-none focus:border-ring"
-        >
-          <option value="">auto</option>
-          {options.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
         <span
           className={cn(
             // Fixed min-width + right-align so swapping status text
@@ -275,7 +248,7 @@ export function BrowserPane({ available, chatId, navigate, initialSession }: Bro
             status.tone === 'idle' && 'text-muted-foreground'
           )}
         >
-          {!manualSession && autoRecording ? `rec · ${status.text}` : status.text}
+          {autoRecording ? `rec · ${status.text}` : status.text}
         </span>
       </div>
       <div className="relative flex min-h-0 flex-1 items-center justify-center bg-black">
