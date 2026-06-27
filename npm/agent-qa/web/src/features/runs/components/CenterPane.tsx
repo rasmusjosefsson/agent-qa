@@ -5,6 +5,7 @@ import {
   collapseEvents,
   fmtMs,
   fmtRunTime,
+  relRunTime,
   icon,
   isRunLive,
   mergeRows,
@@ -42,18 +43,25 @@ function VerbBadge({ verb }: { verb: unknown }) {
 }
 
 export function CenterPane({ runs, onReplay }: { runs: RunsApi; onReplay: (sid: string) => void }) {
-  const { detail, scenarioDef, sel, runDefSteps } = runs
+  const { detail, scenarioDef, sel, runDefSteps, runsBySid } = runs
 
   // Mode A — a recorded scenario is previewed (no run selected).
   if (scenarioDef && !detail) {
     const steps = scenarioDef.steps || []
+    const runList = (sel.sid && runsBySid[sel.sid]) || []
+    const lastRun = runList.length
+      ? [...runList].sort((a, b) => (a.runId < b.runId ? 1 : -1))[0]
+      : null
     return (
       <Pane>
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <div className="min-w-0">
             <h2 className="truncate text-sm font-semibold">{scenarioDef.intent || scenarioDef.id || 'Scenario'}</h2>
             <div className="truncate text-xs text-muted-foreground">
-              {steps.length} step{steps.length === 1 ? '' : 's'} · recorded {fmtRunTime(sel.sid)} · not yet replayed
+              {steps.length} step{steps.length === 1 ? '' : 's'} · recorded {fmtRunTime(sel.sid)}
+              {lastRun
+                ? ` · last run ${relRunTime(lastRun.runId)}${lastRun.summary ? ' · ' + cleanSummary(lastRun.summary) : ''}`
+                : ' · not yet replayed'}
             </div>
             {sel.sid && (
               <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground opacity-50">{sel.sid}</div>
