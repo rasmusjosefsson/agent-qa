@@ -12,7 +12,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
-import { cleanSummary, scenarioVerdict, verdictTone } from '../rows'
+import { cleanSummary, fmtRunTime, relRunTime, scenarioVerdict, verdictTone } from '../rows'
 import type { RunsApi } from '../useRuns'
 
 const TONE: Record<string, string> = {
@@ -115,7 +115,12 @@ export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
                             className="flex min-w-0 flex-1 items-center gap-2 px-1.5 py-1 text-left"
                           >
                             <Badge tone={tone}>{label}</Badge>
-                            <span className="truncate font-mono text-[10px] text-muted-foreground">{r.runId}</span>
+                            <span
+                              className="truncate text-[11px] text-muted-foreground"
+                              title={fmtRunTime(r.runId)}
+                            >
+                              {relRunTime(r.runId)}
+                            </span>
                           </button>
                           <AlertDialog>
                             <AlertDialogTrigger asChild>

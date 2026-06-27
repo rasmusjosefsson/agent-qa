@@ -4,6 +4,7 @@ import {
   cleanSummary,
   collapseEvents,
   fmtMs,
+  fmtRunTime,
   icon,
   isRunLive,
   mergeRows,
@@ -108,7 +109,9 @@ export function CenterPane({ runs, onReplay }: { runs: RunsApi; onReplay: (sid: 
             </span>
             {live && <span className="text-xs text-amber-400">● live</span>}
           </div>
-          <div className="mt-0.5 font-mono text-xs text-muted-foreground">{detail.runId}</div>
+          <div className="mt-0.5 text-xs text-muted-foreground">
+            {fmtRunTime(detail.runId)} <span className="font-mono opacity-50">· {detail.runId}</span>
+          </div>
         </div>
         <ol className="min-h-0 flex-1 overflow-auto p-2">
           {rows.map((st) => {
