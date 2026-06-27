@@ -55,8 +55,8 @@ export function CenterPane({ runs, onReplay }: { runs: RunsApi; onReplay: (sid: 
       : null
     return (
       <Pane>
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <div className="min-w-0">
+        <div className="flex flex-col items-start gap-2 border-b border-border px-4 py-3 @md:flex-row @md:items-center @md:justify-between @md:gap-3">
+          <div className="min-w-0 @md:flex-1">
             <h2 className="truncate text-sm font-semibold">{scenarioDef.intent || scenarioDef.id || 'Scenario'}</h2>
             <div className="truncate text-xs text-muted-foreground">
               {steps.length} step{steps.length === 1 ? '' : 's'} · recorded {fmtRunTime(sel.sid)}
@@ -173,5 +173,5 @@ export function CenterPane({ runs, onReplay }: { runs: RunsApi; onReplay: (sid: 
 }
 
 function Pane({ children }: { children: React.ReactNode }) {
-  return <section className="flex h-full min-h-0 flex-col overflow-hidden">{children}</section>
+  return <section className="@container flex h-full min-h-0 flex-col overflow-hidden">{children}</section>
 }
