@@ -62,7 +62,7 @@ export function PromptInput(props: PromptInputProps) {
   }
 
   return (
-    <div className="rounded-xl border border-border bg-card">
+    <div className="border-t border-border bg-background">
       <textarea
         ref={taRef}
         value={value}

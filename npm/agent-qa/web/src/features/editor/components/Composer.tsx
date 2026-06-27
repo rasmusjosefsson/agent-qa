@@ -1,5 +1,6 @@
 // web/src/features/editor/components/Composer.tsx
 import { Button } from '@/components/ui/button'
+import { CheckIcon, XIcon } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -34,7 +35,7 @@ export function Composer({
   const nameLabel = spec.name || 'Name / label'
 
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-3">
+    <div className="flex flex-col gap-3 p-3">
       <div className="text-xs font-medium text-muted-foreground">Add a step</div>
 
       <div className="flex flex-col gap-1">
@@ -85,13 +86,23 @@ export function Composer({
       {runResult && (
         <div
           className={cn(
-            'rounded-md px-2 py-1.5 text-xs',
+            'flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs',
             runResult.recorded || runResult.ok
               ? 'bg-emerald-500/15 text-emerald-400'
               : 'bg-destructive/15 text-destructive'
           )}
         >
-          {runResult.recorded ? '✓ recorded' : runResult.ok ? '✓ step passed' : `✗ ${runResult.error || 'step failed'}`}
+          {runResult.recorded || runResult.ok ? (
+            <>
+              <CheckIcon className="size-3.5 shrink-0" />
+              {runResult.recorded ? 'recorded' : 'step passed'}
+            </>
+          ) : (
+            <>
+              <XIcon className="size-3.5 shrink-0" />
+              {runResult.error || 'step failed'}
+            </>
+          )}
         </div>
       )}
     </div>

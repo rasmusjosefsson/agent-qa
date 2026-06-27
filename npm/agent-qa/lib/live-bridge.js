@@ -260,6 +260,13 @@ function createLiveBridge({
     // Page finished loading -> tell the editor to refresh the element picker
     // (covers same-URL reloads and pages whose DOM settles after navigation).
     if (msg.method === 'Page.loadEventFired' || msg.method === 'Page.frameStoppedLoading') {
+      // New document after a navigation: re-arm the viewport metrics (so click
+      // coords map against the NEW page, not the previous one) and grab a fresh
+      // frame, then tell the editor to refresh the element picker. Without the
+      // metrics refresh, the first interactions on the new page use stale css
+      // dimensions — which is how a navigating click made recording "stop".
+      requestMetrics();
+      requestFrame();
       broadcastEvent('loaded', {});
       return;
     }
@@ -546,10 +553,25 @@ function createLiveBridge({
     let role = '';
     let name = '';
     try {
-      const ax = await call('Accessibility.getPartialAXTree', { backendNodeId, fetchRelatives: false });
+      // fetchRelatives so we get the ancestor chain too: DOM.getNodeForLocation
+      // returns the DEEPEST node (often a text/span that resolves to "generic"),
+      // but the clickable role lives on an ancestor <a>/<button>. Walk up to it.
+      const ax = await call('Accessibility.getPartialAXTree', { backendNodeId, fetchRelatives: true });
       const nodes = (ax && ax.nodes) || [];
-      const named = nodes.find((n) => n.name && n.name.value && n.role && n.role.value);
-      const node = named || nodes[0];
+      const byId = new Map(nodes.map((n) => [n.nodeId, n]));
+      const parentOf = new Map();
+      for (const n of nodes) for (const c of n.childIds || []) parentOf.set(c, n.nodeId);
+      const hit = nodes.find((n) => String(n.backendDOMNodeId) === String(backendNodeId));
+      let node = hit || nodes.find((n) => n.name && n.name.value && n.role && n.role.value) || nodes[0];
+      let cur = hit;
+      for (let i = 0; cur && i < 12; i++) {
+        const r = cur.role && cur.role.value;
+        if (r && INTERACTIVE_ROLES.has(r)) {
+          node = cur;
+          break;
+        }
+        cur = byId.get(parentOf.get(cur.nodeId));
+      }
       if (node) {
         role = (node.role && node.role.value) || '';
         name = (node.name && node.name.value) || '';

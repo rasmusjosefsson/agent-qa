@@ -13,7 +13,17 @@ import BrowserPane from './BrowserPane'
 import { Message } from './components/Message'
 import { PromptInput } from './components/PromptInput'
 import RecordingView from './components/RecordingView'
-import { Button } from '@/components/ui/button'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
 import { cn } from '@/lib/utils'
 import { useMediaQuery } from '@/lib/useMediaQuery'
 import {
@@ -70,6 +80,12 @@ export function ChatPage() {
   const [chats, setChats] = useState<ChatMeta[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
+  // `/chat?ask=…` (e.g. the Runs "Ask agent" button) opens a fresh chat seeded
+  // with that prompt. Consumed once on mount.
+  const askRef = useRef<string | null>(
+    typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('ask') : null
+  )
+  const [seed, setSeed] = useState<{ id: string; prompt: string } | null>(null)
 
   useEffect(() => {
     let mounted = true
@@ -80,6 +96,20 @@ export function ChatPage() {
         const c = await createChat()
         if (!mounted) return
         list = c ? [c] : []
+      }
+      const ask = askRef.current
+      if (ask) {
+        askRef.current = null
+        window.history.replaceState({}, '', window.location.pathname)
+        const c = await createChat()
+        if (!mounted) return
+        if (c) {
+          prefetchChatState(c.id)
+          setSeed({ id: c.id, prompt: ask })
+          setChats([...list, c])
+          setActiveId(c.id)
+          return
+        }
       }
       const firstId = list[0]?.id ?? null
       if (firstId) prefetchChatState(firstId)
@@ -114,9 +144,9 @@ export function ChatPage() {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3">
+    <div className="flex min-h-0 flex-1 flex-col">
       {/* Chat switcher — tabs */}
-      <div className="flex items-center border-b border-border">
+      <div className="flex items-center border-b border-border px-3">
         <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
           {chats.map((c, i) => {
             const isActive = c.id === activeId
@@ -139,17 +169,32 @@ export function ChatPage() {
                   {c.title && c.title !== 'New chat' ? c.title : `Chat ${i + 1}`}
                 </button>
                 {chats.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => void onDelete(c.id)}
-                    aria-label="Close chat"
-                    className={cn(
-                      'rounded p-0.5 text-muted-foreground/50 transition-opacity hover:bg-muted hover:text-foreground',
-                      isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-                    )}
-                  >
-                    <XIcon className="size-3.5" />
-                  </button>
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <button
+                        type="button"
+                        aria-label="Close chat"
+                        className={cn(
+                          'rounded p-0.5 text-muted-foreground/50 transition-opacity hover:bg-muted hover:text-foreground',
+                          isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                        )}
+                      >
+                        <XIcon className="size-3.5" />
+                      </button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Close this chat?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          This permanently deletes the conversation and closes its browser session.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={() => void onDelete(c.id)}>Delete</AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
                 )}
               </div>
             )
@@ -184,6 +229,8 @@ export function ChatPage() {
             key={activeId}
             cid={activeId}
             session={chats.find((c) => c.id === activeId)?.session ?? null}
+            seedPrompt={seed && seed.id === activeId ? seed.prompt : undefined}
+            onSeeded={() => setSeed(null)}
           />
           </Suspense>
         </div>
@@ -197,8 +244,18 @@ export function ChatPage() {
 }
 
 // One conversation: bound to a single chat id. Re-mounted on switch via `key`.
-function ChatConversation({ cid, session }: { cid: string; session: string | null }) {
-  const { state, root, sendPrompt, abort, newChat, setModel, setThinking, navigateBrowser } =
+function ChatConversation({
+  cid,
+  session,
+  seedPrompt,
+  onSeeded,
+}: {
+  cid: string
+  session: string | null
+  seedPrompt?: string
+  onSeeded?: () => void
+}) {
+  const { state, root, sendPrompt, abort, setModel, setThinking, navigateBrowser } =
     useChat(cid)
   const [text, setText] = useState('')
   const threadRef = useRef<HTMLDivElement | null>(null)
@@ -267,6 +324,16 @@ function ChatConversation({ cid, session }: { cid: string; session: string | nul
     if (el && atBottomRef.current) el.scrollTop = el.scrollHeight
   }, [state.items, state.streaming])
 
+  // Seed prompt (from /chat?ask=…) — send once, as soon as the agent is available.
+  const seededRef = useRef(false)
+  useEffect(() => {
+    if (seededRef.current || !seedPrompt || !state.available) return
+    seededRef.current = true
+    atBottomRef.current = true
+    void sendPrompt(seedPrompt)
+    onSeeded?.()
+  }, [seedPrompt, state.available, sendPrompt])
+
   const empty = state.items.length === 0
 
   const activeThinkingId =
@@ -293,33 +360,15 @@ function ChatConversation({ cid, session }: { cid: string; session: string | nul
     void sendPrompt(prompt)
   }
 
-  const metaParts: string[] = []
-  if (state.model?.label || state.model?.id) metaParts.push(state.model.label || state.model.id!)
-  if (state.thinkingLevel && state.thinkingLevel !== 'off')
-    metaParts.push('thinking: ' + state.thinkingLevel)
-
   const conversationColumn = (
     <div
-      className="flex min-h-0 min-w-0 flex-1 flex-col gap-2"
+      className="flex min-h-0 min-w-0 flex-1 flex-col"
       style={isDesktop ? { flexBasis: `${leftPct}%`, flexGrow: 0, flexShrink: 0 } : undefined}
     >
-          <div className="flex items-center justify-between gap-3 px-1">
-            <div className="truncate text-xs text-muted-foreground">{metaParts.join(' · ')}</div>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => void newChat()}
-              disabled={!state.available || empty}
-              title="Clear this conversation and start fresh in a new browser"
-            >
-              Reset
-            </Button>
-          </div>
-
           <div
             ref={threadRef}
             onScroll={onScroll}
-            className="min-h-0 flex-1 space-y-6 overflow-auto rounded-xl border border-border bg-card/20 p-5"
+            className="min-h-0 flex-1 space-y-6 overflow-auto px-4 py-3"
           >
             {empty ? (
               <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
@@ -339,7 +388,7 @@ function ChatConversation({ cid, session }: { cid: string; session: string | nul
                       title={s.prompt}
                       disabled={!state.available}
                       onClick={() => sendSuggestion(s.prompt)}
-                      className="rounded-full border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                      className="rounded-sm border border-border bg-transparent px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
                     >
                       {s.title}
                     </button>
@@ -415,19 +464,20 @@ function ChatConversation({ cid, session }: { cid: string; session: string | nul
           onPointerDown={onDividerDown}
           role="separator"
           aria-orientation="vertical"
-          className="group hidden shrink-0 cursor-col-resize px-1.5 lg:flex lg:items-stretch"
+          className="group relative hidden w-px shrink-0 cursor-col-resize bg-border transition-colors hover:bg-primary lg:block"
           title="Drag to resize"
         >
-          <div className="w-px bg-border transition-colors group-hover:bg-primary" />
+          {/* invisible wider grab zone over the flush 1px line */}
+          <span className="absolute inset-y-0 -left-1.5 -right-1.5" />
         </div>
 
         {/* Right column: live browser, with the recording steps stacked
             underneath once a recording exists (the browser letterboxes, so the
             leftover vertical space goes to the steps). */}
-        <div className="flex h-[60vh] min-h-0 min-w-0 flex-col gap-3 lg:h-auto lg:flex-1">
+        <div className="flex h-[60vh] min-h-0 min-w-0 flex-col lg:h-auto lg:flex-1">
           <div className={cn('min-h-0', hasRecording ? 'flex-[3]' : 'flex-1')}>{liveBrowserPane}</div>
           {hasRecording && (
-            <div className="flex min-h-0 flex-[2] flex-col overflow-hidden rounded-xl border border-border bg-card/20">
+            <div className="flex min-h-0 flex-[2] flex-col overflow-hidden border-t border-border">
               <RecordingView cid={cid} rec={rec} />
             </div>
           )}

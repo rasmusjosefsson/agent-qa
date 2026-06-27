@@ -31,7 +31,7 @@ export interface ScenarioStep {
   id?: string
   verb?: string
   intent?: string
-  on?: { role?: string; name?: string }
+  on?: { role?: string; name?: string; raw?: { kind?: string; value?: string }; reason?: string }
   value?: { literal?: unknown }
   [k: string]: unknown
 }
@@ -67,7 +67,7 @@ export interface RunDetail {
   events: RunEvent[]
 }
 
-export type DetailTab = 'step' | 'context' | 'network' | 'html' | 'console'
+export type DetailTab = 'step' | 'scenario' | 'context' | 'network' | 'html' | 'console'
 
 export interface Selection {
   sid: string | null

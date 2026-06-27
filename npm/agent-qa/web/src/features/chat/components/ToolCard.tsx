@@ -22,7 +22,7 @@ export function ToolCard({ item }: { item: ToolItem }) {
         <span className="font-mono text-xs font-medium">{item.name || 'tool'}</span>
         <span
           className={cn(
-            'rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide',
+            'rounded-sm px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide',
             item.status === 'running' && 'bg-amber-500/15 text-amber-400',
             item.status === 'ok' && 'bg-emerald-500/15 text-emerald-400',
             item.status === 'err' && 'bg-destructive/15 text-destructive'

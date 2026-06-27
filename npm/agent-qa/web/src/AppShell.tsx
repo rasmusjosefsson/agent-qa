@@ -17,18 +17,18 @@ export function AppShell({ tab, children }: { tab: Tab; children?: ReactNode }) 
 
   return (
     <div className="flex h-svh flex-col overflow-hidden bg-background text-foreground">
-      <header className="flex h-13 items-center gap-4 border-b border-border px-5">
-        <div className="text-sm font-semibold">agent-qa</div>
-        <nav className="flex items-center gap-1">
+      <header className="flex h-13 shrink-0 items-stretch gap-5 border-b border-border px-5">
+        <div className="flex items-center text-sm font-semibold tracking-tight">agent-qa</div>
+        <nav className="flex items-stretch gap-5">
           {TABS.map((t) => (
             <a
               key={t.id}
               href={t.href}
               className={
-                "rounded-md px-3 py-1.5 text-sm transition-colors " +
+                "-mb-px flex items-center border-b-2 text-sm transition-colors " +
                 (t.id === tab
-                  ? "bg-muted text-foreground"
-                  : "text-muted-foreground hover:bg-muted/50 hover:text-foreground")
+                  ? "border-foreground text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground")
               }
             >
               {t.label}
@@ -38,7 +38,7 @@ export function AppShell({ tab, children }: { tab: Tab; children?: ReactNode }) 
       </header>
 
       {children ? (
-        <main className="flex min-h-0 flex-1 flex-col p-4">{children}</main>
+        <main className="flex min-h-0 flex-1 flex-col">{children}</main>
       ) : (
         <main className="flex flex-1 items-center justify-center p-8">
           <div className="flex max-w-md flex-col items-start gap-4 rounded-xl border border-border bg-card p-8 text-card-foreground">

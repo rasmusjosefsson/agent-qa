@@ -1,9 +1,12 @@
 // web/src/features/runs/components/CenterPane.tsx
 import { cn } from '@/lib/utils'
+import { PlayIcon } from 'lucide-react'
 import {
   cleanSummary,
   collapseEvents,
   fmtMs,
+  fmtRunTime,
+  relRunTime,
   icon,
   isRunLive,
   mergeRows,
@@ -41,27 +44,38 @@ function VerbBadge({ verb }: { verb: unknown }) {
 }
 
 export function CenterPane({ runs, onReplay }: { runs: RunsApi; onReplay: (sid: string) => void }) {
-  const { detail, scenarioDef, sel, runDefSteps } = runs
+  const { detail, scenarioDef, sel, runDefSteps, runsBySid } = runs
 
   // Mode A — a recorded scenario is previewed (no run selected).
   if (scenarioDef && !detail) {
     const steps = scenarioDef.steps || []
+    const runList = (sel.sid && runsBySid[sel.sid]) || []
+    const lastRun = runList.length
+      ? [...runList].sort((a, b) => (a.runId < b.runId ? 1 : -1))[0]
+      : null
     return (
       <Pane>
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <div className="min-w-0">
+        <div className="flex flex-col items-start gap-2 border-b border-border px-4 py-3 @md:flex-row @md:items-center @md:justify-between @md:gap-3">
+          <div className="min-w-0 @md:flex-1">
             <h2 className="truncate text-sm font-semibold">{scenarioDef.intent || scenarioDef.id || 'Scenario'}</h2>
-            <div className="text-xs text-muted-foreground">
-              {steps.length} step{steps.length === 1 ? '' : 's'} · recorded · not yet replayed
+            <div className="truncate text-xs text-muted-foreground">
+              {steps.length} step{steps.length === 1 ? '' : 's'} · recorded {fmtRunTime(sel.sid)}
+              {lastRun
+                ? ` · last run ${relRunTime(lastRun.runId)}${lastRun.summary ? ' · ' + cleanSummary(lastRun.summary) : ''}`
+                : ' · not yet replayed'}
             </div>
+            {sel.sid && (
+              <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground opacity-50">{sel.sid}</div>
+            )}
           </div>
           {sel.sid && (
             <button
               type="button"
               onClick={() => onReplay(sel.sid!)}
-              className="shrink-0 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90"
+              className="flex shrink-0 items-center gap-2 rounded-md border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
             >
-              ▶ Replay
+              <PlayIcon className="size-4 fill-emerald-400 text-emerald-400" />
+              Replay
             </button>
           )}
         </div>
@@ -108,7 +122,9 @@ export function CenterPane({ runs, onReplay }: { runs: RunsApi; onReplay: (sid: 
             </span>
             {live && <span className="text-xs text-amber-400">● live</span>}
           </div>
-          <div className="mt-0.5 font-mono text-xs text-muted-foreground">{detail.runId}</div>
+          <div className="mt-0.5 text-xs text-muted-foreground">
+            {fmtRunTime(detail.runId)} <span className="font-mono opacity-50">· {detail.runId}</span>
+          </div>
         </div>
         <ol className="min-h-0 flex-1 overflow-auto p-2">
           {rows.map((st) => {
@@ -157,5 +173,5 @@ export function CenterPane({ runs, onReplay }: { runs: RunsApi; onReplay: (sid: 
 }
 
 function Pane({ children }: { children: React.ReactNode }) {
-  return <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card">{children}</section>
+  return <section className="@container flex h-full min-h-0 flex-col overflow-hidden">{children}</section>
 }

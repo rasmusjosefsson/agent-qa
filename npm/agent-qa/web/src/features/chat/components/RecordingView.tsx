@@ -102,11 +102,11 @@ export function RecordingView({ cid, rec }: { cid: string; rec: RecordingState |
           </div>
         </div>
         {rec.flushed ? (
-          <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-300">
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-300">
             <CheckCircle2Icon className="size-3" /> saved
           </span>
         ) : (
-          <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-red-500/30 bg-red-500/10 px-2 py-0.5 text-[11px] font-medium text-red-300">
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-red-500/30 bg-red-500/10 px-2 py-0.5 text-[11px] font-medium text-red-300">
             <CircleDotIcon className="size-3 animate-pulse" /> recording
           </span>
         )}

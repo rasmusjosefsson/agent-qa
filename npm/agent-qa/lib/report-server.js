@@ -1409,6 +1409,61 @@ function createRequestHandler(root, deps, chat) {
         return sendJson(res, 202, { ok: true, sid, started: true });
       }
 
+      // Delete a recorded scenario (POST): remove its dir + all replays via the
+      // Rust CLI `scenario delete <sid> --yes`. Requires deps.runCli.
+      if (
+        req.method === 'POST' &&
+        segAll[0] === 'api' &&
+        segAll[1] === 'scenarios' &&
+        segAll[3] === 'delete' &&
+        segAll.length === 4
+      ) {
+        if (!deps || !deps.runCli) {
+          return sendJson(res, 503, { error: 'delete unavailable: agent-qa CLI not resolved' });
+        }
+        const sid = decodeURIComponent(segAll[2]);
+        if (!isSafeSegment(sid)) return badRequest(res, 'unsafe sid');
+        const r = await deps.runCli(['scenario', 'delete', sid, '--yes']);
+        if (r.spawnError) return sendJson(res, 503, { error: 'agent-qa CLI not runnable' });
+        if (r.code !== 0) return sendJson(res, 500, { error: (r.stderr || '').trim() || 'delete failed' });
+        return sendJson(res, 200, { ok: true, sid, deleted: true });
+      }
+
+      // Delete a single replay run (POST): remove its dir + repoint latest.txt.
+      if (
+        req.method === 'POST' &&
+        segAll[0] === 'api' &&
+        segAll[1] === 'scenarios' &&
+        segAll[3] === 'runs' &&
+        segAll[5] === 'delete' &&
+        segAll.length === 6
+      ) {
+        const sid = decodeURIComponent(segAll[2]);
+        const runId = decodeURIComponent(segAll[4]);
+        if (!isSafeSegment(sid) || !isSafeSegment(runId)) return badRequest(res, 'unsafe id');
+        const replaysDir = path.join(root, sid, 'replays');
+        try {
+          await fsp.rm(path.join(replaysDir, runId), { recursive: true, force: true });
+        } catch (e) {
+          return sendJson(res, 500, { error: 'delete failed: ' + (e.message || e) });
+        }
+        // If latest.txt pointed at the deleted run, repoint to the newest
+        // remaining run (ids sort by timestamp), else drop the pointer.
+        try {
+          const latestPath = path.join(replaysDir, 'latest.txt');
+          const latest = ((await readText(latestPath)) || '').trim();
+          if (latest === runId) {
+            const entries = await fsp.readdir(replaysDir, { withFileTypes: true }).catch(() => []);
+            const runs = entries.filter((e) => e.isDirectory()).map((e) => e.name).sort();
+            if (runs.length) await fsp.writeFile(latestPath, runs[runs.length - 1] + '\n');
+            else await fsp.rm(latestPath, { force: true });
+          }
+        } catch {
+          /* best-effort */
+        }
+        return sendJson(res, 200, { ok: true, sid, runId, deleted: true });
+      }
+
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         return sendJson(res, 405, { error: 'method not allowed' });
       }
@@ -1615,17 +1670,17 @@ function start(opts = {}) {
 
   server.on('error', (err) => {
     if (err && err.code === 'EADDRINUSE') {
-      console.error(`agent-qa report view: port ${port} is already in use on ${host}.`);
-      console.error('Pass a different port: agent-qa report view --port <N>');
+      console.error(`agent-qa web: port ${port} is already in use on ${host}.`);
+      console.error('Pass a different port: agent-qa web --port <N>');
     } else {
-      console.error(`agent-qa report view: ${err.message || err}`);
+      console.error(`agent-qa web: ${err.message || err}`);
     }
     process.exit(1);
   });
 
   server.listen(port, host, () => {
     const url = `http://${host}:${port}/`;
-    console.error(`agent-qa report view — read-only viewer + editor`);
+    console.error(`agent-qa web — run viewer + authoring editor + chat`);
     console.error(`  scenarios root: ${root}`);
     console.error(`  serving:        ${url}`);
     if (deps) {

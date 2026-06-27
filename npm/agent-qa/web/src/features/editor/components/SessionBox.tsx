@@ -34,7 +34,7 @@ export function SessionBox({
 
   if (active) {
     return (
-      <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-3">
+      <div className="flex flex-col gap-2 border-b border-border p-3">
         <div className="text-xs text-muted-foreground">
           recording <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">{buffer.sid}</code>
         </div>
@@ -72,7 +72,7 @@ export function SessionBox({
   }
 
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-3">
+    <div className="flex flex-col gap-3 border-b border-border p-3">
       <div className="flex flex-col gap-1">
         <Label htmlFor="intentInput" className="text-xs">
           Intent

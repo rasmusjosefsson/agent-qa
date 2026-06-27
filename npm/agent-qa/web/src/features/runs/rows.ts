@@ -103,6 +103,47 @@ export function cleanSummary(s: string | null | undefined): string {
   return String(s || '').replace(/^SUMMARY:\s*/, '')
 }
 
+// Run ids are `<iso-with-dashes>__<hash>`; scenario ids add an `s-` prefix
+// (e.g. 2026-06-26T23-25-13-841Z__26048c2f, s-2026-06-15T21-01-40-384Z__0fb96b1f).
+function runDate(id: string | null | undefined): Date | null {
+  if (!id) return null
+  const m = String(id)
+    .replace(/^s-/, '')
+    .split('__')[0]
+    .match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/)
+  if (!m) return null
+  const d = new Date(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}.${m[7]}Z`)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+const ABS_FMT = new Intl.DateTimeFormat(undefined, {
+  month: 'short',
+  day: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+})
+const REL_FMT = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
+
+// Absolute local date/time (for the detail header + hover titles).
+export function fmtRunTime(runId: string | null | undefined): string {
+  const d = runDate(runId)
+  return d ? ABS_FMT.format(d) : String(runId || '')
+}
+
+// Relative "x ago" for run lists; ≥1 week falls back to the absolute date.
+export function relRunTime(runId: string | null | undefined): string {
+  const d = runDate(runId)
+  if (!d) return String(runId || '')
+  const sec = Math.round((d.getTime() - Date.now()) / 1000) // negative = past
+  const abs = Math.abs(sec)
+  if (abs < 60) return REL_FMT.format(Math.round(sec), 'second')
+  if (abs < 3600) return REL_FMT.format(Math.round(sec / 60), 'minute')
+  if (abs < 86400) return REL_FMT.format(Math.round(sec / 3600), 'hour')
+  if (abs < 604800) return REL_FMT.format(Math.round(sec / 86400), 'day')
+  return ABS_FMT.format(d)
+}
+
 export function defFrom(json: { scenario?: ScenarioDef } | null): ScenarioDef | null {
   return json && json.scenario ? json.scenario : null
 }

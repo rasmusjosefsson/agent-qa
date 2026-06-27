@@ -1,5 +1,6 @@
 // web/src/features/editor/components/LiveCanvas.tsx
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { ChevronLeftIcon, ChevronRightIcon, CircleDotIcon, CrosshairIcon, MousePointer2Icon, RotateCwIcon } from 'lucide-react'
 import {
   Select,
   SelectContent,
@@ -87,13 +88,28 @@ export function LiveCanvas({
     if (!cv) return
     cv.tabIndex = 0
 
-    const norm = (ev: MouseEvent) => {
+    // The canvas paints its frame with object-contain, so the live page is
+    // letterboxed inside the element box. Map against the *rendered* frame rect
+    // (centered, aspect-preserved) — otherwise clicks/picks land in the bars and
+    // resolve to a wrapper ("generic") or nothing ("no node at location").
+    const frameRect = () => {
       const r = cv.getBoundingClientRect()
+      const bw = cv.width || 1
+      const bh = cv.height || 1
       if (!r.width || !r.height) return null
-      return {
-        nx: Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width)),
-        ny: Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height)),
-      }
+      const scale = Math.min(r.width / bw, r.height / bh)
+      const w = bw * scale
+      const h = bh * scale
+      return { left: r.left + (r.width - w) / 2, top: r.top + (r.height - h) / 2, width: w, height: h }
+    }
+
+    const norm = (ev: MouseEvent) => {
+      const fr = frameRect()
+      if (!fr) return null
+      const nx = (ev.clientX - fr.left) / fr.width
+      const ny = (ev.clientY - fr.top) / fr.height
+      if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return null // outside the frame (letterbox bar)
+      return { nx, ny }
     }
 
     const hideHover = () => setOverlay((o) => (o.hidden ? o : HIDDEN_OVERLAY))
@@ -102,18 +118,19 @@ export function LiveCanvas({
       const box = el && el.box
       const stage = stageRef.current
       if (!box || !stage) return hideHover()
-      const r = cv.getBoundingClientRect()
+      const fr = frameRect()
       const s = stage.getBoundingClientRect()
-      const offX = r.left - s.left + stage.scrollLeft
-      const offY = r.top - s.top + stage.scrollTop
+      if (!fr) return hideHover()
+      const offX = fr.left - s.left + stage.scrollLeft
+      const offY = fr.top - s.top + stage.scrollTop
       const recordable = el.interactive !== false
       const tail = !recordable && bag.current.clickMode === 'record' ? '  (not recordable)' : ''
       setOverlay({
         hidden: false,
-        left: offX + box.nx * r.width,
-        top: offY + box.ny * r.height,
-        width: Math.max(2, box.nw * r.width),
-        height: Math.max(2, box.nh * r.height),
+        left: offX + box.nx * fr.width,
+        top: offY + box.ny * fr.height,
+        width: Math.max(2, box.nw * fr.width),
+        height: Math.max(2, box.nh * fr.height),
         label: (el.role || '?') + (el.name ? ' · ' + el.name : '') + tail,
         noninteractive: !recordable,
       })
@@ -192,11 +209,11 @@ export function LiveCanvas({
   const tone = liveStatus.tone
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <div className="flex items-center gap-1.5 border-b border-border px-2 py-1.5">
-        <NavBtn label="‹" title="Back" onClick={() => sendInput({ type: 'back' })} />
-        <NavBtn label="›" title="Forward" onClick={() => sendInput({ type: 'forward' })} />
-        <NavBtn label="↻" title="Reload" onClick={reload} />
+        <NavBtn icon={<ChevronLeftIcon className="size-4" />} title="Back" onClick={() => sendInput({ type: 'back' })} />
+        <NavBtn icon={<ChevronRightIcon className="size-4" />} title="Forward" onClick={() => sendInput({ type: 'forward' })} />
+        <NavBtn icon={<RotateCwIcon className="size-3.5" />} title="Reload" onClick={reload} />
         <input
           value={addr}
           onChange={(e) => setAddr(e.target.value)}
@@ -229,9 +246,9 @@ export function LiveCanvas({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="interact">🖱 interact</SelectItem>
-            <SelectItem value="record">⏺ auto-record</SelectItem>
-            <SelectItem value="pick">🎯 pick element</SelectItem>
+            <SelectItem value="interact"><span className="flex items-center gap-1.5"><MousePointer2Icon className="size-3.5" /> Browse</span></SelectItem>
+            <SelectItem value="record"><span className="flex items-center gap-1.5"><CircleDotIcon className="size-3.5 text-red-400" /> Record</span></SelectItem>
+            <SelectItem value="pick"><span className="flex items-center gap-1.5"><CrosshairIcon className="size-3.5" /> Pick element</span></SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -266,15 +283,16 @@ export function LiveCanvas({
   )
 }
 
-function NavBtn({ label, title, onClick }: { label: string; title: string; onClick: () => void }) {
+function NavBtn({ icon, title, onClick }: { icon: ReactNode; title: string; onClick: () => void }) {
   return (
     <button
       type="button"
       title={title}
+      aria-label={title}
       onClick={onClick}
-      className="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-border bg-background text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+      className="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
     >
-      {label}
+      {icon}
     </button>
   )
 }

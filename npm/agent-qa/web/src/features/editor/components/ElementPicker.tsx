@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
+import { RefreshCwIcon } from 'lucide-react'
 import type { AriaNode } from '../types'
 
 export function ElementPicker({
@@ -25,25 +26,29 @@ export function ElementPicker({
   )
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-2 rounded-lg border border-border bg-card p-3">
+    <div className="flex h-full min-h-0 flex-col gap-2 p-3">
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium text-muted-foreground">Element picker</span>
         <span className="flex items-center gap-2">
-          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <label
+            className="flex items-center gap-1.5 text-[11px] text-muted-foreground"
+            title="Show only interactive elements (buttons, links, inputs)"
+          >
             <Checkbox
               checked={interactiveOnly}
               onCheckedChange={(v) => onInteractiveChange(v === true)}
               className="size-3.5"
             />
-            interactive
+            interactive only
           </label>
           <button
             type="button"
             title="Snapshot the live page"
+            aria-label="Snapshot the live page"
             onClick={onSnapshot}
             className="grid h-6 w-6 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
           >
-            ⟳
+            <RefreshCwIcon className="size-3.5" />
           </button>
         </span>
       </div>

@@ -2,6 +2,8 @@
 import type { BufferRow } from '../types'
 import { rowLabel } from '../compose'
 import { cn } from '@/lib/utils'
+import type { ReactNode } from 'react'
+import { ArrowUpIcon, ArrowDownIcon, XIcon } from 'lucide-react'
 
 const BADGE: Record<string, string> = {
   nav: 'bg-sky-500/15 text-sky-400',
@@ -49,9 +51,9 @@ export function StepList({
               </span>
             </span>
             <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-              <IconBtn label="↑" title="Move up" disabled={i === 0} onClick={() => onMove(i, i - 1)} />
-              <IconBtn label="↓" title="Move down" disabled={i === rows.length - 1} onClick={() => onMove(i, i + 1)} />
-              <IconBtn label="✕" title="Delete" danger onClick={() => onDelete(i)} />
+              <IconBtn icon={<ArrowUpIcon className="size-3.5" />} title="Move up" disabled={i === 0} onClick={() => onMove(i, i - 1)} />
+              <IconBtn icon={<ArrowDownIcon className="size-3.5" />} title="Move down" disabled={i === rows.length - 1} onClick={() => onMove(i, i + 1)} />
+              <IconBtn icon={<XIcon className="size-3.5" />} title="Delete" danger onClick={() => onDelete(i)} />
             </span>
           </li>
         )
@@ -61,13 +63,13 @@ export function StepList({
 }
 
 function IconBtn({
-  label,
+  icon,
   title,
   onClick,
   disabled,
   danger,
 }: {
-  label: string
+  icon: ReactNode
   title: string
   onClick: () => void
   disabled?: boolean
@@ -77,14 +79,15 @@ function IconBtn({
     <button
       type="button"
       title={title}
+      aria-label={title}
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        'grid h-5 w-5 place-items-center rounded text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30',
+        'grid h-5 w-5 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30',
         danger && 'hover:text-destructive'
       )}
     >
-      {label}
+      {icon}
     </button>
   )
 }

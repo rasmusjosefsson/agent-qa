@@ -20,7 +20,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `verify` | Cross-check the on-disk scenario against recorder sidecars |
 
 > `run-step`, `aria-snapshot`, and `buffer` are the primitives the local
-> **authoring editor** (`agent-qa report view` → the *Editor* tab) shells
+> **authoring editor** (`agent-qa web` → the *Editor* tab) shells
 > to build a scenario by targeting the UI. The editor is hosted by the
 > Node launcher; the Rust CLI still owns every record/run/flush mutation.
 

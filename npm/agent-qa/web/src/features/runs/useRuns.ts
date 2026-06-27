@@ -1,6 +1,8 @@
 // web/src/features/runs/useRuns.ts
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  deleteRun as apiDeleteRun,
+  deleteScenario as apiDeleteScenario,
   getRunDetail,
   getRuns,
   getScenarioDef,
@@ -24,6 +26,8 @@ export interface RunsApi {
   live: boolean
   setLive: (v: boolean) => void
   toggleScenario: (sid: string) => Promise<void>
+  deleteScenario: (sid: string) => Promise<{ ok: boolean; error?: string }>
+  deleteRun: (sid: string, runId: string) => Promise<{ ok: boolean; error?: string }>
   selectRun: (sid: string, runId: string, manual?: boolean) => Promise<void>
   selectStep: (idx: number) => void
   selectTab: (tab: Selection['tab']) => void
@@ -132,18 +136,61 @@ export function useRuns(): RunsApi {
 
   const toggleScenario = useCallback(
     async (sid: string) => {
-      if (expandedRef.current.has(sid)) {
-        setExpanded((prev) => {
-          const n = new Set(prev)
-          n.delete(sid)
-          return n
-        })
-        return
-      }
-      setExpanded((prev) => new Set(prev).add(sid))
-      await Promise.all([loadRuns(sid), selectScenario(sid)])
+      // Always select the scenario (so the center pane + Replay button reflect
+      // it on the FIRST click), then toggle its run list. Previously clicking an
+      // already-expanded row only collapsed it and selected nothing — which is
+      // why it took a second click to show the Replay button.
+      const wasExpanded = expandedRef.current.has(sid)
+      setExpanded((prev) => {
+        const n = new Set(prev)
+        if (wasExpanded) n.delete(sid)
+        else n.add(sid)
+        return n
+      })
+      const tasks: Promise<unknown>[] = [selectScenario(sid)]
+      if (!wasExpanded) tasks.push(loadRuns(sid))
+      await Promise.all(tasks)
     },
     [loadRuns, selectScenario]
+  )
+
+  const deleteScenario = useCallback(
+    async (sid: string): Promise<{ ok: boolean; error?: string }> => {
+      const res = await apiDeleteScenario(sid)
+      if (!res.ok) return res
+      setExpanded((prev) => {
+        const n = new Set(prev)
+        n.delete(sid)
+        return n
+      })
+      setRunsBySid((prev) => {
+        const n = { ...prev }
+        delete n[sid]
+        return n
+      })
+      if (selRef.current.sid === sid) {
+        setSel(EMPTY_SEL)
+        setDetail(null)
+        setScenarioDef(null)
+      }
+      await loadScenarios().catch(() => {})
+      return { ok: true }
+    },
+    [loadScenarios]
+  )
+
+  const deleteRun = useCallback(
+    async (sid: string, runId: string): Promise<{ ok: boolean; error?: string }> => {
+      const res = await apiDeleteRun(sid, runId)
+      if (!res.ok) return res
+      await loadRuns(sid)
+      if (selRef.current.sid === sid && selRef.current.runId === runId) {
+        setSel((prev) => ({ ...prev, runId: null, stepIdx: null }))
+        setDetail(null)
+      }
+      return { ok: true }
+    },
+    [loadRuns]
   )
 
   const selectStep = useCallback((idx: number) => {
@@ -211,6 +258,8 @@ export function useRuns(): RunsApi {
     live,
     setLive,
     toggleScenario,
+    deleteScenario,
+    deleteRun,
     selectRun,
     selectStep,
     selectTab,

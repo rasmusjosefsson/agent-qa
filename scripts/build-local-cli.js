@@ -91,7 +91,7 @@ const dest = join(binDir, `agent-qa-${desc.key}${desc.exe}`);
 rmSync(dest, { force: true }); // drop any stale symlink/file (don't write through it)
 symlinkSync(built, dest); // symlink → `cargo build --release` keeps it fresh
 console.log(`linked ${dest}\n    -> ${built}`);
-console.log('done. `agent-qa report view` now uses the freshly-built binary.');
+console.log('done. `agent-qa web` now uses the freshly-built binary.');
 console.log(
   `tip: to bypass node_modules entirely, export AGENT_QA_BINARY_PATH="${built}"`
 );

@@ -135,6 +135,8 @@ fn print_help() {
 Usage: agent-qa <verb> [args...]
 
 Verbs:
+  web [--port <N>] [--no-open]  Open the local UI — run viewer + editor + chat
+                                (alias: `report view`, deprecated)
   skills [list]                 List embedded agent skills
   skills get <name>             Print a skill's markdown
   skills path [name]            Print the embedded path for a skill

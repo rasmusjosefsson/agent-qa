@@ -22,7 +22,7 @@ export default defineConfig({
     },
   },
   server: {
-    // `npm run dev` (HMR) proxies the API to a running `agent-qa report view`.
+    // `npm run dev` (HMR) proxies the API to a running `agent-qa web`.
     proxy: { "/api": "http://127.0.0.1:7878" },
   },
 })
