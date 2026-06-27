@@ -137,7 +137,7 @@ export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
                               <AlertDialogHeader>
                                 <AlertDialogTitle>Delete this run?</AlertDialogTitle>
                                 <AlertDialogDescription>
-                                  Permanently removes replay run {r.runId}. This can’t be undone.
+                                  Permanently removes the replay from {fmtRunTime(r.runId)}. This can’t be undone.
                                 </AlertDialogDescription>
                               </AlertDialogHeader>
                               <AlertDialogFooter>
