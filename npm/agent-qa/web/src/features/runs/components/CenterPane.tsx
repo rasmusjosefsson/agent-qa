@@ -1,5 +1,6 @@
 // web/src/features/runs/components/CenterPane.tsx
 import { cn } from '@/lib/utils'
+import { PlayIcon } from 'lucide-react'
 import {
   cleanSummary,
   collapseEvents,
@@ -71,9 +72,10 @@ export function CenterPane({ runs, onReplay }: { runs: RunsApi; onReplay: (sid: 
             <button
               type="button"
               onClick={() => onReplay(sel.sid!)}
-              className="shrink-0 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90"
+              className="flex shrink-0 items-center gap-2 rounded-md border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
             >
-              ▶ Replay
+              <PlayIcon className="size-4 fill-emerald-400 text-emerald-400" />
+              Replay
             </button>
           )}
         </div>
