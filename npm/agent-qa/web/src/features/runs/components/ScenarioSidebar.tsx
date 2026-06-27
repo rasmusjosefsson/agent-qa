@@ -55,17 +55,17 @@ export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
           const list = runsBySid[sc.sid]
           return (
             <li key={sc.sid} className="group mb-0.5">
-              <div className="flex items-stretch rounded-md hover:bg-muted/50">
+              <div className="flex items-center rounded-md hover:bg-muted/50">
                 <button
                   type="button"
                   onClick={() => void runs.toggleScenario(sc.sid)}
                   className="min-w-0 flex-1 px-2 py-1.5 text-left"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="truncate text-sm">{sc.scenarioId || sc.sid}</span>
+                    <span className="truncate text-sm">{sc.intent || sc.scenarioId || sc.sid}</span>
                     {verdict && <Badge tone={verdict}>{verdict}</Badge>}
                   </div>
-                  <div className="truncate text-xs text-muted-foreground">{sc.intent || sc.sid}</div>
+                  <div className="truncate font-mono text-[11px] text-muted-foreground">{sc.scenarioId || sc.sid}</div>
                 </button>
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
@@ -73,7 +73,7 @@ export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
                       type="button"
                       aria-label="Delete scenario"
                       title="Delete scenario"
-                      className="my-1 mr-1 grid shrink-0 place-items-center rounded p-1 text-muted-foreground/40 opacity-0 transition hover:bg-muted hover:text-destructive group-hover:opacity-100"
+                      className="mr-1 grid size-6 shrink-0 place-items-center rounded text-muted-foreground/40 opacity-0 transition hover:bg-muted hover:text-destructive group-hover:opacity-100"
                     >
                       <Trash2Icon className="size-3.5" />
                     </button>
@@ -102,18 +102,46 @@ export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
                       const tone = r.state === 'running' ? 'running' : verdictTone(r.summary, r.state)
                       const label = r.state === 'running' ? 'running' : r.summary ? cleanSummary(r.summary) : 'in flight'
                       return (
-                        <button
+                        <div
                           key={r.runId}
-                          type="button"
-                          onClick={() => void runs.selectRun(sc.sid, r.runId)}
                           className={cn(
-                            'flex w-full items-center gap-2 rounded px-1.5 py-1 text-left',
+                            'group/run flex items-center rounded',
                             selected ? 'bg-muted' : 'hover:bg-muted/50'
                           )}
                         >
-                          <Badge tone={tone}>{label}</Badge>
-                          <span className="truncate font-mono text-[10px] text-muted-foreground">{r.runId}</span>
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() => void runs.selectRun(sc.sid, r.runId)}
+                            className="flex min-w-0 flex-1 items-center gap-2 px-1.5 py-1 text-left"
+                          >
+                            <Badge tone={tone}>{label}</Badge>
+                            <span className="truncate font-mono text-[10px] text-muted-foreground">{r.runId}</span>
+                          </button>
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <button
+                                type="button"
+                                aria-label="Delete run"
+                                title="Delete run"
+                                className="mr-1 grid size-5 shrink-0 place-items-center rounded text-muted-foreground/40 opacity-0 transition hover:bg-muted hover:text-destructive group-hover/run:opacity-100"
+                              >
+                                <Trash2Icon className="size-3" />
+                              </button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Delete this run?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  Permanently removes replay run {r.runId}. This can’t be undone.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                <AlertDialogAction onClick={() => void runs.deleteRun(sc.sid, r.runId)}>Delete</AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        </div>
                       )
                     })}
                 </div>

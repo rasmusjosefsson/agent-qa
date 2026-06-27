@@ -1,6 +1,7 @@
 // web/src/features/runs/useRuns.ts
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  deleteRun as apiDeleteRun,
   deleteScenario as apiDeleteScenario,
   getRunDetail,
   getRuns,
@@ -26,6 +27,7 @@ export interface RunsApi {
   setLive: (v: boolean) => void
   toggleScenario: (sid: string) => Promise<void>
   deleteScenario: (sid: string) => Promise<{ ok: boolean; error?: string }>
+  deleteRun: (sid: string, runId: string) => Promise<{ ok: boolean; error?: string }>
   selectRun: (sid: string, runId: string, manual?: boolean) => Promise<void>
   selectStep: (idx: number) => void
   selectTab: (tab: Selection['tab']) => void
@@ -177,6 +179,20 @@ export function useRuns(): RunsApi {
     [loadScenarios]
   )
 
+  const deleteRun = useCallback(
+    async (sid: string, runId: string): Promise<{ ok: boolean; error?: string }> => {
+      const res = await apiDeleteRun(sid, runId)
+      if (!res.ok) return res
+      await loadRuns(sid)
+      if (selRef.current.sid === sid && selRef.current.runId === runId) {
+        setSel((prev) => ({ ...prev, runId: null, stepIdx: null }))
+        setDetail(null)
+      }
+      return { ok: true }
+    },
+    [loadRuns]
+  )
+
   const selectStep = useCallback((idx: number) => {
     setSel((prev) => ({ ...prev, stepIdx: idx }))
   }, [])
@@ -243,6 +259,7 @@ export function useRuns(): RunsApi {
     setLive,
     toggleScenario,
     deleteScenario,
+    deleteRun,
     selectRun,
     selectStep,
     selectTab,

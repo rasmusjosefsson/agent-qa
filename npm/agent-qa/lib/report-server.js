@@ -1429,6 +1429,41 @@ function createRequestHandler(root, deps, chat) {
         return sendJson(res, 200, { ok: true, sid, deleted: true });
       }
 
+      // Delete a single replay run (POST): remove its dir + repoint latest.txt.
+      if (
+        req.method === 'POST' &&
+        segAll[0] === 'api' &&
+        segAll[1] === 'scenarios' &&
+        segAll[3] === 'runs' &&
+        segAll[5] === 'delete' &&
+        segAll.length === 6
+      ) {
+        const sid = decodeURIComponent(segAll[2]);
+        const runId = decodeURIComponent(segAll[4]);
+        if (!isSafeSegment(sid) || !isSafeSegment(runId)) return badRequest(res, 'unsafe id');
+        const replaysDir = path.join(root, sid, 'replays');
+        try {
+          await fsp.rm(path.join(replaysDir, runId), { recursive: true, force: true });
+        } catch (e) {
+          return sendJson(res, 500, { error: 'delete failed: ' + (e.message || e) });
+        }
+        // If latest.txt pointed at the deleted run, repoint to the newest
+        // remaining run (ids sort by timestamp), else drop the pointer.
+        try {
+          const latestPath = path.join(replaysDir, 'latest.txt');
+          const latest = ((await readText(latestPath)) || '').trim();
+          if (latest === runId) {
+            const entries = await fsp.readdir(replaysDir, { withFileTypes: true }).catch(() => []);
+            const runs = entries.filter((e) => e.isDirectory()).map((e) => e.name).sort();
+            if (runs.length) await fsp.writeFile(latestPath, runs[runs.length - 1] + '\n');
+            else await fsp.rm(latestPath, { force: true });
+          }
+        } catch {
+          /* best-effort */
+        }
+        return sendJson(res, 200, { ok: true, sid, runId, deleted: true });
+      }
+
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         return sendJson(res, 405, { error: 'method not allowed' });
       }

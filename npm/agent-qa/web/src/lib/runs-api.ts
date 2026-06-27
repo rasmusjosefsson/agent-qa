@@ -46,6 +46,16 @@ export async function deleteScenario(sid: string): Promise<{ ok: boolean; error?
   return { ok: false, error: j.error || String(res.status) }
 }
 
+export async function deleteRun(sid: string, runId: string): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch(
+    `/api/scenarios/${encodeURIComponent(sid)}/runs/${encodeURIComponent(runId)}/delete`,
+    { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }
+  )
+  if (res.ok) return { ok: true }
+  const j = (await res.json().catch(() => ({}))) as { error?: string }
+  return { ok: false, error: j.error || String(res.status) }
+}
+
 export function artifactUrl(sid: string, runId: string, kind: string, stepId: string): string {
   return `/api/scenarios/${encodeURIComponent(sid)}/runs/${encodeURIComponent(runId)}/artifact/${kind}/${encodeURIComponent(stepId)}`
 }
