@@ -65,7 +65,9 @@ export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
                     <span className="truncate text-sm">{sc.intent || sc.scenarioId || sc.sid}</span>
                     {verdict && <Badge tone={verdict}>{verdict}</Badge>}
                   </div>
-                  <div className="truncate font-mono text-[11px] text-muted-foreground">{sc.scenarioId || sc.sid}</div>
+                  <div className="truncate text-[11px] text-muted-foreground" title={fmtRunTime(sc.sid)}>
+                    {relRunTime(sc.sid)}
+                  </div>
                 </button>
                 <AlertDialog>
                   <AlertDialogTrigger asChild>

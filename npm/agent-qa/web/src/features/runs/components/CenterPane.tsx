@@ -52,9 +52,12 @@ export function CenterPane({ runs, onReplay }: { runs: RunsApi; onReplay: (sid: 
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <div className="min-w-0">
             <h2 className="truncate text-sm font-semibold">{scenarioDef.intent || scenarioDef.id || 'Scenario'}</h2>
-            <div className="text-xs text-muted-foreground">
-              {steps.length} step{steps.length === 1 ? '' : 's'} · recorded · not yet replayed
+            <div className="truncate text-xs text-muted-foreground">
+              {steps.length} step{steps.length === 1 ? '' : 's'} · recorded {fmtRunTime(sel.sid)} · not yet replayed
             </div>
+            {sel.sid && (
+              <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground opacity-50">{sel.sid}</div>
+            )}
           </div>
           {sel.sid && (
             <button

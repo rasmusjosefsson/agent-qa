@@ -103,10 +103,12 @@ export function cleanSummary(s: string | null | undefined): string {
   return String(s || '').replace(/^SUMMARY:\s*/, '')
 }
 
-// Run ids are `<iso-with-dashes>__<hash>` (e.g. 2026-06-26T23-25-13-841Z__26048c2f).
-function runDate(runId: string | null | undefined): Date | null {
-  if (!runId) return null
-  const m = String(runId)
+// Run ids are `<iso-with-dashes>__<hash>`; scenario ids add an `s-` prefix
+// (e.g. 2026-06-26T23-25-13-841Z__26048c2f, s-2026-06-15T21-01-40-384Z__0fb96b1f).
+function runDate(id: string | null | undefined): Date | null {
+  if (!id) return null
+  const m = String(id)
+    .replace(/^s-/, '')
     .split('__')[0]
     .match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/)
   if (!m) return null
