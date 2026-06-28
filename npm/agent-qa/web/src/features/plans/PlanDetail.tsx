@@ -27,6 +27,8 @@ import { deletePlan, getPlan, runPlan, upsertPlan } from '@/lib/plans-api'
 import type { CaseWithScenario } from '@/features/cases/types'
 import type { SetWithCount } from '@/features/sets/types'
 import { StatusBadge, caseStatus } from '@/features/cases/status'
+import { ReplayLive } from '@/features/runs/components/ReplayLive'
+import { Lightbox } from '@/features/runs/components/Lightbox'
 import { buildXrayExportPrompt, type XrayExportItem } from '@/features/knowledge/exportPrompt'
 
 const back = () => {
@@ -34,6 +36,27 @@ const back = () => {
 }
 const gotoCase = (id: string) => {
   window.location.href = `/cases?id=${encodeURIComponent(id)}`
+}
+// Open the full run view (live browser stream + per-step screenshots/pass-fail)
+// for a member case's scenario.
+const gotoRun = (sid: string) => {
+  window.location.href = `/?sid=${encodeURIComponent(sid)}`
+}
+
+// "step 3/5" while a case is mid-replay, from its scenario summary. currentIdx
+// is 0-based and can tick one past the last step at the end, so clamp to total.
+function stepProgress(c: CaseWithScenario): string | null {
+  const r = c.scenario?.latestRun
+  if (!r || r.state !== 'running') return null
+  const total = typeof r.total === 'number' ? r.total : null
+  let cur = typeof r.currentIdx === 'number' ? r.currentIdx + 1 : null
+  if (cur != null && total != null) cur = Math.min(cur, total)
+  return cur && total ? `step ${cur}/${total}` : 'running'
+}
+
+// Is this member's replay in flight right now?
+function isRunning(c: CaseWithScenario): boolean {
+  return !!(c.scenario?.sid && (c.scenario.activeRunId || c.scenario.latestRun?.state === 'running'))
 }
 
 // Client mirror of the server's resolveSetCaseIds, so the dashboard reflects
@@ -57,6 +80,7 @@ export function PlanDetail({ id }: { id: string }) {
   const [live, setLive] = useState(false)
   const [runMsg, setRunMsg] = useState('')
   const [confirmDel, setConfirmDel] = useState(false)
+  const [lightbox, setLightbox] = useState<{ url: string; caption: string } | null>(null)
 
   // Editable fields.
   const [name, setName] = useState('')
@@ -118,6 +142,13 @@ export function PlanDetail({ id }: { id: string }) {
     for (const c of members) acc[caseStatus(c.scenario).tone] += 1
     return acc
   }, [members])
+
+  // Count of members mid-replay — keep polling whenever something is running
+  // (covers opening a plan while a run is already going).
+  const runningCount = useMemo(() => members.filter(isRunning).length, [members])
+  useEffect(() => {
+    if (runningCount > 0) setLive(true)
+  }, [runningCount])
 
   // Members that map to an Xray test, with their latest verdict + run link —
   // the payload an export pushes back as a Test Execution.
@@ -354,19 +385,36 @@ export function PlanDetail({ id }: { id: string }) {
               </div>
             ) : (
               <div className="divide-y divide-border/60 rounded-md border border-border">
-                {members.map((c) => (
-                  <button
-                    key={c.id}
-                    onClick={() => gotoCase(c.id)}
-                    className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-muted/40"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium text-foreground">{c.title}</div>
-                      <div className="font-mono text-[11px] text-muted-foreground">{c.id}</div>
+                {members.map((c) => {
+                  const recorded = !!c.scenario?.hasScenario
+                  const progress = stepProgress(c)
+                  const running = isRunning(c)
+                  return (
+                    <div key={c.id}>
+                      <button
+                        onClick={() => (recorded ? gotoRun(c.scenario!.sid) : gotoCase(c.id))}
+                        title={recorded ? 'Open the live run + step details' : 'Open the case'}
+                        className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-muted/40"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-medium text-foreground">{c.title}</div>
+                          <div className="font-mono text-[11px] text-muted-foreground">{c.id}</div>
+                        </div>
+                        {progress && <span className="text-[11px] text-amber-400">{progress}</span>}
+                        <StatusBadge scenario={c.scenario} />
+                      </button>
+                      {/* Live browser, inline under the case it belongs to. */}
+                      {running && (
+                        <div className="h-52 border-t border-amber-500/30 bg-black/40 px-2 pb-2 pt-1">
+                          <ReplayLive
+                            sid={c.scenario!.sid}
+                            onLightbox={(url, caption) => setLightbox({ url, caption })}
+                          />
+                        </div>
+                      )}
                     </div>
-                    <StatusBadge scenario={c.scenario} />
-                  </button>
-                ))}
+                  )
+                })}
               </div>
             )}
           </div>
@@ -391,6 +439,10 @@ export function PlanDetail({ id }: { id: string }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {lightbox && (
+        <Lightbox url={lightbox.url} caption={lightbox.caption} onClose={() => setLightbox(null)} />
+      )}
     </div>
   )
 }

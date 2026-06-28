@@ -120,6 +120,7 @@ export function useRuns(): RunsApi {
     const list = data.scenarios || []
     setScenarios(list)
     await maybeAutoFollow(list)
+    return list
   }, [maybeAutoFollow])
 
   const selectScenario = useCallback(async (sid: string) => {
@@ -232,7 +233,25 @@ export function useRuns(): RunsApi {
 
   // Boot + 1.5s live poll (mirrors app.js pollTick).
   useEffect(() => {
-    loadScenarios().catch(() => {})
+    let cancelled = false
+    // Deep-link: `/?sid=<sid>[&run=<runId>]` (used by the plan dashboard to
+    // open a member case's live/last run). Honors the explicit sid over the
+    // generic active-run auto-follow.
+    loadScenarios()
+      .then(async (list) => {
+        if (cancelled) return
+        const params = new URLSearchParams(window.location.search)
+        const wantSid = params.get('sid')
+        const sc = wantSid ? (list || []).find((s) => s.sid === wantSid) : undefined
+        if (!wantSid || !sc) return
+        autoFollow.current = false
+        setExpanded((prev) => new Set(prev).add(wantSid))
+        await loadRuns(wantSid)
+        const runId = params.get('run') || sc.activeRunId || sc.latestRunId
+        if (runId) await selectRun(wantSid, runId, false)
+        else await selectScenario(wantSid)
+      })
+      .catch(() => {})
     const id = setInterval(() => {
       void (async () => {
         if (!liveRef.current) return
@@ -243,8 +262,11 @@ export function useRuns(): RunsApi {
         for (const sid of expandedRef.current) await loadRuns(sid)
       })().catch(() => {})
     }, 1500)
-    return () => clearInterval(id)
-  }, [loadScenarios, refreshRun, loadRuns])
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [loadScenarios, refreshRun, loadRuns, selectRun, selectScenario])
 
   return {
     root,
