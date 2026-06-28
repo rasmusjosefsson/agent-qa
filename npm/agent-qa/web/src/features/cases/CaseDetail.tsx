@@ -47,6 +47,7 @@ function emptyCase(id: string): CaseRecord {
     scenarioSid: null,
     source: 'manual',
     sourceRef: null,
+    externalRefs: [],
     createdAt: 0,
     updatedAt: 0,
   }

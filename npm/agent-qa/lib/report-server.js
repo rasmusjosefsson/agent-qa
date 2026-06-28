@@ -66,8 +66,12 @@ const STATIC_FILES = {
   '/chat.html': 'chat.html',
   '/cases': 'cases.html',
   '/cases.html': 'cases.html',
-  '/sources': 'sources.html',
-  '/sources.html': 'sources.html',
+  '/sets': 'sets.html',
+  '/sets.html': 'sets.html',
+  '/plans': 'plans.html',
+  '/plans.html': 'plans.html',
+  '/knowledge': 'knowledge.html',
+  '/knowledge.html': 'knowledge.html',
 };
 
 // -------- path safety --------
@@ -383,6 +387,14 @@ function normalizeCase(id, body, existing) {
     scenarioSid: body.scenarioSid ?? existing?.scenarioSid ?? null,
     source: String(body.source ?? existing?.source ?? 'manual'),
     sourceRef: body.sourceRef ?? existing?.sourceRef ?? null,
+    // Links to external test-management items (provider-agnostic), so an import
+    // adapter can round-trip a case to its origin without the core knowing any
+    // one provider's schema. `[{ provider, key, url }]`.
+    externalRefs: arr(body.externalRefs, existing?.externalRefs ?? []).map((r) => ({
+      provider: String((r && r.provider) ?? ''),
+      key: String((r && r.key) ?? ''),
+      url: r && r.url != null ? String(r.url) : null,
+    })),
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };
@@ -477,6 +489,296 @@ async function handleCases(req, res, root, seg) {
       await fsp.writeFile(file, JSON.stringify(existing, null, 2) + '\n');
       return sendJson(res, 200, { ok: true, case: await caseWithScenario(root, existing) });
     }
+  }
+
+  return notFound(res, 'not found');
+}
+
+// -------- test sets (curated collections of cases) --------
+//
+// A "test set" is a reusable, cross-cutting grouping of cases — the "organize"
+// primitive (a case can belong to many sets). Membership resolves one of two
+// ways: an explicit `caseIds` list ('manual'), or a `tagQuery` matched against
+// case tags, any-of ('tag'). Pure JSON metadata, mirroring _cases; no browser.
+//
+// Stored under `<root>/_sets/<id>/set.json`. Like `_cases`, the `_sets` dir
+// never surfaces in Runs (no scenario.json, 0 steps).
+const SETS_DIRNAME = '_sets';
+const setsDir = (root) => path.join(root, SETS_DIRNAME);
+const setFile = (root, id) => path.join(setsDir(root), id, 'set.json');
+
+function normalizeSet(id, body, existing) {
+  const now = Date.now();
+  const arr = (v, fb) => (Array.isArray(v) ? v : fb);
+  const mode =
+    body.mode === 'tag' || body.mode === 'manual' ? body.mode : existing?.mode ?? 'manual';
+  return {
+    schema: 'set/1',
+    id,
+    name: String(body.name ?? existing?.name ?? id),
+    description: String(body.description ?? existing?.description ?? ''),
+    mode,
+    caseIds: arr(body.caseIds, existing?.caseIds ?? []).map((s) => String(s)),
+    tagQuery: arr(body.tagQuery, existing?.tagQuery ?? []).map((t) => String(t)),
+    source: String(body.source ?? existing?.source ?? 'manual'),
+    sourceRef: body.sourceRef ?? existing?.sourceRef ?? null,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  };
+}
+
+// Resolve a set's members against the full case list. Manual sets keep their
+// stored order (filtered to ids that still exist); tag sets match any case
+// carrying ≥1 of the set's tags, in case-list order.
+function resolveSetCaseIds(set, allCases) {
+  if (set.mode === 'tag') {
+    const want = new Set(set.tagQuery);
+    if (want.size === 0) return [];
+    return allCases.filter((c) => (c.tags || []).some((t) => want.has(t))).map((c) => c.id);
+  }
+  const byId = new Set(allCases.map((c) => c.id));
+  return set.caseIds.filter((cid) => byId.has(cid));
+}
+
+async function listSets(root) {
+  let entries;
+  try {
+    entries = await fsp.readdir(setsDir(root), { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const ids = entries
+    .filter((e) => e.isDirectory() && isSafeSegment(e.name))
+    .map((e) => e.name)
+    .sort();
+  const allCases = await listCases(root);
+  const out = [];
+  for (const id of ids) {
+    const rec = await readJson(setFile(root, id));
+    if (rec) out.push({ ...rec, caseCount: resolveSetCaseIds(rec, allCases).length });
+  }
+  return out;
+}
+
+// /api/sets[/:id[/delete|cases]] — GET list/one/resolved-cases, POST upsert/delete.
+async function handleSets(req, res, root, seg) {
+  const method = req.method;
+
+  if (seg.length === 0) {
+    if (method === 'GET') return sendJson(res, 200, { sets: await listSets(root) });
+    return sendJson(res, 405, { error: 'method not allowed' });
+  }
+
+  const id = decodeURIComponent(seg[0]);
+  if (!isSafeSegment(id)) return badRequest(res, 'unsafe set id');
+  const dir = path.join(setsDir(root), id);
+  const file = setFile(root, id);
+
+  if (seg.length === 1) {
+    if (method === 'GET') {
+      const rec = await readJson(file);
+      if (!rec) return notFound(res, 'no such set');
+      const allCases = await listCases(root);
+      return sendJson(res, 200, {
+        set: { ...rec, caseCount: resolveSetCaseIds(rec, allCases).length },
+      });
+    }
+    if (method === 'POST') {
+      let body;
+      try {
+        body = await readJsonBody(req);
+      } catch (e) {
+        return badRequest(res, String((e && e.message) || e));
+      }
+      const existing = await readJson(file);
+      const rec = normalizeSet(id, body, existing);
+      await fsp.mkdir(dir, { recursive: true });
+      await fsp.writeFile(file, JSON.stringify(rec, null, 2) + '\n');
+      return sendJson(res, 200, { ok: true, set: rec });
+    }
+    return sendJson(res, 405, { error: 'method not allowed' });
+  }
+
+  if (seg.length === 2 && seg[1] === 'cases' && method === 'GET') {
+    const rec = await readJson(file);
+    if (!rec) return notFound(res, 'no such set');
+    const allCases = await listCases(root);
+    const ids = new Set(resolveSetCaseIds(rec, allCases));
+    return sendJson(res, 200, { cases: allCases.filter((c) => ids.has(c.id)) });
+  }
+
+  if (seg.length === 2 && seg[1] === 'delete' && method === 'POST') {
+    try {
+      await fsp.rm(dir, { recursive: true, force: true });
+    } catch (e) {
+      return sendJson(res, 500, { error: 'delete failed: ' + ((e && e.message) || e) });
+    }
+    return sendJson(res, 200, { ok: true, id, deleted: true });
+  }
+
+  return notFound(res, 'not found');
+}
+
+// -------- test plans (runnable + trackable scope of cases) --------
+//
+// A "test plan" is the "execute + track" primitive: a named scope made of sets
+// and/or individual cases. Running a plan replays every member case's linked
+// scenario; the dashboard rolls up each case's latest run. Membership is the
+// deduped union of the cases resolved from `scope.setIds` plus `scope.caseIds`.
+//
+// Stored under `<root>/_plans/<id>/plan.json`. Hidden from Runs like _cases.
+const PLANS_DIRNAME = '_plans';
+const plansDir = (root) => path.join(root, PLANS_DIRNAME);
+const planFile = (root, id) => path.join(plansDir(root), id, 'plan.json');
+
+function normalizePlan(id, body, existing) {
+  const now = Date.now();
+  const arr = (v, fb) => (Array.isArray(v) ? v : fb);
+  const scope = body.scope && typeof body.scope === 'object' ? body.scope : {};
+  const existingScope = existing?.scope ?? {};
+  return {
+    schema: 'plan/1',
+    id,
+    name: String(body.name ?? existing?.name ?? id),
+    description: String(body.description ?? existing?.description ?? ''),
+    scope: {
+      setIds: arr(scope.setIds, existingScope.setIds ?? []).map((s) => String(s)),
+      caseIds: arr(scope.caseIds, existingScope.caseIds ?? []).map((s) => String(s)),
+    },
+    source: String(body.source ?? existing?.source ?? 'manual'),
+    sourceRef: body.sourceRef ?? existing?.sourceRef ?? null,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  };
+}
+
+// Deduped union of cases from the plan's sets (resolved live) then its explicit
+// caseIds, in that order. Ids that no longer exist are dropped.
+function resolvePlanCaseIds(plan, allSets, allCases) {
+  const order = [];
+  const seen = new Set();
+  const add = (cid) => {
+    if (!seen.has(cid)) {
+      seen.add(cid);
+      order.push(cid);
+    }
+  };
+  const setById = new Map(allSets.map((s) => [s.id, s]));
+  for (const sid of plan.scope.setIds) {
+    const s = setById.get(sid);
+    if (s) for (const cid of resolveSetCaseIds(s, allCases)) add(cid);
+  }
+  const byId = new Set(allCases.map((c) => c.id));
+  for (const cid of plan.scope.caseIds) if (byId.has(cid)) add(cid);
+  return order;
+}
+
+async function listPlans(root) {
+  let entries;
+  try {
+    entries = await fsp.readdir(plansDir(root), { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const ids = entries
+    .filter((e) => e.isDirectory() && isSafeSegment(e.name))
+    .map((e) => e.name)
+    .sort();
+  const [allCases, allSets] = [await listCases(root), await listSets(root)];
+  const out = [];
+  for (const id of ids) {
+    const rec = await readJson(planFile(root, id));
+    if (rec) out.push({ ...rec, caseCount: resolvePlanCaseIds(rec, allSets, allCases).length });
+  }
+  return out;
+}
+
+// /api/plans[/:id[/delete|cases|run]] — GET list/one/resolved-cases, POST
+// upsert/delete/run. The `run` action replays each member scenario and needs
+// the launcher-resolved CLI (deps.replay); everything else is pure JSON.
+async function handlePlans(req, res, root, seg, deps) {
+  const method = req.method;
+
+  if (seg.length === 0) {
+    if (method === 'GET') return sendJson(res, 200, { plans: await listPlans(root) });
+    return sendJson(res, 405, { error: 'method not allowed' });
+  }
+
+  const id = decodeURIComponent(seg[0]);
+  if (!isSafeSegment(id)) return badRequest(res, 'unsafe plan id');
+  const dir = path.join(plansDir(root), id);
+  const file = planFile(root, id);
+
+  if (seg.length === 1) {
+    if (method === 'GET') {
+      const rec = await readJson(file);
+      if (!rec) return notFound(res, 'no such plan');
+      const [allCases, allSets] = [await listCases(root), await listSets(root)];
+      return sendJson(res, 200, {
+        plan: { ...rec, caseCount: resolvePlanCaseIds(rec, allSets, allCases).length },
+      });
+    }
+    if (method === 'POST') {
+      let body;
+      try {
+        body = await readJsonBody(req);
+      } catch (e) {
+        return badRequest(res, String((e && e.message) || e));
+      }
+      const existing = await readJson(file);
+      const rec = normalizePlan(id, body, existing);
+      await fsp.mkdir(dir, { recursive: true });
+      await fsp.writeFile(file, JSON.stringify(rec, null, 2) + '\n');
+      return sendJson(res, 200, { ok: true, plan: rec });
+    }
+    return sendJson(res, 405, { error: 'method not allowed' });
+  }
+
+  if (seg.length === 2 && seg[1] === 'cases' && method === 'GET') {
+    const rec = await readJson(file);
+    if (!rec) return notFound(res, 'no such plan');
+    const [allCases, allSets] = [await listCases(root), await listSets(root)];
+    const ids = new Set(resolvePlanCaseIds(rec, allSets, allCases));
+    return sendJson(res, 200, { cases: allCases.filter((c) => ids.has(c.id)) });
+  }
+
+  if (seg.length === 2 && seg[1] === 'run' && method === 'POST') {
+    if (!deps || typeof deps.replay !== 'function') {
+      return sendJson(res, 503, { error: 'run unavailable: agent-qa CLI not resolved' });
+    }
+    const rec = await readJson(file);
+    if (!rec) return notFound(res, 'no such plan');
+    const [allCases, allSets] = [await listCases(root), await listSets(root)];
+    const memberIds = resolvePlanCaseIds(rec, allSets, allCases);
+    const byId = new Map(allCases.map((c) => [c.id, c]));
+    const started = [];
+    const skipped = [];
+    for (const cid of memberIds) {
+      const c = byId.get(cid);
+      const sid = c && c.scenarioSid;
+      if (!sid || !isSafeSegment(sid)) {
+        skipped.push({ caseId: cid, reason: 'no recorded scenario' });
+        continue;
+      }
+      const scn = await readJson(path.join(root, sid, 'scenario.json'));
+      if (!scn) {
+        skipped.push({ caseId: cid, reason: 'scenario missing' });
+        continue;
+      }
+      const out = await deps.replay(sid, replaySessionFor(sid));
+      if (out.ok) started.push({ caseId: cid, sid });
+      else skipped.push({ caseId: cid, reason: out.error || 'replay failed to start' });
+    }
+    return sendJson(res, 202, { ok: true, started, skipped });
+  }
+
+  if (seg.length === 2 && seg[1] === 'delete' && method === 'POST') {
+    try {
+      await fsp.rm(dir, { recursive: true, force: true });
+    } catch (e) {
+      return sendJson(res, 500, { error: 'delete failed: ' + ((e && e.message) || e) });
+    }
+    return sendJson(res, 200, { ok: true, id, deleted: true });
   }
 
   return notFound(res, 'not found');
@@ -1530,6 +1832,18 @@ function createRequestHandler(root, deps, chat) {
       // Unconditional — works without a resolved CLI, like GET /api/scenarios.
       if (segAll[0] === 'api' && segAll[1] === 'cases') {
         return await handleCases(req, res, root, segAll.slice(2));
+      }
+
+      // Test sets (curated collections of cases) — pure JSON under <root>/_sets.
+      // Like /api/cases, works without a resolved CLI.
+      if (segAll[0] === 'api' && segAll[1] === 'sets') {
+        return await handleSets(req, res, root, segAll.slice(2));
+      }
+
+      // Test plans (runnable scope of sets/cases) under <root>/_plans. CRUD is
+      // pure JSON; the /run action needs deps.replay (handled within).
+      if (segAll[0] === 'api' && segAll[1] === 'plans') {
+        return await handlePlans(req, res, root, segAll.slice(2), deps);
       }
 
       // Trigger a replay of a recorded scenario (POST). Spawns the Rust CLI

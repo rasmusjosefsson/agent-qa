@@ -8,19 +8,22 @@ import {
 import { Separator } from "@/components/ui/separator"
 import { TooltipProvider } from "@/components/ui/tooltip"
 
-export type Tab = "cases" | "runs" | "editor" | "chat" | "sources"
+export type Tab = "cases" | "sets" | "plans" | "runs" | "editor" | "chat" | "knowledge"
 
 const LABELS: Record<Tab, string> = {
   cases: "Test Cases",
+  sets: "Test Sets",
+  plans: "Test Plans",
   runs: "Test Runs",
   editor: "Editor",
   chat: "Copilot",
-  sources: "Sources",
+  knowledge: "Knowledge",
 }
 
 // App shell: collapsible sidebar (shadcn sidebar-07) + a thin topbar, shared
-// across the MPA entries (main-cases / main-runs / main-editor / main-chat /
-// main-sources). Each entry passes its tab; the sidebar highlights it and the
+// across the MPA entries (main-cases / main-sets / main-plans / main-runs /
+// main-editor / main-chat / main-knowledge). Each entry passes its tab; the
+// sidebar highlights it and the
 // page renders as children. Collapse state persists across full-page nav via
 // the sidebar's `sidebar_state` cookie (path=/).
 export function AppShell({ tab, children }: { tab: Tab; children?: ReactNode }) {

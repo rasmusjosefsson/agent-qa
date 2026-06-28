@@ -6,7 +6,6 @@ import {
   FolderTreeIcon,
   GlobeIcon,
   LayersIcon,
-  PlugIcon,
   Settings2Icon,
   SparklesIcon,
   SquarePenIcon,
@@ -40,23 +39,22 @@ type NavItem = {
 }
 
 // Working sections (each maps to an MPA entry / tab). "Copilot" is the chat
-// agent; "Sources" is the import/integrations surface.
+// agent; "Knowledge" is the connector hub (import/integrations).
 const PROJECT: NavItem[] = [
   { label: "Test Cases", icon: ClipboardListIcon, tab: "cases", href: "/cases" },
+  { label: "Test Sets", icon: LayersIcon, tab: "sets", href: "/sets" },
+  { label: "Test Plans", icon: FolderTreeIcon, tab: "plans", href: "/plans" },
   { label: "Test Runs", icon: CirclePlayIcon, tab: "runs", href: "/" },
   { label: "Editor", icon: SquarePenIcon, tab: "editor", href: "/editor" },
   { label: "Copilot", icon: SparklesIcon, tab: "chat", href: "/chat" },
-  { label: "Sources", icon: PlugIcon, tab: "sources", href: "/sources" },
+  { label: "Knowledge", icon: BookOpenIcon, tab: "knowledge", href: "/knowledge" },
 ]
 
 // Standard QA objects we don't cover yet — shown disabled so the model is
 // legible. Wired up as they land.
 const SOON: NavItem[] = [
-  { label: "Test Suites", icon: FolderTreeIcon, soon: true },
-  { label: "Test Sets", icon: LayersIcon, soon: true },
   { label: "Environments", icon: GlobeIcon, soon: true },
   { label: "Personas", icon: UsersIcon, soon: true },
-  { label: "Knowledge", icon: BookOpenIcon, soon: true },
 ]
 
 const WORKSPACE: NavItem[] = [{ label: "Settings", icon: Settings2Icon, soon: true }]

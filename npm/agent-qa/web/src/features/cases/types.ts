@@ -9,6 +9,14 @@ export interface InputDecl {
   description?: string
 }
 
+// Provider-agnostic link to an external test-management item, so an import
+// adapter can round-trip a case to its origin. Core stays vendor-neutral.
+export interface ExternalRef {
+  provider: string
+  key: string
+  url: string | null
+}
+
 export interface CaseRecord {
   schema: 'case/1'
   id: string
@@ -22,6 +30,7 @@ export interface CaseRecord {
   scenarioSid: string | null
   source: string
   sourceRef: string | null
+  externalRefs: ExternalRef[]
   createdAt: number
   updatedAt: number
 }
