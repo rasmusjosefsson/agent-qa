@@ -70,6 +70,10 @@ const STATIC_FILES = {
   '/sets.html': 'sets.html',
   '/plans': 'plans.html',
   '/plans.html': 'plans.html',
+  '/personas': 'personas.html',
+  '/personas.html': 'personas.html',
+  '/environments': 'environments.html',
+  '/environments.html': 'environments.html',
   '/knowledge': 'knowledge.html',
   '/knowledge.html': 'knowledge.html',
 };
@@ -748,6 +752,13 @@ async function handlePlans(req, res, root, seg, deps) {
     }
     const rec = await readJson(file);
     if (!rec) return notFound(res, 'no such plan');
+    // Optional persona/environment for this run: { profile, params }.
+    let runOpts = {};
+    try {
+      runOpts = runOptsFromBody(await readJsonBody(req));
+    } catch {
+      /* no/!json body → defaults */
+    }
     const [allCases, allSets] = [await listCases(root), await listSets(root)];
     const memberIds = resolvePlanCaseIds(rec, allSets, allCases);
     const byId = new Map(allCases.map((c) => [c.id, c]));
@@ -765,11 +776,131 @@ async function handlePlans(req, res, root, seg, deps) {
         skipped.push({ caseId: cid, reason: 'scenario missing' });
         continue;
       }
-      const out = await deps.replay(sid, replaySessionFor(sid));
+      const out = await deps.replay(sid, replaySessionFor(sid), runOpts);
       if (out.ok) started.push({ caseId: cid, sid });
       else skipped.push({ caseId: cid, reason: out.error || 'replay failed to start' });
     }
     return sendJson(res, 202, { ok: true, started, skipped });
+  }
+
+  if (seg.length === 2 && seg[1] === 'delete' && method === 'POST') {
+    try {
+      await fsp.rm(dir, { recursive: true, force: true });
+    } catch (e) {
+      return sendJson(res, 500, { error: 'delete failed: ' + ((e && e.message) || e) });
+    }
+    return sendJson(res, 200, { ok: true, id, deleted: true });
+  }
+
+  return notFound(res, 'not found');
+}
+
+// -------- run options (persona + environment) --------
+//
+// A replay/plan-run can carry a persona (forwarded as `--profile`) and
+// environment values (each `--param k=v`). The UI resolves the chosen persona
+// + environment into `{ profile, params }` and posts that; the server just
+// passes it through to the replay spawner.
+function runOptsFromBody(body) {
+  const o = {};
+  if (body && body.profile) o.profile = String(body.profile);
+  if (body && body.params && typeof body.params === 'object') {
+    o.params = {};
+    for (const [k, v] of Object.entries(body.params)) if (k) o.params[String(k)] = String(v);
+  }
+  return o;
+}
+
+// -------- personas + environments (run-config records) --------
+//
+// Flat JSON records under <root>/_personas and <root>/_environments. A persona
+// names a login identity (its `profile` is the value passed to `--profile`); an
+// environment names a target (its `baseUrl` + `params` become `--param`s).
+function normalizePersona(id, body, existing) {
+  const now = Date.now();
+  return {
+    schema: 'persona/1',
+    id,
+    name: String(body.name ?? existing?.name ?? id),
+    profile: String(body.profile ?? existing?.profile ?? ''),
+    description: String(body.description ?? existing?.description ?? ''),
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  };
+}
+
+function normalizeEnvironment(id, body, existing) {
+  const now = Date.now();
+  const src = body.params && typeof body.params === 'object' ? body.params : existing?.params ?? {};
+  const params = {};
+  for (const [k, v] of Object.entries(src)) if (k) params[String(k)] = String(v);
+  return {
+    schema: 'environment/1',
+    id,
+    name: String(body.name ?? existing?.name ?? id),
+    baseUrl: String(body.baseUrl ?? existing?.baseUrl ?? ''),
+    params,
+    description: String(body.description ?? existing?.description ?? ''),
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  };
+}
+
+// Generic flat-record CRUD shared by personas + environments: GET list/one,
+// POST upsert/delete, stored at <root>/<dirname>/<id>/<key>.json.
+async function handleSimpleRecords(req, res, root, seg, cfg) {
+  const { dirname, key, plural, normalize } = cfg;
+  const method = req.method;
+  const baseDir = path.join(root, dirname);
+  const fileOf = (id) => path.join(baseDir, id, `${key}.json`);
+
+  if (seg.length === 0) {
+    if (method === 'GET') {
+      let entries = [];
+      try {
+        entries = await fsp.readdir(baseDir, { withFileTypes: true });
+      } catch {
+        /* none yet */
+      }
+      const ids = entries
+        .filter((e) => e.isDirectory() && isSafeSegment(e.name))
+        .map((e) => e.name)
+        .sort();
+      const items = [];
+      for (const id of ids) {
+        const rec = await readJson(fileOf(id));
+        if (rec) items.push(rec);
+      }
+      return sendJson(res, 200, { [plural]: items });
+    }
+    return sendJson(res, 405, { error: 'method not allowed' });
+  }
+
+  const id = decodeURIComponent(seg[0]);
+  if (!isSafeSegment(id)) return badRequest(res, `unsafe ${key} id`);
+  const dir = path.join(baseDir, id);
+  const file = fileOf(id);
+
+  if (seg.length === 1) {
+    if (method === 'GET') {
+      const rec = await readJson(file);
+      if (!rec) return notFound(res, `no such ${key}`);
+      return sendJson(res, 200, { [key]: rec });
+    }
+    if (method === 'POST') {
+      let body;
+      try {
+        body = await readJsonBody(req);
+      } catch (e) {
+        return badRequest(res, String((e && e.message) || e));
+      }
+      const existing = await readJson(file);
+      const rec = normalize(id, body, existing);
+      await fsp.mkdir(dir, { recursive: true });
+      await fsp.writeFile(file, JSON.stringify(rec, null, 2) + '\n');
+      return sendJson(res, 200, { ok: true, [key]: rec });
+    }
+    return sendJson(res, 405, { error: 'method not allowed' });
   }
 
   if (seg.length === 2 && seg[1] === 'delete' && method === 'POST') {
@@ -1015,9 +1146,17 @@ function cdpUrlResolver(runCli, session) {
 // status.json. Resolves quickly to { ok, pid } | { ok:false, error }.
 function makeReplaySpawner({ bin, env, cwd }) {
   const { spawn } = require('node:child_process');
-  return function replay(sid, session) {
+  // opts: { profile?: string, params?: Record<string,string> } — a persona
+  // (forwarded as `--profile`) and environment values (each as `--param k=v`).
+  return function replay(sid, session, opts = {}) {
     return new Promise((resolve) => {
       const args = ['replay', sid, ...(session ? ['--session', session] : [])];
+      if (opts && opts.profile) args.push('--profile', String(opts.profile));
+      if (opts && opts.params && typeof opts.params === 'object') {
+        for (const [k, v] of Object.entries(opts.params)) {
+          if (k) args.push('--param', `${k}=${String(v)}`);
+        }
+      }
       const child = spawn(bin, args, { env, cwd, stdio: 'ignore', detached: true });
       let done = false;
       child.once('spawn', () => {
@@ -1846,6 +1985,26 @@ function createRequestHandler(root, deps, chat) {
         return await handlePlans(req, res, root, segAll.slice(2), deps);
       }
 
+      // Personas (login identities → --profile) and environments (target
+      // values → --param) — flat run-config records under <root>/_personas,
+      // <root>/_environments.
+      if (segAll[0] === 'api' && segAll[1] === 'personas') {
+        return await handleSimpleRecords(req, res, root, segAll.slice(2), {
+          dirname: '_personas',
+          key: 'persona',
+          plural: 'personas',
+          normalize: normalizePersona,
+        });
+      }
+      if (segAll[0] === 'api' && segAll[1] === 'environments') {
+        return await handleSimpleRecords(req, res, root, segAll.slice(2), {
+          dirname: '_environments',
+          key: 'environment',
+          plural: 'environments',
+          normalize: normalizeEnvironment,
+        });
+      }
+
       // Trigger a replay of a recorded scenario (POST). Spawns the Rust CLI
       // `replay <sid>` detached; the viewer's live poll then auto-follows the
       // new run. Requires the launcher-resolved CLI (deps.replay).
@@ -1863,7 +2022,14 @@ function createRequestHandler(root, deps, chat) {
         if (!isSafeSegment(sid)) return badRequest(res, 'unsafe sid');
         const scn = await readJson(path.join(root, sid, 'scenario.json'));
         if (!scn) return notFound(res, 'no scenario.json to replay');
-        const out = await deps.replay(sid, replaySessionFor(sid));
+        // Optional persona/environment for this replay: { profile, params }.
+        let replayOpts = {};
+        try {
+          replayOpts = runOptsFromBody(await readJsonBody(req));
+        } catch {
+          /* no/!json body → defaults */
+        }
+        const out = await deps.replay(sid, replaySessionFor(sid), replayOpts);
         if (!out.ok) return sendJson(res, 500, { error: out.error || 'replay failed to start' });
         return sendJson(res, 202, { ok: true, sid, started: true });
       }

@@ -593,8 +593,8 @@ test('POST /api/plans/:id/run replays each member scenario via deps.replay', asy
   const fx = makeFixture();
   const calls = [];
   const deps = {
-    replay: async (sid, session) => {
-      calls.push({ sid, session });
+    replay: async (sid, session, opts) => {
+      calls.push({ sid, session, opts });
       return { ok: true };
     },
   };
@@ -614,11 +614,60 @@ test('POST /api/plans/:id/run replays each member scenario via deps.replay', asy
   await j('POST', '/api/cases/draft', { title: 'Draft (no recording)' });
   await j('POST', '/api/plans/p1', { name: 'P1', scope: { caseIds: ['login', 'draft'] } });
 
-  const res = await j('POST', '/api/plans/p1/run');
+  // run with a persona (→ --profile) and environment values (→ --param)
+  const res = await j('POST', '/api/plans/p1/run', {
+    profile: 'qa-admin',
+    params: { baseUrl: 'https://staging.example.com' },
+  });
   assert.equal(res.status, 202);
   const out = await res.json();
   assert.deepEqual(out.started, [{ caseId: 'login', sid: fx.sid }]);
   assert.equal(out.skipped.length, 1);
   assert.equal(out.skipped[0].caseId, 'draft');
-  assert.deepEqual(calls, [{ sid: fx.sid, session: `replay-${fx.sid}` }]);
+  assert.deepEqual(calls, [
+    {
+      sid: fx.sid,
+      session: `replay-${fx.sid}`,
+      opts: { profile: 'qa-admin', params: { baseUrl: 'https://staging.example.com' } },
+    },
+  ]);
+});
+
+test('persona + environment CRUD (run-config records)', async (t) => {
+  const fx = makeFixture();
+  const { server, base } = await boot(fx.root);
+  t.after(() => server.close());
+  const j = (m, p, body) =>
+    fetch(`${base}${p}`, {
+      method: m,
+      headers: { 'content-type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+  // personas: upsert seals persona/1, list, delete
+  let r = await (await j('GET', '/api/personas')).json();
+  assert.deepEqual(r.personas, []);
+  r = await (
+    await j('POST', '/api/personas/admin', { name: 'Admin', profile: 'admin-user' })
+  ).json();
+  assert.equal(r.persona.schema, 'persona/1');
+  assert.equal(r.persona.profile, 'admin-user');
+  assert.ok(fs.existsSync(path.join(fx.root, '_personas', 'admin', 'persona.json')));
+
+  // environments: params coerced to strings
+  r = await (
+    await j('POST', '/api/environments/staging', {
+      name: 'Staging',
+      baseUrl: 'https://staging.example.com',
+      params: { region: 'eu', flag: true },
+    })
+  ).json();
+  assert.equal(r.environment.schema, 'environment/1');
+  assert.deepEqual(r.environment.params, { region: 'eu', flag: 'true' });
+
+  // listed + unsafe id rejected + delete
+  assert.equal((await (await j('GET', '/api/environments')).json()).environments.length, 1);
+  assert.equal((await j('POST', '/api/personas/..%2Fevil', {})).status, 400);
+  assert.equal((await j('POST', '/api/personas/admin/delete')).status, 200);
+  assert.ok(!fs.existsSync(path.join(fx.root, '_personas', 'admin')));
 });

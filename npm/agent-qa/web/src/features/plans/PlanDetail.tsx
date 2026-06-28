@@ -24,8 +24,11 @@ import {
 import { getCases } from '@/lib/cases-api'
 import { getSets } from '@/lib/sets-api'
 import { deletePlan, getPlan, runPlan, upsertPlan } from '@/lib/plans-api'
+import { getPersonas, getEnvironments } from '@/lib/run-config-api'
 import type { CaseWithScenario } from '@/features/cases/types'
 import type { SetWithCount } from '@/features/sets/types'
+import type { PersonaRecord } from '@/features/personas/types'
+import type { EnvironmentRecord } from '@/features/environments/types'
 import { StatusBadge, caseStatus } from '@/features/cases/status'
 import { ReplayLive } from '@/features/runs/components/ReplayLive'
 import { Lightbox } from '@/features/runs/components/Lightbox'
@@ -75,6 +78,10 @@ export function PlanDetail({ id }: { id: string }) {
   const [loaded, setLoaded] = useState(false)
   const [allCases, setAllCases] = useState<CaseWithScenario[]>([])
   const [allSets, setAllSets] = useState<SetWithCount[]>([])
+  const [personas, setPersonas] = useState<PersonaRecord[]>([])
+  const [environments, setEnvironments] = useState<EnvironmentRecord[]>([])
+  const [personaId, setPersonaId] = useState('')
+  const [envId, setEnvId] = useState('')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const [live, setLive] = useState(false)
@@ -95,18 +102,33 @@ export function PlanDetail({ id }: { id: string }) {
   }, [])
 
   useEffect(() => {
-    Promise.all([getPlan(id), getSets(), getCases()])
-      .then(([p, s, c]) => {
+    Promise.all([getPlan(id), getSets(), getCases(), getPersonas(), getEnvironments()])
+      .then(([p, s, c, pe, en]) => {
         setName(p.plan.name)
         setDescription(p.plan.description)
         setSetIds(p.plan.scope.setIds)
         setCaseIds(p.plan.scope.caseIds)
         setAllSets(s.sets)
         setAllCases(c.cases)
+        setPersonas(pe.personas)
+        setEnvironments(en.environments)
         setLoaded(true)
       })
       .catch((e) => setErr(String(e.message || e)))
   }, [id])
+
+  // Resolve the chosen persona + environment into the run payload:
+  // persona.profile → --profile, environment.baseUrl + params → --param.
+  const buildRunOpts = () => {
+    const persona = personas.find((p) => p.id === personaId)
+    const env = environments.find((e) => e.id === envId)
+    const params: Record<string, string> = env ? { ...env.params } : {}
+    if (env?.baseUrl) params.baseUrl = env.baseUrl
+    return {
+      profile: persona?.profile || undefined,
+      params: Object.keys(params).length ? params : undefined,
+    }
+  }
 
   // Live status polling after a run (and on demand).
   useEffect(() => {
@@ -201,7 +223,7 @@ export function PlanDetail({ id }: { id: string }) {
     try {
       // Persist scope first so the server runs exactly what's shown.
       await upsertPlan(id, { name: name.trim() || id, description, scope: { setIds, caseIds } })
-      const r = await runPlan(id)
+      const r = await runPlan(id, buildRunOpts())
       setRunMsg(
         `Started ${r.started.length} ${r.started.length === 1 ? 'replay' : 'replays'}` +
           (r.skipped.length ? ` · skipped ${r.skipped.length} (no recording)` : '')
@@ -290,6 +312,29 @@ export function PlanDetail({ id }: { id: string }) {
         <Button size="sm" onClick={() => void run()} disabled={busy || !runnable}>
           <PlayIcon /> Run plan
         </Button>
+      </div>
+
+      {/* Run config — who/where the next run uses. */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border px-5 py-2 text-xs text-muted-foreground">
+        <span>Run as</span>
+        <RunSelect
+          value={personaId}
+          onChange={setPersonaId}
+          placeholder="default login"
+          options={personas.map((p) => ({ value: p.id, label: p.name }))}
+        />
+        <span>on</span>
+        <RunSelect
+          value={envId}
+          onChange={setEnvId}
+          placeholder="default environment"
+          options={environments.map((e) => ({ value: e.id, label: e.name }))}
+        />
+        {personas.length === 0 && environments.length === 0 && (
+          <span className="text-[11px] opacity-70">
+            — add Personas / Environments to pick a login or target
+          </span>
+        )}
       </div>
 
       {err && (
@@ -444,6 +489,33 @@ export function PlanDetail({ id }: { id: string }) {
         <Lightbox url={lightbox.url} caption={lightbox.caption} onClose={() => setLightbox(null)} />
       )}
     </div>
+  )
+}
+
+function RunSelect({
+  value,
+  onChange,
+  placeholder,
+  options,
+}: {
+  value: string
+  onChange: (v: string) => void
+  placeholder: string
+  options: { value: string; label: string }[]
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none focus-visible:border-ring"
+    >
+      <option value="">{placeholder}</option>
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </select>
   )
 }
 

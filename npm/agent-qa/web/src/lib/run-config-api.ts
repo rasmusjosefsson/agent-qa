@@ -1,0 +1,51 @@
+// web/src/lib/run-config-api.ts
+// Typed wrappers for the /api/personas and /api/environments record surfaces.
+import type { PersonaRecord } from '@/features/personas/types'
+import type { EnvironmentRecord } from '@/features/environments/types'
+
+async function getJson<T>(path: string): Promise<T> {
+  const res = await fetch(path, { headers: { accept: 'application/json' } })
+  if (!res.ok) throw new Error(`${path} → ${res.status}`)
+  return (await res.json()) as T
+}
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+  })
+  if (!res.ok) {
+    const j = (await res.json().catch(() => ({}))) as { error?: string }
+    throw new Error(j.error || `${path} → ${res.status}`)
+  }
+  return (await res.json()) as T
+}
+
+// --- personas ---
+export function getPersonas(): Promise<{ personas: PersonaRecord[] }> {
+  return getJson('/api/personas')
+}
+export function upsertPersona(
+  id: string,
+  body: Partial<PersonaRecord>
+): Promise<{ ok: boolean; persona: PersonaRecord }> {
+  return postJson(`/api/personas/${encodeURIComponent(id)}`, body)
+}
+export function deletePersona(id: string): Promise<{ ok: boolean }> {
+  return postJson(`/api/personas/${encodeURIComponent(id)}/delete`, {})
+}
+
+// --- environments ---
+export function getEnvironments(): Promise<{ environments: EnvironmentRecord[] }> {
+  return getJson('/api/environments')
+}
+export function upsertEnvironment(
+  id: string,
+  body: Partial<EnvironmentRecord>
+): Promise<{ ok: boolean; environment: EnvironmentRecord }> {
+  return postJson(`/api/environments/${encodeURIComponent(id)}`, body)
+}
+export function deleteEnvironment(id: string): Promise<{ ok: boolean }> {
+  return postJson(`/api/environments/${encodeURIComponent(id)}/delete`, {})
+}
