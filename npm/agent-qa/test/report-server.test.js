@@ -382,11 +382,68 @@ test('serves the React app at /, /editor, /chat with hashed /assets', async (t) 
   assert.equal(asset.status, 200);
   assert.match(asset.headers.get('content-type') || '', /javascript/);
 
-  // /, /editor, /chat all serve the built entries.
+  // /, /editor, /chat, /cases, /sources all serve the built entries.
   assert.equal((await fetch(`${base}/`)).status, 200);
   assert.equal((await fetch(`${base}/editor`)).status, 200);
+  assert.equal((await fetch(`${base}/cases`)).status, 200);
+  assert.equal((await fetch(`${base}/sources`)).status, 200);
 
   // traversal out of the assets subtree is rejected.
   const evil = await fetch(`${base}/assets/..%2F..%2Freport-server.js`);
   assert.equal(evil.status, 404);
+});
+
+test('test-case CRUD: upsert, list join, link, hidden from scenarios, delete', async (t) => {
+  const fx = makeFixture();
+  const { server, base } = await boot(fx.root); // no deps → pure JSON surface
+  t.after(() => server.close());
+
+  const j = (m, p, body) =>
+    fetch(`${base}${p}`, {
+      method: m,
+      headers: { 'content-type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+  // empty
+  let r = await (await j('GET', '/api/cases')).json();
+  assert.deepEqual(r.cases, []);
+
+  // upsert → sealed case/1 with timestamps
+  r = await (
+    await j('POST', '/api/cases/login', {
+      title: 'Log in',
+      startUrl: 'https://x/',
+      steps: ['Enter [EMAIL]', 'Submit'],
+      expected: 'dashboard',
+    })
+  ).json();
+  assert.equal(r.case.schema, 'case/1');
+  assert.equal(r.case.id, 'login');
+  assert.ok(r.case.createdAt && r.case.updatedAt);
+  assert.ok(fs.existsSync(path.join(fx.root, '_cases', 'login', 'case.json')));
+
+  // a case dir does NOT pollute the scenarios listing
+  const scn = await (await fetch(`${base}/api/scenarios`)).json();
+  assert.ok(!scn.scenarios.some((s) => s.sid === '_cases'));
+
+  // link to the fixture scenario → list joins its last-run summary
+  await j('POST', '/api/cases/login/link', { scenarioSid: fx.sid });
+  r = await (await j('GET', '/api/cases')).json();
+  assert.equal(r.cases.length, 1);
+  assert.equal(r.cases[0].scenarioSid, fx.sid);
+  assert.equal(r.cases[0].scenario.latestRun.ok, false);
+
+  // partial save does not clobber the linked sid
+  r = await (await j('POST', '/api/cases/login', { title: 'Log in v2' })).json();
+  assert.equal(r.case.scenarioSid, fx.sid);
+  assert.equal(r.case.title, 'Log in v2');
+
+  // unsafe id rejected
+  assert.equal((await j('POST', '/api/cases/..%2Fevil', {})).status, 400);
+
+  // delete removes the case dir but leaves the scenario intact
+  assert.equal((await j('POST', '/api/cases/login/delete')).status, 200);
+  assert.ok(!fs.existsSync(path.join(fx.root, '_cases', 'login')));
+  assert.ok(fs.existsSync(path.join(fx.root, fx.sid, 'scenario.json')));
 });

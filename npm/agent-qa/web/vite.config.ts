@@ -18,6 +18,8 @@ export default defineConfig({
         index: path.resolve(__dirname, "index.html"),
         editor: path.resolve(__dirname, "editor.html"),
         chat: path.resolve(__dirname, "chat.html"),
+        cases: path.resolve(__dirname, "cases.html"),
+        sources: path.resolve(__dirname, "sources.html"),
       },
     },
   },
