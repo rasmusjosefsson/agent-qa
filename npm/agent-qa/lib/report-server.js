@@ -64,6 +64,10 @@ const STATIC_FILES = {
   '/editor.html': 'editor.html',
   '/chat': 'chat.html',
   '/chat.html': 'chat.html',
+  '/cases': 'cases.html',
+  '/cases.html': 'cases.html',
+  '/sources': 'sources.html',
+  '/sources.html': 'sources.html',
 };
 
 // -------- path safety --------
@@ -341,6 +345,141 @@ async function listScenarios(root) {
   // Un-flushed/empty recording buffers, start skeletons, and cancelled
   // sessions (0 steps, no runs) are hidden so the list isn't cluttered.
   return out.filter((s) => (s.steps && s.steps > 0) || s.latestRunId);
+}
+
+// -------- test cases (author-side artifact) --------
+//
+// A "test case" is a human-authored, plain-English test (numbered steps +
+// expected result + [TOKEN] test data) — the thing a QA engineer writes before
+// it is a machine-replayable scenario. The chat agent turns a case into a
+// recorded `scenario.json`; the case stores the resulting sid in `scenarioSid`
+// (1→1). Cases are pure metadata (no browser), so this is a plain Node JSON
+// surface — no Rust CLI required, unlike the editor's record/replay writes.
+//
+// Stored under `<root>/_cases/<id>/case.json`. The `_cases` dir passes
+// isSafeSegment but never surfaces in Runs: listScenarios drops any dir with 0
+// steps and no runs, and `_cases` has no scenario.json of its own.
+const CASES_DIRNAME = '_cases';
+const casesDir = (root) => path.join(root, CASES_DIRNAME);
+const caseFile = (root, id) => path.join(casesDir(root), id, 'case.json');
+
+// Normalize an upsert body into a sealed case/1 record, preserving fields the
+// caller omits (so a metadata save can't clobber a sid the agent just linked —
+// `??` treats an explicit null as "keep existing" too).
+function normalizeCase(id, body, existing) {
+  const now = Date.now();
+  const arr = (v, fb) => (Array.isArray(v) ? v : fb);
+  return {
+    schema: 'case/1',
+    id,
+    title: String(body.title ?? existing?.title ?? id),
+    startUrl: String(body.startUrl ?? existing?.startUrl ?? ''),
+    preconditions: String(body.preconditions ?? existing?.preconditions ?? ''),
+    steps: arr(body.steps, existing?.steps ?? []).map((s) => String(s)),
+    expected: String(body.expected ?? existing?.expected ?? ''),
+    inputs:
+      body.inputs && typeof body.inputs === 'object' ? body.inputs : existing?.inputs ?? {},
+    tags: arr(body.tags, existing?.tags ?? []).map((t) => String(t)),
+    scenarioSid: body.scenarioSid ?? existing?.scenarioSid ?? null,
+    source: String(body.source ?? existing?.source ?? 'manual'),
+    sourceRef: body.sourceRef ?? existing?.sourceRef ?? null,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  };
+}
+
+// Join a case to its linked scenario summary (last-run status/time) when set.
+async function caseWithScenario(root, rec) {
+  let scenario = null;
+  if (rec.scenarioSid && isSafeSegment(rec.scenarioSid)) {
+    scenario = await scenarioSummary(root, rec.scenarioSid);
+  }
+  return { ...rec, scenario };
+}
+
+async function listCases(root) {
+  let entries;
+  try {
+    entries = await fsp.readdir(casesDir(root), { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const ids = entries
+    .filter((e) => e.isDirectory() && isSafeSegment(e.name))
+    .map((e) => e.name)
+    .sort();
+  const out = [];
+  for (const id of ids) {
+    const rec = await readJson(caseFile(root, id));
+    if (rec) out.push(await caseWithScenario(root, rec));
+  }
+  return out;
+}
+
+// /api/cases[/:id[/delete|link]] — GET list/one, POST upsert/delete/link.
+async function handleCases(req, res, root, seg) {
+  const method = req.method;
+
+  if (seg.length === 0) {
+    if (method === 'GET') return sendJson(res, 200, { cases: await listCases(root) });
+    return sendJson(res, 405, { error: 'method not allowed' });
+  }
+
+  const id = decodeURIComponent(seg[0]);
+  if (!isSafeSegment(id)) return badRequest(res, 'unsafe case id');
+  const dir = path.join(casesDir(root), id);
+  const file = caseFile(root, id);
+
+  if (seg.length === 1) {
+    if (method === 'GET') {
+      const rec = await readJson(file);
+      if (!rec) return notFound(res, 'no such case');
+      return sendJson(res, 200, { case: await caseWithScenario(root, rec) });
+    }
+    if (method === 'POST') {
+      let body;
+      try {
+        body = await readJsonBody(req);
+      } catch (e) {
+        return badRequest(res, String((e && e.message) || e));
+      }
+      const existing = await readJson(file);
+      const rec = normalizeCase(id, body, existing);
+      await fsp.mkdir(dir, { recursive: true });
+      await fsp.writeFile(file, JSON.stringify(rec, null, 2) + '\n');
+      return sendJson(res, 200, { ok: true, case: rec });
+    }
+    return sendJson(res, 405, { error: 'method not allowed' });
+  }
+
+  if (seg.length === 2 && method === 'POST') {
+    if (seg[1] === 'delete') {
+      try {
+        await fsp.rm(dir, { recursive: true, force: true });
+      } catch (e) {
+        return sendJson(res, 500, { error: 'delete failed: ' + ((e && e.message) || e) });
+      }
+      return sendJson(res, 200, { ok: true, id, deleted: true });
+    }
+    if (seg[1] === 'link') {
+      // Read-merge-write only `scenarioSid` so a concurrent metadata save
+      // can't be lost; this is the path the agent uses post-record.
+      let body;
+      try {
+        body = await readJsonBody(req);
+      } catch (e) {
+        return badRequest(res, String((e && e.message) || e));
+      }
+      const existing = await readJson(file);
+      if (!existing) return notFound(res, 'no such case');
+      existing.scenarioSid = body.scenarioSid ? String(body.scenarioSid) : null;
+      existing.updatedAt = Date.now();
+      await fsp.writeFile(file, JSON.stringify(existing, null, 2) + '\n');
+      return sendJson(res, 200, { ok: true, case: await caseWithScenario(root, existing) });
+    }
+  }
+
+  return notFound(res, 'not found');
 }
 
 async function runDetail(root, sid, runId) {
@@ -1385,6 +1524,12 @@ function createRequestHandler(root, deps, chat) {
           return sendJson(res, 503, { error: 'editor unavailable: agent-qa CLI not resolved' });
         }
         return await handleEdit(req, res, deps, segAll.slice(2));
+      }
+
+      // Test-case authoring surface (pure JSON metadata under <root>/_cases).
+      // Unconditional — works without a resolved CLI, like GET /api/scenarios.
+      if (segAll[0] === 'api' && segAll[1] === 'cases') {
+        return await handleCases(req, res, root, segAll.slice(2));
       }
 
       // Trigger a replay of a recorded scenario (POST). Spawns the Rust CLI
