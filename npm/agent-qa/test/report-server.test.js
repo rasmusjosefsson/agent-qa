@@ -382,11 +382,13 @@ test('serves the React app at /, /editor, /chat with hashed /assets', async (t) 
   assert.equal(asset.status, 200);
   assert.match(asset.headers.get('content-type') || '', /javascript/);
 
-  // /, /editor, /chat, /cases, /sources all serve the built entries.
+  // /, /editor, /cases, /sets, /plans, /knowledge all serve the built entries.
   assert.equal((await fetch(`${base}/`)).status, 200);
   assert.equal((await fetch(`${base}/editor`)).status, 200);
   assert.equal((await fetch(`${base}/cases`)).status, 200);
-  assert.equal((await fetch(`${base}/sources`)).status, 200);
+  assert.equal((await fetch(`${base}/sets`)).status, 200);
+  assert.equal((await fetch(`${base}/plans`)).status, 200);
+  assert.equal((await fetch(`${base}/knowledge`)).status, 200);
 
   // traversal out of the assets subtree is rejected.
   const evil = await fetch(`${base}/assets/..%2F..%2Freport-server.js`);
@@ -446,4 +448,177 @@ test('test-case CRUD: upsert, list join, link, hidden from scenarios, delete', a
   assert.equal((await j('POST', '/api/cases/login/delete')).status, 200);
   assert.ok(!fs.existsSync(path.join(fx.root, '_cases', 'login')));
   assert.ok(fs.existsSync(path.join(fx.root, fx.sid, 'scenario.json')));
+});
+
+test('case carries externalRefs (provider-agnostic links)', async (t) => {
+  const fx = makeFixture();
+  const { server, base } = await boot(fx.root);
+  t.after(() => server.close());
+  const j = (m, p, body) =>
+    fetch(`${base}${p}`, {
+      method: m,
+      headers: { 'content-type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+  // unset → empty array; a provided ref is sealed (url defaults to null)
+  let r = await (await j('POST', '/api/cases/login', { title: 'Log in' })).json();
+  assert.deepEqual(r.case.externalRefs, []);
+  r = await (
+    await j('POST', '/api/cases/login', {
+      externalRefs: [{ provider: 'demo', key: 'AB-1', url: 'https://x/AB-1' }, { key: 'AB-2' }],
+    })
+  ).json();
+  assert.deepEqual(r.case.externalRefs, [
+    { provider: 'demo', key: 'AB-1', url: 'https://x/AB-1' },
+    { provider: '', key: 'AB-2', url: null },
+  ]);
+});
+
+test('test-set CRUD: manual + tag membership, resolved cases, hidden from scenarios, delete', async (t) => {
+  const fx = makeFixture();
+  const { server, base } = await boot(fx.root);
+  t.after(() => server.close());
+
+  const j = (m, p, body) =>
+    fetch(`${base}${p}`, {
+      method: m,
+      headers: { 'content-type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+  // two cases, one tagged "smoke"
+  await j('POST', '/api/cases/login', { title: 'Log in', tags: ['smoke', 'auth'] });
+  await j('POST', '/api/cases/checkout', { title: 'Checkout', tags: ['payments'] });
+
+  // empty
+  let r = await (await j('GET', '/api/sets')).json();
+  assert.deepEqual(r.sets, []);
+
+  // manual set with one member → sealed set/1, count reflects membership
+  r = await (
+    await j('POST', '/api/sets/smoke', { name: 'Smoke', mode: 'manual', caseIds: ['login'] })
+  ).json();
+  assert.equal(r.set.schema, 'set/1');
+  assert.equal(r.set.mode, 'manual');
+  assert.ok(fs.existsSync(path.join(fx.root, '_sets', 'smoke', 'set.json')));
+  r = await (await j('GET', '/api/sets/smoke')).json();
+  assert.equal(r.set.caseCount, 1);
+
+  // a set dir does NOT pollute the scenarios listing
+  const scn = await (await fetch(`${base}/api/scenarios`)).json();
+  assert.ok(!scn.scenarios.some((s) => s.sid === '_sets'));
+
+  // resolved member cases (joined to scenario summary, null until linked)
+  r = await (await j('GET', '/api/sets/smoke/cases')).json();
+  assert.equal(r.cases.length, 1);
+  assert.equal(r.cases[0].id, 'login');
+
+  // manual membership ignores ids that don't exist
+  await j('POST', '/api/sets/smoke', { caseIds: ['login', 'ghost'] });
+  r = await (await j('GET', '/api/sets/smoke/cases')).json();
+  assert.equal(r.cases.length, 1);
+
+  // tag set resolves by any-of label match, stays live as cases change
+  await j('POST', '/api/sets/tagged', { name: 'Tagged', mode: 'tag', tagQuery: ['smoke'] });
+  r = await (await j('GET', '/api/sets/tagged/cases')).json();
+  assert.deepEqual(r.cases.map((c) => c.id), ['login']);
+  await j('POST', '/api/cases/checkout', { tags: ['smoke'] });
+  r = await (await j('GET', '/api/sets/tagged/cases')).json();
+  assert.deepEqual(r.cases.map((c) => c.id).sort(), ['checkout', 'login']);
+
+  // unsafe id rejected; delete removes the set, leaves cases intact
+  assert.equal((await j('POST', '/api/sets/..%2Fevil', {})).status, 400);
+  assert.equal((await j('POST', '/api/sets/smoke/delete')).status, 200);
+  assert.ok(!fs.existsSync(path.join(fx.root, '_sets', 'smoke')));
+  assert.ok(fs.existsSync(path.join(fx.root, '_cases', 'login', 'case.json')));
+});
+
+test('test-plan CRUD + scope resolution (union of sets and cases, deduped)', async (t) => {
+  const fx = makeFixture();
+  const { server, base } = await boot(fx.root);
+  t.after(() => server.close());
+
+  const j = (m, p, body) =>
+    fetch(`${base}${p}`, {
+      method: m,
+      headers: { 'content-type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+  await j('POST', '/api/cases/login', { title: 'Log in', tags: ['smoke'] });
+  await j('POST', '/api/cases/checkout', { title: 'Checkout', tags: ['smoke'] });
+  await j('POST', '/api/cases/profile', { title: 'Profile' });
+  await j('POST', '/api/sets/smoke', { name: 'Smoke', mode: 'tag', tagQuery: ['smoke'] });
+
+  // empty
+  let r = await (await j('GET', '/api/plans')).json();
+  assert.deepEqual(r.plans, []);
+
+  // plan from a set + a direct case → sealed plan/1, deduped union resolved
+  r = await (
+    await j('POST', '/api/plans/release', {
+      name: 'Release',
+      scope: { setIds: ['smoke'], caseIds: ['profile', 'login'] }, // login also via set
+    })
+  ).json();
+  assert.equal(r.plan.schema, 'plan/1');
+  assert.ok(fs.existsSync(path.join(fx.root, '_plans', 'release', 'plan.json')));
+  r = await (await j('GET', '/api/plans/release')).json();
+  assert.equal(r.plan.caseCount, 3); // login, checkout (set) + profile (direct), login not doubled
+
+  // resolved order: set members first (in case-list / alphabetical order:
+  // checkout, login), then the new direct case (profile); login isn't doubled
+  r = await (await j('GET', '/api/plans/release/cases')).json();
+  assert.deepEqual(
+    r.cases.map((c) => c.id),
+    ['checkout', 'login', 'profile']
+  );
+
+  // a plan dir does NOT pollute the scenarios listing
+  const scn = await (await fetch(`${base}/api/scenarios`)).json();
+  assert.ok(!scn.scenarios.some((s) => s.sid === '_plans'));
+
+  // run without a resolved CLI → 503 (no deps in this harness)
+  assert.equal((await j('POST', '/api/plans/release/run')).status, 503);
+
+  // unsafe id rejected; delete leaves sets + cases intact
+  assert.equal((await j('POST', '/api/plans/..%2Fevil', {})).status, 400);
+  assert.equal((await j('POST', '/api/plans/release/delete')).status, 200);
+  assert.ok(!fs.existsSync(path.join(fx.root, '_plans', 'release')));
+  assert.ok(fs.existsSync(path.join(fx.root, '_sets', 'smoke', 'set.json')));
+});
+
+test('POST /api/plans/:id/run replays each member scenario via deps.replay', async (t) => {
+  const fx = makeFixture();
+  const calls = [];
+  const deps = {
+    replay: async (sid, session) => {
+      calls.push({ sid, session });
+      return { ok: true };
+    },
+  };
+  const { server, base } = await boot(fx.root, deps);
+  t.after(() => server.close());
+
+  const j = (m, p, body) =>
+    fetch(`${base}${p}`, {
+      method: m,
+      headers: { 'content-type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+  // one case linked to the fixture scenario, one without a recording
+  await j('POST', '/api/cases/login', { title: 'Log in' });
+  await j('POST', '/api/cases/login/link', { scenarioSid: fx.sid });
+  await j('POST', '/api/cases/draft', { title: 'Draft (no recording)' });
+  await j('POST', '/api/plans/p1', { name: 'P1', scope: { caseIds: ['login', 'draft'] } });
+
+  const res = await j('POST', '/api/plans/p1/run');
+  assert.equal(res.status, 202);
+  const out = await res.json();
+  assert.deepEqual(out.started, [{ caseId: 'login', sid: fx.sid }]);
+  assert.equal(out.skipped.length, 1);
+  assert.equal(out.skipped[0].caseId, 'draft');
+  assert.deepEqual(calls, [{ sid: fx.sid, session: `replay-${fx.sid}` }]);
 });
