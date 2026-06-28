@@ -223,10 +223,13 @@ mod dispatch_audit {
 
     const SRC: &str = include_str!("main.rs");
 
-    /// Verbs that are intentionally NOT top-level (sub-verbs like
-    /// 'list', 'doctor', 'path' under `plugins`; or aliases like 'help').
-    /// These appear in the help text but aren't dispatched at the top.
+    /// Verbs that are intentionally NOT dispatched in this Rust match:
+    /// sub-verbs like 'list', 'doctor', 'path' under `plugins`; aliases like
+    /// 'help'; and verbs handled upstream by the Node launcher
+    /// (bin/agent-qa.js) rather than the Rust binary, e.g. `web`.
+    /// These appear in the help text but have no `=>` arm here.
     const NON_TOPLEVEL: &[&str] = &[
+        "web", // handled by the Node launcher (bin/agent-qa.js), not the Rust dispatcher
         "list",
         "get",
         "path",
