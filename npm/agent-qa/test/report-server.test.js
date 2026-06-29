@@ -628,7 +628,8 @@ test('POST /api/plans/:id/run replays each member scenario via deps.replay', asy
     {
       sid: fx.sid,
       session: `replay-${fx.sid}`,
-      opts: { profile: 'qa-admin', params: { baseUrl: 'https://staging.example.com' } },
+      // env is the injected plugin registry — empty here (none registered)
+      opts: { profile: 'qa-admin', params: { baseUrl: 'https://staging.example.com' }, env: {} },
     },
   ]);
 });
@@ -750,4 +751,39 @@ test('POST /api/personas/:id/connect bootstraps a profile via the auth plugin', 
   // an environment with no auth plugin → 400
   await j('POST', '/api/environments/noplug', { name: 'NoPlug' });
   assert.equal((await j('POST', '/api/personas/admin/connect', { environmentId: 'noplug' })).status, 400);
+});
+
+test('plugin registry persists + injects AGENT_QA_PLUGINS into CLI calls', async (t) => {
+  const fx = makeFixture();
+  const calls = [];
+  const deps = {
+    runCli: async (args, extraEnv) => {
+      calls.push({ args, extraEnv });
+      if (args[0] === 'plugins') return { code: 0, stdout: '[]', stderr: '' };
+      if (args[0] === 'profile-status') return { code: 0, stdout: 'admin-user: authenticated', stderr: '' };
+      return { code: 0, stdout: 'ok', stderr: '' };
+    },
+  };
+  const { server, base } = await boot(fx.root, deps);
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  // empty → set (trim + dedupe) → persisted on disk
+  assert.deepEqual((await (await j('GET', '/api/config/plugins')).json()).paths, []);
+  const r = await (await j('POST', '/api/config/plugins', { paths: [' /p/auth ', '/p/auth', '/p/policy'] })).json();
+  assert.deepEqual(r.paths, ['/p/auth', '/p/policy']);
+  assert.ok(fs.existsSync(path.join(fx.root, '_config', 'plugins.json')));
+
+  // discovery injects the registry as AGENT_QA_PLUGINS
+  await (await j('GET', '/api/plugins')).json();
+  const disc = calls.find((c) => c.args[0] === 'plugins');
+  assert.equal(disc.extraEnv.AGENT_QA_PLUGINS, '/p/auth:/p/policy');
+
+  // connect (bootstrap) injects it too
+  await j('POST', '/api/personas/admin', { name: 'Admin', profile: 'admin-user' });
+  await j('POST', '/api/environments/staging', { name: 'Staging', auth: { plugin: 'agent-qa-plugin-acme' } });
+  await j('POST', '/api/personas/admin/connect', { environmentId: 'staging' });
+  const bootCall = calls.find((c) => c.args[0] === 'profile-bootstrap');
+  assert.equal(bootCall.extraEnv.AGENT_QA_PLUGINS, '/p/auth:/p/policy');
 });

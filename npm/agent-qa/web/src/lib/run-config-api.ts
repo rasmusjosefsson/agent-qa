@@ -55,6 +55,14 @@ export function getPlugins(): Promise<{ available: boolean; plugins: PluginInfo[
   return getJson('/api/plugins')
 }
 
+// --- plugin registry (UI-managed paths injected as AGENT_QA_PLUGINS) ---
+export function getPluginPaths(): Promise<{ paths: string[] }> {
+  return getJson('/api/config/plugins')
+}
+export function setPluginPaths(paths: string[]): Promise<{ ok: boolean; paths: string[] }> {
+  return postJson('/api/config/plugins', { paths })
+}
+
 // --- connect (bootstrap a persona's login for an environment) ---
 export interface ConnectStep {
   step: string

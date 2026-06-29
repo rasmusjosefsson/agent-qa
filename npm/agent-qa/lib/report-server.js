@@ -759,6 +759,7 @@ async function handlePlans(req, res, root, seg, deps) {
     } catch {
       /* no/!json body → defaults */
     }
+    runOpts.env = pluginsEnv(await readPluginPaths(root));
     const [allCases, allSets] = [await listCases(root), await listSets(root)];
     const memberIds = resolvePlanCaseIds(rec, allSets, allCases);
     const byId = new Map(allCases.map((c) => [c.id, c]));
@@ -938,6 +939,39 @@ async function handleSimpleRecords(req, res, root, seg, cfg) {
   return notFound(res, 'not found');
 }
 
+// -------- workbench plugin registry --------
+//
+// A UI-managed list of auth-plugin binary paths, stored at <root>/_config/
+// plugins.json. The workbench injects it as AGENT_QA_PLUGINS for every CLI call
+// it makes (discovery, connect, replay), so plugins can be registered entirely
+// from the UI — no hand-edited agent-qa.toml required.
+const pluginsConfigFile = (root) => path.join(root, '_config', 'plugins.json');
+
+async function readPluginPaths(root) {
+  const rec = await readJson(pluginsConfigFile(root));
+  return Array.isArray(rec && rec.paths)
+    ? rec.paths.filter((p) => typeof p === 'string' && p.trim())
+    : [];
+}
+
+async function writePluginPaths(root, paths) {
+  const clean = [
+    ...new Set((Array.isArray(paths) ? paths : []).map((p) => String(p).trim()).filter(Boolean)),
+  ];
+  await fsp.mkdir(path.join(root, '_config'), { recursive: true });
+  await fsp.writeFile(
+    pluginsConfigFile(root),
+    JSON.stringify({ schema: 'plugins/1', paths: clean }, null, 2) + '\n'
+  );
+  return clean;
+}
+
+// Colon-separated AGENT_QA_PLUGINS env for the registered paths (the CLI's
+// env-var registration mechanism).
+function pluginsEnv(paths) {
+  return paths && paths.length ? { AGENT_QA_PLUGINS: paths.join(':') } : {};
+}
+
 // POST /api/personas/:id/connect { environmentId } — sign a persona in for an
 // environment via the downstream auth plugin: profile-add (register the profile
 // against the env's plugin) → profile-bootstrap (run the plugin's auth) →
@@ -967,8 +1001,9 @@ async function handleConnect(req, res, root, personaId, deps) {
   const plugin = env && env.auth && env.auth.plugin ? String(env.auth.plugin) : '';
   if (!plugin) return badRequest(res, 'choose an environment with an auth plugin to connect');
 
-  // Surface the environment's connection config to the plugin via env vars.
-  const extraEnv = {};
+  // Surface the environment's connection config to the plugin via env vars,
+  // plus the UI-registered plugin paths so the plugin is discoverable.
+  const extraEnv = { ...pluginsEnv(await readPluginPaths(root)) };
   if (env.baseUrl) extraEnv.AGENT_QA_ENV_BASE_URL = String(env.baseUrl);
   if (env.auth.loginUrl) extraEnv.AGENT_QA_ENV_LOGIN_URL = String(env.auth.loginUrl);
   for (const [k, v] of Object.entries(env.auth.config || {})) {
@@ -1230,8 +1265,9 @@ function cdpUrlResolver(runCli, session) {
 // status.json. Resolves quickly to { ok, pid } | { ok:false, error }.
 function makeReplaySpawner({ bin, env, cwd }) {
   const { spawn } = require('node:child_process');
-  // opts: { profile?: string, params?: Record<string,string> } — a persona
-  // (forwarded as `--profile`) and environment values (each as `--param k=v`).
+  // opts: { profile?, params?, env? } — a persona (forwarded as `--profile`),
+  // environment values (each `--param k=v`), and per-call env overrides (e.g.
+  // AGENT_QA_PLUGINS so a registered auth plugin applies during replay).
   return function replay(sid, session, opts = {}) {
     return new Promise((resolve) => {
       const args = ['replay', sid, ...(session ? ['--session', session] : [])];
@@ -1241,7 +1277,8 @@ function makeReplaySpawner({ bin, env, cwd }) {
           if (k) args.push('--param', `${k}=${String(v)}`);
         }
       }
-      const child = spawn(bin, args, { env, cwd, stdio: 'ignore', detached: true });
+      const childEnv = opts && opts.env ? { ...env, ...opts.env } : env;
+      const child = spawn(bin, args, { env: childEnv, cwd, stdio: 'ignore', detached: true });
       let done = false;
       child.once('spawn', () => {
         if (done) return;
@@ -2106,7 +2143,10 @@ function createRequestHandler(root, deps, chat) {
         if (!deps || typeof deps.runCli !== 'function') {
           return sendJson(res, 200, { available: false, plugins: [] });
         }
-        const r = await deps.runCli(['plugins', 'list', '--json']);
+        const r = await deps.runCli(
+          ['plugins', 'list', '--json'],
+          pluginsEnv(await readPluginPaths(root))
+        );
         let plugins = [];
         try {
           plugins = JSON.parse(r.stdout || '[]');
@@ -2114,6 +2154,24 @@ function createRequestHandler(root, deps, chat) {
           plugins = [];
         }
         return sendJson(res, 200, { available: true, plugins });
+      }
+
+      // UI-managed plugin registry — list/set the auth-plugin paths the
+      // workbench injects as AGENT_QA_PLUGINS. Pure JSON under <root>/_config.
+      if (segAll[0] === 'api' && segAll[1] === 'config' && segAll[2] === 'plugins' && segAll.length === 3) {
+        if (req.method === 'GET') {
+          return sendJson(res, 200, { paths: await readPluginPaths(root) });
+        }
+        if (req.method === 'POST') {
+          let body;
+          try {
+            body = await readJsonBody(req);
+          } catch (e) {
+            return badRequest(res, String((e && e.message) || e));
+          }
+          return sendJson(res, 200, { ok: true, paths: await writePluginPaths(root, body.paths) });
+        }
+        return sendJson(res, 405, { error: 'method not allowed' });
       }
 
       // Trigger a replay of a recorded scenario (POST). Spawns the Rust CLI
@@ -2140,6 +2198,7 @@ function createRequestHandler(root, deps, chat) {
         } catch {
           /* no/!json body → defaults */
         }
+        replayOpts.env = pluginsEnv(await readPluginPaths(root));
         const out = await deps.replay(sid, replaySessionFor(sid), replayOpts);
         if (!out.ok) return sendJson(res, 500, { error: out.error || 'replay failed to start' });
         return sendJson(res, 202, { ok: true, sid, started: true });

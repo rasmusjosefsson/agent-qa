@@ -12,7 +12,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { getEnvironments, upsertEnvironment, deleteEnvironment, getPlugins } from '@/lib/run-config-api'
+import {
+  getEnvironments,
+  upsertEnvironment,
+  deleteEnvironment,
+  getPlugins,
+  getPluginPaths,
+  setPluginPaths,
+} from '@/lib/run-config-api'
 import type { EnvironmentRecord, PluginInfo } from './types'
 
 function slugify(s: string): string {
@@ -28,6 +35,8 @@ function slugify(s: string): string {
 export function EnvironmentsPage() {
   const [envs, setEnvs] = useState<EnvironmentRecord[] | null>(null)
   const [plugins, setPlugins] = useState<PluginInfo[]>([])
+  const [paths, setPaths] = useState<string[]>([])
+  const [pluginDraft, setPluginDraft] = useState('')
   const [err, setErr] = useState('')
   const [editing, setEditing] = useState<EnvironmentRecord | 'new' | null>(null)
 
@@ -35,12 +44,29 @@ export function EnvironmentsPage() {
     getEnvironments()
       .then((r) => setEnvs(r.environments))
       .catch((e) => setErr(String(e.message || e)))
+  const refreshPlugins = () =>
+    Promise.all([getPluginPaths(), getPlugins()])
+      .then(([cfg, disc]) => {
+        setPaths(cfg.paths)
+        setPlugins(disc.plugins)
+      })
+      .catch(() => {})
   useEffect(() => {
     void load()
-    getPlugins()
-      .then((r) => setPlugins(r.plugins))
-      .catch(() => {})
+    void refreshPlugins()
   }, [])
+
+  const addPlugin = async () => {
+    const p = pluginDraft.trim()
+    if (!p) return
+    await setPluginPaths([...paths, p]).catch((e) => setErr(String(e.message || e)))
+    setPluginDraft('')
+    void refreshPlugins()
+  }
+  const removePlugin = async (p: string) => {
+    await setPluginPaths(paths.filter((x) => x !== p)).catch((e) => setErr(String(e.message || e)))
+    void refreshPlugins()
+  }
 
   const remove = async (id: string) => {
     await deleteEnvironment(id).catch((e) => setErr(String(e.message || e)))
@@ -67,17 +93,38 @@ export function EnvironmentsPage() {
         </div>
       )}
 
-      <div className="border-b border-border bg-muted/20 px-5 py-1.5 text-[11px] text-muted-foreground">
-        {plugins.length > 0 ? (
-          <span>
-            Auth plugins discovered: {plugins.map((p) => p.name || p.kind || p.path).join(', ')}
-          </span>
-        ) : (
-          <span>
-            No auth plugins discovered — register one in <code>agent-qa.toml</code> <code>[plugins]</code> to
-            sign in to a real app.
-          </span>
-        )}
+      <div className="border-b border-border bg-muted/20 px-5 py-2 text-[11px]">
+        <div className="mb-1 font-medium text-muted-foreground">Auth plugins</div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {paths.map((p) => (
+            <span key={p} className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono">
+              {p}
+              <button onClick={() => void removePlugin(p)} className="opacity-60 hover:opacity-100" title="Remove">
+                <XIcon className="size-3" />
+              </button>
+            </span>
+          ))}
+          <input
+            value={pluginDraft}
+            onChange={(e) => setPluginDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                void addPlugin()
+              }
+            }}
+            placeholder="add auth-plugin binary path…"
+            className="min-w-[14rem] flex-1 rounded border border-border bg-background px-2 py-0.5 font-mono outline-none focus-visible:border-ring"
+          />
+          <Button variant="ghost" size="sm" className="h-6 px-2" onClick={() => void addPlugin()}>
+            <PlusIcon /> Add
+          </Button>
+        </div>
+        <div className="mt-1 text-muted-foreground">
+          {plugins.length > 0
+            ? `Discovered: ${plugins.map((p) => p.name || p.kind || p.path).join(', ')}`
+            : 'None loaded yet — add the path to your auth-plugin binary above.'}
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
