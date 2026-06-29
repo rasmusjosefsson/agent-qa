@@ -703,3 +703,51 @@ test('GET /api/plugins reports discovered auth plugins (read-only)', async (t) =
   assert.equal(res.available, true);
   assert.deepEqual(res.plugins, [{ kind: 'auth', name: 'acme' }]);
 });
+
+test('POST /api/personas/:id/connect bootstraps a profile via the auth plugin', async (t) => {
+  const fx = makeFixture();
+  const calls = [];
+  const deps = {
+    runCli: async (args, extraEnv) => {
+      calls.push({ args, extraEnv });
+      if (args[0] === 'profile-status') return { code: 0, stdout: 'admin-user: authenticated', stderr: '' };
+      return { code: 0, stdout: 'ok', stderr: '' };
+    },
+  };
+
+  // no CLI → 503
+  let booted = await boot(fx.root);
+  let j0 = (m, p, b) =>
+    fetch(`${booted.base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+  await j0('POST', '/api/personas/admin', { name: 'Admin', profile: 'admin-user' });
+  await j0('POST', '/api/environments/staging', {
+    name: 'Staging',
+    baseUrl: 'https://s.example.com',
+    auth: { plugin: 'agent-qa-plugin-acme', config: { tenant: '7' } },
+  });
+  assert.equal((await j0('POST', '/api/personas/admin/connect', { environmentId: 'staging' })).status, 503);
+  booted.server.close();
+
+  // with a runCli → add → bootstrap → status, env config surfaced to plugin
+  booted = await boot(fx.root, deps);
+  t.after(() => booted.server.close());
+  const j = (m, p, b) =>
+    fetch(`${booted.base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  const res = await j('POST', '/api/personas/admin/connect', { environmentId: 'staging' });
+  assert.equal(res.status, 200);
+  const out = await res.json();
+  assert.equal(out.authenticated, true);
+  assert.equal(out.profile, 'admin-user');
+  assert.deepEqual(
+    calls.map((c) => c.args[0]),
+    ['profile-add', 'profile-bootstrap', 'profile-status']
+  );
+  assert.deepEqual(calls[0].args, ['profile-add', 'admin-user', '--plugin', 'agent-qa-plugin-acme']);
+  assert.equal(calls[1].extraEnv.AGENT_QA_ENV_BASE_URL, 'https://s.example.com');
+  assert.equal(calls[1].extraEnv.AGENT_QA_ENV_TENANT, '7');
+
+  // an environment with no auth plugin → 400
+  await j('POST', '/api/environments/noplug', { name: 'NoPlug' });
+  assert.equal((await j('POST', '/api/personas/admin/connect', { environmentId: 'noplug' })).status, 400);
+});

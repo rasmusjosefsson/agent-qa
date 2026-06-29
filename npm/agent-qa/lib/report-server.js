@@ -938,6 +938,64 @@ async function handleSimpleRecords(req, res, root, seg, cfg) {
   return notFound(res, 'not found');
 }
 
+// POST /api/personas/:id/connect { environmentId } — sign a persona in for an
+// environment via the downstream auth plugin: profile-add (register the profile
+// against the env's plugin) → profile-bootstrap (run the plugin's auth) →
+// profile-status (report). The env's connection config is passed to the plugin
+// as AGENT_QA_ENV_* vars; secrets stay in the user's own env (never here).
+async function handleConnect(req, res, root, personaId, deps) {
+  if (!isSafeSegment(personaId)) return badRequest(res, 'unsafe persona id');
+  if (!deps || typeof deps.runCli !== 'function') {
+    return sendJson(res, 503, { error: 'connect unavailable: agent-qa CLI not resolved' });
+  }
+  const persona = await readJson(path.join(root, '_personas', personaId, 'persona.json'));
+  if (!persona) return notFound(res, 'no such persona');
+  const profile = String(persona.profile || '').trim();
+  if (!profile) return badRequest(res, 'persona has no profile to bootstrap');
+
+  let body = {};
+  try {
+    body = await readJsonBody(req);
+  } catch {
+    /* optional body */
+  }
+  let env = null;
+  const envId = body.environmentId ? String(body.environmentId) : '';
+  if (envId && isSafeSegment(envId)) {
+    env = await readJson(path.join(root, '_environments', envId, 'environment.json'));
+  }
+  const plugin = env && env.auth && env.auth.plugin ? String(env.auth.plugin) : '';
+  if (!plugin) return badRequest(res, 'choose an environment with an auth plugin to connect');
+
+  // Surface the environment's connection config to the plugin via env vars.
+  const extraEnv = {};
+  if (env.baseUrl) extraEnv.AGENT_QA_ENV_BASE_URL = String(env.baseUrl);
+  if (env.auth.loginUrl) extraEnv.AGENT_QA_ENV_LOGIN_URL = String(env.auth.loginUrl);
+  for (const [k, v] of Object.entries(env.auth.config || {})) {
+    extraEnv[`AGENT_QA_ENV_${k.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`] = String(v);
+  }
+
+  const log = [];
+  const step = async (label, args) => {
+    const r = await deps.runCli(args, extraEnv);
+    log.push({
+      step: label,
+      code: r.code,
+      stdout: (r.stdout || '').slice(0, 4000),
+      stderr: (r.stderr || '').slice(0, 4000),
+      spawnError: r.spawnError ? String((r.spawnError && r.spawnError.message) || r.spawnError) : null,
+    });
+    return r;
+  };
+
+  // profile-add is non-fatal (the profile may already be registered).
+  await step('profile-add', ['profile-add', profile, '--plugin', plugin]);
+  const boot = await step('profile-bootstrap', ['profile-bootstrap', profile]);
+  const stat = await step('profile-status', ['profile-status', profile]);
+  const authenticated = /authenticated/i.test(stat.stdout || '');
+  return sendJson(res, 200, { ok: boot.code === 0, authenticated, profile, log });
+}
+
 async function runDetail(root, sid, runId) {
   const runDir = path.join(root, sid, 'replays', runId);
   const [audit, status, events, latest] = await Promise.all([
@@ -1048,12 +1106,15 @@ async function serveArtifact(res, root, sid, runId, kind, stepId) {
 // child env. Resolves to { code, stdout, stderr, spawnError }. A missing
 // binary surfaces as spawnError (→ 500) rather than a fake exit code.
 function makeCliRunner({ bin, env, cwd }) {
-  return function runCli(args) {
+  // extraEnv: per-call env overrides (e.g. an environment's connection config
+  // passed to an auth plugin during bootstrap). Merged over the fixed childEnv.
+  return function runCli(args, extraEnv) {
+    const callEnv = extraEnv ? { ...env, ...extraEnv } : env;
     return new Promise((resolve) => {
       execFile(
         bin,
         args,
-        { env, cwd, maxBuffer: 32 * 1024 * 1024 },
+        { env: callEnv, cwd, maxBuffer: 32 * 1024 * 1024 },
         (err, stdout, stderr) => {
           if (err && typeof err.code === 'string') {
             // Spawn failure (ENOENT, EACCES, …) — not a process exit.
@@ -2011,6 +2072,16 @@ function createRequestHandler(root, deps, chat) {
       // Personas (login identities → --profile) and environments (target
       // values → --param) — flat run-config records under <root>/_personas,
       // <root>/_environments.
+      // Bootstrap a persona's login for an environment (needs deps.runCli).
+      if (
+        segAll[0] === 'api' &&
+        segAll[1] === 'personas' &&
+        segAll[3] === 'connect' &&
+        segAll.length === 4 &&
+        req.method === 'POST'
+      ) {
+        return await handleConnect(req, res, root, decodeURIComponent(segAll[2]), deps);
+      }
       if (segAll[0] === 'api' && segAll[1] === 'personas') {
         return await handleSimpleRecords(req, res, root, segAll.slice(2), {
           dirname: '_personas',

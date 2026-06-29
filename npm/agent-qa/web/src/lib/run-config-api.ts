@@ -54,3 +54,21 @@ export function deleteEnvironment(id: string): Promise<{ ok: boolean }> {
 export function getPlugins(): Promise<{ available: boolean; plugins: PluginInfo[] }> {
   return getJson('/api/plugins')
 }
+
+// --- connect (bootstrap a persona's login for an environment) ---
+export interface ConnectStep {
+  step: string
+  code: number | null
+  stdout: string
+  stderr: string
+  spawnError: string | null
+}
+export interface ConnectResult {
+  ok: boolean
+  authenticated: boolean
+  profile: string
+  log: ConnectStep[]
+}
+export function connectPersona(personaId: string, environmentId: string): Promise<ConnectResult> {
+  return postJson(`/api/personas/${encodeURIComponent(personaId)}/connect`, { environmentId })
+}

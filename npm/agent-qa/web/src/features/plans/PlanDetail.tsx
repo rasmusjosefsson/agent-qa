@@ -3,6 +3,7 @@ import {
   ArrowLeftIcon,
   Loader2Icon,
   PlayIcon,
+  PlugZapIcon,
   RefreshCwIcon,
   SaveIcon,
   Trash2Icon,
@@ -24,7 +25,7 @@ import {
 import { getCases } from '@/lib/cases-api'
 import { getSets } from '@/lib/sets-api'
 import { deletePlan, getPlan, runPlan, upsertPlan } from '@/lib/plans-api'
-import { getPersonas, getEnvironments } from '@/lib/run-config-api'
+import { getPersonas, getEnvironments, connectPersona } from '@/lib/run-config-api'
 import type { CaseWithScenario } from '@/features/cases/types'
 import type { SetWithCount } from '@/features/sets/types'
 import type { PersonaRecord } from '@/features/personas/types'
@@ -237,6 +238,25 @@ export function PlanDetail({ id }: { id: string }) {
     }
   }
 
+  const connect = async () => {
+    if (!personaId || !envId) return
+    setBusy(true)
+    setErr('')
+    setRunMsg('')
+    try {
+      const r = await connectPersona(personaId, envId)
+      setRunMsg(
+        r.authenticated
+          ? `Connected — ${r.profile} is authenticated.`
+          : `Connect ran but ${r.profile} is not authenticated yet (check the auth plugin / secrets).`
+      )
+    } catch (e) {
+      setErr(String((e as Error).message || e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const exportXray = () => {
     if (xrayItems.length === 0) return
     const prompt = buildXrayExportPrompt(name.trim() || id, xrayItems, window.location.origin)
@@ -330,6 +350,16 @@ export function PlanDetail({ id }: { id: string }) {
           placeholder="default environment"
           options={environments.map((e) => ({ value: e.id, label: e.name }))}
         />
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 text-xs"
+          onClick={() => void connect()}
+          disabled={busy || !personaId || !envId}
+          title="Sign this persona in for the selected environment (profile-add → bootstrap)"
+        >
+          <PlugZapIcon /> Connect
+        </Button>
         {personas.length === 0 && environments.length === 0 && (
           <span className="text-[11px] opacity-70">
             — add Personas / Environments to pick a login or target
