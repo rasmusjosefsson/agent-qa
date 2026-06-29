@@ -849,15 +849,22 @@ function normalizePersona(id, body, existing) {
   };
 }
 
-// A "vault target": a command the workbench runs to fetch secrets, emitting
-// either a JSON object of {KEY:value} or dotenv KEY=VALUE lines. The command
-// (not the secret) is what's stored.
+// A "vault target". Two modes:
+//   'inline'  — plain key/value pairs typed in (stored locally on this machine).
+//   'command' — a command the workbench runs that prints secrets (nothing
+//               sensitive stored; for real vaults).
 function normalizeSecretSource(id, body, existing) {
   const now = Date.now();
+  const mode =
+    body.mode === 'inline' || body.mode === 'command'
+      ? body.mode
+      : existing?.mode ?? (body.command || existing?.command ? 'command' : 'inline');
   return {
     schema: 'secretsource/1',
     id,
     name: String(body.name ?? existing?.name ?? id),
+    mode,
+    entries: strMap(body.entries, existing?.entries),
     command: String(body.command ?? existing?.command ?? ''),
     description: String(body.description ?? existing?.description ?? ''),
     createdAt: existing?.createdAt ?? now,
@@ -1102,13 +1109,18 @@ async function handleConnect(req, res, root, personaId, deps) {
     const src = await readJson(
       path.join(root, '_secretsources', persona.secretSourceId, 'secretsource.json')
     );
-    if (src && src.command) {
-      const sec = await runSecretSourceCommand(src.command);
-      log.push({ step: 'secret-source', code: sec.ok ? 0 : 1, stdout: '', stderr: sec.ok ? '' : sec.error, spawnError: null });
-      if (!sec.ok) {
-        return sendJson(res, 200, { ok: false, authenticated: false, profile, log });
+    if (src) {
+      if (src.mode === 'command') {
+        const sec = await runSecretSourceCommand(src.command);
+        log.push({ step: 'secret-source', code: sec.ok ? 0 : 1, stdout: '', stderr: sec.ok ? '' : sec.error, spawnError: null });
+        if (!sec.ok) {
+          return sendJson(res, 200, { ok: false, authenticated: false, profile, log });
+        }
+        Object.assign(extraEnv, sec.env);
+      } else {
+        // inline key/value entries
+        Object.assign(extraEnv, src.entries || {});
       }
-      Object.assign(extraEnv, sec.env);
     }
   }
   const step = async (label, args) => {

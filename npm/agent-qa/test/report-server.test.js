@@ -800,6 +800,14 @@ test('secret source (vault target) fetches creds + injects them at connect', asy
   assert.equal(bootCall.extraEnv.ACME_TOKEN, 'sekret');
   assert.equal(bootCall.extraEnv.ACME_USER, 'qa');
 
+  // inline mode: typed key/value entries are injected directly (no command)
+  await j('POST', '/api/secret-sources/inline', { name: 'Inline', mode: 'inline', entries: { INLINE_KEY: 'iv' } });
+  await j('POST', '/api/personas/admin', { name: 'Admin', profile: 'admin-user', secretSourceId: 'inline' });
+  calls.length = 0;
+  await j('POST', '/api/personas/admin/connect', { environmentId: 'staging' });
+  const inlineBoot = calls.find((c) => c.args[0] === 'profile-bootstrap');
+  assert.equal(inlineBoot.extraEnv.INLINE_KEY, 'iv');
+
   // a failing source command surfaces as a connect failure, no bootstrap
   await j('POST', '/api/secret-sources/bad', { name: 'Bad', command: 'exit 3' });
   await j('POST', '/api/personas/admin', { name: 'Admin', profile: 'admin-user', secretSourceId: 'bad' });

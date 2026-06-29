@@ -326,10 +326,17 @@ function SecretSourceDialog({
   onSaved: () => void
 }) {
   const [name, setName] = useState(source?.name ?? '')
+  const [mode, setMode] = useState<'inline' | 'command'>(source?.mode ?? 'inline')
+  const [rows, setRows] = useState<{ k: string; v: string }[]>(
+    source ? Object.entries(source.entries ?? {}).map(([k, v]) => ({ k, v })) : [{ k: '', v: '' }]
+  )
   const [command, setCommand] = useState(source?.command ?? '')
   const [description, setDescription] = useState(source?.description ?? '')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+
+  const setRow = (i: number, patch: Partial<{ k: string; v: string }>) =>
+    setRows((prev) => prev.map((r, j) => (j === i ? { ...r, ...patch } : r)))
 
   const save = async () => {
     const n = name.trim()
@@ -337,7 +344,9 @@ function SecretSourceDialog({
     setBusy(true)
     try {
       const id = source?.id ?? slugify(n)
-      await upsertSecretSource(id, { name: n, command, description })
+      const entries: Record<string, string> = {}
+      for (const { k, v } of rows) if (k.trim()) entries[k.trim()] = v
+      await upsertSecretSource(id, { name: n, mode, entries, command, description })
       onSaved()
     } catch (e) {
       setErr(String((e as Error).message || e))
@@ -350,31 +359,73 @@ function SecretSourceDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{source ? 'Edit vault target' : 'New vault target'}</DialogTitle>
-          <DialogDescription>
-            A command that prints secrets — JSON <code>{'{KEY:value}'}</code> or <code>KEY=VALUE</code>{' '}
-            lines. The command is stored, never the secrets.
-          </DialogDescription>
+          <DialogDescription>Secrets passed to the auth plugin at run time.</DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div className="space-y-2">
             <Label htmlFor="s-name">Name</Label>
-            <Input id="s-name" autoFocus placeholder="e.g. staging-vault" value={name} onChange={(e) => setName(e.target.value)} />
+            <Input id="s-name" autoFocus placeholder="e.g. staging-creds" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="s-cmd">Fetch command</Label>
-            <Textarea
-              id="s-cmd"
-              rows={3}
-              className="font-mono text-xs"
-              placeholder={`vault kv get -format=json secret/qa/staging | jq -r '.data.data | to_entries[] | "\\(.key)=\\(.value)"'`}
-              value={command}
-              onChange={(e) => setCommand(e.target.value)}
-            />
-            <p className="text-[11px] text-muted-foreground">
-              Runs with the server's environment (so an ambient vault token works). Output is parsed
-              into env vars passed to the auth plugin.
-            </p>
+
+          <div className="grid grid-cols-2 gap-2">
+            {(['inline', 'command'] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setMode(m)}
+                className={`rounded-md border px-3 py-2 text-left text-xs transition-colors ${
+                  mode === m ? 'border-primary bg-primary/10' : 'border-border hover:bg-muted/40'
+                }`}
+              >
+                <div className="font-medium">{m === 'inline' ? 'Key / value' : 'Command'}</div>
+                <div className="mt-0.5 text-muted-foreground">
+                  {m === 'inline' ? 'Type the secrets in' : 'Fetch from a vault'}
+                </div>
+              </button>
+            ))}
           </div>
+
+          {mode === 'inline' ? (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label>Secrets</Label>
+                <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setRows((p) => [...p, { k: '', v: '' }])}>
+                  <PlusIcon /> Add
+                </Button>
+              </div>
+              {rows.map((r, i) => (
+                <div key={i} className="flex items-center gap-1.5">
+                  <Input className="h-8 flex-1 font-mono text-xs" placeholder="KEY" value={r.k} onChange={(e) => setRow(i, { k: e.target.value })} />
+                  <Input className="h-8 flex-1 font-mono text-xs" type="password" placeholder="value" value={r.v} onChange={(e) => setRow(i, { v: e.target.value })} />
+                  <Button variant="ghost" size="icon" className="size-8 shrink-0" onClick={() => setRows((p) => p.filter((_, j) => j !== i))}>
+                    <Trash2Icon className="size-4" />
+                  </Button>
+                </div>
+              ))}
+              <p className="text-[11px] text-muted-foreground">
+                Stored locally on this machine. Keys are env vars the auth plugin reads — e.g.{' '}
+                <code>AGENT_QA_PROFILE_ADMIN_EMAIL</code>, <code>AGENT_QA_PROFILE_ADMIN_PASSWORD</code>,
+                plus any client id / token your plugin needs.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <Label htmlFor="s-cmd">Fetch command</Label>
+              <Textarea
+                id="s-cmd"
+                rows={3}
+                className="font-mono text-xs"
+                placeholder={`vault kv get -format=json secret/qa/staging | jq -r '.data.data | to_entries[] | "\\(.key)=\\(.value)"'`}
+                value={command}
+                onChange={(e) => setCommand(e.target.value)}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Prints JSON <code>{'{KEY:value}'}</code> or <code>KEY=VALUE</code> lines. Runs with the
+                server's env (so an ambient vault token works); secrets aren't stored.
+              </p>
+            </div>
+          )}
+
           <div className="space-y-2">
             <Label htmlFor="s-desc">Notes</Label>
             <Textarea id="s-desc" rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />

@@ -23,6 +23,8 @@ export interface SecretSourceRecord {
   schema: 'secretsource/1'
   id: string
   name: string
+  mode: 'inline' | 'command'
+  entries: Record<string, string>
   command: string
   description: string
   createdAt: number
