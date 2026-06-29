@@ -644,30 +644,62 @@ test('persona + environment CRUD (run-config records)', async (t) => {
       body: body ? JSON.stringify(body) : undefined,
     });
 
-  // personas: upsert seals persona/1, list, delete
+  // personas: upsert seals persona/1 incl. a credentials block, list, delete
   let r = await (await j('GET', '/api/personas')).json();
   assert.deepEqual(r.personas, []);
   r = await (
-    await j('POST', '/api/personas/admin', { name: 'Admin', profile: 'admin-user' })
+    await j('POST', '/api/personas/admin', {
+      name: 'Admin',
+      profile: 'admin-user',
+      credentials: { envPrefix: 'AGENT_QA_PROFILE_ADMIN' },
+    })
   ).json();
   assert.equal(r.persona.schema, 'persona/1');
   assert.equal(r.persona.profile, 'admin-user');
+  assert.deepEqual(r.persona.credentials, { envPrefix: 'AGENT_QA_PROFILE_ADMIN' });
   assert.ok(fs.existsSync(path.join(fx.root, '_personas', 'admin', 'persona.json')));
 
-  // environments: params coerced to strings
+  // environments: params + auth.config coerced to strings, auth block sealed
   r = await (
     await j('POST', '/api/environments/staging', {
       name: 'Staging',
       baseUrl: 'https://staging.example.com',
       params: { region: 'eu', flag: true },
+      auth: { plugin: 'agent-qa-plugin-acme', loginUrl: 'https://staging.example.com/sso', config: { tenant: 7 } },
     })
   ).json();
   assert.equal(r.environment.schema, 'environment/1');
   assert.deepEqual(r.environment.params, { region: 'eu', flag: 'true' });
+  assert.equal(r.environment.auth.plugin, 'agent-qa-plugin-acme');
+  assert.deepEqual(r.environment.auth.config, { tenant: '7' });
 
   // listed + unsafe id rejected + delete
   assert.equal((await (await j('GET', '/api/environments')).json()).environments.length, 1);
   assert.equal((await j('POST', '/api/personas/..%2Fevil', {})).status, 400);
   assert.equal((await j('POST', '/api/personas/admin/delete')).status, 200);
   assert.ok(!fs.existsSync(path.join(fx.root, '_personas', 'admin')));
+});
+
+test('GET /api/plugins reports discovered auth plugins (read-only)', async (t) => {
+  const fx = makeFixture();
+
+  // no CLI resolved → graceful "not available", not an error
+  let booted = await boot(fx.root);
+  let res = await (await fetch(`${booted.base}/api/plugins`)).json();
+  assert.deepEqual(res, { available: false, plugins: [] });
+  booted.server.close();
+
+  // with a runCli, parses `plugins list --json`
+  const deps = {
+    runCli: async (args) => ({
+      stdout: args.join(' ') === 'plugins list --json' ? '[{"kind":"auth","name":"acme"}]' : '[]',
+      stderr: '',
+      code: 0,
+    }),
+  };
+  booted = await boot(fx.root, deps);
+  t.after(() => booted.server.close());
+  res = await (await fetch(`${booted.base}/api/plugins`)).json();
+  assert.equal(res.available, true);
+  assert.deepEqual(res.plugins, [{ kind: 'auth', name: 'acme' }]);
 });

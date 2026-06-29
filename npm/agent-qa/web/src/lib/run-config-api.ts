@@ -1,7 +1,7 @@
 // web/src/lib/run-config-api.ts
 // Typed wrappers for the /api/personas and /api/environments record surfaces.
 import type { PersonaRecord } from '@/features/personas/types'
-import type { EnvironmentRecord } from '@/features/environments/types'
+import type { EnvironmentRecord, PluginInfo } from '@/features/environments/types'
 
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(path, { headers: { accept: 'application/json' } })
@@ -48,4 +48,9 @@ export function upsertEnvironment(
 }
 export function deleteEnvironment(id: string): Promise<{ ok: boolean }> {
   return postJson(`/api/environments/${encodeURIComponent(id)}/delete`, {})
+}
+
+// --- discovered auth plugins (read-only) ---
+export function getPlugins(): Promise<{ available: boolean; plugins: PluginInfo[] }> {
+  return getJson('/api/plugins')
 }

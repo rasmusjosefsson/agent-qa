@@ -815,14 +815,30 @@ function runOptsFromBody(body) {
 //
 // Flat JSON records under <root>/_personas and <root>/_environments. A persona
 // names a login identity (its `profile` is the value passed to `--profile`); an
-// environment names a target (its `baseUrl` + `params` become `--param`s).
+// environment names a target (its `baseUrl` + `params` become `--param`s). Both
+// carry a vendor-neutral connection block so a downstream auth plugin can sign
+// in: the environment names the plugin + login entry; the persona names the
+// env-var prefix holding its secrets (secrets never live here).
+function strMap(src, fallback) {
+  const out = {};
+  const obj = src && typeof src === 'object' ? src : fallback && typeof fallback === 'object' ? fallback : {};
+  for (const [k, v] of Object.entries(obj)) if (k) out[String(k)] = String(v);
+  return out;
+}
+
 function normalizePersona(id, body, existing) {
   const now = Date.now();
+  const cred = body.credentials || existing?.credentials || {};
   return {
     schema: 'persona/1',
     id,
     name: String(body.name ?? existing?.name ?? id),
     profile: String(body.profile ?? existing?.profile ?? ''),
+    // Where this persona's secrets come from — an env-var prefix
+    // (e.g. AGENT_QA_PROFILE_ADMIN_*), resolved by the auth plugin.
+    credentials: {
+      envPrefix: String(cred.envPrefix ?? ''),
+    },
     description: String(body.description ?? existing?.description ?? ''),
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
@@ -831,15 +847,22 @@ function normalizePersona(id, body, existing) {
 
 function normalizeEnvironment(id, body, existing) {
   const now = Date.now();
-  const src = body.params && typeof body.params === 'object' ? body.params : existing?.params ?? {};
-  const params = {};
-  for (const [k, v] of Object.entries(src)) if (k) params[String(k)] = String(v);
+  const params = strMap(body.params, existing?.params);
+  const auth = body.auth || existing?.auth || {};
   return {
     schema: 'environment/1',
     id,
     name: String(body.name ?? existing?.name ?? id),
     baseUrl: String(body.baseUrl ?? existing?.baseUrl ?? ''),
     params,
+    // Connection: which auth plugin signs in here + free-form config it reads.
+    // The plugin binary is supplied downstream (agent-qa.toml [plugins]); the
+    // workbench only references it by name and never embeds vendor logic.
+    auth: {
+      plugin: String(auth.plugin ?? ''),
+      loginUrl: String(auth.loginUrl ?? ''),
+      config: strMap(auth.config, existing?.auth?.config),
+    },
     description: String(body.description ?? existing?.description ?? ''),
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
@@ -2003,6 +2026,23 @@ function createRequestHandler(root, deps, chat) {
           plural: 'environments',
           normalize: normalizeEnvironment,
         });
+      }
+
+      // Read-only auth-plugin discovery for the run-config UI. Shells
+      // `plugins list --json`; reports availability instead of erroring when no
+      // CLI is resolved so the UI can show a plain "not configured" state.
+      if (segAll[0] === 'api' && segAll[1] === 'plugins' && segAll.length === 2 && req.method === 'GET') {
+        if (!deps || typeof deps.runCli !== 'function') {
+          return sendJson(res, 200, { available: false, plugins: [] });
+        }
+        const r = await deps.runCli(['plugins', 'list', '--json']);
+        let plugins = [];
+        try {
+          plugins = JSON.parse(r.stdout || '[]');
+        } catch {
+          plugins = [];
+        }
+        return sendJson(res, 200, { available: true, plugins });
       }
 
       // Trigger a replay of a recorded scenario (POST). Spawns the Rust CLI

@@ -151,6 +151,7 @@ function PersonaDialog({
 }) {
   const [name, setName] = useState(persona?.name ?? '')
   const [profile, setProfile] = useState(persona?.profile ?? '')
+  const [envPrefix, setEnvPrefix] = useState(persona?.credentials?.envPrefix ?? '')
   const [description, setDescription] = useState(persona?.description ?? '')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -161,7 +162,12 @@ function PersonaDialog({
     setBusy(true)
     try {
       const id = persona?.id ?? slugify(n)
-      await upsertPersona(id, { name: n, profile: profile.trim(), description })
+      await upsertPersona(id, {
+        name: n,
+        profile: profile.trim(),
+        credentials: { envPrefix: envPrefix.trim() },
+        description,
+      })
       onSaved()
     } catch (e) {
       setErr(String((e as Error).message || e))
@@ -193,6 +199,19 @@ function PersonaDialog({
             />
             <p className="text-[11px] text-muted-foreground">
               A registered agent-qa auth profile (see <code>agent-qa profile-list</code>).
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="p-env">Secrets env prefix</Label>
+            <Input
+              id="p-env"
+              placeholder="e.g. AGENT_QA_PROFILE_ADMIN"
+              value={envPrefix}
+              onChange={(e) => setEnvPrefix(e.target.value)}
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Env-var prefix the auth plugin reads this login's secrets from — no secrets are stored
+              here.
             </p>
           </div>
           <div className="space-y-2">

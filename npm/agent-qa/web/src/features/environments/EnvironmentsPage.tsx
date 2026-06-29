@@ -12,8 +12,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { getEnvironments, upsertEnvironment, deleteEnvironment } from '@/lib/run-config-api'
-import type { EnvironmentRecord } from './types'
+import { getEnvironments, upsertEnvironment, deleteEnvironment, getPlugins } from '@/lib/run-config-api'
+import type { EnvironmentRecord, PluginInfo } from './types'
 
 function slugify(s: string): string {
   return (
@@ -27,6 +27,7 @@ function slugify(s: string): string {
 
 export function EnvironmentsPage() {
   const [envs, setEnvs] = useState<EnvironmentRecord[] | null>(null)
+  const [plugins, setPlugins] = useState<PluginInfo[]>([])
   const [err, setErr] = useState('')
   const [editing, setEditing] = useState<EnvironmentRecord | 'new' | null>(null)
 
@@ -36,6 +37,9 @@ export function EnvironmentsPage() {
       .catch((e) => setErr(String(e.message || e)))
   useEffect(() => {
     void load()
+    getPlugins()
+      .then((r) => setPlugins(r.plugins))
+      .catch(() => {})
   }, [])
 
   const remove = async (id: string) => {
@@ -62,6 +66,19 @@ export function EnvironmentsPage() {
           {err}
         </div>
       )}
+
+      <div className="border-b border-border bg-muted/20 px-5 py-1.5 text-[11px] text-muted-foreground">
+        {plugins.length > 0 ? (
+          <span>
+            Auth plugins discovered: {plugins.map((p) => p.name || p.kind || p.path).join(', ')}
+          </span>
+        ) : (
+          <span>
+            No auth plugins discovered — register one in <code>agent-qa.toml</code> <code>[plugins]</code> to
+            sign in to a real app.
+          </span>
+        )}
+      </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
         {envs === null ? (
@@ -158,11 +175,18 @@ function EnvironmentDialog({
   const [rows, setRows] = useState<{ k: string; v: string }[]>(
     env ? Object.entries(env.params).map(([k, v]) => ({ k, v })) : []
   )
+  const [authPlugin, setAuthPlugin] = useState(env?.auth?.plugin ?? '')
+  const [authLoginUrl, setAuthLoginUrl] = useState(env?.auth?.loginUrl ?? '')
+  const [authRows, setAuthRows] = useState<{ k: string; v: string }[]>(
+    env ? Object.entries(env.auth?.config ?? {}).map(([k, v]) => ({ k, v })) : []
+  )
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
 
   const setRow = (i: number, patch: Partial<{ k: string; v: string }>) =>
     setRows((prev) => prev.map((r, j) => (j === i ? { ...r, ...patch } : r)))
+  const setAuthRow = (i: number, patch: Partial<{ k: string; v: string }>) =>
+    setAuthRows((prev) => prev.map((r, j) => (j === i ? { ...r, ...patch } : r)))
 
   const save = async () => {
     const n = name.trim()
@@ -172,7 +196,15 @@ function EnvironmentDialog({
       const id = env?.id ?? slugify(n)
       const params: Record<string, string> = {}
       for (const { k, v } of rows) if (k.trim()) params[k.trim()] = v
-      await upsertEnvironment(id, { name: n, baseUrl: baseUrl.trim(), params, description })
+      const config: Record<string, string> = {}
+      for (const { k, v } of authRows) if (k.trim()) config[k.trim()] = v
+      await upsertEnvironment(id, {
+        name: n,
+        baseUrl: baseUrl.trim(),
+        params,
+        auth: { plugin: authPlugin.trim(), loginUrl: authLoginUrl.trim(), config },
+        description,
+      })
       onSaved()
     } catch (e) {
       setErr(String((e as Error).message || e))
@@ -240,6 +272,52 @@ function EnvironmentDialog({
                 ))}
               </div>
             )}
+          </div>
+          <div className="space-y-2 rounded-md border border-border p-3">
+            <Label className="text-xs uppercase tracking-wide text-muted-foreground">
+              Connection (optional)
+            </Label>
+            <div className="space-y-2">
+              <Input
+                placeholder="auth plugin name (agent-qa.toml [plugins] auth)"
+                value={authPlugin}
+                onChange={(e) => setAuthPlugin(e.target.value)}
+              />
+              <Input
+                placeholder="login / SSO entry URL"
+                value={authLoginUrl}
+                onChange={(e) => setAuthLoginUrl(e.target.value)}
+              />
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-muted-foreground">Plugin config</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => setAuthRows((prev) => [...prev, { k: '', v: '' }])}
+                >
+                  <PlusIcon /> Add
+                </Button>
+              </div>
+              {authRows.map((r, i) => (
+                <div key={i} className="flex items-center gap-1.5">
+                  <Input className="h-8 flex-1" placeholder="key" value={r.k} onChange={(e) => setAuthRow(i, { k: e.target.value })} />
+                  <Input className="h-8 flex-1" placeholder="value" value={r.v} onChange={(e) => setAuthRow(i, { v: e.target.value })} />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-8 shrink-0"
+                    onClick={() => setAuthRows((prev) => prev.filter((_, j) => j !== i))}
+                  >
+                    <XIcon className="size-4" />
+                  </Button>
+                </div>
+              ))}
+              <p className="text-[11px] text-muted-foreground">
+                Names a downstream auth plugin that signs in here. The plugin binary lives in your
+                own repo — nothing vendor-specific is stored in the workbench.
+              </p>
+            </div>
           </div>
           <div className="space-y-2">
             <Label htmlFor="e-desc">Notes</Label>
