@@ -152,7 +152,14 @@ export function EnvironmentsPage() {
         </div>
         <div className="mt-1 text-muted-foreground">
           {plugins.length > 0
-            ? `Discovered: ${plugins.map((p) => p.name || p.kind || p.path).join(', ')}`
+            ? `Discovered: ${plugins
+                .map((p) => {
+                  const base = (p.binary || '').split('/').pop() || '?'
+                  const kinds = (p.kinds || []).join(', ')
+                  const bad = p.pingFailed ? ' — ping failed' : ''
+                  return kinds ? `${base} [${kinds}]${bad}` : `${base}${bad}`
+                })
+                .join(', ')}`
             : 'None loaded yet — add the path to your auth-plugin binary above.'}
         </div>
       </div>

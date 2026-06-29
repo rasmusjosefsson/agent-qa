@@ -26,8 +26,9 @@ export interface EnvironmentRecord {
 
 // One discovered auth plugin (shape from `agent-qa plugins list --json`).
 export interface PluginInfo {
-  kind?: string
-  name?: string
-  path?: string
+  binary?: string
   source?: string
+  kinds?: string[]
+  declared?: boolean
+  pingFailed?: boolean
 }
