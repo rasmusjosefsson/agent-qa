@@ -753,6 +753,51 @@ test('POST /api/personas/:id/connect bootstraps a profile via the auth plugin', 
   assert.equal((await j('POST', '/api/personas/admin/connect', { environmentId: 'noplug' })).status, 400);
 });
 
+test('secret source (vault target) fetches creds + injects them at connect', async (t) => {
+  const fx = makeFixture();
+  const calls = [];
+  const deps = {
+    runCli: async (args, extraEnv) => {
+      calls.push({ args, extraEnv });
+      if (args[0] === 'profile-status') return { code: 0, stdout: 'authenticated', stderr: '' };
+      return { code: 0, stdout: 'ok', stderr: '' };
+    },
+  };
+  const { server, base } = await boot(fx.root, deps);
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  // a vault target that prints KEY=VALUE lines (no real vault needed)
+  let r = await (
+    await j('POST', '/api/secret-sources/vault', {
+      name: 'Vault',
+      command: 'printf "ACME_TOKEN=sekret\\nACME_USER=qa\\n"',
+    })
+  ).json();
+  assert.equal(r.secretsource.schema, 'secretsource/1');
+  assert.ok(fs.existsSync(path.join(fx.root, '_secretsources', 'vault', 'secretsource.json')));
+
+  // a persona that pulls from it + an env with a plugin
+  await j('POST', '/api/personas/admin', { name: 'Admin', profile: 'admin-user', secretSourceId: 'vault' });
+  await j('POST', '/api/environments/staging', { name: 'Staging', auth: { plugin: 'agent-qa-plugin-acme' } });
+
+  const res = await j('POST', '/api/personas/admin/connect', { environmentId: 'staging' });
+  assert.equal(res.status, 200);
+  // the fetched secrets reached the bootstrap call's env
+  const bootCall = calls.find((c) => c.args[0] === 'profile-bootstrap');
+  assert.equal(bootCall.extraEnv.ACME_TOKEN, 'sekret');
+  assert.equal(bootCall.extraEnv.ACME_USER, 'qa');
+
+  // a failing source command surfaces as a connect failure, no bootstrap
+  await j('POST', '/api/secret-sources/bad', { name: 'Bad', command: 'exit 3' });
+  await j('POST', '/api/personas/admin', { name: 'Admin', profile: 'admin-user', secretSourceId: 'bad' });
+  calls.length = 0;
+  const r2 = await (await j('POST', '/api/personas/admin/connect', { environmentId: 'staging' })).json();
+  assert.equal(r2.ok, false);
+  assert.ok(!calls.some((c) => c.args[0] === 'profile-bootstrap'));
+});
+
 test('plugin registry persists + injects AGENT_QA_PLUGINS into CLI calls', async (t) => {
   const fx = makeFixture();
   const calls = [];

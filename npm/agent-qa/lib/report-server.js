@@ -840,10 +840,82 @@ function normalizePersona(id, body, existing) {
     credentials: {
       envPrefix: String(cred.envPrefix ?? ''),
     },
+    // Optional secret source (a "vault target") to fetch secrets from at run
+    // time, so nobody exports passwords by hand.
+    secretSourceId: String(body.secretSourceId ?? existing?.secretSourceId ?? ''),
     description: String(body.description ?? existing?.description ?? ''),
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };
+}
+
+// A "vault target": a command the workbench runs to fetch secrets, emitting
+// either a JSON object of {KEY:value} or dotenv KEY=VALUE lines. The command
+// (not the secret) is what's stored.
+function normalizeSecretSource(id, body, existing) {
+  const now = Date.now();
+  return {
+    schema: 'secretsource/1',
+    id,
+    name: String(body.name ?? existing?.name ?? id),
+    command: String(body.command ?? existing?.command ?? ''),
+    description: String(body.description ?? existing?.description ?? ''),
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  };
+}
+
+// Run a secret-source command; parse stdout into env vars. Runs with the
+// server's own env (so an ambient vault token etc. is available).
+function parseSecretEnv(text) {
+  const out = {};
+  const t = String(text || '').trim();
+  if (t.startsWith('{')) {
+    try {
+      const o = JSON.parse(t);
+      if (o && typeof o === 'object') {
+        for (const [k, v] of Object.entries(o)) out[String(k)] = String(v);
+        return out;
+      }
+    } catch {
+      /* fall through to line parsing */
+    }
+  }
+  for (const line of t.split('\n')) {
+    const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
+    if (m) {
+      let v = m[2];
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1);
+      }
+      out[m[1]] = v;
+    }
+  }
+  return out;
+}
+
+function runSecretSourceCommand(command) {
+  return new Promise((resolve) => {
+    if (!command || !command.trim()) return resolve({ ok: true, env: {} });
+    execFile(
+      'sh',
+      ['-c', command],
+      { env: process.env, cwd: process.cwd(), timeout: 60000, maxBuffer: 4 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err && typeof err.code === 'string') {
+          return resolve({ ok: false, error: `secret source failed: ${err.message}` });
+        }
+        const code = err && typeof err.code === 'number' ? err.code : 0;
+        if (code !== 0) {
+          return resolve({
+            ok: false,
+            error: String(stderr || stdout || 'secret source exited non-zero').slice(-1000),
+          });
+        }
+        resolve({ ok: true, env: parseSecretEnv(stdout) });
+      }
+    );
+  });
 }
 
 function normalizeEnvironment(id, body, existing) {
@@ -1011,6 +1083,22 @@ async function handleConnect(req, res, root, personaId, deps) {
   }
 
   const log = [];
+
+  // Pull secrets from the persona's secret source (vault target), if any, and
+  // merge them into the plugin's env — so credentials never need exporting.
+  if (persona.secretSourceId && isSafeSegment(persona.secretSourceId)) {
+    const src = await readJson(
+      path.join(root, '_secretsources', persona.secretSourceId, 'secretsource.json')
+    );
+    if (src && src.command) {
+      const sec = await runSecretSourceCommand(src.command);
+      log.push({ step: 'secret-source', code: sec.ok ? 0 : 1, stdout: '', stderr: sec.ok ? '' : sec.error, spawnError: null });
+      if (!sec.ok) {
+        return sendJson(res, 200, { ok: false, authenticated: false, profile, log });
+      }
+      Object.assign(extraEnv, sec.env);
+    }
+  }
   const step = async (label, args) => {
     const r = await deps.runCli(args, extraEnv);
     log.push({
@@ -2133,6 +2221,16 @@ function createRequestHandler(root, deps, chat) {
           key: 'environment',
           plural: 'environments',
           normalize: normalizeEnvironment,
+        });
+      }
+      // Secret sources ("vault targets") — a command per source that fetches
+      // secrets at run time. Flat records under <root>/_secretsources.
+      if (segAll[0] === 'api' && segAll[1] === 'secret-sources') {
+        return await handleSimpleRecords(req, res, root, segAll.slice(2), {
+          dirname: '_secretsources',
+          key: 'secretsource',
+          plural: 'secretSources',
+          normalize: normalizeSecretSource,
         });
       }
 
