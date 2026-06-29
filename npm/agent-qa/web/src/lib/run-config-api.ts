@@ -62,6 +62,13 @@ export function getPluginPaths(): Promise<{ paths: string[] }> {
 export function setPluginPaths(paths: string[]): Promise<{ ok: boolean; paths: string[] }> {
   return postJson('/api/config/plugins', { paths })
 }
+// Upload a downloaded plugin file → stored, made executable, and registered.
+export function importPlugin(
+  filename: string,
+  contentBase64: string
+): Promise<{ ok: boolean; path: string; paths: string[] }> {
+  return postJson('/api/config/plugins/import', { filename, contentBase64 })
+}
 
 // --- connect (bootstrap a persona's login for an environment) ---
 export interface ConnectStep {

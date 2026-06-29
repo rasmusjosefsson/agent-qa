@@ -2156,6 +2156,48 @@ function createRequestHandler(root, deps, chat) {
         return sendJson(res, 200, { available: true, plugins });
       }
 
+      // Import a downloaded plugin file: save it under <root>/_config/plugins,
+      // mark it executable, and register its path. Body { filename, contentBase64 }.
+      if (
+        segAll[0] === 'api' &&
+        segAll[1] === 'config' &&
+        segAll[2] === 'plugins' &&
+        segAll[3] === 'import' &&
+        segAll.length === 4 &&
+        req.method === 'POST'
+      ) {
+        let body;
+        try {
+          body = await readJsonBody(req, 16 * 1024 * 1024);
+        } catch (e) {
+          return badRequest(res, String((e && e.message) || e));
+        }
+        // basename + safe charset; no traversal, no hidden/dotfiles.
+        const safe = String(body.filename || '')
+          .replace(/^.*[\\/]/, '')
+          .replace(/[^A-Za-z0-9._-]/g, '_')
+          .replace(/^\.+/, '');
+        if (!safe) return badRequest(res, 'invalid filename');
+        if (!body.contentBase64) return badRequest(res, 'missing file content');
+        let buf;
+        try {
+          buf = Buffer.from(String(body.contentBase64), 'base64');
+        } catch {
+          return badRequest(res, 'invalid base64 content');
+        }
+        const dir = path.join(root, '_config', 'plugins');
+        await fsp.mkdir(dir, { recursive: true });
+        const dest = path.join(dir, safe);
+        await fsp.writeFile(dest, buf);
+        try {
+          await fsp.chmod(dest, 0o755);
+        } catch {
+          /* best-effort on platforms without chmod */
+        }
+        const paths = await writePluginPaths(root, [...(await readPluginPaths(root)), dest]);
+        return sendJson(res, 200, { ok: true, path: dest, paths });
+      }
+
       // UI-managed plugin registry — list/set the auth-plugin paths the
       // workbench injects as AGENT_QA_PLUGINS. Pure JSON under <root>/_config.
       if (segAll[0] === 'api' && segAll[1] === 'config' && segAll[2] === 'plugins' && segAll.length === 3) {

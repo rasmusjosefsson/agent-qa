@@ -787,3 +787,27 @@ test('plugin registry persists + injects AGENT_QA_PLUGINS into CLI calls', async
   const bootCall = calls.find((c) => c.args[0] === 'profile-bootstrap');
   assert.equal(bootCall.extraEnv.AGENT_QA_PLUGINS, '/p/auth:/p/policy');
 });
+
+test('POST /api/config/plugins/import saves, chmods, and registers a plugin file', async (t) => {
+  const fx = makeFixture();
+  const { server, base } = await boot(fx.root);
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  const content = '#!/bin/sh\necho hi\n';
+  const r = await (
+    await j('POST', '/api/config/plugins/import', {
+      filename: '../evil/agent-qa-plugin-x', // path stripped to basename
+      contentBase64: Buffer.from(content).toString('base64'),
+    })
+  ).json();
+  const dest = path.join(fx.root, '_config', 'plugins', 'agent-qa-plugin-x');
+  assert.equal(r.path, dest);
+  assert.deepEqual(r.paths, [dest]); // auto-registered
+  assert.equal(fs.readFileSync(dest, 'utf8'), content);
+  assert.ok(fs.statSync(dest).mode & 0o100); // executable bit set
+
+  // bad input rejected
+  assert.equal((await j('POST', '/api/config/plugins/import', { filename: 'x' })).status, 400);
+});

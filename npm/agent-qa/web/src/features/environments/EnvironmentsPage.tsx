@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { PlusIcon, Loader2Icon, GlobeIcon, Trash2Icon, XIcon } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { PlusIcon, Loader2Icon, GlobeIcon, Trash2Icon, XIcon, UploadIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -19,6 +19,7 @@ import {
   getPlugins,
   getPluginPaths,
   setPluginPaths,
+  importPlugin,
 } from '@/lib/run-config-api'
 import type { EnvironmentRecord, PluginInfo } from './types'
 
@@ -66,6 +67,22 @@ export function EnvironmentsPage() {
   const removePlugin = async (p: string) => {
     await setPluginPaths(paths.filter((x) => x !== p)).catch((e) => setErr(String(e.message || e)))
     void refreshPlugins()
+  }
+  const fileRef = useRef<HTMLInputElement | null>(null)
+  const onImportFile = async (file: File) => {
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const r = new FileReader()
+        r.onload = () => resolve(String(r.result))
+        r.onerror = () => reject(r.error)
+        r.readAsDataURL(file)
+      })
+      const b64 = dataUrl.split(',')[1] || ''
+      await importPlugin(file.name, b64)
+      void refreshPlugins()
+    } catch (e) {
+      setErr(String((e as Error).message || e))
+    }
   }
 
   const remove = async (id: string) => {
@@ -117,8 +134,21 @@ export function EnvironmentsPage() {
             className="min-w-[14rem] flex-1 rounded border border-border bg-background px-2 py-0.5 font-mono outline-none focus-visible:border-ring"
           />
           <Button variant="ghost" size="sm" className="h-6 px-2" onClick={() => void addPlugin()}>
-            <PlusIcon /> Add
+            <PlusIcon /> Add path
           </Button>
+          <Button variant="ghost" size="sm" className="h-6 px-2" onClick={() => fileRef.current?.click()}>
+            <UploadIcon /> Import file
+          </Button>
+          <input
+            ref={fileRef}
+            type="file"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              if (f) void onImportFile(f)
+              e.target.value = ''
+            }}
+          />
         </div>
         <div className="mt-1 text-muted-foreground">
           {plugins.length > 0
