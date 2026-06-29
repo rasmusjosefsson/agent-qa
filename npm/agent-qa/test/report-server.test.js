@@ -744,11 +744,22 @@ test('POST /api/personas/:id/connect bootstraps a profile via the auth plugin', 
     calls.map((c) => c.args[0]),
     ['profile-add', 'profile-bootstrap', 'profile-status']
   );
-  assert.deepEqual(calls[0].args, ['profile-add', 'admin-user', '--plugin', 'agent-qa-plugin-acme']);
+  // profile-add binds credential env-var names + the adapter-name preference;
+  // the plugin itself is discovered from the registry (no --plugin path).
+  assert.deepEqual(calls[0].args, [
+    'profile-add',
+    'admin-user',
+    '--email-var',
+    'AGENT_QA_PROFILE_ADMIN_USER_EMAIL',
+    '--password-var',
+    'AGENT_QA_PROFILE_ADMIN_USER_PASSWORD',
+    '--adapter',
+    'agent-qa-plugin-acme',
+  ]);
   assert.equal(calls[1].extraEnv.AGENT_QA_ENV_BASE_URL, 'https://s.example.com');
   assert.equal(calls[1].extraEnv.AGENT_QA_ENV_TENANT, '7');
 
-  // an environment with no auth plugin → 400
+  // no auth plugin (no registry entry + no env adapter) → 400
   await j('POST', '/api/environments/noplug', { name: 'NoPlug' });
   assert.equal((await j('POST', '/api/personas/admin/connect', { environmentId: 'noplug' })).status, 400);
 });

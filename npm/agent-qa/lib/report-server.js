@@ -1070,17 +1070,29 @@ async function handleConnect(req, res, root, personaId, deps) {
   if (envId && isSafeSegment(envId)) {
     env = await readJson(path.join(root, '_environments', envId, 'environment.json'));
   }
-  const plugin = env && env.auth && env.auth.plugin ? String(env.auth.plugin) : '';
-  if (!plugin) return badRequest(res, 'choose an environment with an auth plugin to connect');
+  const auth = (env && env.auth) || {};
+  // The plugin is discovered from the registry (AGENT_QA_PLUGINS); env.auth.plugin
+  // is an optional adapter-name preference. Require at least one registered plugin.
+  const pluginPaths = await readPluginPaths(root);
+  if (pluginPaths.length === 0 && !auth.plugin) {
+    return badRequest(res, 'register an auth plugin first (Environments → Auth plugins → Import)');
+  }
 
   // Surface the environment's connection config to the plugin via env vars,
   // plus the UI-registered plugin paths so the plugin is discoverable.
-  const extraEnv = { ...pluginsEnv(await readPluginPaths(root)) };
-  if (env.baseUrl) extraEnv.AGENT_QA_ENV_BASE_URL = String(env.baseUrl);
-  if (env.auth.loginUrl) extraEnv.AGENT_QA_ENV_LOGIN_URL = String(env.auth.loginUrl);
-  for (const [k, v] of Object.entries(env.auth.config || {})) {
+  const extraEnv = { ...pluginsEnv(pluginPaths) };
+  if (env && env.baseUrl) extraEnv.AGENT_QA_ENV_BASE_URL = String(env.baseUrl);
+  if (auth.loginUrl) extraEnv.AGENT_QA_ENV_LOGIN_URL = String(auth.loginUrl);
+  for (const [k, v] of Object.entries(auth.config || {})) {
     extraEnv[`AGENT_QA_ENV_${k.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`] = String(v);
   }
+
+  // Credential env-var names the auth plugin should read, derived from the
+  // persona's secrets prefix (registered via profile-add → passed in the auth
+  // request). Defaults keep a sensible pair when no prefix is set.
+  const prefix = (persona.credentials && persona.credentials.envPrefix) || 'AGENT_QA_PROFILE_' + profile.toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+  const emailVar = `${prefix}_EMAIL`;
+  const passwordVar = `${prefix}_PASSWORD`;
 
   const log = [];
 
@@ -1111,8 +1123,12 @@ async function handleConnect(req, res, root, personaId, deps) {
     return r;
   };
 
-  // profile-add is non-fatal (the profile may already be registered).
-  await step('profile-add', ['profile-add', profile, '--plugin', plugin]);
+  // Register the profile (idempotent): bind the credential env-var names and,
+  // if given, the adapter-name preference. The plugin itself is discovered from
+  // the registry. profile-add is non-fatal (may already be registered).
+  const addArgs = ['profile-add', profile, '--email-var', emailVar, '--password-var', passwordVar];
+  if (auth.plugin) addArgs.push('--adapter', String(auth.plugin));
+  await step('profile-add', addArgs);
   const boot = await step('profile-bootstrap', ['profile-bootstrap', profile]);
   const stat = await step('profile-status', ['profile-status', profile]);
   const authenticated = /authenticated/i.test(stat.stdout || '');
