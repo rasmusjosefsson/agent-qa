@@ -84,7 +84,7 @@ fn run_one(
                     .map(|s| format!(" ({s})"))
                     .unwrap_or_default()
             );
-            bootstrap_profile(name)
+            bootstrap_profile(name, session)
                 .with_context(|| format!("[{phase}#{idx}] useProfile: bootstrap {name}"))?;
             Ok(())
         }
@@ -363,15 +363,19 @@ fn reset_browser_state(session: &str) -> Result<()> {
 }
 
 /// Implementation of `EnvOp::UseProfile`. Shells out to
-/// `agent-qa profile-bootstrap <name>` (the same verb authors run
-/// at recording time) so replay reaches the same authenticated
-/// baseline. The bootstrap is idempotent — it no-ops when the
-/// session is already authenticated for the profile.
-fn bootstrap_profile(name: &str) -> Result<()> {
+/// `agent-qa profile-bootstrap <name> --session <replay session>` (the same
+/// verb authors run at recording time) so replay reaches the same
+/// authenticated baseline. Targeting the REPLAY session (not the profile's
+/// default `<name>-session`) is what makes this idempotent: the auth plugin
+/// probes that session first and no-ops if it is already signed in — so a
+/// replay against a session a host already authenticated (e.g. the workbench
+/// after `/connect`) needs no credentials. A fresh session still triggers a
+/// full `auth login`, which requires the profile's credentials in env.
+fn bootstrap_profile(name: &str, session: &str) -> Result<()> {
     use std::process::Command;
     let exe = std::env::current_exe().unwrap_or_else(|_| "agent-qa".into());
     let status = Command::new(exe)
-        .args(["profile-bootstrap", name])
+        .args(["profile-bootstrap", name, "--session", session])
         .status()
         .with_context(|| format!("spawn agent-qa profile-bootstrap {name}"))?;
     if !status.success() {
