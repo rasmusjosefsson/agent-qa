@@ -7,7 +7,7 @@ import {
   useTransition,
   type PointerEvent as ReactPointerEvent,
 } from 'react'
-import { Loader2Icon, PlusIcon, XIcon } from 'lucide-react'
+import { Loader2Icon, PlusIcon, XIcon, PlugZapIcon } from 'lucide-react'
 import { useChat } from './useChat'
 import BrowserPane from './BrowserPane'
 import { Message } from './components/Message'
@@ -26,6 +26,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { cn } from '@/lib/utils'
 import { useMediaQuery } from '@/lib/useMediaQuery'
+import { Button } from '@/components/ui/button'
 import {
   listChats,
   createChat,
@@ -34,6 +35,9 @@ import {
   type ChatMeta,
   type RecordingState,
 } from '@/lib/api'
+import { getPersonas, getEnvironments, connectPersonaToChat } from '@/lib/run-config-api'
+import type { PersonaRecord } from '@/features/personas/types'
+import type { EnvironmentRecord } from '@/features/environments/types'
 import { prefetchChatState, dropChatState } from '@/lib/resources'
 
 const SPLIT_KEY = 'aqa-chat-split'
@@ -365,6 +369,7 @@ function ChatConversation({
       className="flex min-h-0 min-w-0 flex-1 flex-col"
       style={isDesktop ? { flexBasis: `${leftPct}%`, flexGrow: 0, flexShrink: 0 } : undefined}
     >
+          <ConnectBar cid={cid} />
           <div
             ref={threadRef}
             onScroll={onScroll}
@@ -484,6 +489,124 @@ function ChatConversation({
         </div>
       </div>
     </div>
+  )
+}
+
+// Sign a persona into THIS chat's own browser session, so the agent operates an
+// already-authenticated page (no credentials in the agent's hands). Hidden when
+// no personas exist — keeps the chat clean for users who don't need auth.
+function ConnectBar({ cid }: { cid: string }) {
+  const [personas, setPersonas] = useState<PersonaRecord[]>([])
+  const [environments, setEnvironments] = useState<EnvironmentRecord[]>([])
+  const [personaId, setPersonaId] = useState('')
+  const [envId, setEnvId] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        const [pe, en] = await Promise.all([getPersonas(), getEnvironments()])
+        if (!alive) return
+        setPersonas(pe.personas)
+        setEnvironments(en.environments)
+        if (pe.personas.length === 1) setPersonaId(pe.personas[0].id)
+      } catch {
+        /* personas optional — bar stays hidden */
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  if (personas.length === 0) return null
+
+  const connect = async () => {
+    if (!personaId || busy) return
+    setBusy(true)
+    setMsg(null)
+    try {
+      const r = await connectPersonaToChat(cid, personaId, envId || undefined)
+      setMsg(
+        r.authenticated
+          ? { tone: 'ok', text: `Signed in as ${r.profile} — this chat's browser is authenticated.` }
+          : {
+              tone: 'err',
+              text: `Connect ran but ${r.profile} isn't authenticated yet (check the auth plugin / \`vault login\`).`,
+            }
+      )
+    } catch (e) {
+      setMsg({ tone: 'err', text: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border px-4 py-2 text-xs text-muted-foreground">
+      <span>Sign in as</span>
+      <ChatSelect
+        value={personaId}
+        onChange={setPersonaId}
+        placeholder="persona"
+        options={personas.map((p) => ({ value: p.id, label: p.name }))}
+      />
+      {environments.length > 0 && (
+        <>
+          <span>on</span>
+          <ChatSelect
+            value={envId}
+            onChange={setEnvId}
+            placeholder="default environment"
+            options={environments.map((e) => ({ value: e.id, label: e.name }))}
+          />
+        </>
+      )}
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-7 px-2 text-xs"
+        onClick={() => void connect()}
+        disabled={busy || !personaId}
+        title="Sign this persona into this chat's browser session (resolve credentials → profile-bootstrap)"
+      >
+        {busy ? <Loader2Icon className="size-3.5 animate-spin" /> : <PlugZapIcon className="size-3.5" />} Connect
+      </Button>
+      {msg && (
+        <span className={cn('text-[11px]', msg.tone === 'ok' ? 'text-emerald-400' : 'text-destructive')}>
+          {msg.text}
+        </span>
+      )}
+    </div>
+  )
+}
+
+function ChatSelect({
+  value,
+  onChange,
+  placeholder,
+  options,
+}: {
+  value: string
+  onChange: (v: string) => void
+  placeholder: string
+  options: { value: string; label: string }[]
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none focus-visible:border-ring"
+    >
+      <option value="">{placeholder}</option>
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </select>
   )
 }
 

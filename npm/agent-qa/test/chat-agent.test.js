@@ -331,6 +331,10 @@ test('AGENT_QA_PRIMER tells the agent it is in agent-qa, vendor-neutrally', asyn
   assert.match(p, /AGENT_BROWSER_SESSION/); // points at the bound session
   assert.match(p, /agent-qa skills get core/); // bootstraps the skill, like the terminal
   assert.match(p, /Never guess a/i); // host/route discipline
+  // Self-serve persona sign-in (no manual Connect click required).
+  assert.match(p, /AGENT_QA_BASE/);
+  assert.match(p, /\/connect/);
+  assert.match(p, /default/i);
   // Stays generic: no vendor/product names baked into our code.
   assert.doesNotMatch(p, /outreach/i);
 });

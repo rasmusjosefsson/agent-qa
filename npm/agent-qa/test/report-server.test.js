@@ -711,6 +711,8 @@ test('POST /api/personas/:id/connect bootstraps a profile via the auth plugin', 
   const deps = {
     runCli: async (args, extraEnv) => {
       calls.push({ args, extraEnv });
+      // simulate no CLI-discoverable auth plugin (agent-qa.toml / $PATH empty)
+      if (args[0] === 'plugins' && args[1] === 'path') return { code: 1, stdout: '', stderr: 'no plugin' };
       if (args[0] === 'profile-status') return { code: 0, stdout: 'admin-user: authenticated', stderr: '' };
       return { code: 0, stdout: 'ok', stderr: '' };
     },
@@ -754,6 +756,45 @@ test('POST /api/personas/:id/connect bootstraps a profile via the auth plugin', 
   // no auth plugin (no registry entry + no env adapter) → 400
   await j('POST', '/api/environments/noplug', { name: 'NoPlug' });
   assert.equal((await j('POST', '/api/personas/admin/connect', { environmentId: 'noplug' })).status, 400);
+});
+
+test("POST /api/chat/c/:id/connect bootstraps auth into THAT chat's own session", async (t) => {
+  const fx = makeFixture();
+  const calls = [];
+  const deps = {
+    chat: { hub: {} }, // chat available so a chat can be created
+    runCli: async (args) => {
+      calls.push(args);
+      if (args[0] === 'profile-status') return { code: 0, stdout: 'admin-user: authenticated', stderr: '' };
+      return { code: 0, stdout: 'ok', stderr: '' };
+    },
+  };
+  const booted = await boot(fx.root, deps);
+  t.after(() => booted.server.close());
+  const j = (m, p, b) =>
+    fetch(`${booted.base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  await j('POST', '/api/personas/admin', { name: 'Admin', profile: 'admin-user' });
+  await j('POST', '/api/environments/staging', { name: 'Staging', auth: { plugin: 'agent-qa-plugin-acme' } });
+
+  const created = await (await j('POST', '/api/chat/create')).json();
+  assert.match(created.session, /^chat-[0-9a-f]+$/);
+
+  const res = await j('POST', `/api/chat/c/${created.id}/connect`, { personaId: 'admin', environmentId: 'staging' });
+  assert.equal(res.status, 200);
+  const out = await res.json();
+  assert.equal(out.authenticated, true);
+  assert.equal(out.profile, 'admin-user');
+  // The cookie must land in THIS chat's browser session, not the per-profile
+  // default — so bootstrap + status carry --session <chat session>.
+  assert.equal(out.session, created.session);
+  const bootCall = calls.find((a) => a[0] === 'profile-bootstrap');
+  const statCall = calls.find((a) => a[0] === 'profile-status');
+  assert.deepEqual(bootCall, ['profile-bootstrap', 'admin-user', '--session', created.session]);
+  assert.deepEqual(statCall, ['profile-status', 'admin-user', '--session', created.session]);
+
+  // personaId is required
+  assert.equal((await j('POST', `/api/chat/c/${created.id}/connect`, {})).status, 400);
 });
 
 test('persona credentials inject into the plugin env; unresolved vault refs fail connect', async (t) => {

@@ -835,6 +835,9 @@ function normalizePersona(id, body, existing) {
     id,
     name: String(body.name ?? existing?.name ?? id),
     profile: String(body.profile ?? existing?.profile ?? id),
+    // The login the agent picks when the user names no persona (and falls back
+    // to the sole persona when nothing is flagged).
+    default: typeof body.default === 'boolean' ? body.default : !!existing?.default,
     // Credentials this login hands the auth plugin: env-var name → value. Each
     // value may be a literal OR a `vault:<path>:<key>` reference resolved at
     // run time. Stored locally; vault refs hold no secret, just a pointer.
@@ -1035,7 +1038,7 @@ function pluginsEnv(paths) {
 // against the env's plugin) → profile-bootstrap (run the plugin's auth) →
 // profile-status (report). The env's connection config is passed to the plugin
 // as AGENT_QA_ENV_* vars; secrets stay in the user's own env (never here).
-async function handleConnect(req, res, root, personaId, deps) {
+async function handleConnect(req, res, root, personaId, deps, opts = {}) {
   if (!isSafeSegment(personaId)) return badRequest(res, 'unsafe persona id');
   if (!deps || typeof deps.runCli !== 'function') {
     return sendJson(res, 503, { error: 'connect unavailable: agent-qa CLI not resolved' });
@@ -1045,11 +1048,20 @@ async function handleConnect(req, res, root, personaId, deps) {
   const profile = String(persona.profile || '').trim();
   if (!profile) return badRequest(res, 'persona has no profile to bootstrap');
 
-  let body = {};
-  try {
-    body = await readJsonBody(req);
-  } catch {
-    /* optional body */
+  // Optional target agent-browser session to authenticate (e.g. a chat's own
+  // session, so the chat agent operates an already-signed-in page). Omitted →
+  // the plugin's per-profile default session (`<profile>-session`).
+  const sessionOverride = typeof opts.session === 'string' && opts.session ? opts.session : null;
+
+  // The caller may have pre-parsed the request body (the chat connect route
+  // reads it to extract personaId); reuse it so the stream isn't consumed twice.
+  let body = opts.body;
+  if (body === undefined) {
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      body = {};
+    }
   }
   let env = null;
   const envId = body.environmentId ? String(body.environmentId) : '';
@@ -1057,11 +1069,21 @@ async function handleConnect(req, res, root, personaId, deps) {
     env = await readJson(path.join(root, '_environments', envId, 'environment.json'));
   }
   const auth = (env && env.auth) || {};
-  // The plugin is discovered from the registry (AGENT_QA_PLUGINS); env.auth.plugin
-  // is an optional adapter-name preference. Require at least one registered plugin.
+  // An auth plugin can come from three places: the workbench's own registry
+  // (UI-imported → AGENT_QA_PLUGINS), an environment's auth.plugin adapter
+  // preference, or the CLI's native discovery (agent-qa.toml [plugins] /
+  // AGENT_QA_PLUGINS / $PATH). Only block when none of them can serve `auth` —
+  // a workbench with the plugin in agent-qa.toml must still be able to connect.
   const pluginPaths = await readPluginPaths(root);
   if (pluginPaths.length === 0 && !auth.plugin) {
-    return badRequest(res, 'register an auth plugin first (Environments → Auth plugins → Import)');
+    const probe = await deps.runCli(['plugins', 'path', 'auth'], {});
+    const discoverable = !!(probe && probe.code === 0 && String(probe.stdout || '').trim());
+    if (!discoverable) {
+      return badRequest(
+        res,
+        'register an auth plugin first (Environments → Auth plugins → Import, or add one to agent-qa.toml)',
+      );
+    }
   }
 
   // Surface the environment's connection config to the plugin via env vars,
@@ -1109,10 +1131,14 @@ async function handleConnect(req, res, root, personaId, deps) {
   const addArgs = ['profile-add', profile];
   if (auth.plugin) addArgs.push('--adapter', String(auth.plugin));
   await step('profile-add', addArgs);
-  const boot = await step('profile-bootstrap', ['profile-bootstrap', profile]);
-  const stat = await step('profile-status', ['profile-status', profile]);
+  const bootArgs = ['profile-bootstrap', profile];
+  if (sessionOverride) bootArgs.push('--session', sessionOverride);
+  const boot = await step('profile-bootstrap', bootArgs);
+  const statArgs = ['profile-status', profile];
+  if (sessionOverride) statArgs.push('--session', sessionOverride);
+  const stat = await step('profile-status', statArgs);
   const authenticated = /authenticated/i.test(stat.stdout || '');
-  return sendJson(res, 200, { ok: boot.code === 0, authenticated, profile, log });
+  return sendJson(res, 200, { ok: boot.code === 0, authenticated, profile, session: sessionOverride, log });
 }
 
 async function runDetail(root, sid, runId) {
@@ -1797,6 +1823,10 @@ async function serveRecordingArtifact(res, entry, scenariosRoot, stepId, kind) {
 function createChatManager(deps) {
   const chat = deps && deps.chat;
   const recordRoot = deps && deps.recordRoot;
+  // Localhost base URL of this server, so each chat's agent can call back to the
+  // workbench (e.g. POST /api/chat/c/<id>/connect to sign a persona into its own
+  // browser session). Set by start(); absent in tests.
+  const baseUrl = deps && deps.baseUrl;
   const chats = new Map();
 
   function makeEntry() {
@@ -1833,6 +1863,10 @@ function createChatManager(deps) {
                 const env = { AGENT_BROWSER_SESSION: browser.name };
                 const dir = entry.recordDir();
                 if (dir) env.AGENT_QA_RECORD_DIR = dir;
+                // So the agent can self-serve persona sign-in for THIS chat:
+                // POST {personaId} to $AGENT_QA_BASE/api/chat/c/$AGENT_QA_CHAT_ID/connect.
+                env.AGENT_QA_CHAT_ID = entry.id;
+                if (baseUrl) env.AGENT_QA_BASE = baseUrl;
                 return env;
               },
             };
@@ -2050,6 +2084,26 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
   // per-step screenshot/snapshot artifacts. Cheap file reads — pollable.
   if (sub === 'recording' && req.method === 'GET') {
     return sendJson(res, 200, await chatRecordingState(entry, scenariosRoot));
+  }
+
+  // Connect a persona's auth INTO this chat's own browser session, so the chat
+  // agent operates an already-signed-in page (no credentials in the agent's
+  // hands). Reuses the persona connect flow — resolve vault creds → profile-add
+  // → profile-bootstrap → profile-status — but targets the chat's agent-browser
+  // session via --session instead of the plugin's per-profile default.
+  if (sub === 'connect' && req.method === 'POST') {
+    let body = {};
+    try {
+      body = await readJsonBody(req);
+    } catch (e) {
+      return badRequest(res, String((e && e.message) || e));
+    }
+    const personaId = body.personaId ? String(body.personaId) : '';
+    if (!personaId) return badRequest(res, 'personaId is required');
+    return handleConnect(req, res, scenariosRoot, personaId, deps, {
+      session: entry.browser.name,
+      body,
+    });
   }
   {
     const m = /^recording\/step\/([^/]+)\/(screenshot|snapshot)$/.exec(sub);
@@ -2585,6 +2639,8 @@ function start(opts = {}) {
         logger: (m) => console.error(`  [chat] ${m}`),
       },
     };
+    // So each chat's agent can call back to sign a persona into its own session.
+    deps.baseUrl = `http://${host}:${port}`;
   }
 
   const server = createServer(root, deps);
