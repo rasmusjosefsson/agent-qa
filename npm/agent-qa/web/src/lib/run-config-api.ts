@@ -1,6 +1,6 @@
 // web/src/lib/run-config-api.ts
 // Typed wrappers for the /api/personas and /api/environments record surfaces.
-import type { PersonaRecord, SecretSourceRecord } from '@/features/personas/types'
+import type { PersonaRecord } from '@/features/personas/types'
 import type { EnvironmentRecord, PluginInfo } from '@/features/environments/types'
 
 async function getJson<T>(path: string): Promise<T> {
@@ -34,20 +34,6 @@ export function upsertPersona(
 }
 export function deletePersona(id: string): Promise<{ ok: boolean }> {
   return postJson(`/api/personas/${encodeURIComponent(id)}/delete`, {})
-}
-
-// --- secret sources (vault targets) ---
-export function getSecretSources(): Promise<{ secretSources: SecretSourceRecord[] }> {
-  return getJson('/api/secret-sources')
-}
-export function upsertSecretSource(
-  id: string,
-  body: Partial<SecretSourceRecord>
-): Promise<{ ok: boolean; secretsource: SecretSourceRecord }> {
-  return postJson(`/api/secret-sources/${encodeURIComponent(id)}`, body)
-}
-export function deleteSecretSource(id: string): Promise<{ ok: boolean }> {
-  return postJson(`/api/secret-sources/${encodeURIComponent(id)}/delete`, {})
 }
 
 // --- environments ---

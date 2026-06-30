@@ -652,12 +652,12 @@ test('persona + environment CRUD (run-config records)', async (t) => {
     await j('POST', '/api/personas/admin', {
       name: 'Admin',
       profile: 'admin-user',
-      credentials: { envPrefix: 'AGENT_QA_PROFILE_ADMIN' },
+      credentials: { entries: { APP_EMAIL: 'a@b.com', APP_PASSWORD: 'pw' } },
     })
   ).json();
   assert.equal(r.persona.schema, 'persona/1');
   assert.equal(r.persona.profile, 'admin-user');
-  assert.deepEqual(r.persona.credentials, { envPrefix: 'AGENT_QA_PROFILE_ADMIN' });
+  assert.deepEqual(r.persona.credentials, { entries: { APP_EMAIL: 'a@b.com', APP_PASSWORD: 'pw' } });
   assert.ok(fs.existsSync(path.join(fx.root, '_personas', 'admin', 'persona.json')));
 
   // environments: params + auth.config coerced to strings, auth block sealed
@@ -744,18 +744,10 @@ test('POST /api/personas/:id/connect bootstraps a profile via the auth plugin', 
     calls.map((c) => c.args[0]),
     ['profile-add', 'profile-bootstrap', 'profile-status']
   );
-  // profile-add binds credential env-var names + the adapter-name preference;
-  // the plugin itself is discovered from the registry (no --plugin path).
-  assert.deepEqual(calls[0].args, [
-    'profile-add',
-    'admin-user',
-    '--email-var',
-    'AGENT_QA_PROFILE_ADMIN_USER_EMAIL',
-    '--password-var',
-    'AGENT_QA_PROFILE_ADMIN_USER_PASSWORD',
-    '--adapter',
-    'agent-qa-plugin-acme',
-  ]);
+  // profile-add registers the profile + adapter-name preference; the plugin
+  // itself is discovered from the registry. Credentials reach the plugin via
+  // the injected env, not profile-add flags.
+  assert.deepEqual(calls[0].args, ['profile-add', 'admin-user', '--adapter', 'agent-qa-plugin-acme']);
   assert.equal(calls[1].extraEnv.AGENT_QA_ENV_BASE_URL, 'https://s.example.com');
   assert.equal(calls[1].extraEnv.AGENT_QA_ENV_TENANT, '7');
 
@@ -764,7 +756,7 @@ test('POST /api/personas/:id/connect bootstraps a profile via the auth plugin', 
   assert.equal((await j('POST', '/api/personas/admin/connect', { environmentId: 'noplug' })).status, 400);
 });
 
-test('secret source (vault target) fetches creds + injects them at connect', async (t) => {
+test('persona credentials inject into the plugin env; unresolved vault refs fail connect', async (t) => {
   const fx = makeFixture();
   const calls = [];
   const deps = {
@@ -779,41 +771,31 @@ test('secret source (vault target) fetches creds + injects them at connect', asy
   const j = (m, p, b) =>
     fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
 
-  // a vault target that prints KEY=VALUE lines (no real vault needed)
-  let r = await (
-    await j('POST', '/api/secret-sources/vault', {
-      name: 'Vault',
-      command: 'printf "ACME_TOKEN=sekret\\nACME_USER=qa\\n"',
-    })
-  ).json();
-  assert.equal(r.secretsource.schema, 'secretsource/1');
-  assert.ok(fs.existsSync(path.join(fx.root, '_secretsources', 'vault', 'secretsource.json')));
-
-  // a persona that pulls from it + an env with a plugin
-  await j('POST', '/api/personas/admin', { name: 'Admin', profile: 'admin-user', secretSourceId: 'vault' });
   await j('POST', '/api/environments/staging', { name: 'Staging', auth: { plugin: 'agent-qa-plugin-acme' } });
 
+  // literal credential entries are injected into the bootstrap call's env
+  await j('POST', '/api/personas/admin', {
+    name: 'Admin',
+    profile: 'admin-user',
+    credentials: { entries: { APP_EMAIL: 'a@b.com', APP_PASSWORD: 'pw' } },
+  });
   const res = await j('POST', '/api/personas/admin/connect', { environmentId: 'staging' });
   assert.equal(res.status, 200);
-  // the fetched secrets reached the bootstrap call's env
   const bootCall = calls.find((c) => c.args[0] === 'profile-bootstrap');
-  assert.equal(bootCall.extraEnv.ACME_TOKEN, 'sekret');
-  assert.equal(bootCall.extraEnv.ACME_USER, 'qa');
+  assert.equal(bootCall.extraEnv.APP_EMAIL, 'a@b.com');
+  assert.equal(bootCall.extraEnv.APP_PASSWORD, 'pw');
 
-  // inline mode: typed key/value entries are injected directly (no command)
-  await j('POST', '/api/secret-sources/inline', { name: 'Inline', mode: 'inline', entries: { INLINE_KEY: 'iv' } });
-  await j('POST', '/api/personas/admin', { name: 'Admin', profile: 'admin-user', secretSourceId: 'inline' });
+  // a vault: ref with no VAULT_ADDR can't resolve → connect fails, no bootstrap
+  process.env.VAULT_ADDR = ''; // force "no endpoint" so the ref is unresolvable (no network)
+  await j('POST', '/api/personas/vaulted', {
+    name: 'Vaulted',
+    profile: 'vaulted',
+    credentials: { entries: { APP_EMAIL: 'vault:dev/data/x:EMAIL' } },
+  });
   calls.length = 0;
-  await j('POST', '/api/personas/admin/connect', { environmentId: 'staging' });
-  const inlineBoot = calls.find((c) => c.args[0] === 'profile-bootstrap');
-  assert.equal(inlineBoot.extraEnv.INLINE_KEY, 'iv');
-
-  // a failing source command surfaces as a connect failure, no bootstrap
-  await j('POST', '/api/secret-sources/bad', { name: 'Bad', command: 'exit 3' });
-  await j('POST', '/api/personas/admin', { name: 'Admin', profile: 'admin-user', secretSourceId: 'bad' });
-  calls.length = 0;
-  const r2 = await (await j('POST', '/api/personas/admin/connect', { environmentId: 'staging' })).json();
+  const r2 = await (await j('POST', '/api/personas/vaulted/connect', { environmentId: 'staging' })).json();
   assert.equal(r2.ok, false);
+  assert.ok(r2.log.some((s) => s.step === 'vault'));
   assert.ok(!calls.some((c) => c.args[0] === 'profile-bootstrap'));
 });
 

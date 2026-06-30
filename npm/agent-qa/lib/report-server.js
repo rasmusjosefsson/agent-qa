@@ -834,95 +834,74 @@ function normalizePersona(id, body, existing) {
     schema: 'persona/1',
     id,
     name: String(body.name ?? existing?.name ?? id),
-    profile: String(body.profile ?? existing?.profile ?? ''),
-    // Where this persona's secrets come from — an env-var prefix
-    // (e.g. AGENT_QA_PROFILE_ADMIN_*), resolved by the auth plugin.
+    profile: String(body.profile ?? existing?.profile ?? id),
+    // Credentials this login hands the auth plugin: env-var name → value. Each
+    // value may be a literal OR a `vault:<path>:<key>` reference resolved at
+    // run time. Stored locally; vault refs hold no secret, just a pointer.
     credentials: {
-      envPrefix: String(cred.envPrefix ?? ''),
+      entries: strMap(cred.entries, existing?.credentials?.entries),
     },
-    // Optional secret source (a "vault target") to fetch secrets from at run
-    // time, so nobody exports passwords by hand.
-    secretSourceId: String(body.secretSourceId ?? existing?.secretSourceId ?? ''),
     description: String(body.description ?? existing?.description ?? ''),
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };
 }
 
-// A "vault target". Two modes:
-//   'inline'  — plain key/value pairs typed in (stored locally on this machine).
-//   'command' — a command the workbench runs that prints secrets (nothing
-//               sensitive stored; for real vaults).
-function normalizeSecretSource(id, body, existing) {
-  const now = Date.now();
-  const mode =
-    body.mode === 'inline' || body.mode === 'command'
-      ? body.mode
-      : existing?.mode ?? (body.command || existing?.command ? 'command' : 'inline');
-  return {
-    schema: 'secretsource/1',
-    id,
-    name: String(body.name ?? existing?.name ?? id),
-    mode,
-    entries: strMap(body.entries, existing?.entries),
-    command: String(body.command ?? existing?.command ?? ''),
-    description: String(body.description ?? existing?.description ?? ''),
-    createdAt: existing?.createdAt ?? now,
-    updatedAt: now,
-  };
+// Read a Vault token: $VAULT_TOKEN, else ~/.vault-token (e.g. after
+// `vault login`). Returns null when neither is present.
+async function readVaultToken() {
+  if (process.env.VAULT_TOKEN && process.env.VAULT_TOKEN.trim()) return process.env.VAULT_TOKEN.trim();
+  try {
+    const t = await fsp.readFile(path.join(os.homedir(), '.vault-token'), 'utf8');
+    return t.trim() || null;
+  } catch {
+    return null;
+  }
 }
 
-// Run a secret-source command; parse stdout into env vars. Runs with the
-// server's own env (so an ambient vault token etc. is available).
-function parseSecretEnv(text) {
+// Resolve any `vault:<path>:<key>` values in a {name:value} map via the generic
+// HashiCorp Vault KV HTTP API (GET <VAULT_ADDR>/v1/<path>, X-Vault-Token).
+// Handles KV-v2 (data.data) and KV-v1 (data). Non-vault values pass through;
+// values that can't be resolved are returned in `unresolved` (left literal).
+async function resolveVaultRefs(map) {
   const out = {};
-  const t = String(text || '').trim();
-  if (t.startsWith('{')) {
+  const unresolved = [];
+  const needsVault = Object.values(map).some((v) => typeof v === 'string' && v.startsWith('vault:'));
+  const token = needsVault ? await readVaultToken() : null;
+  const endpoint = needsVault ? String(process.env.VAULT_ADDR || '').replace(/\/$/, '') : '';
+  for (const [name, value] of Object.entries(map)) {
+    if (typeof value !== 'string' || !value.startsWith('vault:')) {
+      out[name] = value;
+      continue;
+    }
+    const parts = value.slice('vault:'.length).split(':');
+    if (!endpoint || !token || parts.length !== 2 || !parts[0] || !parts[1]) {
+      out[name] = value;
+      unresolved.push(name);
+      continue;
+    }
+    const [vpath, key] = parts;
     try {
-      const o = JSON.parse(t);
-      if (o && typeof o === 'object') {
-        for (const [k, v] of Object.entries(o)) out[String(k)] = String(v);
-        return out;
+      const r = await fetch(`${endpoint}/v1/${vpath}`, { headers: { 'X-Vault-Token': token } });
+      if (!r.ok) {
+        out[name] = value;
+        unresolved.push(name);
+        continue;
+      }
+      const j = await r.json();
+      const v2 = j && j.data && j.data.data;
+      const resolved = v2 && typeof v2[key] === 'string' ? v2[key] : j && j.data ? j.data[key] : undefined;
+      if (typeof resolved === 'string') out[name] = resolved;
+      else {
+        out[name] = value;
+        unresolved.push(name);
       }
     } catch {
-      /* fall through to line parsing */
+      out[name] = value;
+      unresolved.push(name);
     }
   }
-  for (const line of t.split('\n')) {
-    const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
-    if (m) {
-      let v = m[2];
-      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
-        v = v.slice(1, -1);
-      }
-      out[m[1]] = v;
-    }
-  }
-  return out;
-}
-
-function runSecretSourceCommand(command) {
-  return new Promise((resolve) => {
-    if (!command || !command.trim()) return resolve({ ok: true, env: {} });
-    execFile(
-      'sh',
-      ['-c', command],
-      { env: process.env, cwd: process.cwd(), timeout: 60000, maxBuffer: 4 * 1024 * 1024 },
-      (err, stdout, stderr) => {
-        if (err && typeof err.code === 'string') {
-          return resolve({ ok: false, error: `secret source failed: ${err.message}` });
-        }
-        const code = err && typeof err.code === 'number' ? err.code : 0;
-        if (code !== 0) {
-          return resolve({
-            ok: false,
-            error: String(stderr || stdout || 'secret source exited non-zero').slice(-1000),
-          });
-        }
-        resolve({ ok: true, env: parseSecretEnv(stdout) });
-      }
-    );
-  });
+  return { env: out, unresolved };
 }
 
 function normalizeEnvironment(id, body, existing) {
@@ -1094,35 +1073,25 @@ async function handleConnect(req, res, root, personaId, deps) {
     extraEnv[`AGENT_QA_ENV_${k.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`] = String(v);
   }
 
-  // Credential env-var names the auth plugin should read, derived from the
-  // persona's secrets prefix (registered via profile-add → passed in the auth
-  // request). Defaults keep a sensible pair when no prefix is set.
-  const prefix = (persona.credentials && persona.credentials.envPrefix) || 'AGENT_QA_PROFILE_' + profile.toUpperCase().replace(/[^A-Z0-9]+/g, '_');
-  const emailVar = `${prefix}_EMAIL`;
-  const passwordVar = `${prefix}_PASSWORD`;
-
   const log = [];
 
-  // Pull secrets from the persona's secret source (vault target), if any, and
-  // merge them into the plugin's env — so credentials never need exporting.
-  if (persona.secretSourceId && isSafeSegment(persona.secretSourceId)) {
-    const src = await readJson(
-      path.join(root, '_secretsources', persona.secretSourceId, 'secretsource.json')
-    );
-    if (src) {
-      if (src.mode === 'command') {
-        const sec = await runSecretSourceCommand(src.command);
-        log.push({ step: 'secret-source', code: sec.ok ? 0 : 1, stdout: '', stderr: sec.ok ? '' : sec.error, spawnError: null });
-        if (!sec.ok) {
-          return sendJson(res, 200, { ok: false, authenticated: false, profile, log });
-        }
-        Object.assign(extraEnv, sec.env);
-      } else {
-        // inline key/value entries
-        Object.assign(extraEnv, src.entries || {});
-      }
-    }
+  // The persona's credentials (env-var → value). Values may be literals or
+  // `vault:<path>:<key>` refs resolved here (token from `vault login` /
+  // VAULT_TOKEN, endpoint from VAULT_ADDR). Merged into the plugin's env.
+  const entries = (persona.credentials && persona.credentials.entries) || {};
+  const { env: resolvedEnv, unresolved } = await resolveVaultRefs(entries);
+  if (unresolved.length) {
+    log.push({
+      step: 'vault',
+      code: 1,
+      stdout: '',
+      stderr: `could not resolve vault refs: ${unresolved.join(', ')}. Run \`vault login\` and set VAULT_ADDR.`,
+      spawnError: null,
+    });
+    return sendJson(res, 200, { ok: false, authenticated: false, profile, log });
   }
+  Object.assign(extraEnv, resolvedEnv);
+
   const step = async (label, args) => {
     const r = await deps.runCli(args, extraEnv);
     log.push({
@@ -1135,10 +1104,9 @@ async function handleConnect(req, res, root, personaId, deps) {
     return r;
   };
 
-  // Register the profile (idempotent): bind the credential env-var names and,
-  // if given, the adapter-name preference. The plugin itself is discovered from
-  // the registry. profile-add is non-fatal (may already be registered).
-  const addArgs = ['profile-add', profile, '--email-var', emailVar, '--password-var', passwordVar];
+  // Register the profile (idempotent); the plugin is discovered from the
+  // registry. The plugin reads credentials from the injected env directly.
+  const addArgs = ['profile-add', profile];
   if (auth.plugin) addArgs.push('--adapter', String(auth.plugin));
   await step('profile-add', addArgs);
   const boot = await step('profile-bootstrap', ['profile-bootstrap', profile]);
@@ -2249,16 +2217,6 @@ function createRequestHandler(root, deps, chat) {
           key: 'environment',
           plural: 'environments',
           normalize: normalizeEnvironment,
-        });
-      }
-      // Secret sources ("vault targets") — a command per source that fetches
-      // secrets at run time. Flat records under <root>/_secretsources.
-      if (segAll[0] === 'api' && segAll[1] === 'secret-sources') {
-        return await handleSimpleRecords(req, res, root, segAll.slice(2), {
-          dirname: '_secretsources',
-          key: 'secretsource',
-          plural: 'secretSources',
-          normalize: normalizeSecretSource,
         });
       }
 
