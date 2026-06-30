@@ -167,6 +167,15 @@ describe('toolSummary — compact tool titles', () => {
     expect(toolSummary('bash', { command: 'npm test\nsecond line' })).toBe('$ npm test')
   })
 
+  it('uses a leading comment as the title for multi-line scripts (skips the blank first line)', () => {
+    const command = '\n# Navigate to the accounts page\nagent-browser open "https://x"\nsleep 2'
+    expect(toolSummary('bash', { command })).toBe('Navigate to the accounts page')
+  })
+
+  it('falls back to the first real command when there is no leading comment', () => {
+    expect(toolSummary('bash', { command: '\n\nls -la\n# trailing' })).toBe('$ ls -la')
+  })
+
   it('uses the file basename for file tools (accepts file_path and path)', () => {
     expect(toolSummary('edit', { file_path: '/x/ToolCard.tsx' })).toBe('Edit ToolCard.tsx')
     // pi agent's Read tool names the arg `path`, not `file_path`.

@@ -74,9 +74,24 @@ export function fmtArgs(args: unknown): string {
   }
 }
 
-function firstLine(s: string): string {
-  const i = s.indexOf('\n');
-  return (i === -1 ? s : s.slice(0, i)).trim();
+// Title for a bash command: agents often write multi-line scripts that open
+// with a blank line and/or a `# comment` describing the action (so a naive
+// "first line" yields an empty "$ "). Prefer a leading comment as the human
+// label (it reads better than the raw command); else the first real command
+// line, prefixed with `$`.
+function summarizeCommand(s: string): string {
+  const lines = s
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (!lines.length) return 'bash';
+  const first = lines[0];
+  if (first.startsWith('#') && !first.startsWith('#!')) {
+    const label = first.replace(/^#+\s*/, '').trim();
+    if (label) return clip(label, 80);
+  }
+  const cmd = lines.find((l) => !l.startsWith('#')) || first;
+  return `$ ${clip(cmd, 80)}`;
 }
 
 function clip(s: string, n: number): string {
@@ -133,7 +148,7 @@ export function toolSummary(name?: string, args?: unknown): string {
     case 'bash':
     case 'shell': {
       const cmd = str(a.command) || str(a.cmd) || (typeof args === 'string' ? args : '');
-      return cmd ? `$ ${clip(firstLine(cmd), 80)}` : 'bash';
+      return cmd ? summarizeCommand(cmd) : 'bash';
     }
     case 'read': {
       const f = fileName();

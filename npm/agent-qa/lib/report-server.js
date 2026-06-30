@@ -1089,6 +1089,10 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
   // Surface the environment's connection config to the plugin via env vars,
   // plus the UI-registered plugin paths so the plugin is discoverable.
   const extraEnv = { ...pluginsEnv(pluginPaths) };
+  // Run profile-add / profile-bootstrap in the SAME record dir the chat agent
+  // records under, so the scenario's `useProfile` op resolves the profile on
+  // replay (otherwise it lands in the shared root the agent never looks in).
+  if (opts.recordDir) extraEnv.AGENT_QA_RECORD_DIR = String(opts.recordDir);
   if (env && env.baseUrl) extraEnv.AGENT_QA_ENV_BASE_URL = String(env.baseUrl);
   if (auth.loginUrl) extraEnv.AGENT_QA_ENV_LOGIN_URL = String(auth.loginUrl);
   for (const [k, v] of Object.entries(auth.config || {})) {
@@ -1138,7 +1142,41 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
   if (sessionOverride) statArgs.push('--session', sessionOverride);
   const stat = await step('profile-status', statArgs);
   const authenticated = /authenticated/i.test(stat.stdout || '');
+  if (authenticated) {
+    // Remember the profile on the chat entry (so the agent's bash gets
+    // AGENT_QA_PROFILE → a later `start` records a useProfile baseline) and
+    // bind it into any recording already in progress (so a `start` that ran
+    // BEFORE connect still replays under this profile, not fresh).
+    if (opts.entry) {
+      opts.entry.connectedProfile = profile;
+      opts.entry.connectedPersonaId = personaId;
+    }
+    if (opts.recordDir) await bindRecordingProfile(opts.recordDir, profile);
+  }
   return sendJson(res, 200, { ok: boot.code === 0, authenticated, profile, session: sessionOverride, log });
+}
+
+// Rewrite an in-progress recording's baseline to use the connected profile, so
+// `flush` emits `env.open: [{kind:"useProfile", name}]` and replay re-auths
+// instead of clearing cookies (fresh). Best-effort: no-ops if no recording is
+// in progress or the buffer was already flushed.
+async function bindRecordingProfile(recordDir, profile) {
+  const envFile = path.join(recordDir, 'scenario.env');
+  let body;
+  try {
+    body = await fsp.readFile(envFile, 'utf8');
+  } catch {
+    return; // no recording in progress for this chat
+  }
+  const line = `BASELINE=PROFILE=${profile}`;
+  const next = /^BASELINE=.*$/m.test(body)
+    ? body.replace(/^BASELINE=.*$/m, line)
+    : `${body.replace(/\n*$/, '\n')}${line}\n`;
+  try {
+    await fsp.writeFile(envFile, next);
+  } catch {
+    /* best-effort — recording still works, just may need an explicit --profile */
+  }
 }
 
 async function runDetail(root, sid, runId) {
@@ -1867,6 +1905,10 @@ function createChatManager(deps) {
                 // POST {personaId} to $AGENT_QA_BASE/api/chat/c/$AGENT_QA_CHAT_ID/connect.
                 env.AGENT_QA_CHAT_ID = entry.id;
                 if (baseUrl) env.AGENT_QA_BASE = baseUrl;
+                // Once a persona is connected, `agent-qa start` defaults its
+                // baseline to this profile (no --profile needed) so recordings
+                // are replayable under that login.
+                if (entry.connectedProfile) env.AGENT_QA_PROFILE = entry.connectedProfile;
                 return env;
               },
             };
@@ -2103,6 +2145,64 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
     return handleConnect(req, res, scenariosRoot, personaId, deps, {
       session: entry.browser.name,
       body,
+      // Register/bootstrap the profile in THIS chat's record dir (so replay's
+      // useProfile op finds it) and remember it on the entry so the agent's
+      // bash + the in-progress recording bind to it.
+      recordDir: entry.recordDir(),
+      entry,
+    });
+  }
+
+  // Replay a scenario the chat recorded, re-authenticating via the connected
+  // persona. The agent CANNOT run `agent-qa replay` itself for an auth-walled
+  // flow — replay's `useProfile` op needs the persona's credentials (incl.
+  // vault refs) which only the workbench resolves. So this endpoint mirrors
+  // /connect: resolve creds → run replay in THIS chat's (already-signed-in)
+  // session with the profile + creds in env. Synchronous: returns pass/fail.
+  if (sub === 'replay' && req.method === 'POST') {
+    if (!deps || typeof deps.runCli !== 'function') {
+      return sendJson(res, 503, { error: 'replay unavailable: agent-qa CLI not resolved' });
+    }
+    let body = {};
+    try {
+      body = await readJsonBody(req);
+    } catch (e) {
+      return badRequest(res, String((e && e.message) || e));
+    }
+    const sid = body.sid ? String(body.sid) : '';
+    if (!sid || !isSafeSegment(sid)) return badRequest(res, 'sid is required');
+    const personaId = entry.connectedPersonaId;
+    const profile = entry.connectedProfile;
+    if (!personaId || !profile) {
+      return badRequest(res, 'connect a persona first (POST /api/chat/c/<id>/connect)');
+    }
+    const persona = await readJson(path.join(scenariosRoot, '_personas', personaId, 'persona.json'));
+    const entries = (persona && persona.credentials && persona.credentials.entries) || {};
+    const { env: resolvedEnv, unresolved } = await resolveVaultRefs(entries);
+    if (unresolved.length) {
+      return sendJson(res, 200, {
+        ok: false,
+        error: `could not resolve vault refs: ${unresolved.join(', ')}. Run \`vault login\` and set VAULT_ADDR.`,
+      });
+    }
+    const extraEnv = { ...pluginsEnv(await readPluginPaths(scenariosRoot)), ...resolvedEnv };
+    const rdir = entry.recordDir();
+    if (rdir) extraEnv.AGENT_QA_RECORD_DIR = rdir;
+    const r = await deps.runCli(
+      ['replay', sid, '--session', entry.browser.name, '--profile', profile],
+      extraEnv,
+    );
+    const tail = (s) =>
+      String(s || '')
+        .split('\n')
+        .filter(Boolean)
+        .slice(-4)
+        .join('\n');
+    return sendJson(res, 200, {
+      ok: r.code === 0,
+      code: r.code,
+      summary: tail(r.stdout),
+      error: r.code === 0 ? undefined : tail(r.stderr) || tail(r.stdout),
     });
   }
   {

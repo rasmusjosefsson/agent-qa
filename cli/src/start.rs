@@ -189,9 +189,17 @@ fn write_env_file(
     session: &str,
     opts: &Opts,
 ) -> Result<()> {
+    // Baseline precedence: --keep-session > --profile > $AGENT_QA_PROFILE > fresh.
+    // The env fallback lets a host (e.g. the workbench, after a persona is
+    // connected) make recordings default to that profile so they replay under
+    // that login without the caller having to pass --profile.
+    let env_profile = std::env::var("AGENT_QA_PROFILE")
+        .ok()
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty());
     let baseline = if opts.keep_session {
         "KEEP_SESSION".to_string()
-    } else if let Some(p) = &opts.profile {
+    } else if let Some(p) = opts.profile.as_ref().or(env_profile.as_ref()) {
         format!("PROFILE={p}")
     } else {
         "FRESH".to_string()

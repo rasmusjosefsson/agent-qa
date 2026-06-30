@@ -797,6 +797,51 @@ test("POST /api/chat/c/:id/connect bootstraps auth into THAT chat's own session"
   assert.equal((await j('POST', `/api/chat/c/${created.id}/connect`, {})).status, 400);
 });
 
+test('POST /api/chat/c/:id/replay re-auths via the connected persona, in its session', async (t) => {
+  const fx = makeFixture();
+  const calls = [];
+  const deps = {
+    chat: { hub: {} },
+    recordRoot: path.join(fx.root, 'rec'),
+    runCli: async (args, extraEnv) => {
+      calls.push({ args, env: extraEnv || {} });
+      if (args[0] === 'profile-status') return { code: 0, stdout: 'admin-user: authenticated', stderr: '' };
+      return { code: 0, stdout: 'SUMMARY: 1/1 (PASS)', stderr: '' };
+    },
+  };
+  const booted = await boot(fx.root, deps);
+  t.after(() => booted.server.close());
+  const j = (m, p, b) =>
+    fetch(`${booted.base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  await j('POST', '/api/personas/admin', {
+    name: 'Admin',
+    profile: 'admin-user',
+    credentials: { entries: { OUTREACH_CLIENT_ID: 'cid-literal' } },
+  });
+  const created = await (await j('POST', '/api/chat/create')).json();
+
+  // Replay before connecting a persona → 400 (nothing to re-auth as).
+  assert.equal((await j('POST', `/api/chat/c/${created.id}/replay`, { sid: 's-x' })).status, 400);
+
+  // Connect, then replay through the workbench (which injects creds).
+  await j('POST', `/api/chat/c/${created.id}/connect`, { personaId: 'admin' });
+  const res = await j('POST', `/api/chat/c/${created.id}/replay`, { sid: 's-2026' });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).ok, true);
+
+  const replay = calls.find((c) => c.args[0] === 'replay');
+  // Runs in the chat's own (already-authed) session, under the connected profile.
+  assert.deepEqual(replay.args, ['replay', 's-2026', '--session', created.session, '--profile', 'admin-user']);
+  // Persona credentials are injected so the useProfile op can re-authenticate.
+  assert.equal(replay.env.OUTREACH_CLIENT_ID, 'cid-literal');
+  // ...and in the chat's record dir, where the connected profile is registered.
+  assert.ok(String(replay.env.AGENT_QA_RECORD_DIR || '').includes(created.session));
+
+  // sid is required.
+  assert.equal((await j('POST', `/api/chat/c/${created.id}/replay`, {})).status, 400);
+});
+
 test('persona credentials inject into the plugin env; unresolved vault refs fail connect', async (t) => {
   const fx = makeFixture();
   const calls = [];
