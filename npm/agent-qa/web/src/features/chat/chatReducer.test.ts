@@ -1,6 +1,6 @@
 // web/src/features/chat/chatReducer.test.ts
 import { describe, it, expect } from 'vitest'
-import { reducer, initialState, type Action, type ChatUIState } from './chatReducer'
+import { reducer, initialState, toolSummary, type Action, type ChatUIState } from './chatReducer'
 import type { AgentEvent, ChatState } from '@/lib/types'
 
 function run(events: Action[], start: ChatUIState = initialState): ChatUIState {
@@ -153,5 +153,42 @@ describe('chatReducer — meta + lifecycle', () => {
     const s = reducer({ ...initialState, streaming: true }, { type: 'session_event', event: { type: 'session_idle' } })
     expect(s.streaming).toBe(false)
     expect(s.sessionNote).toMatch(/idled out/i)
+  })
+})
+
+describe('toolSummary — compact tool titles', () => {
+  it('prefers an explicit description arg', () => {
+    expect(toolSummary('bash', { command: 'cat skill/core/SKILL.md', description: 'Read skill core' })).toBe(
+      'Read skill core'
+    )
+  })
+
+  it('summarizes a bash command to its first line when no description', () => {
+    expect(toolSummary('bash', { command: 'npm test\nsecond line' })).toBe('$ npm test')
+  })
+
+  it('uses the file basename for file tools (accepts file_path and path)', () => {
+    expect(toolSummary('edit', { file_path: '/x/ToolCard.tsx' })).toBe('Edit ToolCard.tsx')
+    // pi agent's Read tool names the arg `path`, not `file_path`.
+    expect(toolSummary('Read', { path: '/x/ToolCard.tsx' })).toBe('Read ToolCard.tsx')
+  })
+
+  it('includes the parent dir for ambiguous filenames like SKILL.md', () => {
+    expect(toolSummary('Read', { path: '/Users/x/.pi/agent/skills/agent-qa/SKILL.md' })).toBe(
+      'Read agent-qa/SKILL.md'
+    )
+    expect(toolSummary('Read', { file_path: '/repo/src/index.ts' })).toBe('Read src/index.ts')
+  })
+
+  it('handles grep, skill, agent, and web tools', () => {
+    expect(toolSummary('grep', { pattern: 'TODO' })).toBe('Grep TODO')
+    expect(toolSummary('Skill', { skill: 'agent-qa' })).toBe('Skill agent-qa')
+    expect(toolSummary('Task', { subagent_type: 'Explore' })).toBe('Explore')
+    expect(toolSummary('webfetch', { url: 'https://example.com/docs/x' })).toBe('Fetch example.com')
+  })
+
+  it('clips long descriptions and falls back to the raw name', () => {
+    expect(toolSummary('mystery', {})).toBe('mystery')
+    expect(toolSummary('bash', { description: 'x'.repeat(200) }).endsWith('…')).toBe(true)
   })
 })
