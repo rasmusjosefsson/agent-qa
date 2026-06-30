@@ -209,8 +209,52 @@ function maybeRunVersion(argv) {
   return true;
 }
 
+// Package manager — `install` / `list-packages` / `remove`. Handled by the
+// launcher (like `web`) so it works without the platform binary; it wires
+// ~/.agent-qa/agent-qa.toml, which the Rust CLI + workbench then discover.
+function maybeRunPackages(argv) {
+  const verb = argv[0];
+  if (!['install', 'list-packages', 'remove'].includes(verb)) return false;
+  // eslint-disable-next-line global-require
+  const pkgs = require('../lib/packages.js');
+  if (verb === 'list-packages') {
+    const list = pkgs.listPackages();
+    if (!list.length) {
+      console.log('No packages installed. Try: agent-qa install npm:<pkg> | git:<url> | https://…');
+      return true;
+    }
+    for (const p of list) {
+      const kinds = (p.plugins || []).flatMap((x) => x.kinds || []);
+      console.log(
+        `${p.source}\n  plugins: ${kinds.join(', ') || '—'}  skills: ${(p.skills || []).length}`,
+      );
+    }
+    return true;
+  }
+  const source = argv[1];
+  if (!source) {
+    console.error(`usage: agent-qa ${verb} <npm:<pkg> | git:<url> | https://…>`);
+    process.exit(2);
+  }
+  if (verb === 'remove') {
+    const n = pkgs.remove(source);
+    console.log(n ? `removed ${source}` : `no installed package matching ${source}`);
+    return true;
+  }
+  const r = pkgs.install(source);
+  const kinds = r.plugins.flatMap((p) => p.kinds || []);
+  console.log(
+    `installed ${r.name}\n  plugins: ${kinds.join(', ') || '(none)'}\n  skills: ${r.skills.length} dir(s)\n` +
+      `Wired into ~/.agent-qa/agent-qa.toml — agent-qa and the workbench will pick them up.`,
+  );
+  return true;
+}
+
 try {
   if (maybeRunVersion(process.argv.slice(2))) {
+    return;
+  }
+  if (maybeRunPackages(process.argv.slice(2))) {
     return;
   }
   if (maybeRunWeb(process.argv.slice(2))) {
