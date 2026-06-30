@@ -103,10 +103,15 @@ fn verify_with(sid_override: Option<&str>) -> Result<Vec<String>> {
                 findings.push(format!("line {}: missing field {required:?}", lineno + 1));
             }
         }
+        // The recording buffer holds friendly trigger rows (the vocab
+        // `record-step` / `fill-unique` write and `flush` translates), NOT the
+        // final scenario `do`/`check` steps. Validate against that same vocab —
+        // reusing the canonical allow-list — so a recording that verifies clean
+        // is one `flush` will accept.
         let kind = row.get("kind").and_then(|v| v.as_str()).unwrap_or("?");
-        if !matches!(kind, "do" | "check") {
+        if crate::recorder_shape::TriggerKind::parse(kind).is_err() {
             findings.push(format!(
-                "line {}: kind {kind:?} must be 'do' or 'check'",
+                "line {}: kind {kind:?} must be one of [navigation, action, wait, assert]",
                 lineno + 1
             ));
         }
@@ -231,8 +236,8 @@ mod tests {
             append_row(
                 &rec,
                 json!({
-                    "stepIndex": i, "stepId": format!("s{i}"), "kind": "do",
-                    "payload": { "intent": "x", "verb": "reload" },
+                    "stepIndex": i, "stepId": format!("s{i}"), "kind": "navigation",
+                    "payload": { "route": "https://x/" },
                     "recordedAt": "now"
                 }),
             );
@@ -255,16 +260,16 @@ mod tests {
         append_row(
             &rec,
             json!({
-                "stepIndex": 0, "stepId": "s0", "kind": "do",
-                "payload": { "intent": "x", "verb": "reload" },
+                "stepIndex": 0, "stepId": "s0", "kind": "navigation",
+                "payload": { "route": "https://x/" },
                 "recordedAt": "now"
             }),
         );
         append_row(
             &rec,
             json!({
-                "stepIndex": 2, "stepId": "s2", "kind": "do",
-                "payload": { "intent": "y", "verb": "reload" },
+                "stepIndex": 2, "stepId": "s2", "kind": "navigation",
+                "payload": { "route": "https://y/" },
                 "recordedAt": "now"
             }),
         );
@@ -287,8 +292,8 @@ mod tests {
         append_row(
             &rec,
             json!({
-                "stepIndex": 0, "stepId": "s0", "kind": "do",
-                "payload": { "intent": "x", "verb": "reload" },
+                "stepIndex": 0, "stepId": "s0", "kind": "navigation",
+                "payload": { "route": "https://x/" },
                 "recordedAt": "now"
             }),
         );

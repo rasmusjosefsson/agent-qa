@@ -74,6 +74,98 @@ export function fmtArgs(args: unknown): string {
   }
 }
 
+function firstLine(s: string): string {
+  const i = s.indexOf('\n');
+  return (i === -1 ? s : s.slice(0, i)).trim();
+}
+
+function clip(s: string, n: number): string {
+  const t = s.trim();
+  return t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t;
+}
+
+function hostOf(u: string): string {
+  try {
+    return new URL(u).host;
+  } catch {
+    return u;
+  }
+}
+
+// Compact, human-readable one-line label for a tool card header, e.g.
+// "Read core SKILL.md" or "$ npm test". Prefers an explicit `description`
+// arg (the Bash tool writes one), otherwise summarizes the salient argument
+// per tool. Falls back to the raw tool name. Kept pure for unit testing.
+export function toolSummary(name?: string, args?: unknown): string {
+  const a: Record<string, unknown> =
+    args && typeof args === 'object' ? (args as Record<string, unknown>) : {};
+  const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+  const desc = str(a.description).trim();
+  if (desc) return clip(desc, 80);
+
+  // Filenames that are too generic to identify a file on their own — show the
+  // parent dir too (e.g. "agent-qa/SKILL.md" rather than just "SKILL.md").
+  const AMBIGUOUS_FILE = new Set([
+    'skill.md',
+    'readme.md',
+    'index.ts',
+    'index.tsx',
+    'index.js',
+    'index.jsx',
+    'package.json',
+    'mod.rs',
+    'main.rs',
+    '__init__.py',
+  ]);
+  // Accept both `file_path` (Claude tools) and `path` (pi agent tools).
+  const fileName = (): string => {
+    const s = str(a.file_path) || str(a.path);
+    if (!s) return '';
+    const parts = s.split('/').filter(Boolean);
+    const base = parts[parts.length - 1] || s;
+    if (AMBIGUOUS_FILE.has(base.toLowerCase()) && parts.length >= 2) {
+      return `${parts[parts.length - 2]}/${base}`;
+    }
+    return base;
+  };
+
+  switch ((name || '').toLowerCase()) {
+    case 'bash':
+    case 'shell': {
+      const cmd = str(a.command) || str(a.cmd) || (typeof args === 'string' ? args : '');
+      return cmd ? `$ ${clip(firstLine(cmd), 80)}` : 'bash';
+    }
+    case 'read': {
+      const f = fileName();
+      return f ? `Read ${f}` : 'Read';
+    }
+    case 'write': {
+      const f = fileName();
+      return f ? `Write ${f}` : 'Write';
+    }
+    case 'edit':
+    case 'multiedit': {
+      const f = fileName();
+      return f ? `Edit ${f}` : 'Edit';
+    }
+    case 'grep':
+      return a.pattern ? `Grep ${clip(str(a.pattern), 60)}` : 'Grep';
+    case 'glob':
+      return a.pattern ? `Glob ${clip(str(a.pattern), 60)}` : 'Glob';
+    case 'skill':
+      return a.skill ? `Skill ${str(a.skill)}` : 'Skill';
+    case 'task':
+    case 'agent':
+      return clip(str(a.subagent_type) || 'Agent', 80);
+    case 'webfetch':
+      return a.url ? `Fetch ${hostOf(str(a.url))}` : 'Fetch';
+    case 'websearch':
+      return a.query ? `Search ${clip(str(a.query), 60)}` : 'Web search';
+    default:
+      return name || 'tool';
+  }
+}
+
 export function resultText(result: unknown): string {
   if (result == null) return '';
   const r = result as { content?: unknown };

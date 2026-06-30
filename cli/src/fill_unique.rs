@@ -2,11 +2,13 @@
 //! the step with the unique-template intact.
 //!
 //! At record time we substitute `{{vars._unique}}` with a freshly minted
-//! 8-hex token, fill the field with the substituted literal, and append
-//! a `do/type` row whose payload's `value` carries the **template**
-//! (not the substituted value). Replay then re-mints a fresh token each
-//! run via `value::substitute_scenario_vars`, so the same scenario can run
-//! many times without colliding on uniqueness constraints.
+//! 8-hex token, fill the field with the substituted literal, and append a
+//! friendly `action`/`fillByLabel` trigger row (the same buffer vocab
+//! `record-step` writes) whose value arg carries the **template** (not the
+//! substituted value). `flush` translates it into a `do/type` step via the
+//! shared `recorder_shape::map_row` path. Replay then re-mints a fresh token
+//! each run via `value::substitute_scenario_vars`, so the same scenario can
+//! run many times without colliding on uniqueness constraints.
 //!
 //! CLI shape:
 //!
@@ -59,16 +61,21 @@ pub fn run(args: &[String]) -> Result<u8> {
         let buffer = paths::record_steps_jsonl();
         let step_index = count_lines(&buffer)? as u32;
         let step_id = format!("s{step_index}");
+        // Record a friendly `action`/`fillByLabel` trigger row — the same
+        // buffer vocab `record-step` writes — so `flush` translates it through
+        // the shared `recorder_shape::map_row` path into the `do/type` step.
+        // args[1] keeps the {{vars._unique}} template intact (not the minted
+        // value) so replay re-mints; the `--save-as` binding is persisted
+        // separately in scenario.fill-unique.bindings.json.
         let payload = json!({
+            "method": "fillByLabel",
+            "args": [opts.label.clone(), opts.template.clone()],
             "intent": format!("fill-unique {}", opts.label),
-            "verb": "type",
-            "on": { "role": "textbox", "name": opts.label },
-            "value": { "from": "literal", "literal": opts.template.clone() },
         });
         let row = json!({
             "stepIndex": step_index,
             "stepId": step_id,
-            "kind": "do",
+            "kind": "action",
             "payload": payload,
             "recordedAt": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
         });
@@ -91,7 +98,7 @@ pub fn run(args: &[String]) -> Result<u8> {
 
 fn print_help() {
     println!(
-        "agent-qa fill-unique — fill a labelled field with a unique token\n\nUsage:\n  agent-qa fill-unique <Label> --template '<literal-with-{{vars._unique}}>'\n                              [--save-as <name>] [--no-record]\n                              [--session <name>]\n\nAt record time: mints a fresh 8-hex value, fills the labelled field with\nthe substituted literal, appends a do/type row carrying the original\ntemplate (not the substituted value) so replay re-mints fresh.\n\n--save-as <name> registers a vars.<name> binding so a later record-step\ncheck referencing {{vars.<name>}} sees the same token at replay."
+        "agent-qa fill-unique — fill a labelled field with a unique token\n\nUsage:\n  agent-qa fill-unique <Label> --template '<literal-with-{{vars._unique}}>'\n                              [--save-as <name>] [--no-record]\n                              [--session <name>]\n\nAt record time: mints a fresh 8-hex value, fills the labelled field with\nthe substituted literal, appends an action/fillByLabel row carrying the\noriginal template (not the substituted value; flush turns it into a do/type\nstep) so replay re-mints fresh.\n\n--save-as <name> registers a vars.<name> binding so a later record-step\ncheck referencing {{vars.<name>}} sees the same token at replay."
     );
 }
 
@@ -296,11 +303,19 @@ mod tests {
         let buffer = fs::read_to_string(rec.join("scenario.steps.jsonl")).unwrap();
         assert_eq!(buffer.lines().count(), 1);
         let row: Json = serde_json::from_str(buffer.lines().next().unwrap()).unwrap();
-        assert_eq!(row["kind"], "do");
-        assert_eq!(
-            row["payload"]["value"]["literal"],
-            "qa-{{vars._unique}}@e.com"
-        );
+        // Recorded as a friendly trigger row that `flush` can translate
+        // (the bug was emitting a raw `do` step `flush`/`verify` reject).
+        assert_eq!(row["kind"], "action");
+        assert_eq!(row["payload"]["method"], "fillByLabel");
+        assert_eq!(row["payload"]["args"][0], "Email");
+        assert_eq!(row["payload"]["args"][1], "qa-{{vars._unique}}@e.com");
+        // And it must flush into a do/type step that keeps the template
+        // (replay re-mints {{vars._unique}} from it).
+        let step = crate::recorder_shape::map_row("action", &row["payload"], "s0").unwrap();
+        assert_eq!(step["verb"], "type");
+        assert_eq!(step["on"]["role"], "textbox");
+        assert_eq!(step["on"]["name"], "Email");
+        assert_eq!(step["value"]["literal"], "qa-{{vars._unique}}@e.com");
 
         std::env::remove_var(paths::SCENARIOS_DIR_ENV);
         std::env::remove_var(paths::RECORD_DIR_ENV);
@@ -355,15 +370,14 @@ mod tests {
             let step_index = count_lines(&buffer)? as u32;
             let step_id = format!("s{step_index}");
             let payload = serde_json::json!({
+                "method": "fillByLabel",
+                "args": [opts.label.clone(), opts.template.clone()],
                 "intent": format!("fill-unique {}", opts.label),
-                "verb": "type",
-                "on": { "role": "textbox", "name": opts.label },
-                "value": { "from": "literal", "literal": opts.template.clone() },
             });
             let row = serde_json::json!({
                 "stepIndex": step_index,
                 "stepId": step_id,
-                "kind": "do",
+                "kind": "action",
                 "payload": payload,
                 "recordedAt": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
             });
