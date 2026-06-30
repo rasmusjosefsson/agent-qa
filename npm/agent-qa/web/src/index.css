@@ -107,6 +107,9 @@
     --sidebar-accent-foreground: oklch(0.205 0 0);
     --sidebar-border: oklch(0.922 0 0);
     --sidebar-ring: oklch(0.708 0 0);
+    color-scheme: light;
+    --scrollbar-thumb: oklch(0.82 0 0);
+    --scrollbar-thumb-hover: oklch(0.68 0 0);
 }
 
 .dark {
@@ -145,14 +148,45 @@
     --sidebar-accent-foreground: oklch(0.98 0.004 265);
     --sidebar-border: oklch(1 0 0 / 6.5%);
     --sidebar-ring: oklch(0.55 0.02 265);
+    color-scheme: dark;
+    --scrollbar-thumb: oklch(1 0 0 / 30%);
+    --scrollbar-thumb-hover: oklch(1 0 0 / 45%);
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
+    /* Firefox: thin, token-coloured bar (transparent track). */
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
     }
   body {
     @apply bg-background text-foreground;
+    }
+
+  /* Visible, on-theme scrollbars. The native ones were invisible on the dark
+     "cool ink" surface (no color-scheme + a near-black track). `color-scheme`
+     (set per theme above) fixes the default UA bar + form controls; these
+     WebKit rules give a thin, token-coloured thumb consistently across the
+     app's scroll regions. Kept in @layer base so the `.no-scrollbar` utility
+     (sidebar / command) — a higher utilities-layer rule — still hides where
+     intended. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+    }
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+    }
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+    }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--scrollbar-thumb-hover);
     }
 }
 
