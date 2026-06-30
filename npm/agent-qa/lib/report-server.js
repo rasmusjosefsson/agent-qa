@@ -2585,6 +2585,21 @@ function openBrowser(targetUrl) {
 // -------- entrypoint --------
 
 function start(opts = {}) {
+  // Survive flaky third-party pi extensions. The chat agent loads the user's
+  // pi extensions (~/.pi/agent/extensions); some hold a captured ctx in a timer
+  // and throw "stale ctx" after we dispose a session on idle/new-chat. That's an
+  // uncaught exception in a setTimeout — fatal by default. A localhost dev
+  // server must not die because someone's titlebar-spinner extension threw, so
+  // log it loudly and keep serving. (Opt out with AGENT_QA_STRICT_CRASH=1.)
+  if (process.env.AGENT_QA_STRICT_CRASH !== '1' && !start._guarded) {
+    start._guarded = true;
+    process.on('uncaughtException', (err) => {
+      console.error(`agent-qa web: ignored uncaught exception — ${(err && err.stack) || err}`);
+    });
+    process.on('unhandledRejection', (err) => {
+      console.error(`agent-qa web: ignored unhandled rejection — ${(err && err.stack) || err}`);
+    });
+  }
   const root = resolveScenariosRoot(opts);
   const recordRoot = resolveRecordRoot(opts);
   // The in-process chat agent inherits process.env (its bash subprocesses do

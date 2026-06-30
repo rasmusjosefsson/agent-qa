@@ -7,8 +7,9 @@ import {
   useTransition,
   type PointerEvent as ReactPointerEvent,
 } from 'react'
-import { Loader2Icon, PlusIcon, XIcon, PlugZapIcon } from 'lucide-react'
+import { Loader2Icon, PlusIcon, XIcon, PlugZapIcon, CopyIcon, CheckIcon } from 'lucide-react'
 import { useChat } from './useChat'
+import type { ChatItem } from '@/lib/types'
 import BrowserPane from './BrowserPane'
 import { Message } from './components/Message'
 import { PromptInput } from './components/PromptInput'
@@ -74,6 +75,33 @@ const SUGGESTIONS: { title: string; prompt: string }[] = [
     prompt: 'Look at the latest replay run and explain why it failed, with the failing step.',
   },
 ]
+
+// Serialize the conversation to markdown for the clipboard, so the user can
+// paste a chat back to us when something goes wrong. Thinking bubbles are
+// dropped (noise); tool calls + their output are kept (they're the useful part
+// when diagnosing what the agent did).
+function transcriptToText(items: ChatItem[]): string {
+  const blocks: string[] = []
+  for (const it of items) {
+    if (it.kind === 'user') {
+      blocks.push(`## User\n\n${it.text}`)
+    } else if (it.kind === 'assistant') {
+      if (it.text.trim()) blocks.push(`## Assistant\n\n${it.text}`)
+    } else if (it.kind === 'tool') {
+      const args =
+        it.args == null ? '' : typeof it.args === 'string' ? it.args : JSON.stringify(it.args)
+      const out = (it.out || '').trim()
+      blocks.push(
+        `### ${it.name || 'tool'} (${it.status})` +
+          (args ? `\nargs: ${args}` : '') +
+          (out ? `\n\n\`\`\`\n${out}\n\`\`\`` : '')
+      )
+    } else if (it.kind === 'error') {
+      blocks.push(`### error\n\n${it.text}`)
+    }
+  }
+  return blocks.join('\n\n')
+}
 
 // Top-level Chat tab: owns the open chats + which one is active, renders the
 // switcher, and mounts one ChatConversation keyed by the active id (so React
@@ -262,6 +290,7 @@ function ChatConversation({
   const { state, root, sendPrompt, abort, setModel, setThinking, navigateBrowser } =
     useChat(cid)
   const [text, setText] = useState('')
+  const [copied, setCopied] = useState(false)
   const threadRef = useRef<HTMLDivElement | null>(null)
   const atBottomRef = useRef(true)
 
@@ -364,12 +393,34 @@ function ChatConversation({
     void sendPrompt(prompt)
   }
 
+  const copyTranscript = async () => {
+    if (empty) return
+    try {
+      await navigator.clipboard.writeText(transcriptToText(state.items))
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    } catch {
+      /* clipboard blocked — nothing we can do */
+    }
+  }
+
   const conversationColumn = (
     <div
       className="flex min-h-0 min-w-0 flex-1 flex-col"
       style={isDesktop ? { flexBasis: `${leftPct}%`, flexGrow: 0, flexShrink: 0 } : undefined}
     >
-          <ConnectBar cid={cid} />
+          <div className="flex items-center justify-end border-b border-border px-2 py-1">
+            <button
+              type="button"
+              onClick={() => void copyTranscript()}
+              disabled={empty}
+              title="Copy the whole conversation (markdown) to share"
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+            >
+              {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
+              {copied ? 'Copied' : 'Copy chat'}
+            </button>
+          </div>
           <div
             ref={threadRef}
             onScroll={onScroll}
@@ -447,6 +498,7 @@ function ChatConversation({
       chatId={cid}
       navigate={navigateBrowser}
       initialSession={session ?? undefined}
+      footer={<ConnectBar cid={cid} />}
     />
   )
   const hasRecording = !!(rec && rec.sid)
@@ -545,7 +597,7 @@ function ConnectBar({ cid }: { cid: string }) {
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border px-4 py-2 text-xs text-muted-foreground">
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border bg-background px-2 py-1.5 text-xs text-muted-foreground">
       <span>Sign in as</span>
       <ChatSelect
         value={personaId}
