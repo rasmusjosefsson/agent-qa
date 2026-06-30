@@ -82,8 +82,24 @@ export interface ConnectResult {
   ok: boolean
   authenticated: boolean
   profile: string
+  session?: string | null
   log: ConnectStep[]
 }
 export function connectPersona(personaId: string, environmentId: string): Promise<ConnectResult> {
   return postJson(`/api/personas/${encodeURIComponent(personaId)}/connect`, { environmentId })
+}
+
+// Sign a persona into a specific chat's OWN browser session, so that chat's
+// agent operates an already-authenticated page (profile-bootstrap --session
+// <chat session>). environmentId is optional — the plugin is otherwise
+// discovered via agent-qa.toml / AGENT_QA_PLUGINS / $PATH.
+export function connectPersonaToChat(
+  chatId: string,
+  personaId: string,
+  environmentId?: string
+): Promise<ConnectResult> {
+  return postJson(`/api/chat/c/${encodeURIComponent(chatId)}/connect`, {
+    personaId,
+    ...(environmentId ? { environmentId } : {}),
+  })
 }
