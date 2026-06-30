@@ -47,15 +47,14 @@ const PROJECT: NavItem[] = [
   { label: "Test Runs", icon: CirclePlayIcon, tab: "runs", href: "/" },
   { label: "Editor", icon: SquarePenIcon, tab: "editor", href: "/editor" },
   { label: "Copilot", icon: SparklesIcon, tab: "chat", href: "/chat" },
+  { label: "Personas", icon: UsersIcon, tab: "personas", href: "/personas" },
+  { label: "Environments", icon: GlobeIcon, tab: "environments", href: "/environments" },
   { label: "Knowledge", icon: BookOpenIcon, tab: "knowledge", href: "/knowledge" },
 ]
 
 // Standard QA objects we don't cover yet — shown disabled so the model is
 // legible. Wired up as they land.
-const SOON: NavItem[] = [
-  { label: "Environments", icon: GlobeIcon, soon: true },
-  { label: "Personas", icon: UsersIcon, soon: true },
-]
+const SOON: NavItem[] = []
 
 const WORKSPACE: NavItem[] = [{ label: "Settings", icon: Settings2Icon, soon: true }]
 
@@ -117,14 +116,16 @@ export function AppSidebar({ tab, ...props }: { tab: Tab } & ComponentProps<type
           </SidebarMenu>
         </SidebarGroup>
 
-        <SidebarGroup>
-          <SidebarGroupLabel>Coming soon</SidebarGroupLabel>
-          <SidebarMenu>
-            {SOON.map((item) => (
-              <NavRow key={item.label} item={item} tab={tab} />
-            ))}
-          </SidebarMenu>
-        </SidebarGroup>
+        {SOON.length > 0 && (
+          <SidebarGroup>
+            <SidebarGroupLabel>Coming soon</SidebarGroupLabel>
+            <SidebarMenu>
+              {SOON.map((item) => (
+                <NavRow key={item.label} item={item} tab={tab} />
+              ))}
+            </SidebarMenu>
+          </SidebarGroup>
+        )}
       </SidebarContent>
 
       <SidebarFooter>

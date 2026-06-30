@@ -8,7 +8,16 @@ import {
 import { Separator } from "@/components/ui/separator"
 import { TooltipProvider } from "@/components/ui/tooltip"
 
-export type Tab = "cases" | "sets" | "plans" | "runs" | "editor" | "chat" | "knowledge"
+export type Tab =
+  | "cases"
+  | "sets"
+  | "plans"
+  | "runs"
+  | "editor"
+  | "chat"
+  | "personas"
+  | "environments"
+  | "knowledge"
 
 const LABELS: Record<Tab, string> = {
   cases: "Test Cases",
@@ -17,6 +26,8 @@ const LABELS: Record<Tab, string> = {
   runs: "Test Runs",
   editor: "Editor",
   chat: "Copilot",
+  personas: "Personas",
+  environments: "Environments",
   knowledge: "Knowledge",
 }
 

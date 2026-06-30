@@ -70,6 +70,10 @@ const STATIC_FILES = {
   '/sets.html': 'sets.html',
   '/plans': 'plans.html',
   '/plans.html': 'plans.html',
+  '/personas': 'personas.html',
+  '/personas.html': 'personas.html',
+  '/environments': 'environments.html',
+  '/environments.html': 'environments.html',
   '/knowledge': 'knowledge.html',
   '/knowledge.html': 'knowledge.html',
 };
@@ -748,6 +752,14 @@ async function handlePlans(req, res, root, seg, deps) {
     }
     const rec = await readJson(file);
     if (!rec) return notFound(res, 'no such plan');
+    // Optional persona/environment for this run: { profile, params }.
+    let runOpts = {};
+    try {
+      runOpts = runOptsFromBody(await readJsonBody(req));
+    } catch {
+      /* no/!json body → defaults */
+    }
+    runOpts.env = pluginsEnv(await readPluginPaths(root));
     const [allCases, allSets] = [await listCases(root), await listSets(root)];
     const memberIds = resolvePlanCaseIds(rec, allSets, allCases);
     const byId = new Map(allCases.map((c) => [c.id, c]));
@@ -765,7 +777,7 @@ async function handlePlans(req, res, root, seg, deps) {
         skipped.push({ caseId: cid, reason: 'scenario missing' });
         continue;
       }
-      const out = await deps.replay(sid, replaySessionFor(sid));
+      const out = await deps.replay(sid, replaySessionFor(sid), runOpts);
       if (out.ok) started.push({ caseId: cid, sid });
       else skipped.push({ caseId: cid, reason: out.error || 'replay failed to start' });
     }
@@ -782,6 +794,357 @@ async function handlePlans(req, res, root, seg, deps) {
   }
 
   return notFound(res, 'not found');
+}
+
+// -------- run options (persona + environment) --------
+//
+// A replay/plan-run can carry a persona (forwarded as `--profile`) and
+// environment values (each `--param k=v`). The UI resolves the chosen persona
+// + environment into `{ profile, params }` and posts that; the server just
+// passes it through to the replay spawner.
+function runOptsFromBody(body) {
+  const o = {};
+  if (body && body.profile) o.profile = String(body.profile);
+  if (body && body.params && typeof body.params === 'object') {
+    o.params = {};
+    for (const [k, v] of Object.entries(body.params)) if (k) o.params[String(k)] = String(v);
+  }
+  return o;
+}
+
+// -------- personas + environments (run-config records) --------
+//
+// Flat JSON records under <root>/_personas and <root>/_environments. A persona
+// names a login identity (its `profile` is the value passed to `--profile`); an
+// environment names a target (its `baseUrl` + `params` become `--param`s). Both
+// carry a vendor-neutral connection block so a downstream auth plugin can sign
+// in: the environment names the plugin + login entry; the persona names the
+// env-var prefix holding its secrets (secrets never live here).
+function strMap(src, fallback) {
+  const out = {};
+  const obj = src && typeof src === 'object' ? src : fallback && typeof fallback === 'object' ? fallback : {};
+  for (const [k, v] of Object.entries(obj)) if (k) out[String(k)] = String(v);
+  return out;
+}
+
+function normalizePersona(id, body, existing) {
+  const now = Date.now();
+  const cred = body.credentials || existing?.credentials || {};
+  return {
+    schema: 'persona/1',
+    id,
+    name: String(body.name ?? existing?.name ?? id),
+    profile: String(body.profile ?? existing?.profile ?? ''),
+    // Where this persona's secrets come from — an env-var prefix
+    // (e.g. AGENT_QA_PROFILE_ADMIN_*), resolved by the auth plugin.
+    credentials: {
+      envPrefix: String(cred.envPrefix ?? ''),
+    },
+    // Optional secret source (a "vault target") to fetch secrets from at run
+    // time, so nobody exports passwords by hand.
+    secretSourceId: String(body.secretSourceId ?? existing?.secretSourceId ?? ''),
+    description: String(body.description ?? existing?.description ?? ''),
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  };
+}
+
+// A "vault target". Two modes:
+//   'inline'  — plain key/value pairs typed in (stored locally on this machine).
+//   'command' — a command the workbench runs that prints secrets (nothing
+//               sensitive stored; for real vaults).
+function normalizeSecretSource(id, body, existing) {
+  const now = Date.now();
+  const mode =
+    body.mode === 'inline' || body.mode === 'command'
+      ? body.mode
+      : existing?.mode ?? (body.command || existing?.command ? 'command' : 'inline');
+  return {
+    schema: 'secretsource/1',
+    id,
+    name: String(body.name ?? existing?.name ?? id),
+    mode,
+    entries: strMap(body.entries, existing?.entries),
+    command: String(body.command ?? existing?.command ?? ''),
+    description: String(body.description ?? existing?.description ?? ''),
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  };
+}
+
+// Run a secret-source command; parse stdout into env vars. Runs with the
+// server's own env (so an ambient vault token etc. is available).
+function parseSecretEnv(text) {
+  const out = {};
+  const t = String(text || '').trim();
+  if (t.startsWith('{')) {
+    try {
+      const o = JSON.parse(t);
+      if (o && typeof o === 'object') {
+        for (const [k, v] of Object.entries(o)) out[String(k)] = String(v);
+        return out;
+      }
+    } catch {
+      /* fall through to line parsing */
+    }
+  }
+  for (const line of t.split('\n')) {
+    const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
+    if (m) {
+      let v = m[2];
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1);
+      }
+      out[m[1]] = v;
+    }
+  }
+  return out;
+}
+
+function runSecretSourceCommand(command) {
+  return new Promise((resolve) => {
+    if (!command || !command.trim()) return resolve({ ok: true, env: {} });
+    execFile(
+      'sh',
+      ['-c', command],
+      { env: process.env, cwd: process.cwd(), timeout: 60000, maxBuffer: 4 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err && typeof err.code === 'string') {
+          return resolve({ ok: false, error: `secret source failed: ${err.message}` });
+        }
+        const code = err && typeof err.code === 'number' ? err.code : 0;
+        if (code !== 0) {
+          return resolve({
+            ok: false,
+            error: String(stderr || stdout || 'secret source exited non-zero').slice(-1000),
+          });
+        }
+        resolve({ ok: true, env: parseSecretEnv(stdout) });
+      }
+    );
+  });
+}
+
+function normalizeEnvironment(id, body, existing) {
+  const now = Date.now();
+  const params = strMap(body.params, existing?.params);
+  const auth = body.auth || existing?.auth || {};
+  return {
+    schema: 'environment/1',
+    id,
+    name: String(body.name ?? existing?.name ?? id),
+    baseUrl: String(body.baseUrl ?? existing?.baseUrl ?? ''),
+    params,
+    // Connection: which auth plugin signs in here + free-form config it reads.
+    // The plugin binary is supplied downstream (agent-qa.toml [plugins]); the
+    // workbench only references it by name and never embeds vendor logic.
+    auth: {
+      plugin: String(auth.plugin ?? ''),
+      loginUrl: String(auth.loginUrl ?? ''),
+      config: strMap(auth.config, existing?.auth?.config),
+    },
+    description: String(body.description ?? existing?.description ?? ''),
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  };
+}
+
+// Generic flat-record CRUD shared by personas + environments: GET list/one,
+// POST upsert/delete, stored at <root>/<dirname>/<id>/<key>.json.
+async function handleSimpleRecords(req, res, root, seg, cfg) {
+  const { dirname, key, plural, normalize } = cfg;
+  const method = req.method;
+  const baseDir = path.join(root, dirname);
+  const fileOf = (id) => path.join(baseDir, id, `${key}.json`);
+
+  if (seg.length === 0) {
+    if (method === 'GET') {
+      let entries = [];
+      try {
+        entries = await fsp.readdir(baseDir, { withFileTypes: true });
+      } catch {
+        /* none yet */
+      }
+      const ids = entries
+        .filter((e) => e.isDirectory() && isSafeSegment(e.name))
+        .map((e) => e.name)
+        .sort();
+      const items = [];
+      for (const id of ids) {
+        const rec = await readJson(fileOf(id));
+        if (rec) items.push(rec);
+      }
+      return sendJson(res, 200, { [plural]: items });
+    }
+    return sendJson(res, 405, { error: 'method not allowed' });
+  }
+
+  const id = decodeURIComponent(seg[0]);
+  if (!isSafeSegment(id)) return badRequest(res, `unsafe ${key} id`);
+  const dir = path.join(baseDir, id);
+  const file = fileOf(id);
+
+  if (seg.length === 1) {
+    if (method === 'GET') {
+      const rec = await readJson(file);
+      if (!rec) return notFound(res, `no such ${key}`);
+      return sendJson(res, 200, { [key]: rec });
+    }
+    if (method === 'POST') {
+      let body;
+      try {
+        body = await readJsonBody(req);
+      } catch (e) {
+        return badRequest(res, String((e && e.message) || e));
+      }
+      const existing = await readJson(file);
+      const rec = normalize(id, body, existing);
+      await fsp.mkdir(dir, { recursive: true });
+      await fsp.writeFile(file, JSON.stringify(rec, null, 2) + '\n');
+      return sendJson(res, 200, { ok: true, [key]: rec });
+    }
+    return sendJson(res, 405, { error: 'method not allowed' });
+  }
+
+  if (seg.length === 2 && seg[1] === 'delete' && method === 'POST') {
+    try {
+      await fsp.rm(dir, { recursive: true, force: true });
+    } catch (e) {
+      return sendJson(res, 500, { error: 'delete failed: ' + ((e && e.message) || e) });
+    }
+    return sendJson(res, 200, { ok: true, id, deleted: true });
+  }
+
+  return notFound(res, 'not found');
+}
+
+// -------- workbench plugin registry --------
+//
+// A UI-managed list of auth-plugin binary paths, stored at <root>/_config/
+// plugins.json. The workbench injects it as AGENT_QA_PLUGINS for every CLI call
+// it makes (discovery, connect, replay), so plugins can be registered entirely
+// from the UI — no hand-edited agent-qa.toml required.
+const pluginsConfigFile = (root) => path.join(root, '_config', 'plugins.json');
+
+async function readPluginPaths(root) {
+  const rec = await readJson(pluginsConfigFile(root));
+  return Array.isArray(rec && rec.paths)
+    ? rec.paths.filter((p) => typeof p === 'string' && p.trim())
+    : [];
+}
+
+async function writePluginPaths(root, paths) {
+  const clean = [
+    ...new Set((Array.isArray(paths) ? paths : []).map((p) => String(p).trim()).filter(Boolean)),
+  ];
+  await fsp.mkdir(path.join(root, '_config'), { recursive: true });
+  await fsp.writeFile(
+    pluginsConfigFile(root),
+    JSON.stringify({ schema: 'plugins/1', paths: clean }, null, 2) + '\n'
+  );
+  return clean;
+}
+
+// Colon-separated AGENT_QA_PLUGINS env for the registered paths (the CLI's
+// env-var registration mechanism).
+function pluginsEnv(paths) {
+  return paths && paths.length ? { AGENT_QA_PLUGINS: paths.join(':') } : {};
+}
+
+// POST /api/personas/:id/connect { environmentId } — sign a persona in for an
+// environment via the downstream auth plugin: profile-add (register the profile
+// against the env's plugin) → profile-bootstrap (run the plugin's auth) →
+// profile-status (report). The env's connection config is passed to the plugin
+// as AGENT_QA_ENV_* vars; secrets stay in the user's own env (never here).
+async function handleConnect(req, res, root, personaId, deps) {
+  if (!isSafeSegment(personaId)) return badRequest(res, 'unsafe persona id');
+  if (!deps || typeof deps.runCli !== 'function') {
+    return sendJson(res, 503, { error: 'connect unavailable: agent-qa CLI not resolved' });
+  }
+  const persona = await readJson(path.join(root, '_personas', personaId, 'persona.json'));
+  if (!persona) return notFound(res, 'no such persona');
+  const profile = String(persona.profile || '').trim();
+  if (!profile) return badRequest(res, 'persona has no profile to bootstrap');
+
+  let body = {};
+  try {
+    body = await readJsonBody(req);
+  } catch {
+    /* optional body */
+  }
+  let env = null;
+  const envId = body.environmentId ? String(body.environmentId) : '';
+  if (envId && isSafeSegment(envId)) {
+    env = await readJson(path.join(root, '_environments', envId, 'environment.json'));
+  }
+  const auth = (env && env.auth) || {};
+  // The plugin is discovered from the registry (AGENT_QA_PLUGINS); env.auth.plugin
+  // is an optional adapter-name preference. Require at least one registered plugin.
+  const pluginPaths = await readPluginPaths(root);
+  if (pluginPaths.length === 0 && !auth.plugin) {
+    return badRequest(res, 'register an auth plugin first (Environments → Auth plugins → Import)');
+  }
+
+  // Surface the environment's connection config to the plugin via env vars,
+  // plus the UI-registered plugin paths so the plugin is discoverable.
+  const extraEnv = { ...pluginsEnv(pluginPaths) };
+  if (env && env.baseUrl) extraEnv.AGENT_QA_ENV_BASE_URL = String(env.baseUrl);
+  if (auth.loginUrl) extraEnv.AGENT_QA_ENV_LOGIN_URL = String(auth.loginUrl);
+  for (const [k, v] of Object.entries(auth.config || {})) {
+    extraEnv[`AGENT_QA_ENV_${k.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`] = String(v);
+  }
+
+  // Credential env-var names the auth plugin should read, derived from the
+  // persona's secrets prefix (registered via profile-add → passed in the auth
+  // request). Defaults keep a sensible pair when no prefix is set.
+  const prefix = (persona.credentials && persona.credentials.envPrefix) || 'AGENT_QA_PROFILE_' + profile.toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+  const emailVar = `${prefix}_EMAIL`;
+  const passwordVar = `${prefix}_PASSWORD`;
+
+  const log = [];
+
+  // Pull secrets from the persona's secret source (vault target), if any, and
+  // merge them into the plugin's env — so credentials never need exporting.
+  if (persona.secretSourceId && isSafeSegment(persona.secretSourceId)) {
+    const src = await readJson(
+      path.join(root, '_secretsources', persona.secretSourceId, 'secretsource.json')
+    );
+    if (src) {
+      if (src.mode === 'command') {
+        const sec = await runSecretSourceCommand(src.command);
+        log.push({ step: 'secret-source', code: sec.ok ? 0 : 1, stdout: '', stderr: sec.ok ? '' : sec.error, spawnError: null });
+        if (!sec.ok) {
+          return sendJson(res, 200, { ok: false, authenticated: false, profile, log });
+        }
+        Object.assign(extraEnv, sec.env);
+      } else {
+        // inline key/value entries
+        Object.assign(extraEnv, src.entries || {});
+      }
+    }
+  }
+  const step = async (label, args) => {
+    const r = await deps.runCli(args, extraEnv);
+    log.push({
+      step: label,
+      code: r.code,
+      stdout: (r.stdout || '').slice(0, 4000),
+      stderr: (r.stderr || '').slice(0, 4000),
+      spawnError: r.spawnError ? String((r.spawnError && r.spawnError.message) || r.spawnError) : null,
+    });
+    return r;
+  };
+
+  // Register the profile (idempotent): bind the credential env-var names and,
+  // if given, the adapter-name preference. The plugin itself is discovered from
+  // the registry. profile-add is non-fatal (may already be registered).
+  const addArgs = ['profile-add', profile, '--email-var', emailVar, '--password-var', passwordVar];
+  if (auth.plugin) addArgs.push('--adapter', String(auth.plugin));
+  await step('profile-add', addArgs);
+  const boot = await step('profile-bootstrap', ['profile-bootstrap', profile]);
+  const stat = await step('profile-status', ['profile-status', profile]);
+  const authenticated = /authenticated/i.test(stat.stdout || '');
+  return sendJson(res, 200, { ok: boot.code === 0, authenticated, profile, log });
 }
 
 async function runDetail(root, sid, runId) {
@@ -894,12 +1257,15 @@ async function serveArtifact(res, root, sid, runId, kind, stepId) {
 // child env. Resolves to { code, stdout, stderr, spawnError }. A missing
 // binary surfaces as spawnError (→ 500) rather than a fake exit code.
 function makeCliRunner({ bin, env, cwd }) {
-  return function runCli(args) {
+  // extraEnv: per-call env overrides (e.g. an environment's connection config
+  // passed to an auth plugin during bootstrap). Merged over the fixed childEnv.
+  return function runCli(args, extraEnv) {
+    const callEnv = extraEnv ? { ...env, ...extraEnv } : env;
     return new Promise((resolve) => {
       execFile(
         bin,
         args,
-        { env, cwd, maxBuffer: 32 * 1024 * 1024 },
+        { env: callEnv, cwd, maxBuffer: 32 * 1024 * 1024 },
         (err, stdout, stderr) => {
           if (err && typeof err.code === 'string') {
             // Spawn failure (ENOENT, EACCES, …) — not a process exit.
@@ -1015,10 +1381,20 @@ function cdpUrlResolver(runCli, session) {
 // status.json. Resolves quickly to { ok, pid } | { ok:false, error }.
 function makeReplaySpawner({ bin, env, cwd }) {
   const { spawn } = require('node:child_process');
-  return function replay(sid, session) {
+  // opts: { profile?, params?, env? } — a persona (forwarded as `--profile`),
+  // environment values (each `--param k=v`), and per-call env overrides (e.g.
+  // AGENT_QA_PLUGINS so a registered auth plugin applies during replay).
+  return function replay(sid, session, opts = {}) {
     return new Promise((resolve) => {
       const args = ['replay', sid, ...(session ? ['--session', session] : [])];
-      const child = spawn(bin, args, { env, cwd, stdio: 'ignore', detached: true });
+      if (opts && opts.profile) args.push('--profile', String(opts.profile));
+      if (opts && opts.params && typeof opts.params === 'object') {
+        for (const [k, v] of Object.entries(opts.params)) {
+          if (k) args.push('--param', `${k}=${String(v)}`);
+        }
+      }
+      const childEnv = opts && opts.env ? { ...env, ...opts.env } : env;
+      const child = spawn(bin, args, { env: childEnv, cwd, stdio: 'ignore', detached: true });
       let done = false;
       child.once('spawn', () => {
         if (done) return;
@@ -1846,6 +2222,126 @@ function createRequestHandler(root, deps, chat) {
         return await handlePlans(req, res, root, segAll.slice(2), deps);
       }
 
+      // Personas (login identities → --profile) and environments (target
+      // values → --param) — flat run-config records under <root>/_personas,
+      // <root>/_environments.
+      // Bootstrap a persona's login for an environment (needs deps.runCli).
+      if (
+        segAll[0] === 'api' &&
+        segAll[1] === 'personas' &&
+        segAll[3] === 'connect' &&
+        segAll.length === 4 &&
+        req.method === 'POST'
+      ) {
+        return await handleConnect(req, res, root, decodeURIComponent(segAll[2]), deps);
+      }
+      if (segAll[0] === 'api' && segAll[1] === 'personas') {
+        return await handleSimpleRecords(req, res, root, segAll.slice(2), {
+          dirname: '_personas',
+          key: 'persona',
+          plural: 'personas',
+          normalize: normalizePersona,
+        });
+      }
+      if (segAll[0] === 'api' && segAll[1] === 'environments') {
+        return await handleSimpleRecords(req, res, root, segAll.slice(2), {
+          dirname: '_environments',
+          key: 'environment',
+          plural: 'environments',
+          normalize: normalizeEnvironment,
+        });
+      }
+      // Secret sources ("vault targets") — a command per source that fetches
+      // secrets at run time. Flat records under <root>/_secretsources.
+      if (segAll[0] === 'api' && segAll[1] === 'secret-sources') {
+        return await handleSimpleRecords(req, res, root, segAll.slice(2), {
+          dirname: '_secretsources',
+          key: 'secretsource',
+          plural: 'secretSources',
+          normalize: normalizeSecretSource,
+        });
+      }
+
+      // Read-only auth-plugin discovery for the run-config UI. Shells
+      // `plugins list --json`; reports availability instead of erroring when no
+      // CLI is resolved so the UI can show a plain "not configured" state.
+      if (segAll[0] === 'api' && segAll[1] === 'plugins' && segAll.length === 2 && req.method === 'GET') {
+        if (!deps || typeof deps.runCli !== 'function') {
+          return sendJson(res, 200, { available: false, plugins: [] });
+        }
+        const r = await deps.runCli(
+          ['plugins', 'list', '--json'],
+          pluginsEnv(await readPluginPaths(root))
+        );
+        let plugins = [];
+        try {
+          plugins = JSON.parse(r.stdout || '[]');
+        } catch {
+          plugins = [];
+        }
+        return sendJson(res, 200, { available: true, plugins });
+      }
+
+      // Import a downloaded plugin file: save it under <root>/_config/plugins,
+      // mark it executable, and register its path. Body { filename, contentBase64 }.
+      if (
+        segAll[0] === 'api' &&
+        segAll[1] === 'config' &&
+        segAll[2] === 'plugins' &&
+        segAll[3] === 'import' &&
+        segAll.length === 4 &&
+        req.method === 'POST'
+      ) {
+        let body;
+        try {
+          body = await readJsonBody(req, 16 * 1024 * 1024);
+        } catch (e) {
+          return badRequest(res, String((e && e.message) || e));
+        }
+        // basename + safe charset; no traversal, no hidden/dotfiles.
+        const safe = String(body.filename || '')
+          .replace(/^.*[\\/]/, '')
+          .replace(/[^A-Za-z0-9._-]/g, '_')
+          .replace(/^\.+/, '');
+        if (!safe) return badRequest(res, 'invalid filename');
+        if (!body.contentBase64) return badRequest(res, 'missing file content');
+        let buf;
+        try {
+          buf = Buffer.from(String(body.contentBase64), 'base64');
+        } catch {
+          return badRequest(res, 'invalid base64 content');
+        }
+        const dir = path.join(root, '_config', 'plugins');
+        await fsp.mkdir(dir, { recursive: true });
+        const dest = path.join(dir, safe);
+        await fsp.writeFile(dest, buf);
+        try {
+          await fsp.chmod(dest, 0o755);
+        } catch {
+          /* best-effort on platforms without chmod */
+        }
+        const paths = await writePluginPaths(root, [...(await readPluginPaths(root)), dest]);
+        return sendJson(res, 200, { ok: true, path: dest, paths });
+      }
+
+      // UI-managed plugin registry — list/set the auth-plugin paths the
+      // workbench injects as AGENT_QA_PLUGINS. Pure JSON under <root>/_config.
+      if (segAll[0] === 'api' && segAll[1] === 'config' && segAll[2] === 'plugins' && segAll.length === 3) {
+        if (req.method === 'GET') {
+          return sendJson(res, 200, { paths: await readPluginPaths(root) });
+        }
+        if (req.method === 'POST') {
+          let body;
+          try {
+            body = await readJsonBody(req);
+          } catch (e) {
+            return badRequest(res, String((e && e.message) || e));
+          }
+          return sendJson(res, 200, { ok: true, paths: await writePluginPaths(root, body.paths) });
+        }
+        return sendJson(res, 405, { error: 'method not allowed' });
+      }
+
       // Trigger a replay of a recorded scenario (POST). Spawns the Rust CLI
       // `replay <sid>` detached; the viewer's live poll then auto-follows the
       // new run. Requires the launcher-resolved CLI (deps.replay).
@@ -1863,7 +2359,15 @@ function createRequestHandler(root, deps, chat) {
         if (!isSafeSegment(sid)) return badRequest(res, 'unsafe sid');
         const scn = await readJson(path.join(root, sid, 'scenario.json'));
         if (!scn) return notFound(res, 'no scenario.json to replay');
-        const out = await deps.replay(sid, replaySessionFor(sid));
+        // Optional persona/environment for this replay: { profile, params }.
+        let replayOpts = {};
+        try {
+          replayOpts = runOptsFromBody(await readJsonBody(req));
+        } catch {
+          /* no/!json body → defaults */
+        }
+        replayOpts.env = pluginsEnv(await readPluginPaths(root));
+        const out = await deps.replay(sid, replaySessionFor(sid), replayOpts);
         if (!out.ok) return sendJson(res, 500, { error: out.error || 'replay failed to start' });
         return sendJson(res, 202, { ok: true, sid, started: true });
       }

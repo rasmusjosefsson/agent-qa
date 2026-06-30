@@ -21,6 +21,8 @@ export default defineConfig({
         cases: path.resolve(__dirname, "cases.html"),
         sets: path.resolve(__dirname, "sets.html"),
         plans: path.resolve(__dirname, "plans.html"),
+        personas: path.resolve(__dirname, "personas.html"),
+        environments: path.resolve(__dirname, "environments.html"),
         knowledge: path.resolve(__dirname, "knowledge.html"),
       },
     },

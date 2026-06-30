@@ -47,7 +47,11 @@ export function deletePlan(id: string): Promise<{ ok: boolean }> {
 }
 
 // Kick a replay of every member case's linked scenario (fire-and-forget;
-// results land in each case's latest run).
-export function runPlan(id: string): Promise<PlanRunResult> {
-  return postJson(`/api/plans/${encodeURIComponent(id)}/run`, {})
+// results land in each case's latest run). `opts` carries the chosen persona
+// (profile) + environment values (params) for the run.
+export function runPlan(
+  id: string,
+  opts?: { profile?: string; params?: Record<string, string> }
+): Promise<PlanRunResult> {
+  return postJson(`/api/plans/${encodeURIComponent(id)}/run`, opts ?? {})
 }

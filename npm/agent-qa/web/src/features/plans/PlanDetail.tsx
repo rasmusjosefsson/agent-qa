@@ -3,6 +3,7 @@ import {
   ArrowLeftIcon,
   Loader2Icon,
   PlayIcon,
+  PlugZapIcon,
   RefreshCwIcon,
   SaveIcon,
   Trash2Icon,
@@ -24,9 +25,14 @@ import {
 import { getCases } from '@/lib/cases-api'
 import { getSets } from '@/lib/sets-api'
 import { deletePlan, getPlan, runPlan, upsertPlan } from '@/lib/plans-api'
+import { getPersonas, getEnvironments, connectPersona } from '@/lib/run-config-api'
 import type { CaseWithScenario } from '@/features/cases/types'
 import type { SetWithCount } from '@/features/sets/types'
+import type { PersonaRecord } from '@/features/personas/types'
+import type { EnvironmentRecord } from '@/features/environments/types'
 import { StatusBadge, caseStatus } from '@/features/cases/status'
+import { ReplayLive } from '@/features/runs/components/ReplayLive'
+import { Lightbox } from '@/features/runs/components/Lightbox'
 import { buildXrayExportPrompt, type XrayExportItem } from '@/features/knowledge/exportPrompt'
 
 const back = () => {
@@ -34,6 +40,27 @@ const back = () => {
 }
 const gotoCase = (id: string) => {
   window.location.href = `/cases?id=${encodeURIComponent(id)}`
+}
+// Open the full run view (live browser stream + per-step screenshots/pass-fail)
+// for a member case's scenario.
+const gotoRun = (sid: string) => {
+  window.location.href = `/?sid=${encodeURIComponent(sid)}`
+}
+
+// "step 3/5" while a case is mid-replay, from its scenario summary. currentIdx
+// is 0-based and can tick one past the last step at the end, so clamp to total.
+function stepProgress(c: CaseWithScenario): string | null {
+  const r = c.scenario?.latestRun
+  if (!r || r.state !== 'running') return null
+  const total = typeof r.total === 'number' ? r.total : null
+  let cur = typeof r.currentIdx === 'number' ? r.currentIdx + 1 : null
+  if (cur != null && total != null) cur = Math.min(cur, total)
+  return cur && total ? `step ${cur}/${total}` : 'running'
+}
+
+// Is this member's replay in flight right now?
+function isRunning(c: CaseWithScenario): boolean {
+  return !!(c.scenario?.sid && (c.scenario.activeRunId || c.scenario.latestRun?.state === 'running'))
 }
 
 // Client mirror of the server's resolveSetCaseIds, so the dashboard reflects
@@ -52,11 +79,16 @@ export function PlanDetail({ id }: { id: string }) {
   const [loaded, setLoaded] = useState(false)
   const [allCases, setAllCases] = useState<CaseWithScenario[]>([])
   const [allSets, setAllSets] = useState<SetWithCount[]>([])
+  const [personas, setPersonas] = useState<PersonaRecord[]>([])
+  const [environments, setEnvironments] = useState<EnvironmentRecord[]>([])
+  const [personaId, setPersonaId] = useState('')
+  const [envId, setEnvId] = useState('')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const [live, setLive] = useState(false)
   const [runMsg, setRunMsg] = useState('')
   const [confirmDel, setConfirmDel] = useState(false)
+  const [lightbox, setLightbox] = useState<{ url: string; caption: string } | null>(null)
 
   // Editable fields.
   const [name, setName] = useState('')
@@ -71,18 +103,33 @@ export function PlanDetail({ id }: { id: string }) {
   }, [])
 
   useEffect(() => {
-    Promise.all([getPlan(id), getSets(), getCases()])
-      .then(([p, s, c]) => {
+    Promise.all([getPlan(id), getSets(), getCases(), getPersonas(), getEnvironments()])
+      .then(([p, s, c, pe, en]) => {
         setName(p.plan.name)
         setDescription(p.plan.description)
         setSetIds(p.plan.scope.setIds)
         setCaseIds(p.plan.scope.caseIds)
         setAllSets(s.sets)
         setAllCases(c.cases)
+        setPersonas(pe.personas)
+        setEnvironments(en.environments)
         setLoaded(true)
       })
       .catch((e) => setErr(String(e.message || e)))
   }, [id])
+
+  // Resolve the chosen persona + environment into the run payload:
+  // persona.profile → --profile, environment.baseUrl + params → --param.
+  const buildRunOpts = () => {
+    const persona = personas.find((p) => p.id === personaId)
+    const env = environments.find((e) => e.id === envId)
+    const params: Record<string, string> = env ? { ...env.params } : {}
+    if (env?.baseUrl) params.baseUrl = env.baseUrl
+    return {
+      profile: persona?.profile || undefined,
+      params: Object.keys(params).length ? params : undefined,
+    }
+  }
 
   // Live status polling after a run (and on demand).
   useEffect(() => {
@@ -118,6 +165,13 @@ export function PlanDetail({ id }: { id: string }) {
     for (const c of members) acc[caseStatus(c.scenario).tone] += 1
     return acc
   }, [members])
+
+  // Count of members mid-replay — keep polling whenever something is running
+  // (covers opening a plan while a run is already going).
+  const runningCount = useMemo(() => members.filter(isRunning).length, [members])
+  useEffect(() => {
+    if (runningCount > 0) setLive(true)
+  }, [runningCount])
 
   // Members that map to an Xray test, with their latest verdict + run link —
   // the payload an export pushes back as a Test Execution.
@@ -170,13 +224,32 @@ export function PlanDetail({ id }: { id: string }) {
     try {
       // Persist scope first so the server runs exactly what's shown.
       await upsertPlan(id, { name: name.trim() || id, description, scope: { setIds, caseIds } })
-      const r = await runPlan(id)
+      const r = await runPlan(id, buildRunOpts())
       setRunMsg(
         `Started ${r.started.length} ${r.started.length === 1 ? 'replay' : 'replays'}` +
           (r.skipped.length ? ` · skipped ${r.skipped.length} (no recording)` : '')
       )
       setLive(true)
       void refreshCases()
+    } catch (e) {
+      setErr(String((e as Error).message || e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const connect = async () => {
+    if (!personaId || !envId) return
+    setBusy(true)
+    setErr('')
+    setRunMsg('')
+    try {
+      const r = await connectPersona(personaId, envId)
+      setRunMsg(
+        r.authenticated
+          ? `Connected — ${r.profile} is authenticated.`
+          : `Connect ran but ${r.profile} is not authenticated yet (check the auth plugin / secrets).`
+      )
     } catch (e) {
       setErr(String((e as Error).message || e))
     } finally {
@@ -259,6 +332,39 @@ export function PlanDetail({ id }: { id: string }) {
         <Button size="sm" onClick={() => void run()} disabled={busy || !runnable}>
           <PlayIcon /> Run plan
         </Button>
+      </div>
+
+      {/* Run config — who/where the next run uses. */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border px-5 py-2 text-xs text-muted-foreground">
+        <span>Run as</span>
+        <RunSelect
+          value={personaId}
+          onChange={setPersonaId}
+          placeholder="default login"
+          options={personas.map((p) => ({ value: p.id, label: p.name }))}
+        />
+        <span>on</span>
+        <RunSelect
+          value={envId}
+          onChange={setEnvId}
+          placeholder="default environment"
+          options={environments.map((e) => ({ value: e.id, label: e.name }))}
+        />
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 text-xs"
+          onClick={() => void connect()}
+          disabled={busy || !personaId || !envId}
+          title="Sign this persona in for the selected environment (profile-add → bootstrap)"
+        >
+          <PlugZapIcon /> Connect
+        </Button>
+        {personas.length === 0 && environments.length === 0 && (
+          <span className="text-[11px] opacity-70">
+            — add Personas / Environments to pick a login or target
+          </span>
+        )}
       </div>
 
       {err && (
@@ -354,19 +460,36 @@ export function PlanDetail({ id }: { id: string }) {
               </div>
             ) : (
               <div className="divide-y divide-border/60 rounded-md border border-border">
-                {members.map((c) => (
-                  <button
-                    key={c.id}
-                    onClick={() => gotoCase(c.id)}
-                    className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-muted/40"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium text-foreground">{c.title}</div>
-                      <div className="font-mono text-[11px] text-muted-foreground">{c.id}</div>
+                {members.map((c) => {
+                  const recorded = !!c.scenario?.hasScenario
+                  const progress = stepProgress(c)
+                  const running = isRunning(c)
+                  return (
+                    <div key={c.id}>
+                      <button
+                        onClick={() => (recorded ? gotoRun(c.scenario!.sid) : gotoCase(c.id))}
+                        title={recorded ? 'Open the live run + step details' : 'Open the case'}
+                        className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-muted/40"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-medium text-foreground">{c.title}</div>
+                          <div className="font-mono text-[11px] text-muted-foreground">{c.id}</div>
+                        </div>
+                        {progress && <span className="text-[11px] text-amber-400">{progress}</span>}
+                        <StatusBadge scenario={c.scenario} />
+                      </button>
+                      {/* Live browser, inline under the case it belongs to. */}
+                      {running && (
+                        <div className="h-52 border-t border-amber-500/30 bg-black/40 px-2 pb-2 pt-1">
+                          <ReplayLive
+                            sid={c.scenario!.sid}
+                            onLightbox={(url, caption) => setLightbox({ url, caption })}
+                          />
+                        </div>
+                      )}
                     </div>
-                    <StatusBadge scenario={c.scenario} />
-                  </button>
-                ))}
+                  )
+                })}
               </div>
             )}
           </div>
@@ -391,7 +514,38 @@ export function PlanDetail({ id }: { id: string }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {lightbox && (
+        <Lightbox url={lightbox.url} caption={lightbox.caption} onClose={() => setLightbox(null)} />
+      )}
     </div>
+  )
+}
+
+function RunSelect({
+  value,
+  onChange,
+  placeholder,
+  options,
+}: {
+  value: string
+  onChange: (v: string) => void
+  placeholder: string
+  options: { value: string; label: string }[]
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none focus-visible:border-ring"
+    >
+      <option value="">{placeholder}</option>
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </select>
   )
 }
 
