@@ -9,23 +9,9 @@ export interface PersonaRecord {
   id: string
   name: string
   profile: string
-  credentials: { envPrefix: string }
-  secretSourceId: string
-  description: string
-  createdAt: number
-  updatedAt: number
-}
-
-// A "vault target": a command the workbench runs to fetch secrets at run time
-// (output parsed as JSON {KEY:value} or KEY=VALUE lines). The command — not the
-// secret — is stored.
-export interface SecretSourceRecord {
-  schema: 'secretsource/1'
-  id: string
-  name: string
-  mode: 'inline' | 'command'
-  entries: Record<string, string>
-  command: string
+  // Credentials handed to the auth plugin (env var → value). Each value may be
+  // a literal or a `vault:<path>:<key>` reference resolved at run time.
+  credentials: { entries: Record<string, string> }
   description: string
   createdAt: number
   updatedAt: number
