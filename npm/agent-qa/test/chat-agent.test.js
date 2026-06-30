@@ -322,6 +322,55 @@ test('__internal helpers: toExistingEntry + whichOnPath', async () => {
   assert.equal(__internal.toExistingEntry(exe), exe);
 });
 
+// ---- agent-qa awareness (primer + skill discovery) ----
+
+test('AGENT_QA_PRIMER tells the agent it is in agent-qa, vendor-neutrally', async () => {
+  const { __internal } = await chatAgent();
+  const p = __internal.AGENT_QA_PRIMER;
+  assert.match(p, /agent-qa workbench/);
+  assert.match(p, /AGENT_BROWSER_SESSION/); // points at the bound session
+  assert.match(p, /agent-qa skills get core/); // bootstraps the skill, like the terminal
+  assert.match(p, /Never guess a/i); // host/route discipline
+  // Self-serve persona sign-in (no manual Connect click required).
+  assert.match(p, /AGENT_QA_BASE/);
+  assert.match(p, /\/connect/);
+  assert.match(p, /default/i);
+  // Stays generic: no vendor/product names baked into our code.
+  assert.doesNotMatch(p, /outreach/i);
+});
+
+test('resolveAgentQaSkillDirs reads [skills] extra-dirs from a walked-up agent-qa.toml', async () => {
+  const { __internal } = await chatAgent();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-skilldirs-'));
+  const skillA = path.join(root, 'skills-a');
+  const skillB = path.join(root, 'pkgs', 'overlay');
+  fs.mkdirSync(skillA, { recursive: true });
+  fs.mkdirSync(skillB, { recursive: true });
+  const missing = path.join(root, 'gone');
+  fs.writeFileSync(
+    path.join(root, 'agent-qa.toml'),
+    [
+      '[skills]',
+      'extra-dirs = [',
+      `  ${JSON.stringify(skillA)},`,
+      `  ${JSON.stringify(skillB)},`,
+      `  ${JSON.stringify(missing)},`, // non-existent → filtered out
+      ']',
+      '',
+      '[plugins]',
+      'auth = "/somewhere/agent-qa-plugin-x"',
+      '',
+    ].join('\n'),
+  );
+  // cwd a couple levels below the toml → walked-up discovery finds it.
+  const cwd = path.join(root, 'a', 'b');
+  fs.mkdirSync(cwd, { recursive: true });
+  const dirs = __internal.resolveAgentQaSkillDirs(cwd);
+  assert.ok(dirs.includes(skillA), 'existing dir A present');
+  assert.ok(dirs.includes(skillB), 'existing dir B present');
+  assert.ok(!dirs.includes(missing), 'non-existent dir filtered out');
+});
+
 // ---- /api/chat/* routes ----
 
 function makeStubHub() {

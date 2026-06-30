@@ -17,8 +17,9 @@
 
 import { createRequire } from 'node:module';
 import { pathToFileURL, fileURLToPath } from 'node:url';
-import { existsSync, statSync, realpathSync } from 'node:fs';
+import { existsSync, statSync, realpathSync, readFileSync } from 'node:fs';
 import { dirname, join, delimiter } from 'node:path';
+import { homedir } from 'node:os';
 
 const PI_PKG = '@earendil-works/pi-coding-agent';
 
@@ -447,6 +448,135 @@ export async function loadPiSdk(config = {}) {
   return { sdk, url };
 }
 
+// -------- agent-qa awareness (primer + skill discovery) --------
+
+// Appended to the chat agent's system prompt so it behaves like the terminal
+// agent-qa skill instead of a blank coding agent. Without this the pi session
+// has no idea it's inside agent-qa — it never loads the recorder/replay skills
+// and tries to "drive a browser" by guessing (the classic
+// "Unknown agent: agent-browser" + wrong-host failures). Kept vendor-neutral:
+// any app-specific host/route knowledge comes from the loaded skills, never
+// from this string.
+const AGENT_QA_PRIMER = [
+  'You are the built-in assistant of the **agent-qa workbench**. agent-qa drives a',
+  'REAL browser (Chrome over CDP) to open, inspect, record, and replay UI flows',
+  'against live web apps. You are already running inside an agent-qa environment —',
+  'act on that without being told to "use agent-qa".',
+  '',
+  'Operating rules:',
+  '- A dedicated browser session is already bound to THIS chat via the env var',
+  '  $AGENT_BROWSER_SESSION. All browser work happens there. Do NOT launch your own',
+  '  browser and do NOT try to delegate to a sub-agent named "agent-browser" —',
+  '  `agent-browser` and `agent-qa` are command-line tools you call from the bash',
+  '  tool (e.g. `agent-browser open <url>`).',
+  '- For ANY task that opens, navigates, inspects, records, or replays a page, FIRST',
+  '  run `agent-qa skills get core` and follow it exactly. It is the source of truth',
+  '  for commands and flags — never guess them.',
+  '- App-specific overlays (the correct host, environment, and known routes for a',
+  '  given product) ship as skills. Before navigating a specific app, run',
+  '  `agent-qa skills list`, load the matching overlay skill(s) with',
+  '  `agent-qa skills get <name>`, and use the host/route they specify. Never guess a',
+  '  host or URL path.',
+  '- Signing in: many app pages need an authenticated session. Saved logins',
+  '  ("personas") may be available — sign in YOURSELF, never tell the user to click',
+  '  anything. List them with `curl -s "$AGENT_QA_BASE/api/personas"` (each has id,',
+  '  name, profile, and may have `default: true`). To sign the chosen persona into',
+  '  THIS chat\'s own browser, POST its id:',
+  '    curl -s -X POST "$AGENT_QA_BASE/api/chat/c/$AGENT_QA_CHAT_ID/connect" \\',
+  '      -H "content-type: application/json" -d \'{"personaId":"<id>"}\'',
+  '  It resolves the persona\'s credentials (incl. vault refs) and runs the auth',
+  '  plugin, returning {"authenticated":true,...} once signed in (it can take ~30-60s).',
+  '  Pick the persona the user names; otherwise the one with `default: true`, or the',
+  '  only persona if there is just one; if several exist and none is default, ask.',
+  '  After it authenticates, just navigate — the browser is already signed in. Do this',
+  '  proactively when a page shows a sign-in screen. This connect endpoint is the ONLY',
+  '  way to authenticate — do NOT run `agent-qa profile-add` or `agent-qa',
+  '  profile-bootstrap` yourself; they cannot see the credentials (only the workbench',
+  '  resolves them). If a `snapshot` shows a sign-in page, call connect, then retry.',
+  '- RECORDING an authenticated flow (user asks to record/capture a scenario on a page',
+  '  that needs sign-in): SESSION and ORDER both matter.',
+  '  (1) Use THIS chat\'s browser for the whole recording. Do NOT pass --session to',
+  '      `agent-qa start`, and NEVER invent a session name like "default-session" —',
+  '      `start` defaults to $AGENT_BROWSER_SESSION, the exact session the connect',
+  '      endpoint signs in. Every `agent-browser` command you run while recording must',
+  '      pass --session "$AGENT_BROWSER_SESSION". A mismatched session records an',
+  '      UNAUTHENTICATED page (the classic failure).',
+  '  (2) `agent-qa start "<intent>" --profile <persona-profile>` (no --session). The',
+  '      profile baseline lets replay re-authenticate.',
+  '  (3) BEFORE the first navigation, authenticate via the connect endpoint above — the',
+  '      sign-in cookie is per-session and will NOT carry over from an earlier turn.',
+  '  (4) `snapshot --session "$AGENT_BROWSER_SESSION"` to confirm you are PAST the',
+  '      sign-in screen. If you still see a "Sign in" heading, connect again and retry —',
+  '      do NOT proceed.',
+  '  (5) Only THEN record the navigation step + the rest. NEVER record or assert the',
+  '      sign-in page as if it were the target: that means auth failed, so stop and fix',
+  '      it, do not flush a scenario that lands on "Sign in".',
+  '- Prefer agent-qa / agent-browser commands over any other automation. If a command',
+  '  fails, report the exact error verbatim; do not silently switch tools.',
+].join('\n');
+
+const expandTilde = (p) => (p && p.startsWith('~') ? join(homedir(), p.slice(1)) : p);
+
+// Resolve the agent-qa skill directories so the chat agent can see (and load on
+// demand) the same skills the CLI serves — `core` is bundled with the binary,
+// but overlays like route catalogs / host rules live in dirs listed under
+// `[skills] extra-dirs` in agent-qa.toml. We read the global config plus the
+// nearest agent-qa.toml walked up from cwd (per-repo overlay), mirroring the
+// CLI's own discovery order. Best-effort: returns [] if nothing is found.
+function resolveAgentQaSkillDirs(cwd) {
+  const tomlPaths = [join(homedir(), '.agent-qa', 'agent-qa.toml')];
+  if (process.env.XDG_CONFIG_HOME) {
+    tomlPaths.push(join(process.env.XDG_CONFIG_HOME, 'agent-qa', 'agent-qa.toml'));
+  }
+  let d = cwd || process.cwd();
+  for (;;) {
+    const p = join(d, 'agent-qa.toml');
+    if (existsSync(p)) {
+      tomlPaths.push(p);
+      break;
+    }
+    const parent = dirname(d);
+    if (parent === d) break;
+    d = parent;
+  }
+
+  // Reuse the package manager's tested toml splitter when available; fall back to
+  // a tiny [skills] extractor so a missing sibling never breaks the chat.
+  let splitToml = null;
+  try {
+    splitToml = createRequire(import.meta.url)('./packages.js').splitToml;
+  } catch {
+    /* fall back to the regex extractor below */
+  }
+  const extractSkillsDirs = (text) => {
+    if (splitToml) {
+      try {
+        return splitToml(text).extraDirs || [];
+      } catch {
+        /* fall through */
+      }
+    }
+    const m = /\[skills\]([\s\S]*?)(?:\n\[|$)/.exec(text || '');
+    if (!m) return [];
+    return [...m[1].matchAll(/"([^"]+)"/g)].map((q) => q[1]);
+  };
+
+  const dirs = [];
+  for (const p of tomlPaths) {
+    let text;
+    try {
+      text = readFileSync(p, 'utf8');
+    } catch {
+      continue;
+    }
+    for (const raw of extractSkillsDirs(text)) {
+      const abs = expandTilde(raw);
+      if (abs && existsSync(abs) && !dirs.includes(abs)) dirs.push(abs);
+    }
+  }
+  return dirs;
+}
+
 // Build a createSession() that mints a fresh in-memory AgentSession bound to
 // the repo cwd, inheriting skills/extensions/models/keys via the SDK's default
 // resource loader + auth storage — i.e. the same agent as the terminal.
@@ -456,6 +586,8 @@ function makeSessionFactory(sdk, config = {}, shared = {}) {
     AuthStorage,
     ModelRegistry,
     SessionManager,
+    SettingsManager,
+    DefaultResourceLoader,
     getAgentDir,
     createReadToolDefinition,
     createBashToolDefinition,
@@ -463,7 +595,11 @@ function makeSessionFactory(sdk, config = {}, shared = {}) {
     createWriteToolDefinition,
   } = sdk;
   const cwd = config.cwd || process.cwd();
-  const agentDir = config.agentDir || (typeof getAgentDir === 'function' ? getAgentDir() : undefined);
+  const agentDir =
+    config.agentDir ||
+    (typeof getAgentDir === 'function' ? getAgentDir() : join(homedir(), '.pi', 'agent'));
+  // Resolved once: the agent-qa skill dirs to surface to every chat session.
+  const agentQaSkillDirs = resolveAgentQaSkillDirs(cwd);
   // Optional per-conversation env injected into every bash spawn (e.g. a
   // dedicated AGENT_BROWSER_SESSION so this chat's browsing + recording land in
   // its own browser). Read lazily so a New-chat session rotation is picked up.
@@ -481,6 +617,35 @@ function makeSessionFactory(sdk, config = {}, shared = {}) {
       sessionManager: SessionManager.inMemory(cwd),
     };
     if (agentDir) opts.agentDir = agentDir;
+
+    // Make the chat agent agent-qa-aware. A custom resource loader keeps every
+    // pi default (cwd skills, AGENTS.md, extensions, themes) but ALSO appends
+    // the agent-qa primer to the system prompt and registers the agent-qa skill
+    // dirs so `core` + app overlays show up and load on demand — i.e. the chat
+    // behaves like the terminal agent-qa skill instead of a blank coding agent.
+    // Best-effort: any failure falls back to the SDK's default loader so chat
+    // keeps working (just without the primer).
+    try {
+      if (DefaultResourceLoader) {
+        const settingsManager =
+          SettingsManager && typeof SettingsManager.create === 'function'
+            ? SettingsManager.create(cwd, agentDir)
+            : undefined;
+        const loader = new DefaultResourceLoader({
+          cwd,
+          agentDir,
+          settingsManager,
+          appendSystemPrompt: [AGENT_QA_PRIMER],
+          additionalSkillPaths: agentQaSkillDirs,
+        });
+        await loader.reload();
+        opts.resourceLoader = loader;
+        if (settingsManager) opts.settingsManager = settingsManager;
+      }
+    } catch {
+      /* fall back to the SDK's default resource loader */
+    }
+
     // Default tools = full parity with the terminal (read/bash/edit/write +
     // any custom/extension tools). Pass an allowlist to run a limited mode.
     if (Array.isArray(config.tools) && config.tools.length) opts.tools = config.tools;
@@ -557,4 +722,12 @@ export async function createChatBackend(config = {}) {
   });
 }
 
-export const __internal = { safeStringify, safeClone, modelInfo, toExistingEntry, whichOnPath };
+export const __internal = {
+  safeStringify,
+  safeClone,
+  modelInfo,
+  toExistingEntry,
+  whichOnPath,
+  resolveAgentQaSkillDirs,
+  AGENT_QA_PRIMER,
+};
