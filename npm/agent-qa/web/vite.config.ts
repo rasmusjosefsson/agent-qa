@@ -24,6 +24,7 @@ export default defineConfig({
         personas: path.resolve(__dirname, "personas.html"),
         environments: path.resolve(__dirname, "environments.html"),
         knowledge: path.resolve(__dirname, "knowledge.html"),
+        plugins: path.resolve(__dirname, "plugins.html"),
       },
     },
   },

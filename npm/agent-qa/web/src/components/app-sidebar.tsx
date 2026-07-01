@@ -6,6 +6,7 @@ import {
   FolderTreeIcon,
   GlobeIcon,
   LayersIcon,
+  PlugIcon,
   Settings2Icon,
   SparklesIcon,
   SquarePenIcon,
@@ -50,6 +51,7 @@ const PROJECT: NavItem[] = [
   { label: "Personas", icon: UsersIcon, tab: "personas", href: "/personas" },
   { label: "Environments", icon: GlobeIcon, tab: "environments", href: "/environments" },
   { label: "Knowledge", icon: BookOpenIcon, tab: "knowledge", href: "/knowledge" },
+  { label: "Plugins", icon: PlugIcon, tab: "plugins", href: "/plugins" },
 ]
 
 // Standard QA objects we don't cover yet — shown disabled so the model is
