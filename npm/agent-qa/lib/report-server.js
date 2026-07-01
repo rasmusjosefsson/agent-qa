@@ -2438,6 +2438,52 @@ function createRequestHandler(root, deps, chat) {
         return sendJson(res, 200, { ok: true, path: dest, paths });
       }
 
+      // Install an extension package from npm/git/https (the `agent-qa install`
+      // flow, so users don't drop to a terminal): lib/packages.js fetches it
+      // into ~/.agent-qa/packages and wires ~/.agent-qa/agent-qa.toml with the
+      // discovered plugins + skill dirs. Body { source }. Runs synchronously
+      // (npm/git under the hood) — fine for this localhost single-user tool.
+      // Install failures return 200 { ok:false, error } so the UI can show them.
+      if (
+        segAll[0] === 'api' &&
+        segAll[1] === 'config' &&
+        segAll[2] === 'plugins' &&
+        segAll[3] === 'install' &&
+        segAll.length === 4 &&
+        req.method === 'POST'
+      ) {
+        let body;
+        try {
+          body = await readJsonBody(req);
+        } catch (e) {
+          return badRequest(res, String((e && e.message) || e));
+        }
+        const source = String((body && body.source) || '').trim();
+        if (!source) {
+          return badRequest(res, 'source is required (npm:<pkg> | git:<url> | https://…)');
+        }
+        let pkgs;
+        try {
+          pkgs = require('./packages.js');
+        } catch {
+          return sendJson(res, 503, { error: 'package installer unavailable' });
+        }
+        try {
+          const r = pkgs.install(source);
+          return sendJson(res, 200, {
+            ok: true,
+            name: r.name,
+            plugins: (r.plugins || []).map((p) => ({ path: p.path, kinds: p.kinds || [] })),
+            skills: (r.skills || []).length,
+          });
+        } catch (e) {
+          return sendJson(res, 200, {
+            ok: false,
+            error: String((e && e.message) || e).slice(0, 2000),
+          });
+        }
+      }
+
       // UI-managed plugin registry — list/set the auth-plugin paths the
       // workbench injects as AGENT_QA_PLUGINS. Pure JSON under <root>/_config.
       if (segAll[0] === 'api' && segAll[1] === 'config' && segAll[2] === 'plugins' && segAll.length === 3) {
