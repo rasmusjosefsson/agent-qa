@@ -8,7 +8,7 @@ import EditorPage from "./features/editor/EditorPage"
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <ThemeProvider defaultTheme="dark" storageKey="agentqa-theme">
+    <ThemeProvider defaultTheme="light" storageKey="agentqa-theme">
       <AppShell tab="editor">
         <EditorPage />
       </AppShell>

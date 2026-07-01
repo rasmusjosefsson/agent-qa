@@ -8,7 +8,7 @@ import CasesPage from "./features/cases/CasesPage"
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <ThemeProvider defaultTheme="dark" storageKey="agentqa-theme">
+    <ThemeProvider defaultTheme="light" storageKey="agentqa-theme">
       <AppShell tab="cases">
         <CasesPage />
       </AppShell>

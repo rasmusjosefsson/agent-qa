@@ -8,7 +8,7 @@ import PersonasPage from "./features/personas/PersonasPage"
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <ThemeProvider defaultTheme="dark" storageKey="agentqa-theme">
+    <ThemeProvider defaultTheme="light" storageKey="agentqa-theme">
       <AppShell tab="personas">
         <PersonasPage />
       </AppShell>
