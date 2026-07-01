@@ -214,9 +214,16 @@ function maybeRunVersion(argv) {
 // ~/.agent-qa/agent-qa.toml, which the Rust CLI + workbench then discover.
 function maybeRunPackages(argv) {
   const verb = argv[0];
-  if (!['install', 'list-packages', 'remove'].includes(verb)) return false;
+  if (!['install', 'update', 'list-packages', 'remove'].includes(verb)) return false;
   // eslint-disable-next-line global-require
   const pkgs = require('../lib/packages.js');
+  const summarize = (r) => {
+    const kinds = (r.plugins || []).flatMap((p) => p.kinds || []);
+    return (
+      `  plugins: ${kinds.join(', ') || '(none)'}  skills: ${(r.skills || []).length}` +
+      `  personas: ${(r.personas || []).length}  environments: ${(r.environments || []).length}`
+    );
+  };
   if (verb === 'list-packages') {
     const list = pkgs.listPackages();
     if (!list.length) {
@@ -231,6 +238,21 @@ function maybeRunPackages(argv) {
     }
     return true;
   }
+  // `update` re-pulls installed packages (all, or one by name/source). Takes an
+  // optional arg, unlike install/remove which require a source.
+  if (verb === 'update') {
+    const results = pkgs.update(argv[1]);
+    if (!results.length) {
+      console.log(
+        argv[1] ? `no installed package matching ${argv[1]}` : 'no packages installed to update',
+      );
+      return true;
+    }
+    for (const r of results) console.log(`updated ${r.name}\n${summarize(r)}`);
+    console.log('Re-wired ~/.agent-qa/agent-qa.toml — agent-qa and the workbench will pick them up.');
+    return true;
+  }
+
   const source = argv[1];
   if (!source) {
     console.error(`usage: agent-qa ${verb} <npm:<pkg> | git:<url> | https://…>`);
@@ -242,9 +264,8 @@ function maybeRunPackages(argv) {
     return true;
   }
   const r = pkgs.install(source);
-  const kinds = r.plugins.flatMap((p) => p.kinds || []);
   console.log(
-    `installed ${r.name}\n  plugins: ${kinds.join(', ') || '(none)'}\n  skills: ${r.skills.length} dir(s)\n` +
+    `installed ${r.name}\n${summarize(r)}\n` +
       `Wired into ~/.agent-qa/agent-qa.toml — agent-qa and the workbench will pick them up.`,
   );
   return true;

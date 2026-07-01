@@ -91,3 +91,41 @@ test('mergeToml preserves user content + manual dirs, overlays package resources
   assert.ok(!cleared.includes(JSON.stringify(pkgSkill)));
   assert.ok(!cleared.includes('[plugins]')); // package plugin removed
 });
+
+test('resolveResources + mergeToml carry personas + environments', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-pkg2-'));
+
+  // manifest-declared personas/environments
+  const a = path.join(root, 'a');
+  fs.mkdirSync(path.join(a, 'personas'), { recursive: true });
+  fs.mkdirSync(path.join(a, 'environments'), { recursive: true });
+  fs.writeFileSync(
+    path.join(a, 'package.json'),
+    JSON.stringify({ name: 'x', 'agent-qa': { personas: ['./personas'], environments: ['./environments'] } }),
+  );
+  let res = pkgs.resolveResources(a);
+  assert.deepEqual(res.personas, [path.join(a, 'personas')]);
+  assert.deepEqual(res.environments, [path.join(a, 'environments')]);
+
+  // conventional fallback (no manifest)
+  const b = path.join(root, 'b');
+  fs.mkdirSync(path.join(b, 'personas'), { recursive: true });
+  fs.mkdirSync(path.join(b, 'environments'), { recursive: true });
+  fs.writeFileSync(path.join(b, 'package.json'), JSON.stringify({ name: 'y' }));
+  res = pkgs.resolveResources(b);
+  assert.deepEqual(res.personas, [path.join(b, 'personas')]);
+  assert.deepEqual(res.environments, [path.join(b, 'environments')]);
+
+  // mergeToml emits [personas]/[environments] extra-dirs and clears them
+  const home = os.homedir();
+  const pDir = path.join(home, '.agent-qa', 'packages', 'git', 'p', 'personas');
+  const eDir = path.join(home, '.agent-qa', 'packages', 'git', 'p', 'environments');
+  const out = pkgs.mergeToml('', [], {}, [pDir], [eDir]);
+  assert.match(out, /\[personas\]/);
+  assert.match(out, /\[environments\]/);
+  assert.ok(out.includes(JSON.stringify(pDir)));
+  assert.ok(out.includes(JSON.stringify(eDir)));
+  const cleared = pkgs.mergeToml(out, [], {}, [], []);
+  assert.ok(!cleared.includes('[personas]'));
+  assert.ok(!cleared.includes(JSON.stringify(pDir)));
+});
