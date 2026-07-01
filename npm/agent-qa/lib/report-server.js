@@ -76,6 +76,8 @@ const STATIC_FILES = {
   '/environments.html': 'environments.html',
   '/knowledge': 'knowledge.html',
   '/knowledge.html': 'knowledge.html',
+  '/plugins': 'plugins.html',
+  '/plugins.html': 'plugins.html',
 };
 
 // -------- path safety --------
