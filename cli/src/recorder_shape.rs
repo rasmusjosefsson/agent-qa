@@ -168,8 +168,8 @@ pub fn validate_trigger(kind: TriggerKind, payload: &Json) -> Result<()> {
 // ---------- mapper ----------
 //
 // One `RecordedRow` (kind + payload) becomes one scenario/2 `Step`.
-// Mirrors the friendly→schema translation skainet does in TypeScript,
-// trimmed to the verb subset agent-qa core supports today.
+// Mirrors the friendly→schema translation the original TypeScript recorder
+// does, trimmed to the verb subset agent-qa core supports today.
 
 /// Translate one recorded row (the JSONL line written by `record-step`)
 /// into a scenario/2 step object. Used by `flush::build_steps`.
