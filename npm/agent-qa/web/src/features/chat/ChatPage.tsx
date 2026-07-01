@@ -10,6 +10,7 @@ import {
 import { Loader2Icon, PlusIcon, XIcon, PlugZapIcon, CopyIcon, CheckIcon } from 'lucide-react'
 import { useChat } from './useChat'
 import type { ChatItem } from '@/lib/types'
+import { WorkingIndicator } from '@/components/working-indicator'
 import BrowserPane from './BrowserPane'
 import { Message } from './components/Message'
 import { PromptInput } from './components/PromptInput'
@@ -462,7 +463,7 @@ function ChatConversation({
                 ))}
                 {showWorking && (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Loader2Icon className="size-4 animate-spin" />
+                    <WorkingIndicator />
                     <span className="aqa-shimmer">Working…</span>
                   </div>
                 )}

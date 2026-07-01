@@ -214,3 +214,17 @@
   color: transparent;
   animation: aqa-shimmer 1.8s linear infinite;
 }
+
+/* "Agent is working" waveform bars — a lightweight, dependency-free loader
+   (no WebGL / audio libs). Each bar pulses on a staggered delay. */
+@keyframes aqa-wave {
+  0%, 100% { transform: scaleY(0.3); }
+  50% { transform: scaleY(1); }
+}
+.aqa-wave {
+  transform-origin: center;
+  animation: aqa-wave 1s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .aqa-wave { animation: none; transform: scaleY(0.6); }
+}
