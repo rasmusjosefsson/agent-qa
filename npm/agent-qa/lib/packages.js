@@ -330,6 +330,18 @@ function listPackages() {
   return readRegistry().packages || [];
 }
 
+// Re-install (re-pull) installed packages so newly-shipped resources —
+// personas, environments, skills, plugin updates — flow in. With no argument,
+// updates every registered package; else the one matching a name or source.
+// Returns the install result for each updated package (empty if none matched).
+function update(nameOrSource) {
+  const reg = readRegistry();
+  const targets = (reg.packages || []).filter(
+    (p) => !nameOrSource || p.name === nameOrSource || p.source === nameOrSource,
+  );
+  return targets.map((p) => install(p.source));
+}
+
 function remove(input) {
   const reg = readRegistry();
   const before = (reg.packages || []).length;
@@ -345,6 +357,7 @@ module.exports = {
   splitToml,
   mergeToml,
   install,
+  update,
   listPackages,
   remove,
   // paths (for tests)
