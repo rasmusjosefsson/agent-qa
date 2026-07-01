@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { PlusIcon, Loader2Icon, GlobeIcon, Trash2Icon, XIcon, UploadIcon } from 'lucide-react'
+import { PlusIcon, Loader2Icon, GlobeIcon, Trash2Icon, XIcon, UploadIcon, CopyIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -39,7 +39,10 @@ export function EnvironmentsPage() {
   const [paths, setPaths] = useState<string[]>([])
   const [pluginDraft, setPluginDraft] = useState('')
   const [err, setErr] = useState('')
-  const [editing, setEditing] = useState<EnvironmentRecord | 'new' | null>(null)
+  // 'new' → blank; a record → edit; { seed } → clone a read-only package env.
+  const [editing, setEditing] = useState<
+    EnvironmentRecord | 'new' | { seed: EnvironmentRecord } | null
+  >(null)
 
   const load = () =>
     getEnvironments()
@@ -194,37 +197,62 @@ export function EnvironmentsPage() {
               </tr>
             </thead>
             <tbody>
-              {envs.map((e) => (
-                <tr
-                  key={e.id}
-                  onClick={() => setEditing(e)}
-                  className="cursor-pointer border-b border-border/60 transition-colors hover:bg-muted/40"
-                >
-                  <td className="px-5 py-2.5">
-                    <div className="font-medium text-foreground">{e.name}</div>
-                    {e.description && (
-                      <div className="truncate text-xs text-muted-foreground">{e.description}</div>
-                    )}
-                  </td>
-                  <td className="px-3 py-2.5 font-mono text-[11px] text-muted-foreground">
-                    {e.baseUrl || '—'}
-                  </td>
-                  <td className="px-3 py-2.5 text-muted-foreground">{Object.keys(e.params).length}</td>
-                  <td className="px-3 py-2.5 text-right">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-7"
-                      onClick={(ev) => {
-                        ev.stopPropagation()
-                        void remove(e.id)
-                      }}
-                    >
-                      <Trash2Icon className="size-4" />
-                    </Button>
-                  </td>
-                </tr>
-              ))}
+              {envs.map((e) => {
+                const ro = !!e.readOnly
+                return (
+                  <tr
+                    key={e.id}
+                    onClick={() => setEditing(ro ? { seed: e } : e)}
+                    className="cursor-pointer border-b border-border/60 transition-colors hover:bg-muted/40"
+                  >
+                    <td className="px-5 py-2.5">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-foreground">{e.name}</span>
+                        {ro && (
+                          <span className="shrink-0 rounded-sm border border-border bg-muted/50 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                            from {e.source}
+                          </span>
+                        )}
+                      </div>
+                      {e.description && (
+                        <div className="truncate text-xs text-muted-foreground">{e.description}</div>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5 font-mono text-[11px] text-muted-foreground">
+                      {e.baseUrl || '—'}
+                    </td>
+                    <td className="px-3 py-2.5 text-muted-foreground">{Object.keys(e.params).length}</td>
+                    <td className="px-3 py-2.5 text-right">
+                      {ro ? (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-7"
+                          title="Clone to an editable copy"
+                          onClick={(ev) => {
+                            ev.stopPropagation()
+                            setEditing({ seed: e })
+                          }}
+                        >
+                          <CopyIcon className="size-4" />
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-7"
+                          onClick={(ev) => {
+                            ev.stopPropagation()
+                            void remove(e.id)
+                          }}
+                        >
+                          <Trash2Icon className="size-4" />
+                        </Button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         )}
@@ -232,7 +260,8 @@ export function EnvironmentsPage() {
 
       {editing && (
         <EnvironmentDialog
-          env={editing === 'new' ? null : editing}
+          env={editing !== 'new' && !('seed' in editing) ? editing : null}
+          seed={editing !== 'new' && 'seed' in editing ? editing.seed : null}
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null)
@@ -246,26 +275,30 @@ export function EnvironmentsPage() {
 
 function EnvironmentDialog({
   env,
+  seed,
   onClose,
   onSaved,
 }: {
   env: EnvironmentRecord | null
+  // When cloning a read-only package environment: prefill a NEW record from it.
+  seed?: EnvironmentRecord | null
   onClose: () => void
   onSaved: () => void
 }) {
-  const [name, setName] = useState(env?.name ?? '')
-  const [baseUrl, setBaseUrl] = useState(env?.baseUrl ?? '')
-  const [description, setDescription] = useState(env?.description ?? '')
+  const base = env ?? seed ?? null
+  const [name, setName] = useState(env ? env.name : seed ? `${seed.name} (copy)` : '')
+  const [baseUrl, setBaseUrl] = useState(base?.baseUrl ?? '')
+  const [description, setDescription] = useState(base?.description ?? '')
   const [rows, setRows] = useState<{ k: string; v: string }[]>(
-    env ? Object.entries(env.params).map(([k, v]) => ({ k, v })) : []
+    base ? Object.entries(base.params).map(([k, v]) => ({ k, v })) : []
   )
-  const [authPlugin, setAuthPlugin] = useState(env?.auth?.plugin ?? '')
-  const [authLoginUrl, setAuthLoginUrl] = useState(env?.auth?.loginUrl ?? '')
+  const [authPlugin, setAuthPlugin] = useState(base?.auth?.plugin ?? '')
+  const [authLoginUrl, setAuthLoginUrl] = useState(base?.auth?.loginUrl ?? '')
   const [authRows, setAuthRows] = useState<{ k: string; v: string }[]>(
-    env ? Object.entries(env.auth?.config ?? {}).map(([k, v]) => ({ k, v })) : []
+    base ? Object.entries(base.auth?.config ?? {}).map(([k, v]) => ({ k, v })) : []
   )
   const [credRows, setCredRows] = useState<{ k: string; v: string }[]>(
-    env ? Object.entries(env.auth?.creds ?? {}).map(([k, v]) => ({ k, v })) : []
+    base ? Object.entries(base.auth?.creds ?? {}).map(([k, v]) => ({ k, v })) : []
   )
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -307,8 +340,12 @@ function EnvironmentDialog({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{env ? 'Edit environment' : 'New environment'}</DialogTitle>
-          <DialogDescription>Name the target and the values runs should use.</DialogDescription>
+          <DialogTitle>{env ? 'Edit environment' : seed ? 'Clone environment' : 'New environment'}</DialogTitle>
+          <DialogDescription>
+            {seed
+              ? `A local, editable copy of "${seed.name}" (from ${seed.source}).`
+              : 'Name the target and the values runs should use.'}
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div className="space-y-2">

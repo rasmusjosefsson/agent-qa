@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { PlusIcon, Loader2Icon, UsersIcon, Trash2Icon, XIcon } from 'lucide-react'
+import { PlusIcon, Loader2Icon, UsersIcon, Trash2Icon, XIcon, CopyIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -28,7 +28,11 @@ function slugify(s: string): string {
 export function PersonasPage() {
   const [personas, setPersonas] = useState<PersonaRecord[] | null>(null)
   const [err, setErr] = useState('')
-  const [editing, setEditing] = useState<PersonaRecord | 'new' | null>(null)
+  // 'new' → blank dialog; a record → edit; { seed } → clone a read-only
+  // package persona into a new editable local one.
+  const [editing, setEditing] = useState<PersonaRecord | 'new' | { seed: PersonaRecord } | null>(
+    null
+  )
 
   const load = () =>
     getPersonas()
@@ -93,39 +97,64 @@ export function PersonasPage() {
               </tr>
             </thead>
             <tbody>
-              {personas.map((p) => (
-                <tr
-                  key={p.id}
-                  onClick={() => setEditing(p)}
-                  className="cursor-pointer border-b border-border/60 transition-colors hover:bg-muted/40"
-                >
-                  <td className="px-5 py-2.5">
-                    <div className="font-medium text-foreground">{p.name}</div>
-                    {p.description && (
-                      <div className="truncate text-xs text-muted-foreground">{p.description}</div>
-                    )}
-                  </td>
-                  <td className="px-3 py-2.5 font-mono text-[11px] text-muted-foreground">
-                    {p.profile || '—'}
-                  </td>
-                  <td className="px-3 py-2.5 text-muted-foreground">
-                    {Object.keys(p.credentials?.entries || {}).length} keys
-                  </td>
-                  <td className="px-3 py-2.5 text-right">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-7"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        void remove(p.id)
-                      }}
-                    >
-                      <Trash2Icon className="size-4" />
-                    </Button>
-                  </td>
-                </tr>
-              ))}
+              {personas.map((p) => {
+                const ro = !!p.readOnly
+                return (
+                  <tr
+                    key={p.id}
+                    onClick={() => setEditing(ro ? { seed: p } : p)}
+                    className="cursor-pointer border-b border-border/60 transition-colors hover:bg-muted/40"
+                  >
+                    <td className="px-5 py-2.5">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-foreground">{p.name}</span>
+                        {ro && (
+                          <span className="shrink-0 rounded-sm border border-border bg-muted/50 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                            from {p.source}
+                          </span>
+                        )}
+                      </div>
+                      {p.description && (
+                        <div className="truncate text-xs text-muted-foreground">{p.description}</div>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5 font-mono text-[11px] text-muted-foreground">
+                      {p.profile || '—'}
+                    </td>
+                    <td className="px-3 py-2.5 text-muted-foreground">
+                      {Object.keys(p.credentials?.entries || {}).length} keys
+                    </td>
+                    <td className="px-3 py-2.5 text-right">
+                      {ro ? (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-7"
+                          title="Clone to an editable copy"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setEditing({ seed: p })
+                          }}
+                        >
+                          <CopyIcon className="size-4" />
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-7"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void remove(p.id)
+                          }}
+                        >
+                          <Trash2Icon className="size-4" />
+                        </Button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         )}
@@ -133,7 +162,8 @@ export function PersonasPage() {
 
       {editing && (
         <PersonaDialog
-          persona={editing === 'new' ? null : editing}
+          persona={editing !== 'new' && !('seed' in editing) ? editing : null}
+          seed={editing !== 'new' && 'seed' in editing ? editing.seed : null}
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null)
@@ -147,19 +177,23 @@ export function PersonasPage() {
 
 function PersonaDialog({
   persona,
+  seed,
   onClose,
   onSaved,
 }: {
   persona: PersonaRecord | null
+  // When cloning a read-only package persona: prefill a NEW record from it.
+  seed?: PersonaRecord | null
   onClose: () => void
   onSaved: () => void
 }) {
-  const [name, setName] = useState(persona?.name ?? '')
-  const [profile, setProfile] = useState(persona?.profile ?? '')
+  const base = persona ?? seed ?? null
+  const [name, setName] = useState(persona ? persona.name : seed ? `${seed.name} (copy)` : '')
+  const [profile, setProfile] = useState(base?.profile ?? '')
   const [rows, setRows] = useState<{ k: string; v: string }[]>(
-    persona ? Object.entries(persona.credentials?.entries ?? {}).map(([k, v]) => ({ k, v })) : [{ k: '', v: '' }]
+    base ? Object.entries(base.credentials?.entries ?? {}).map(([k, v]) => ({ k, v })) : [{ k: '', v: '' }]
   )
-  const [description, setDescription] = useState(persona?.description ?? '')
+  const [description, setDescription] = useState(base?.description ?? '')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
 
@@ -191,8 +225,12 @@ function PersonaDialog({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{persona ? 'Edit persona' : 'New persona'}</DialogTitle>
-          <DialogDescription>A login: a profile + the credentials it signs in with.</DialogDescription>
+          <DialogTitle>{persona ? 'Edit persona' : seed ? 'Clone persona' : 'New persona'}</DialogTitle>
+          <DialogDescription>
+            {seed
+              ? `A local, editable copy of "${seed.name}" (from ${seed.source}).`
+              : 'A login: a profile + the credentials it signs in with.'}
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div className="space-y-2">

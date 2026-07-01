@@ -843,7 +843,7 @@ async function resolveRunAuthEnv(root, deps, opts) {
   if (!personaId) return { env: base };
   if (!isSafeSegment(personaId)) return { error: 'unsafe persona id' };
 
-  const persona = await readJson(path.join(root, '_personas', personaId, 'persona.json'));
+  const persona = await loadPersonaById(root, personaId);
   if (!persona) return { error: `no such persona: ${personaId}` };
   const profile = String(persona.profile || '').trim();
   if (!profile) return { error: 'persona has no profile to authenticate' };
@@ -852,7 +852,7 @@ async function resolveRunAuthEnv(root, deps, opts) {
   let env = null;
   const envId = opts && opts.environmentId ? String(opts.environmentId) : '';
   if (envId && isSafeSegment(envId)) {
-    env = await readJson(path.join(root, '_environments', envId, 'environment.json'));
+    env = await loadEnvironmentById(root, envId);
   }
   const auth = (env && env.auth) || {};
 
@@ -1013,6 +1013,86 @@ function normalizeEnvironment(id, body, existing) {
 
 // Generic flat-record CRUD shared by personas + environments: GET list/one,
 // POST upsert/delete, stored at <root>/<dirname>/<id>/<key>.json.
+// Read `extra-dirs` for a table ([personas] / [environments]) from the global
+// ~/.agent-qa/agent-qa.toml — the dirs installed extension packages register
+// their read-only records under (see lib/packages.js). Best-effort parse.
+function packageRecordDirs(tableName) {
+  // Same config home the installer writes to (lib/packages.js): AGENT_QA_HOME
+  // override, else ~/.agent-qa.
+  const home = process.env.AGENT_QA_HOME || path.join(os.homedir(), '.agent-qa');
+  const tomlPath = path.join(home, 'agent-qa.toml');
+  let text;
+  try {
+    text = fs.readFileSync(tomlPath, 'utf8');
+  } catch {
+    return [];
+  }
+  const block = [];
+  let inTable = false;
+  for (const line of text.split('\n')) {
+    const m = /^\s*\[([^\]]+)\]\s*$/.exec(line);
+    if (m) {
+      inTable = m[1].trim() === tableName;
+      continue;
+    }
+    if (inTable) block.push(line);
+  }
+  const dirs = [];
+  for (const q of block.join('\n').matchAll(/"([^"]+)"/g)) {
+    const p = q[1];
+    dirs.push(p.startsWith('~') ? path.join(os.homedir(), p.slice(1)) : p);
+  }
+  return dirs;
+}
+
+// Friendly package label from a registered dir path (…/packages/<scheme>/<name>/…).
+function pkgLabelFromDir(dir) {
+  const m = /\/packages\/[^/]+\/([^/]+)/.exec(dir);
+  return m ? m[1] : path.basename(path.dirname(dir));
+}
+
+// Read-only records shipped by installed packages: flat `<id>.json` files in
+// each registered dir. Tagged source=<pkg> + readOnly so the UI shows them
+// distinctly and blocks edits (clone to customize). Local records shadow these.
+async function readPackageRecords(tableName) {
+  const out = [];
+  for (const dir of packageRecordDirs(tableName)) {
+    let files = [];
+    try {
+      files = await fsp.readdir(dir);
+    } catch {
+      continue;
+    }
+    const label = pkgLabelFromDir(dir);
+    for (const f of files.sort()) {
+      if (!f.endsWith('.json')) continue;
+      const rec = await readJson(path.join(dir, f));
+      if (!rec) continue;
+      const id = String(rec.id || f.slice(0, -'.json'.length));
+      out.push({ ...rec, id, source: label, readOnly: true });
+    }
+  }
+  return out;
+}
+
+// Resolve a persona/environment by id: a local record first, else a read-only
+// package-provided one. Used by connect + replay so personas shipped by an
+// installed extension package are usable directly (not merely listable).
+async function loadPersonaById(root, id) {
+  return (
+    (await readJson(path.join(root, '_personas', id, 'persona.json'))) ||
+    (await readPackageRecords('personas')).find((p) => p.id === id) ||
+    null
+  );
+}
+async function loadEnvironmentById(root, id) {
+  return (
+    (await readJson(path.join(root, '_environments', id, 'environment.json'))) ||
+    (await readPackageRecords('environments')).find((e) => e.id === id) ||
+    null
+  );
+}
+
 async function handleSimpleRecords(req, res, root, seg, cfg) {
   const { dirname, key, plural, normalize } = cfg;
   const method = req.method;
@@ -1031,10 +1111,15 @@ async function handleSimpleRecords(req, res, root, seg, cfg) {
         .filter((e) => e.isDirectory() && isSafeSegment(e.name))
         .map((e) => e.name)
         .sort();
+      const localIds = new Set(ids);
       const items = [];
       for (const id of ids) {
         const rec = await readJson(fileOf(id));
-        if (rec) items.push(rec);
+        if (rec) items.push({ ...rec, readOnly: false });
+      }
+      // Merge package-provided records (read-only); local ids win on collision.
+      for (const p of await readPackageRecords(plural)) {
+        if (!localIds.has(p.id)) items.push(p);
       }
       return sendJson(res, 200, { [plural]: items });
     }
@@ -1045,22 +1130,29 @@ async function handleSimpleRecords(req, res, root, seg, cfg) {
   if (!isSafeSegment(id)) return badRequest(res, `unsafe ${key} id`);
   const dir = path.join(baseDir, id);
   const file = fileOf(id);
+  const localRec = await readJson(file);
+  // A package record only "wins" this id when there's no local override.
+  const pkgRec = localRec ? null : (await readPackageRecords(plural)).find((p) => p.id === id) || null;
 
   if (seg.length === 1) {
     if (method === 'GET') {
-      const rec = await readJson(file);
+      const rec = localRec ? { ...localRec, readOnly: false } : pkgRec;
       if (!rec) return notFound(res, `no such ${key}`);
       return sendJson(res, 200, { [key]: rec });
     }
     if (method === 'POST') {
+      if (pkgRec) {
+        return sendJson(res, 409, {
+          error: `${key} "${id}" is provided by package "${pkgRec.source}" (read-only) — clone it under a new id to customize`,
+        });
+      }
       let body;
       try {
         body = await readJsonBody(req);
       } catch (e) {
         return badRequest(res, String((e && e.message) || e));
       }
-      const existing = await readJson(file);
-      const rec = normalize(id, body, existing);
+      const rec = normalize(id, body, localRec);
       await fsp.mkdir(dir, { recursive: true });
       await fsp.writeFile(file, JSON.stringify(rec, null, 2) + '\n');
       return sendJson(res, 200, { ok: true, [key]: rec });
@@ -1069,6 +1161,11 @@ async function handleSimpleRecords(req, res, root, seg, cfg) {
   }
 
   if (seg.length === 2 && seg[1] === 'delete' && method === 'POST') {
+    if (pkgRec) {
+      return sendJson(res, 409, {
+        error: `${key} "${id}" is provided by a package (read-only) — cannot delete`,
+      });
+    }
     try {
       await fsp.rm(dir, { recursive: true, force: true });
     } catch (e) {
@@ -1123,7 +1220,7 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
   if (!deps || typeof deps.runCli !== 'function') {
     return sendJson(res, 503, { error: 'connect unavailable: agent-qa CLI not resolved' });
   }
-  const persona = await readJson(path.join(root, '_personas', personaId, 'persona.json'));
+  const persona = await loadPersonaById(root, personaId);
   if (!persona) return notFound(res, 'no such persona');
   const profile = String(persona.profile || '').trim();
   if (!profile) return badRequest(res, 'persona has no profile to bootstrap');
@@ -1146,7 +1243,7 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
   let env = null;
   const envId = body.environmentId ? String(body.environmentId) : '';
   if (envId && isSafeSegment(envId)) {
-    env = await readJson(path.join(root, '_environments', envId, 'environment.json'));
+    env = await loadEnvironmentById(root, envId);
   }
   const auth = (env && env.auth) || {};
   // An auth plugin can come from three places: the workbench's own registry
@@ -2261,7 +2358,7 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
     if (!personaId || !profile) {
       return badRequest(res, 'connect a persona first (POST /api/chat/c/<id>/connect)');
     }
-    const persona = await readJson(path.join(scenariosRoot, '_personas', personaId, 'persona.json'));
+    const persona = await loadPersonaById(scenariosRoot, personaId);
     const entries = (persona && persona.credentials && persona.credentials.entries) || {};
     const { env: resolvedEnv, unresolved } = await resolveVaultRefs(entries);
     if (unresolved.length) {
