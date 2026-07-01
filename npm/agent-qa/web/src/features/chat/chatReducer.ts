@@ -74,11 +74,24 @@ export function fmtArgs(args: unknown): string {
   }
 }
 
+// Replace an absolute home directory with `~` for display — `/Users/<name>/…`
+// (macOS) and `/home/<name>/…` (Linux). Keeps the UI clean and avoids leaking
+// the OS username (which is PII) into titles, args, and output. Display-only;
+// the real command/output on disk is untouched.
+export function maskHome(s: string): string {
+  return typeof s === 'string' ? s.replace(/\/(?:Users|home)\/[^/\s"':]+/g, '~') : s;
+}
+
+// Shell plumbing that isn't the meaningful action — skipped when choosing a
+// bash card's title so `cd <dir>\nagent-qa flush` reads as "$ agent-qa flush",
+// not the `cd`.
+const PLUMBING = /^(?:cd|export|set|source|\.)\s/;
+
 // Title for a bash command: agents often write multi-line scripts that open
-// with a blank line and/or a `# comment` describing the action (so a naive
-// "first line" yields an empty "$ "). Prefer a leading comment as the human
-// label (it reads better than the raw command); else the first real command
-// line, prefixed with `$`.
+// with a blank line, a `# comment`, and/or shell plumbing (`cd …`) before the
+// real action. Prefer a leading comment as the human label (it reads better
+// than the raw command); else the first meaningful command line (skipping
+// plumbing), prefixed with `$`. Home dir masked to `~`.
 function summarizeCommand(s: string): string {
   const lines = s
     .split('\n')
@@ -88,10 +101,13 @@ function summarizeCommand(s: string): string {
   const first = lines[0];
   if (first.startsWith('#') && !first.startsWith('#!')) {
     const label = first.replace(/^#+\s*/, '').trim();
-    if (label) return clip(label, 80);
+    if (label) return clip(maskHome(label), 80);
   }
-  const cmd = lines.find((l) => !l.startsWith('#')) || first;
-  return `$ ${clip(cmd, 80)}`;
+  const cmd =
+    lines.find((l) => !l.startsWith('#') && !PLUMBING.test(l)) ||
+    lines.find((l) => !l.startsWith('#')) ||
+    first;
+  return `$ ${clip(maskHome(cmd), 80)}`;
 }
 
 function clip(s: string, n: number): string {
