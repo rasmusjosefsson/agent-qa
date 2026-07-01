@@ -2496,6 +2496,11 @@ function createRequestHandler(root, deps, chat) {
       // Rust binary). Handles its own methods (GET + POST).
       const segAll = p.split('/').filter(Boolean);
 
+      // App version for the sidebar. Works without a resolved CLI.
+      if (segAll[0] === 'api' && segAll[1] === 'version' && req.method === 'GET') {
+        return sendJson(res, 200, { version: await resolveAppVersion(deps) });
+      }
+
       // In-app chat surface (pi SDK). Handles its own methods (GET + POST).
       if (segAll[0] === 'api' && segAll[1] === 'chat') {
         return await handleChat(req, res, chatManager, deps, segAll.slice(2), root);
@@ -2851,6 +2856,31 @@ function createRequestHandler(root, deps, chat) {
       sendJson(res, 500, { error: String((err && err.message) || err) });
     }
   };
+}
+
+// Resolve the app version for the UI: the umbrella package.json carries the
+// real version on a published install; in the source tree it's "0.0.0", so
+// fall back to the resolved CLI binary's `--version`. Cached after first read.
+let _appVersion = null;
+async function resolveAppVersion(deps) {
+  if (_appVersion) return _appVersion;
+  let v = '';
+  try {
+    v = String(require('../package.json').version || '');
+  } catch {
+    /* ignore */
+  }
+  if ((!v || v === '0.0.0') && deps && typeof deps.runCli === 'function') {
+    try {
+      const r = await deps.runCli(['--version'], {});
+      const m = /(\d+\.\d+\.\d+[^\s]*)/.exec(String(r.stdout || ''));
+      if (m) v = m[1];
+    } catch {
+      /* CLI unavailable */
+    }
+  }
+  _appVersion = v && v !== '0.0.0' ? v : 'dev';
+  return _appVersion;
 }
 
 function createServer(root, deps) {

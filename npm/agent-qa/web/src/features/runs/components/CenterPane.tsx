@@ -1,6 +1,6 @@
 // web/src/features/runs/components/CenterPane.tsx
 import { cn } from '@/lib/utils'
-import { PlayIcon } from 'lucide-react'
+import { Loader2Icon, PlayIcon } from 'lucide-react'
 import {
   cleanSummary,
   collapseEvents,
@@ -43,7 +43,17 @@ function VerbBadge({ verb }: { verb: unknown }) {
   )
 }
 
-export function CenterPane({ runs, onReplay }: { runs: RunsApi; onReplay: (sid: string) => void }) {
+export function CenterPane({
+  runs,
+  onReplay,
+  busy,
+}: {
+  runs: RunsApi
+  onReplay: (sid: string) => void
+  // A replay of the selected scenario is already in flight — disable Replay so
+  // a second run can't collide with it on the shared browser session.
+  busy?: boolean
+}) {
   const { detail, scenarioDef, sel, runDefSteps, runsBySid } = runs
 
   // Mode A — a recorded scenario is previewed (no run selected).
@@ -72,10 +82,19 @@ export function CenterPane({ runs, onReplay }: { runs: RunsApi; onReplay: (sid: 
             <button
               type="button"
               onClick={() => onReplay(sel.sid!)}
-              className="flex shrink-0 items-center gap-2 rounded-md border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+              disabled={busy}
+              title={busy ? 'A replay is already running for this scenario' : undefined}
+              className="flex shrink-0 items-center gap-2 rounded-md border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-card"
             >
-              <PlayIcon className="size-4 fill-emerald-400 text-emerald-400" />
-              Replay
+              {busy ? (
+                <>
+                  <Loader2Icon className="size-4 animate-spin" /> Replaying…
+                </>
+              ) : (
+                <>
+                  <PlayIcon className="size-4 fill-emerald-400 text-emerald-400" /> Replay
+                </>
+              )}
             </button>
           )}
         </div>
@@ -106,6 +125,16 @@ export function CenterPane({ runs, onReplay }: { runs: RunsApi; onReplay: (sid: 
     const defSteps = runDefSteps.sid === sel.sid ? runDefSteps.steps : null
     const rows = mergeRows(events, defSteps)
 
+    // Setup (env.open, e.g. `useProfile` sign-in) runs BEFORE any step. Surface
+    // its two invisible states so the run never looks silently stuck/broken:
+    //   • signing in  — started, no step has begun, not terminal yet
+    //   • setup failed — a `setup` event errored (e.g. no credentials)
+    const terminal = !!a.summary || s.state === 'done'
+    const stepStarted = (detail.events || []).some((e) => e.status && e.status !== 'pending')
+    const signingIn = !terminal && !stepStarted
+    const setupFail = (detail.events || []).find((e) => e.kind === 'setup' && e.status === 'fail')
+    const setupError = setupFail && setupFail.error ? cleanSummary(setupFail.error) : null
+
     return (
       <Pane>
         <div className="border-b border-border px-4 py-3">
@@ -125,6 +154,22 @@ export function CenterPane({ runs, onReplay }: { runs: RunsApi; onReplay: (sid: 
           <div className="mt-0.5 text-xs text-muted-foreground">
             {fmtRunTime(detail.runId)} <span className="font-mono opacity-50">· {detail.runId}</span>
           </div>
+          {signingIn && (
+            <div className="mt-2 flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-300">
+              <Loader2Icon className="size-3.5 shrink-0 animate-spin" />
+              Signing in… authenticating the persona in a fresh browser — this can take ~30s.
+            </div>
+          )}
+          {setupError && (
+            <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-xs text-destructive">
+              <div className="font-medium">Setup failed — the run never started.</div>
+              <div className="mt-0.5 opacity-90">{setupError}</div>
+              <div className="mt-1 text-muted-foreground">
+                This scenario signs in first. Pick the right <span className="font-medium">Replay as</span> persona
+                (and environment) at the top, then replay.
+              </div>
+            </div>
+          )}
         </div>
         <ol className="min-h-0 flex-1 overflow-auto p-2">
           {rows.map((st) => {
@@ -157,7 +202,11 @@ export function CenterPane({ runs, onReplay }: { runs: RunsApi; onReplay: (sid: 
               </li>
             )
           })}
-          {rows.length === 0 && <li className="px-2 py-3 text-xs text-muted-foreground">No steps recorded for this run.</li>}
+          {rows.length === 0 && (
+            <li className="px-2 py-3 text-xs text-muted-foreground">
+              {signingIn ? 'Signing in… steps start once the persona is authenticated.' : 'No steps recorded for this run.'}
+            </li>
+          )}
         </ol>
       </Pane>
     )
