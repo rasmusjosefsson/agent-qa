@@ -12,6 +12,12 @@ const path = require('node:path');
 
 const srv = require('../lib/report-server.js');
 
+// Isolate package discovery from the developer's real ~/.agent-qa (which may
+// have personas/environments registered via `agent-qa install`). Point
+// AGENT_QA_HOME at an empty dir so persona/environment lists are deterministic;
+// the discovery test overrides this with its own fixture and restores it.
+process.env.AGENT_QA_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-home-empty-'));
+
 // ---- fixture ----
 
 function makeFixture() {

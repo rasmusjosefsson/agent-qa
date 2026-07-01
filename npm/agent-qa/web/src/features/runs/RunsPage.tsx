@@ -1,5 +1,5 @@
 // web/src/features/runs/RunsPage.tsx
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRuns } from './useRuns'
 import { ScenarioSidebar } from './components/ScenarioSidebar'
 import { CenterPane } from './components/CenterPane'
@@ -35,8 +35,43 @@ export function RunsPage() {
       .catch(() => {})
   }, [])
 
+  // Default "Replay as" to the scenario's RECORDED login: an auth-walled
+  // scenario records `env.open: [{useProfile, name}]`; preselect the persona
+  // whose profile matches (+ the sole environment) so replay works first click.
+  // Defaults once per scenario; a manual change sticks until you switch scenarios.
+  const defaultedFor = useRef<string | null>(null)
+  useEffect(() => {
+    const sid = runs.sel.sid
+    if (!sid || defaultedFor.current === sid) return
+    const recorded = (runs.scenarioDef?.env?.open || []).find((o) => o.kind === 'useProfile')?.name
+    if (!recorded) return // not auth-walled → leave the pickers alone
+    const p = personas.find((x) => x.profile === recorded)
+    if (!p) return
+    defaultedFor.current = sid
+    setPersonaId(p.id)
+    if (environments.length === 1) setEnvId(environments[0].id)
+  }, [runs.sel.sid, runs.scenarioDef, personas, environments])
+
+  // A replay of the selected scenario is in flight — block re-firing (a second
+  // run would collide on the shared `replay-<sid>` browser session and fail
+  // setup). `replayingSid` bridges the gap before the run is tracked; then the
+  // in-flight run itself keeps it disabled.
+  const [replayingSid, setReplayingSid] = useState<string | null>(null)
+  const d = runs.detail
+  const viewedRunActive = !!(
+    d &&
+    d.sid === runs.sel.sid &&
+    !d.audit?.summary &&
+    d.status?.state !== 'done'
+  )
+  const busy = viewedRunActive || replayingSid === runs.sel.sid
+  useEffect(() => {
+    if (viewedRunActive && replayingSid === runs.sel.sid) setReplayingSid(null)
+  }, [viewedRunActive, replayingSid, runs.sel.sid])
+
   const onReplay = async (sid: string) => {
     setReplayErr('')
+    setReplayingSid(sid)
     const persona = personas.find((p) => p.id === personaId)
     const env = environments.find((e) => e.id === envId)
     const params: Record<string, string> = env ? { ...env.params } : {}
@@ -47,7 +82,13 @@ export function RunsPage() {
       personaId: personaId || undefined,
       environmentId: envId || undefined,
     })
-    if (!res.ok) setReplayErr(`Replay did not start: ${res.error}`)
+    if (!res.ok) {
+      setReplayErr(`Replay did not start: ${res.error}`)
+      setReplayingSid(null)
+    } else {
+      // Backstop: drop the bridge flag if the in-flight run never gets tracked.
+      window.setTimeout(() => setReplayingSid((cur) => (cur === sid ? null : cur)), 45000)
+    }
   }
 
   const hasRunConfig = personas.length > 0 || environments.length > 0
@@ -99,7 +140,7 @@ export function RunsPage() {
         </Panel>
         <ResizeHandle />
         <Panel defaultSize={56} minSize={30} className="min-h-0">
-          <CenterPane runs={runs} onReplay={(sid) => void onReplay(sid)} />
+          <CenterPane runs={runs} onReplay={(sid) => void onReplay(sid)} busy={busy} />
         </Panel>
         <ResizeHandle />
         <Panel defaultSize={22} minSize={16} className="min-h-0">

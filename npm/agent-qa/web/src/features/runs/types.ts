@@ -40,6 +40,9 @@ export interface ScenarioDef {
   id?: string
   intent?: string
   steps?: ScenarioStep[]
+  // The recorded setup baseline. A `useProfile` op names the login the run must
+  // sign in as — used to default the "Replay as" persona.
+  env?: { open?: Array<{ kind?: string; name?: string }>; [k: string]: unknown }
   [k: string]: unknown
 }
 
