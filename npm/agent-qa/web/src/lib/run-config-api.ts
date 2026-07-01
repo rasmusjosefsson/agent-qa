@@ -70,6 +70,20 @@ export function importPlugin(
   return postJson('/api/config/plugins/import', { filename, contentBase64 })
 }
 
+// Install an extension package (npm:<pkg> | git:<url> | https://…) — fetches it
+// and wires ~/.agent-qa/agent-qa.toml. Returns { ok:false, error } on a failed
+// install (npm/git error) rather than throwing.
+export interface InstallResult {
+  ok: boolean
+  name?: string
+  plugins?: { path: string; kinds: string[] }[]
+  skills?: number
+  error?: string
+}
+export function installPackage(source: string): Promise<InstallResult> {
+  return postJson('/api/config/plugins/install', { source })
+}
+
 // --- connect (bootstrap a persona's login for an environment) ---
 export interface ConnectStep {
   step: string
