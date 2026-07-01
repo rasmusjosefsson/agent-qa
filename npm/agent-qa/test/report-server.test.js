@@ -959,6 +959,53 @@ test('plan run + scenario replay inject the persona credentials and self-bootstr
   assert.equal(replays.length, 0);
 });
 
+test('environment shared creds layer under persona creds (persona wins on conflict)', async (t) => {
+  const fx = makeFixture();
+  const replays = [];
+  const deps = {
+    runCli: async () => ({ code: 0, stdout: 'ok', stderr: '' }),
+    replay: async (sid, session, opts) => {
+      replays.push({ sid, session, opts });
+      return { ok: true };
+    },
+  };
+  const { server, base } = await boot(fx.root, deps);
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  // Environment carries the app-level creds every identity shares, plus a key
+  // that also appears on the persona (to prove precedence).
+  await j('POST', '/api/environments/staging', {
+    name: 'Staging',
+    auth: {
+      plugin: 'agent-qa-plugin-acme',
+      creds: { OUTREACH_CLIENT_ID: 'cid-shared', OVERLAP: 'from-env' },
+    },
+  });
+  // Persona carries only what varies + overrides OVERLAP.
+  await j('POST', '/api/personas/admin', {
+    name: 'Admin',
+    profile: 'admin-user',
+    credentials: { entries: { OUTREACH_EMAIL: 'a@b.com', OVERLAP: 'from-persona' } },
+  });
+
+  const rep = await j('POST', `/api/scenarios/${fx.sid}/replay`, {
+    personaId: 'admin',
+    environmentId: 'staging',
+  });
+  assert.equal(rep.status, 202);
+  assert.equal(replays.length, 1);
+  const env = replays[0].opts.env;
+  assert.equal(env.OUTREACH_CLIENT_ID, 'cid-shared'); // shared from the environment
+  assert.equal(env.OUTREACH_EMAIL, 'a@b.com'); // identity from the persona
+  assert.equal(env.OVERLAP, 'from-persona'); // persona wins on a key collision
+
+  // The stored environment persists the creds block.
+  const got = await (await j('GET', '/api/environments/staging')).json();
+  assert.deepEqual(got.environment.auth.creds, { OUTREACH_CLIENT_ID: 'cid-shared', OVERLAP: 'from-env' });
+});
+
 test('plugin registry persists + injects AGENT_QA_PLUGINS into CLI calls', async (t) => {
   const fx = makeFixture();
   const calls = [];

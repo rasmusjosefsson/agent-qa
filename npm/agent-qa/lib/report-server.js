@@ -856,7 +856,11 @@ async function resolveRunAuthEnv(root, deps, opts) {
   }
   const auth = (env && env.auth) || {};
 
-  const entries = (persona.credentials && persona.credentials.entries) || {};
+  // Environment's shared creds (base) + persona's identity creds (override).
+  const entries = {
+    ...(auth.creds || {}),
+    ...((persona.credentials && persona.credentials.entries) || {}),
+  };
   const { env: resolvedEnv, unresolved } = await resolveVaultRefs(entries);
   if (unresolved.length) {
     return {
@@ -995,6 +999,11 @@ function normalizeEnvironment(id, body, existing) {
       plugin: String(auth.plugin ?? ''),
       loginUrl: String(auth.loginUrl ?? ''),
       config: strMap(auth.config, existing?.auth?.config),
+      // Shared/app-level credentials for this environment (env-var name → value
+      // | `vault:` ref), injected as bare env vars and MERGED UNDER a persona's
+      // own creds at connect/run time. Put what every identity shares here (e.g.
+      // the OAuth client id); keep per-identity email/password on the persona.
+      creds: strMap(auth.creds, existing?.auth?.creds),
     },
     description: String(body.description ?? existing?.description ?? ''),
     createdAt: existing?.createdAt ?? now,
@@ -1172,10 +1181,15 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
 
   const log = [];
 
-  // The persona's credentials (env-var → value). Values may be literals or
-  // `vault:<path>:<key>` refs resolved here (token from `vault login` /
-  // VAULT_TOKEN, endpoint from VAULT_ADDR). Merged into the plugin's env.
-  const entries = (persona.credentials && persona.credentials.entries) || {};
+  // Credentials for the plugin (env-var → value | `vault:` ref, resolved here).
+  // The environment's shared creds (e.g. the OAuth client id) are the base; the
+  // persona's identity creds (email/password) merge on top and win on any key
+  // collision. Values may be literals or vault refs (token from `vault login` /
+  // VAULT_TOKEN, endpoint from VAULT_ADDR).
+  const entries = {
+    ...(auth.creds || {}),
+    ...((persona.credentials && persona.credentials.entries) || {}),
+  };
   const { env: resolvedEnv, unresolved } = await resolveVaultRefs(entries);
   if (unresolved.length) {
     log.push({
