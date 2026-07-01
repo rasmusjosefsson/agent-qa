@@ -1,6 +1,6 @@
 // web/src/features/chat/chatReducer.test.ts
 import { describe, it, expect } from 'vitest'
-import { reducer, initialState, toolSummary, type Action, type ChatUIState } from './chatReducer'
+import { reducer, initialState, toolSummary, maskHome, type Action, type ChatUIState } from './chatReducer'
 import type { AgentEvent, ChatState } from '@/lib/types'
 
 function run(events: Action[], start: ChatUIState = initialState): ChatUIState {
@@ -199,5 +199,29 @@ describe('toolSummary — compact tool titles', () => {
   it('clips long descriptions and falls back to the raw name', () => {
     expect(toolSummary('mystery', {})).toBe('mystery')
     expect(toolSummary('bash', { description: 'x'.repeat(200) }).endsWith('…')).toBe(true)
+  })
+
+  it('skips shell plumbing (cd/export) when picking the title', () => {
+    expect(toolSummary('bash', { command: 'cd /Users/me/dev/agent-qa\nagent-qa flush' })).toBe(
+      '$ agent-qa flush'
+    )
+    expect(toolSummary('bash', { command: 'export FOO=1\nnpm test' })).toBe('$ npm test')
+  })
+
+  it('masks the OS home dir in the title so no username leaks', () => {
+    expect(toolSummary('bash', { command: 'agent-qa replay /Users/rasmus/dev/x' })).toBe(
+      '$ agent-qa replay ~/dev/x'
+    )
+  })
+})
+
+describe('maskHome — home-dir path masking', () => {
+  it('replaces /Users/<name> and /home/<name> with ~', () => {
+    expect(maskHome('wrote /Users/rasmus/dev/agent-qa/tmp/x.json')).toBe('wrote ~/dev/agent-qa/tmp/x.json')
+    expect(maskHome('/home/ci/build/out')).toBe('~/build/out')
+  })
+  it('leaves non-home paths and empty input untouched', () => {
+    expect(maskHome('/var/log/system.log')).toBe('/var/log/system.log')
+    expect(maskHome('')).toBe('')
   })
 })

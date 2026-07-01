@@ -370,11 +370,54 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     };
 
     // 5. env.open setup. Skipped under --dry-run.
+    //
+    // A setup failure (e.g. a `useProfile` op whose profile bootstrap can't
+    // authenticate — no credentials in env) must still leave a TERMINAL run.
+    // Before, `?` propagated here BEFORE the first status.json write, so the
+    // run had only audit.json and the viewer showed it "in flight" forever (a
+    // ghost). Now we finalise a done/failed status + audit first, so the run
+    // surfaces as FAIL with the setup error, then propagate.
     let mut scope = ValueScope::new(resolved_inputs);
     if !opts.dry_run {
         if let Some(env) = &scenario.env {
             if let Some(open_ops) = &env.open {
-                env_ops::run_phase("env.open", open_ops, &opts.session_name, &mut scope)?;
+                if let Err(e) =
+                    env_ops::run_phase("env.open", open_ops, &opts.session_name, &mut scope)
+                {
+                    let reason = format!("env.open setup failed: {e}");
+                    let _ = write_run_status(
+                        &run,
+                        &RunStatus {
+                            state: "done".to_string(),
+                            current_idx: 0,
+                            total: 0,
+                            ok: Some(false),
+                        },
+                    );
+                    let _ = append_event(
+                        &run,
+                        &StepEvent {
+                            idx: 0,
+                            total: 0,
+                            id: "env.open".to_string(),
+                            intent: "setup".to_string(),
+                            kind: "setup".to_string(),
+                            status: "fail".to_string(),
+                            ms: None,
+                            error: Some(reason.clone()),
+                            screenshot: None,
+                            snapshot: None,
+                        },
+                    );
+                    let summary_line = "SUMMARY: 0/0 (FAIL — setup)".to_string();
+                    eprintln!("{summary_line}");
+                    audit.finished_at = Some(now_iso());
+                    audit.summary = Some(summary_line);
+                    audit.exit_code = Some(1);
+                    let _ = write_run_audit(&run, &audit);
+                    let _ = update_latest_pointer(&scenario_dir, &run.run_id);
+                    return Err(e.context("env.open setup failed"));
+                }
             }
         }
     }

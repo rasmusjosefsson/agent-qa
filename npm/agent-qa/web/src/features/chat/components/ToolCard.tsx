@@ -21,7 +21,7 @@ import {
   WrenchIcon,
 } from 'lucide-react'
 import type { ChatItem } from '@/lib/types'
-import { fmtArgs, toolSummary } from '../chatReducer'
+import { fmtArgs, maskHome, toolSummary } from '../chatReducer'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { cn } from '@/lib/utils'
 
@@ -63,8 +63,11 @@ function StatusIcon({ status }: { status: ToolItem['status'] }) {
 
 export function ToolCard({ item }: { item: ToolItem }) {
   const [open, setOpen] = useState(false)
-  const args = fmtArgs(item.args)
-  const hasDetail = !!(args || item.out)
+  // Mask the OS home dir (`/Users/<name>` → `~`) in the expanded detail too, so
+  // the username never shows and long absolute paths stay readable.
+  const args = maskHome(fmtArgs(item.args))
+  const out = maskHome(item.out || '')
+  const hasDetail = !!(args || out)
   const title = toolSummary(item.name, item.args)
   const Icon = iconFor(item.name)
   // Show the raw tool name only when the title doesn't already lead with it
@@ -117,9 +120,9 @@ export function ToolCard({ item }: { item: ToolItem }) {
             </pre>
           </div>
         )}
-        {item.out && (
+        {out && (
           <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
-            {item.out}
+            {out}
           </pre>
         )}
       </CollapsibleContent>
