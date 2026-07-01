@@ -24,13 +24,30 @@ export function getRunDetail(sid: string, runId: string): Promise<RunDetail> {
   return getJson(`/api/scenarios/${encodeURIComponent(sid)}/runs/${encodeURIComponent(runId)}`)
 }
 
-export async function startReplay(sid: string): Promise<{ ok: boolean; error?: string }> {
+// Optional persona/environment for a replay. A named persona lets the server
+// resolve + inject its credentials so an auth-walled scenario re-authenticates.
+export interface ReplayOpts {
+  profile?: string
+  params?: Record<string, string>
+  personaId?: string
+  environmentId?: string
+}
+
+export async function startReplay(
+  sid: string,
+  opts?: ReplayOpts
+): Promise<{ ok: boolean; error?: string }> {
   const res = await fetch(`/api/scenarios/${encodeURIComponent(sid)}/replay`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: '{}',
+    body: JSON.stringify(opts ?? {}),
   })
-  if (res.ok) return { ok: true }
+  // A named persona whose vault refs can't be resolved comes back 200 { ok:false }.
+  if (res.ok) {
+    const j = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string }
+    if (j.ok === false) return { ok: false, error: j.error || 'replay refused' }
+    return { ok: true }
+  }
   const j = (await res.json().catch(() => ({}))) as { error?: string }
   return { ok: false, error: j.error || String(res.status) }
 }

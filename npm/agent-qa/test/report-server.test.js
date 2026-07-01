@@ -817,7 +817,7 @@ test('POST /api/chat/c/:id/replay re-auths via the connected persona, in its ses
   await j('POST', '/api/personas/admin', {
     name: 'Admin',
     profile: 'admin-user',
-    credentials: { entries: { OUTREACH_CLIENT_ID: 'cid-literal' } },
+    credentials: { entries: { APP_CLIENT_ID: 'cid-literal' } },
   });
   const created = await (await j('POST', '/api/chat/create')).json();
 
@@ -834,7 +834,7 @@ test('POST /api/chat/c/:id/replay re-auths via the connected persona, in its ses
   // Runs in the chat's own (already-authed) session, under the connected profile.
   assert.deepEqual(replay.args, ['replay', 's-2026', '--session', created.session, '--profile', 'admin-user']);
   // Persona credentials are injected so the useProfile op can re-authenticate.
-  assert.equal(replay.env.OUTREACH_CLIENT_ID, 'cid-literal');
+  assert.equal(replay.env.APP_CLIENT_ID, 'cid-literal');
   // ...and in the chat's record dir, where the connected profile is registered.
   assert.ok(String(replay.env.AGENT_QA_RECORD_DIR || '').includes(created.session));
 
@@ -883,6 +883,127 @@ test('persona credentials inject into the plugin env; unresolved vault refs fail
   assert.equal(r2.ok, false);
   assert.ok(r2.log.some((s) => s.step === 'vault'));
   assert.ok(!calls.some((c) => c.args[0] === 'profile-bootstrap'));
+});
+
+test('plan run + scenario replay inject the persona credentials and self-bootstrap the profile', async (t) => {
+  const fx = makeFixture();
+  const calls = [];
+  const replays = [];
+  const deps = {
+    runCli: async (args, extraEnv) => {
+      calls.push({ args, extraEnv });
+      return { code: 0, stdout: 'ok', stderr: '' };
+    },
+    replay: async (sid, session, opts) => {
+      replays.push({ sid, session, opts });
+      return { ok: true };
+    },
+  };
+  const { server, base } = await boot(fx.root, deps);
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  await j('POST', '/api/environments/staging', {
+    name: 'Staging',
+    baseUrl: 'https://s.example.com',
+    auth: { plugin: 'agent-qa-plugin-acme', config: { tenant: '7' } },
+  });
+  await j('POST', '/api/personas/admin', {
+    name: 'Admin',
+    profile: 'admin-user',
+    credentials: { entries: { APP_EMAIL: 'a@b.com', APP_PASSWORD: 'pw' } },
+  });
+
+  // Runs-tab replay with a persona: the server registers the profile against
+  // the env's plugin (idempotent profile-add) and injects the persona's creds
+  // + the environment's connection config into the replay env, so replay's
+  // own useProfile op re-authenticates on the fresh replay session.
+  const rep = await j('POST', `/api/scenarios/${fx.sid}/replay`, {
+    personaId: 'admin',
+    environmentId: 'staging',
+  });
+  assert.equal(rep.status, 202);
+  assert.deepEqual(calls[0].args, ['profile-add', 'admin-user', '--adapter', 'agent-qa-plugin-acme']);
+  assert.equal(replays.length, 1);
+  assert.equal(replays[0].opts.profile, 'admin-user');
+  assert.equal(replays[0].opts.env.APP_EMAIL, 'a@b.com');
+  assert.equal(replays[0].opts.env.APP_PASSWORD, 'pw');
+  assert.equal(replays[0].opts.env.AGENT_QA_ENV_BASE_URL, 'https://s.example.com');
+  assert.equal(replays[0].opts.env.AGENT_QA_ENV_TENANT, '7');
+
+  // Plan run with a persona: same injection, per member scenario.
+  calls.length = 0;
+  replays.length = 0;
+  await j('POST', '/api/cases/login', { title: 'Log in' });
+  await j('POST', '/api/cases/login/link', { scenarioSid: fx.sid });
+  await j('POST', '/api/plans/p1', { name: 'P1', scope: { caseIds: ['login'] } });
+  const run = await j('POST', '/api/plans/p1/run', { personaId: 'admin', environmentId: 'staging' });
+  assert.equal(run.status, 202);
+  assert.ok(calls.some((c) => c.args[0] === 'profile-add' && c.args[1] === 'admin-user'));
+  assert.equal(replays.length, 1);
+  assert.equal(replays[0].opts.profile, 'admin-user');
+  assert.equal(replays[0].opts.env.APP_EMAIL, 'a@b.com');
+
+  // A persona whose vault ref can't resolve fails the run up front — no replay.
+  process.env.VAULT_ADDR = '';
+  await j('POST', '/api/personas/vaulted', {
+    name: 'Vaulted',
+    profile: 'vaulted',
+    credentials: { entries: { APP_PASSWORD: 'vault:dev/data/x:PW' } },
+  });
+  replays.length = 0;
+  const bad = await (await j('POST', '/api/plans/p1/run', { personaId: 'vaulted', environmentId: 'staging' })).json();
+  assert.equal(bad.ok, false);
+  assert.match(bad.error, /vault/i);
+  assert.equal(replays.length, 0);
+});
+
+test('environment shared creds layer under persona creds (persona wins on conflict)', async (t) => {
+  const fx = makeFixture();
+  const replays = [];
+  const deps = {
+    runCli: async () => ({ code: 0, stdout: 'ok', stderr: '' }),
+    replay: async (sid, session, opts) => {
+      replays.push({ sid, session, opts });
+      return { ok: true };
+    },
+  };
+  const { server, base } = await boot(fx.root, deps);
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  // Environment carries the app-level creds every identity shares, plus a key
+  // that also appears on the persona (to prove precedence).
+  await j('POST', '/api/environments/staging', {
+    name: 'Staging',
+    auth: {
+      plugin: 'agent-qa-plugin-acme',
+      creds: { APP_CLIENT_ID: 'cid-shared', OVERLAP: 'from-env' },
+    },
+  });
+  // Persona carries only what varies + overrides OVERLAP.
+  await j('POST', '/api/personas/admin', {
+    name: 'Admin',
+    profile: 'admin-user',
+    credentials: { entries: { APP_EMAIL: 'a@b.com', OVERLAP: 'from-persona' } },
+  });
+
+  const rep = await j('POST', `/api/scenarios/${fx.sid}/replay`, {
+    personaId: 'admin',
+    environmentId: 'staging',
+  });
+  assert.equal(rep.status, 202);
+  assert.equal(replays.length, 1);
+  const env = replays[0].opts.env;
+  assert.equal(env.APP_CLIENT_ID, 'cid-shared'); // shared from the environment
+  assert.equal(env.APP_EMAIL, 'a@b.com'); // identity from the persona
+  assert.equal(env.OVERLAP, 'from-persona'); // persona wins on a key collision
+
+  // The stored environment persists the creds block.
+  const got = await (await j('GET', '/api/environments/staging')).json();
+  assert.deepEqual(got.environment.auth.creds, { APP_CLIENT_ID: 'cid-shared', OVERLAP: 'from-env' });
 });
 
 test('plugin registry persists + injects AGENT_QA_PLUGINS into CLI calls', async (t) => {

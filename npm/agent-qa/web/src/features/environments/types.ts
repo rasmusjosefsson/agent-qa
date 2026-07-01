@@ -8,6 +8,11 @@ export interface EnvironmentAuth {
   plugin: string
   loginUrl: string
   config: Record<string, string>
+  // Shared/app-level credentials every persona on this environment reuses
+  // (env-var name → value | `vault:` ref), e.g. the OAuth client id. Injected
+  // as bare env vars and merged UNDER a persona's own creds at run time, so the
+  // persona only carries what varies (email/password).
+  creds: Record<string, string>
 }
 
 // A target to run a scenario against. `baseUrl` + `params` are forwarded to the

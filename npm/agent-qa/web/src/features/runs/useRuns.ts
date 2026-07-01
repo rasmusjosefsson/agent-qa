@@ -8,6 +8,7 @@ import {
   getScenarioDef,
   getScenarios,
   startReplay,
+  type ReplayOpts,
 } from '@/lib/runs-api'
 import { isRunLive } from './rows'
 import type { RunDetail, RunSummary, ScenarioDef, ScenarioStep, ScenarioSummary, Selection } from './types'
@@ -31,7 +32,7 @@ export interface RunsApi {
   selectRun: (sid: string, runId: string, manual?: boolean) => Promise<void>
   selectStep: (idx: number) => void
   selectTab: (tab: Selection['tab']) => void
-  replay: (sid: string) => Promise<{ ok: boolean; error?: string }>
+  replay: (sid: string, opts?: ReplayOpts) => Promise<{ ok: boolean; error?: string }>
   refresh: () => void
 }
 
@@ -203,9 +204,9 @@ export function useRuns(): RunsApi {
   }, [])
 
   const replay = useCallback(
-    async (sid: string): Promise<{ ok: boolean; error?: string }> => {
+    async (sid: string, opts?: ReplayOpts): Promise<{ ok: boolean; error?: string }> => {
       const before = new Set((runsRef.current[sid] || []).map((r) => r.runId))
-      const res = await startReplay(sid)
+      const res = await startReplay(sid, opts)
       if (!res.ok) return res
       autoFollow.current = true
       setExpanded((prev) => new Set(prev).add(sid))
