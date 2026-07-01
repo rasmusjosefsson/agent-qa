@@ -18,4 +18,8 @@ export interface PersonaRecord {
   description: string
   createdAt: number
   updatedAt: number
+  // Set by the workbench for personas provided by an installed extension
+  // package: read-only in the UI, tagged with the package name. Clone to edit.
+  readOnly?: boolean
+  source?: string
 }

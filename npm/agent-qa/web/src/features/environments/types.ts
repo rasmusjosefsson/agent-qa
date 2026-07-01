@@ -27,6 +27,10 @@ export interface EnvironmentRecord {
   description: string
   createdAt: number
   updatedAt: number
+  // Set by the workbench for environments provided by an installed extension
+  // package: read-only in the UI, tagged with the package name. Clone to edit.
+  readOnly?: boolean
+  source?: string
 }
 
 // One discovered auth plugin (shape from `agent-qa plugins list --json`).

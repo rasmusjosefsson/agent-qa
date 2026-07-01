@@ -1006,6 +1006,72 @@ test('environment shared creds layer under persona creds (persona wins on confli
   assert.deepEqual(got.environment.auth.creds, { APP_CLIENT_ID: 'cid-shared', OVERLAP: 'from-env' });
 });
 
+test('package-provided personas are discovered read-only; local shadows; writes refused', async (t) => {
+  const fx = makeFixture();
+  // Isolated config home with a package persona dir registered in agent-qa.toml.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-home-'));
+  const pkgDir = path.join(home, 'packages', 'git', 'agent-qa-acme', 'personas');
+  fs.mkdirSync(pkgDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(pkgDir, 'acme-admin.json'),
+    JSON.stringify({
+      schema: 'persona/1',
+      id: 'acme-admin',
+      name: 'Acme Admin',
+      profile: 'acme-admin',
+      credentials: { entries: { APP_EMAIL: 'vault:dev/x:EMAIL' } },
+    })
+  );
+  fs.writeFileSync(
+    path.join(home, 'agent-qa.toml'),
+    `[personas]\nextra-dirs = [\n  ${JSON.stringify(pkgDir)},\n]\n`
+  );
+  const prevHome = process.env.AGENT_QA_HOME;
+  process.env.AGENT_QA_HOME = home;
+  t.after(() => {
+    if (prevHome === undefined) delete process.env.AGENT_QA_HOME;
+    else process.env.AGENT_QA_HOME = prevHome;
+  });
+
+  const { server, base } = await boot(fx.root);
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  // Listed read-only, tagged with the package it came from.
+  let list = (await (await j('GET', '/api/personas')).json()).personas;
+  const pkg = list.find((p) => p.id === 'acme-admin');
+  assert.ok(pkg, 'package persona is listed');
+  assert.equal(pkg.readOnly, true);
+  assert.equal(pkg.source, 'agent-qa-acme');
+
+  // Editing / deleting a package record is refused.
+  assert.equal((await j('POST', '/api/personas/acme-admin', { name: 'X', profile: 'x' })).status, 409);
+  assert.equal((await j('POST', '/api/personas/acme-admin/delete')).status, 409);
+
+  // Cloning under a new id creates a local, editable copy.
+  const clone = await j('POST', '/api/personas/acme-copy', {
+    name: 'Acme (mine)',
+    profile: 'acme-copy',
+    credentials: { entries: { APP_EMAIL: 'vault:dev/x:EMAIL' } },
+  });
+  assert.equal(clone.status, 200);
+  list = (await (await j('GET', '/api/personas')).json()).personas;
+  assert.equal(list.find((p) => p.id === 'acme-copy').readOnly, false);
+
+  // A local record with the SAME id as a package one shadows it (local wins).
+  fs.mkdirSync(path.join(fx.root, '_personas', 'acme-admin'), { recursive: true });
+  fs.writeFileSync(
+    path.join(fx.root, '_personas', 'acme-admin', 'persona.json'),
+    JSON.stringify({ schema: 'persona/1', id: 'acme-admin', name: 'Local override', profile: 'acme-admin', credentials: { entries: {} } })
+  );
+  list = (await (await j('GET', '/api/personas')).json()).personas;
+  const shadowed = list.filter((p) => p.id === 'acme-admin');
+  assert.equal(shadowed.length, 1);
+  assert.equal(shadowed[0].readOnly, false);
+  assert.equal(shadowed[0].name, 'Local override');
+});
+
 test('plugin registry persists + injects AGENT_QA_PLUGINS into CLI calls', async (t) => {
   const fx = makeFixture();
   const calls = [];
