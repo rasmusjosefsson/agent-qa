@@ -37,7 +37,6 @@ export function EnvironmentsPage() {
   const [envs, setEnvs] = useState<EnvironmentRecord[] | null>(null)
   const [plugins, setPlugins] = useState<PluginInfo[]>([])
   const [paths, setPaths] = useState<string[]>([])
-  const [pluginDraft, setPluginDraft] = useState('')
   const [err, setErr] = useState('')
   // 'new' → blank; a record → edit; { seed } → clone a read-only package env.
   const [editing, setEditing] = useState<
@@ -60,13 +59,6 @@ export function EnvironmentsPage() {
     void refreshPlugins()
   }, [])
 
-  const addPlugin = async () => {
-    const p = pluginDraft.trim()
-    if (!p) return
-    await setPluginPaths([...paths, p]).catch((e) => setErr(String(e.message || e)))
-    setPluginDraft('')
-    void refreshPlugins()
-  }
   const removePlugin = async (p: string) => {
     await setPluginPaths(paths.filter((x) => x !== p)).catch((e) => setErr(String(e.message || e)))
     void refreshPlugins()
@@ -124,23 +116,8 @@ export function EnvironmentsPage() {
               </button>
             </span>
           ))}
-          <input
-            value={pluginDraft}
-            onChange={(e) => setPluginDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                void addPlugin()
-              }
-            }}
-            placeholder="add auth-plugin binary path…"
-            className="min-w-[14rem] flex-1 rounded border border-border bg-background px-2 py-0.5 font-mono outline-none focus-visible:border-ring"
-          />
-          <Button variant="ghost" size="sm" className="h-6 px-2" onClick={() => void addPlugin()}>
-            <PlusIcon /> Add path
-          </Button>
           <Button variant="ghost" size="sm" className="h-6 px-2" onClick={() => fileRef.current?.click()}>
-            <UploadIcon /> Import file
+            <UploadIcon /> Import plugin
           </Button>
           <input
             ref={fileRef}
@@ -163,7 +140,7 @@ export function EnvironmentsPage() {
                   return kinds ? `${base} [${kinds}]${bad}` : `${base}${bad}`
                 })
                 .join(', ')}`
-            : 'None loaded yet — add the path to your auth-plugin binary above.'}
+            : 'None loaded yet — import your auth-plugin binary above (or install a package from Plugins).'}
         </div>
       </div>
 
