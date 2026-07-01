@@ -32,9 +32,16 @@ const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
 
 pkg.version = version;
 
+// Only OUR per-platform packages track the release version. Third-party
+// optionalDependencies (e.g. @earendil-works/pi-coding-agent) keep their
+// declared version — stamping them to the tag pins a version that doesn't
+// exist, which 404s and makes npm skip the whole optional group (the platform
+// binary AND the chat agent silently fail to install). Match by our scope +
+// the `agent-qa-<platform>` prefix.
 const opt = pkg.optionalDependencies || {};
+const isOwnPlatformPkg = (name) => /^@rasmusjosefsson\/agent-qa-/.test(name);
 for (const name of Object.keys(opt)) {
-  opt[name] = version;
+  if (isOwnPlatformPkg(name)) opt[name] = version;
 }
 if (localPlatforms) {
   for (const plat of localPlatforms) {
