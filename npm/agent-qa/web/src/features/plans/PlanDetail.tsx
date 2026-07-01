@@ -119,7 +119,9 @@ export function PlanDetail({ id }: { id: string }) {
   }, [id])
 
   // Resolve the chosen persona + environment into the run payload:
-  // persona.profile → --profile, environment.baseUrl + params → --param.
+  // persona.profile → --profile, environment.baseUrl + params → --param. The
+  // ids ride along so the server can resolve the persona's credentials and
+  // self-bootstrap the login (auth-walled scenarios re-authenticate on replay).
   const buildRunOpts = () => {
     const persona = personas.find((p) => p.id === personaId)
     const env = environments.find((e) => e.id === envId)
@@ -128,6 +130,8 @@ export function PlanDetail({ id }: { id: string }) {
     return {
       profile: persona?.profile || undefined,
       params: Object.keys(params).length ? params : undefined,
+      personaId: personaId || undefined,
+      environmentId: envId || undefined,
     }
   }
 
@@ -225,6 +229,12 @@ export function PlanDetail({ id }: { id: string }) {
       // Persist scope first so the server runs exactly what's shown.
       await upsertPlan(id, { name: name.trim() || id, description, scope: { setIds, caseIds } })
       const r = await runPlan(id, buildRunOpts())
+      // Refused up front (e.g. the persona's vault creds couldn't resolve) —
+      // nothing was replayed, so surface the reason instead of "Started 0".
+      if (r.ok === false) {
+        setErr(r.error || 'Run refused')
+        return
+      }
       setRunMsg(
         `Started ${r.started.length} ${r.started.length === 1 ? 'replay' : 'replays'}` +
           (r.skipped.length ? ` · skipped ${r.skipped.length} (no recording)` : '')

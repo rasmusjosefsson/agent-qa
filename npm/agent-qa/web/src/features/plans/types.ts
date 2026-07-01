@@ -28,4 +28,7 @@ export interface PlanRunResult {
   ok: boolean
   started: { caseId: string; sid: string }[]
   skipped: { caseId: string; reason: string }[]
+  // Set (with ok:false) when the run is refused up front — e.g. the chosen
+  // persona's vault credentials couldn't be resolved, so nothing was replayed.
+  error?: string
 }

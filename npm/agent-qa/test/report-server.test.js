@@ -885,6 +885,80 @@ test('persona credentials inject into the plugin env; unresolved vault refs fail
   assert.ok(!calls.some((c) => c.args[0] === 'profile-bootstrap'));
 });
 
+test('plan run + scenario replay inject the persona credentials and self-bootstrap the profile', async (t) => {
+  const fx = makeFixture();
+  const calls = [];
+  const replays = [];
+  const deps = {
+    runCli: async (args, extraEnv) => {
+      calls.push({ args, extraEnv });
+      return { code: 0, stdout: 'ok', stderr: '' };
+    },
+    replay: async (sid, session, opts) => {
+      replays.push({ sid, session, opts });
+      return { ok: true };
+    },
+  };
+  const { server, base } = await boot(fx.root, deps);
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  await j('POST', '/api/environments/staging', {
+    name: 'Staging',
+    baseUrl: 'https://s.example.com',
+    auth: { plugin: 'agent-qa-plugin-acme', config: { tenant: '7' } },
+  });
+  await j('POST', '/api/personas/admin', {
+    name: 'Admin',
+    profile: 'admin-user',
+    credentials: { entries: { APP_EMAIL: 'a@b.com', APP_PASSWORD: 'pw' } },
+  });
+
+  // Runs-tab replay with a persona: the server registers the profile against
+  // the env's plugin (idempotent profile-add) and injects the persona's creds
+  // + the environment's connection config into the replay env, so replay's
+  // own useProfile op re-authenticates on the fresh replay session.
+  const rep = await j('POST', `/api/scenarios/${fx.sid}/replay`, {
+    personaId: 'admin',
+    environmentId: 'staging',
+  });
+  assert.equal(rep.status, 202);
+  assert.deepEqual(calls[0].args, ['profile-add', 'admin-user', '--adapter', 'agent-qa-plugin-acme']);
+  assert.equal(replays.length, 1);
+  assert.equal(replays[0].opts.profile, 'admin-user');
+  assert.equal(replays[0].opts.env.APP_EMAIL, 'a@b.com');
+  assert.equal(replays[0].opts.env.APP_PASSWORD, 'pw');
+  assert.equal(replays[0].opts.env.AGENT_QA_ENV_BASE_URL, 'https://s.example.com');
+  assert.equal(replays[0].opts.env.AGENT_QA_ENV_TENANT, '7');
+
+  // Plan run with a persona: same injection, per member scenario.
+  calls.length = 0;
+  replays.length = 0;
+  await j('POST', '/api/cases/login', { title: 'Log in' });
+  await j('POST', '/api/cases/login/link', { scenarioSid: fx.sid });
+  await j('POST', '/api/plans/p1', { name: 'P1', scope: { caseIds: ['login'] } });
+  const run = await j('POST', '/api/plans/p1/run', { personaId: 'admin', environmentId: 'staging' });
+  assert.equal(run.status, 202);
+  assert.ok(calls.some((c) => c.args[0] === 'profile-add' && c.args[1] === 'admin-user'));
+  assert.equal(replays.length, 1);
+  assert.equal(replays[0].opts.profile, 'admin-user');
+  assert.equal(replays[0].opts.env.APP_EMAIL, 'a@b.com');
+
+  // A persona whose vault ref can't resolve fails the run up front — no replay.
+  process.env.VAULT_ADDR = '';
+  await j('POST', '/api/personas/vaulted', {
+    name: 'Vaulted',
+    profile: 'vaulted',
+    credentials: { entries: { APP_PASSWORD: 'vault:dev/data/x:PW' } },
+  });
+  replays.length = 0;
+  const bad = await (await j('POST', '/api/plans/p1/run', { personaId: 'vaulted', environmentId: 'staging' })).json();
+  assert.equal(bad.ok, false);
+  assert.match(bad.error, /vault/i);
+  assert.equal(replays.length, 0);
+});
+
 test('plugin registry persists + injects AGENT_QA_PLUGINS into CLI calls', async (t) => {
   const fx = makeFixture();
   const calls = [];

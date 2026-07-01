@@ -761,7 +761,12 @@ async function handlePlans(req, res, root, seg, deps) {
     } catch {
       /* no/!json body → defaults */
     }
-    runOpts.env = pluginsEnv(await readPluginPaths(root));
+    // Resolve the run's persona credentials once for the whole batch (an
+    // unresolved vault ref fails the run up front rather than per case).
+    const auth = await resolveRunAuthEnv(root, deps, runOpts);
+    if (auth.error) return sendJson(res, 200, { ok: false, error: auth.error, started: [], skipped: [] });
+    runOpts.env = auth.env;
+    if (auth.profile) runOpts.profile = auth.profile;
     const [allCases, allSets] = [await listCases(root), await listSets(root)];
     const memberIds = resolvePlanCaseIds(rec, allSets, allCases);
     const byId = new Map(allCases.map((c) => [c.id, c]));
@@ -807,11 +812,75 @@ async function handlePlans(req, res, root, seg, deps) {
 function runOptsFromBody(body) {
   const o = {};
   if (body && body.profile) o.profile = String(body.profile);
+  // A persona/environment named by id lets the server resolve the persona's
+  // credentials at run time (see resolveRunAuthEnv) — the profile string alone
+  // can't, since creds live only under the persona record.
+  if (body && body.personaId) o.personaId = String(body.personaId);
+  if (body && body.environmentId) o.environmentId = String(body.environmentId);
   if (body && body.params && typeof body.params === 'object') {
     o.params = {};
     for (const [k, v] of Object.entries(body.params)) if (k) o.params[String(k)] = String(v);
   }
   return o;
+}
+
+// Prepare authentication for a persona-scoped replay/plan-run. Mirrors the
+// chat replay + connect flow so an auth-walled scenario replays from the Plans
+// and Runs tabs without a prior Connect click:
+//   - resolve the persona's credentials (env-var → literal | `vault:` ref),
+//   - surface the environment's connection config as AGENT_QA_ENV_* vars,
+//   - self-bootstrap by registering the profile against the environment's auth
+//     plugin (idempotent `profile-add --adapter`), so replay's own `useProfile`
+//     op finds the adapter binding and runs `profile-bootstrap` — with these
+//     credentials in env — against the fresh replay session (which triggers a
+//     full `auth login`; see cli/src/env_ops.rs).
+// Returns { env, profile } to hand to the replay spawner, or { error } when a
+// vault ref can't be resolved. With no persona it returns just the plugin env
+// (the pre-existing no-auth path), so unauthenticated runs are unchanged.
+async function resolveRunAuthEnv(root, deps, opts) {
+  const base = pluginsEnv(await readPluginPaths(root));
+  const personaId = opts && opts.personaId ? String(opts.personaId) : '';
+  if (!personaId) return { env: base };
+  if (!isSafeSegment(personaId)) return { error: 'unsafe persona id' };
+
+  const persona = await readJson(path.join(root, '_personas', personaId, 'persona.json'));
+  if (!persona) return { error: `no such persona: ${personaId}` };
+  const profile = String(persona.profile || '').trim();
+  if (!profile) return { error: 'persona has no profile to authenticate' };
+
+  // The environment (optional) names the auth plugin + connection config.
+  let env = null;
+  const envId = opts && opts.environmentId ? String(opts.environmentId) : '';
+  if (envId && isSafeSegment(envId)) {
+    env = await readJson(path.join(root, '_environments', envId, 'environment.json'));
+  }
+  const auth = (env && env.auth) || {};
+
+  const entries = (persona.credentials && persona.credentials.entries) || {};
+  const { env: resolvedEnv, unresolved } = await resolveVaultRefs(entries);
+  if (unresolved.length) {
+    return {
+      error: `could not resolve vault refs: ${unresolved.join(', ')}. Run \`vault login\` and set VAULT_ADDR.`,
+    };
+  }
+
+  const extraEnv = { ...base };
+  if (env && env.baseUrl) extraEnv.AGENT_QA_ENV_BASE_URL = String(env.baseUrl);
+  if (auth.loginUrl) extraEnv.AGENT_QA_ENV_LOGIN_URL = String(auth.loginUrl);
+  for (const [k, v] of Object.entries(auth.config || {})) {
+    extraEnv[`AGENT_QA_ENV_${k.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`] = String(v);
+  }
+  Object.assign(extraEnv, resolvedEnv);
+
+  // Register the profile against the env's plugin (idempotent — a no-op if the
+  // persona was already Connected). Bootstrap itself happens inside replay.
+  if (deps && typeof deps.runCli === 'function') {
+    const addArgs = ['profile-add', profile];
+    if (auth.plugin) addArgs.push('--adapter', String(auth.plugin));
+    await deps.runCli(addArgs, extraEnv);
+  }
+
+  return { env: extraEnv, profile };
 }
 
 // -------- personas + environments (run-config records) --------
@@ -2519,14 +2588,19 @@ function createRequestHandler(root, deps, chat) {
         if (!isSafeSegment(sid)) return badRequest(res, 'unsafe sid');
         const scn = await readJson(path.join(root, sid, 'scenario.json'));
         if (!scn) return notFound(res, 'no scenario.json to replay');
-        // Optional persona/environment for this replay: { profile, params }.
+        // Optional persona/environment for this replay: { profile, params,
+        // personaId, environmentId }. A named persona resolves + injects its
+        // credentials so an auth-walled scenario re-authenticates on replay.
         let replayOpts = {};
         try {
           replayOpts = runOptsFromBody(await readJsonBody(req));
         } catch {
           /* no/!json body → defaults */
         }
-        replayOpts.env = pluginsEnv(await readPluginPaths(root));
+        const auth = await resolveRunAuthEnv(root, deps, replayOpts);
+        if (auth.error) return sendJson(res, 200, { ok: false, error: auth.error });
+        replayOpts.env = auth.env;
+        if (auth.profile) replayOpts.profile = auth.profile;
         const out = await deps.replay(sid, replaySessionFor(sid), replayOpts);
         if (!out.ok) return sendJson(res, 500, { error: out.error || 'replay failed to start' });
         return sendJson(res, 202, { ok: true, sid, started: true });

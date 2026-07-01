@@ -1,5 +1,5 @@
 // web/src/features/runs/RunsPage.tsx
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRuns } from './useRuns'
 import { ScenarioSidebar } from './components/ScenarioSidebar'
 import { CenterPane } from './components/CenterPane'
@@ -9,17 +9,48 @@ import { Lightbox } from './components/Lightbox'
 import { isRunLive } from './rows'
 import { Panel, PanelGroup } from 'react-resizable-panels'
 import { ResizeHandle } from '@/components/ResizeHandle'
+import { getPersonas, getEnvironments } from '@/lib/run-config-api'
+import type { PersonaRecord } from '@/features/personas/types'
+import type { EnvironmentRecord } from '@/features/environments/types'
 
 export function RunsPage() {
   const runs = useRuns()
   const [lightbox, setLightbox] = useState<{ url: string; caption: string } | null>(null)
   const [replayErr, setReplayErr] = useState('')
 
+  // Optional run config: which persona (login) / environment (target) a replay
+  // uses. The ids ride along so the server resolves the persona's credentials
+  // and self-bootstraps the login — an auth-walled scenario re-authenticates.
+  const [personas, setPersonas] = useState<PersonaRecord[]>([])
+  const [environments, setEnvironments] = useState<EnvironmentRecord[]>([])
+  const [personaId, setPersonaId] = useState('')
+  const [envId, setEnvId] = useState('')
+
+  useEffect(() => {
+    Promise.all([getPersonas(), getEnvironments()])
+      .then(([pe, en]) => {
+        setPersonas(pe.personas)
+        setEnvironments(en.environments)
+      })
+      .catch(() => {})
+  }, [])
+
   const onReplay = async (sid: string) => {
     setReplayErr('')
-    const res = await runs.replay(sid)
+    const persona = personas.find((p) => p.id === personaId)
+    const env = environments.find((e) => e.id === envId)
+    const params: Record<string, string> = env ? { ...env.params } : {}
+    if (env?.baseUrl) params.baseUrl = env.baseUrl
+    const res = await runs.replay(sid, {
+      profile: persona?.profile || undefined,
+      params: Object.keys(params).length ? params : undefined,
+      personaId: personaId || undefined,
+      environmentId: envId || undefined,
+    })
     if (!res.ok) setReplayErr(`Replay did not start: ${res.error}`)
   }
+
+  const hasRunConfig = personas.length > 0 || environments.length > 0
 
   // Right pane: live screencast while the run is in flight and no step pinned,
   // otherwise the static step detail (which renders its own empty state).
@@ -27,6 +58,36 @@ export function RunsPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {hasRunConfig && (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border px-4 py-2 text-xs text-muted-foreground">
+          <span>Replay as</span>
+          <select
+            value={personaId}
+            onChange={(e) => setPersonaId(e.target.value)}
+            className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none focus-visible:border-ring"
+          >
+            <option value="">default login</option>
+            {personas.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <span>on</span>
+          <select
+            value={envId}
+            onChange={(e) => setEnvId(e.target.value)}
+            className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none focus-visible:border-ring"
+          >
+            <option value="">default environment</option>
+            {environments.map((en) => (
+              <option key={en.id} value={en.id}>
+                {en.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       {replayErr && (
         <div className="border-b border-destructive/30 bg-destructive/10 px-4 py-1.5 text-xs text-destructive">{replayErr}</div>
       )}

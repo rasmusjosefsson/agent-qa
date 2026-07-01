@@ -51,7 +51,14 @@ export function deletePlan(id: string): Promise<{ ok: boolean }> {
 // (profile) + environment values (params) for the run.
 export function runPlan(
   id: string,
-  opts?: { profile?: string; params?: Record<string, string> }
+  opts?: {
+    profile?: string
+    params?: Record<string, string>
+    // Named persona/environment so the server can resolve + inject the
+    // persona's credentials (auth-walled scenarios re-authenticate on replay).
+    personaId?: string
+    environmentId?: string
+  }
 ): Promise<PlanRunResult> {
   return postJson(`/api/plans/${encodeURIComponent(id)}/run`, opts ?? {})
 }
