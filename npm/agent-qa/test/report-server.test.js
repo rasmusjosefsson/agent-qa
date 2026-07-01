@@ -817,7 +817,7 @@ test('POST /api/chat/c/:id/replay re-auths via the connected persona, in its ses
   await j('POST', '/api/personas/admin', {
     name: 'Admin',
     profile: 'admin-user',
-    credentials: { entries: { OUTREACH_CLIENT_ID: 'cid-literal' } },
+    credentials: { entries: { APP_CLIENT_ID: 'cid-literal' } },
   });
   const created = await (await j('POST', '/api/chat/create')).json();
 
@@ -834,7 +834,7 @@ test('POST /api/chat/c/:id/replay re-auths via the connected persona, in its ses
   // Runs in the chat's own (already-authed) session, under the connected profile.
   assert.deepEqual(replay.args, ['replay', 's-2026', '--session', created.session, '--profile', 'admin-user']);
   // Persona credentials are injected so the useProfile op can re-authenticate.
-  assert.equal(replay.env.OUTREACH_CLIENT_ID, 'cid-literal');
+  assert.equal(replay.env.APP_CLIENT_ID, 'cid-literal');
   // ...and in the chat's record dir, where the connected profile is registered.
   assert.ok(String(replay.env.AGENT_QA_RECORD_DIR || '').includes(created.session));
 
@@ -980,14 +980,14 @@ test('environment shared creds layer under persona creds (persona wins on confli
     name: 'Staging',
     auth: {
       plugin: 'agent-qa-plugin-acme',
-      creds: { OUTREACH_CLIENT_ID: 'cid-shared', OVERLAP: 'from-env' },
+      creds: { APP_CLIENT_ID: 'cid-shared', OVERLAP: 'from-env' },
     },
   });
   // Persona carries only what varies + overrides OVERLAP.
   await j('POST', '/api/personas/admin', {
     name: 'Admin',
     profile: 'admin-user',
-    credentials: { entries: { OUTREACH_EMAIL: 'a@b.com', OVERLAP: 'from-persona' } },
+    credentials: { entries: { APP_EMAIL: 'a@b.com', OVERLAP: 'from-persona' } },
   });
 
   const rep = await j('POST', `/api/scenarios/${fx.sid}/replay`, {
@@ -997,13 +997,13 @@ test('environment shared creds layer under persona creds (persona wins on confli
   assert.equal(rep.status, 202);
   assert.equal(replays.length, 1);
   const env = replays[0].opts.env;
-  assert.equal(env.OUTREACH_CLIENT_ID, 'cid-shared'); // shared from the environment
-  assert.equal(env.OUTREACH_EMAIL, 'a@b.com'); // identity from the persona
+  assert.equal(env.APP_CLIENT_ID, 'cid-shared'); // shared from the environment
+  assert.equal(env.APP_EMAIL, 'a@b.com'); // identity from the persona
   assert.equal(env.OVERLAP, 'from-persona'); // persona wins on a key collision
 
   // The stored environment persists the creds block.
   const got = await (await j('GET', '/api/environments/staging')).json();
-  assert.deepEqual(got.environment.auth.creds, { OUTREACH_CLIENT_ID: 'cid-shared', OVERLAP: 'from-env' });
+  assert.deepEqual(got.environment.auth.creds, { APP_CLIENT_ID: 'cid-shared', OVERLAP: 'from-env' });
 });
 
 test('plugin registry persists + injects AGENT_QA_PLUGINS into CLI calls', async (t) => {
