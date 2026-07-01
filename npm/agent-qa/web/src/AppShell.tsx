@@ -7,6 +7,7 @@ import {
 } from "@/components/ui/sidebar"
 import { Separator } from "@/components/ui/separator"
 import { TooltipProvider } from "@/components/ui/tooltip"
+import { ThemeToggle } from "@/components/theme-toggle"
 
 export type Tab =
   | "cases"
@@ -49,6 +50,9 @@ export function AppShell({ tab, children }: { tab: Tab; children?: ReactNode }) 
           <SidebarTrigger className="-ml-1" />
           <Separator orientation="vertical" className="mr-1 h-4" />
           <span className="text-sm font-semibold tracking-tight">{LABELS[tab]}</span>
+          <div className="ml-auto">
+            <ThemeToggle />
+          </div>
         </header>
         {children ? (
           <div className="flex min-h-0 flex-1 flex-col">{children}</div>

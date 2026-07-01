@@ -8,7 +8,7 @@ import PluginsPage from "./features/plugins/PluginsPage"
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <ThemeProvider defaultTheme="dark" storageKey="agentqa-theme">
+    <ThemeProvider defaultTheme="light" storageKey="agentqa-theme">
       <AppShell tab="plugins">
         <PluginsPage />
       </AppShell>

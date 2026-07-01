@@ -8,7 +8,7 @@ import RunsPage from "./features/runs/RunsPage"
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <ThemeProvider defaultTheme="dark" storageKey="agentqa-theme">
+    <ThemeProvider defaultTheme="light" storageKey="agentqa-theme">
       <AppShell tab="runs">
         <RunsPage />
       </AppShell>

@@ -8,7 +8,7 @@ import ChatPage from "./features/chat/ChatPage"
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <ThemeProvider defaultTheme="dark" storageKey="agentqa-theme">
+    <ThemeProvider defaultTheme="light" storageKey="agentqa-theme">
       <AppShell tab="chat">
         <ChatPage />
       </AppShell>

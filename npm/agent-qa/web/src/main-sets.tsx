@@ -8,7 +8,7 @@ import SetsPage from "./features/sets/SetsPage"
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <ThemeProvider defaultTheme="dark" storageKey="agentqa-theme">
+    <ThemeProvider defaultTheme="light" storageKey="agentqa-theme">
       <AppShell tab="sets">
         <SetsPage />
       </AppShell>

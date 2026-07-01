@@ -8,7 +8,7 @@ import KnowledgePage from "./features/knowledge/KnowledgePage"
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <ThemeProvider defaultTheme="dark" storageKey="agentqa-theme">
+    <ThemeProvider defaultTheme="light" storageKey="agentqa-theme">
       <AppShell tab="knowledge">
         <KnowledgePage />
       </AppShell>
