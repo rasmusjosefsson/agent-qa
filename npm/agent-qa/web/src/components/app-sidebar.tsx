@@ -60,7 +60,7 @@ const SETUP: NavItem[] = [
   { label: "Personas", icon: UsersIcon, tab: "personas", href: "/personas" },
   { label: "Environments", icon: GlobeIcon, tab: "environments", href: "/environments" },
   { label: "Knowledge", icon: BookOpenIcon, tab: "knowledge", href: "/knowledge" },
-  { label: "Plugins", icon: PlugIcon, tab: "plugins", href: "/plugins" },
+  { label: "Extensions", icon: PlugIcon, tab: "plugins", href: "/plugins" },
 ]
 
 const WORKSPACE: NavItem[] = [{ label: "Settings", icon: Settings2Icon, soon: true }]

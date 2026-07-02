@@ -31,7 +31,7 @@ const LABELS: Record<Tab, string> = {
   personas: "Personas",
   environments: "Environments",
   knowledge: "Knowledge",
-  plugins: "Plugins",
+  plugins: "Extensions",
 }
 
 // App shell: collapsible sidebar (shadcn sidebar-07) + a thin topbar, shared
