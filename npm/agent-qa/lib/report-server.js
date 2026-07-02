@@ -850,7 +850,7 @@ async function resolveRunAuthEnv(root, deps, opts) {
 
   // The environment (optional) names the auth plugin + connection config. When
   // the caller didn't name one, fall back to the default/sole environment so the
-  // plugin still gets the env's shared config (e.g. OUTREACH_CLIENT_ID) — else
+  // plugin still gets the env's shared config (e.g. an OAuth client id) — else
   // bootstrap fails with "auth-failed: <cred> unset".
   let env = null;
   const envId = opts && opts.environmentId ? String(opts.environmentId) : '';
@@ -1124,7 +1124,7 @@ async function listAllEnvironments(root) {
 
 // Pick the environment to use when the caller didn't name one: the one flagged
 // `default`, else the sole environment, else null. Lets connect/replay inject an
-// environment's shared config (e.g. OUTREACH_CLIENT_ID) even when the caller —
+// environment's shared config (e.g. an OAuth client id) even when the caller —
 // or the chat agent — forgot to pass an environmentId. Ambiguous (2+, none
 // default) → null, so we never silently pick the wrong target.
 async function pickDefaultEnvironment(root) {
@@ -1285,7 +1285,7 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
     env = await loadEnvironmentById(root, envId);
   }
   // No environment named → fall back to the default/sole one, so the plugin
-  // still gets the environment's shared config (e.g. OUTREACH_CLIENT_ID). This
+  // still gets the environment's shared config (e.g. an OAuth client id). This
   // is why a persona-only connect used to fail with "auth-failed: <cred> unset".
   if (!env) env = await pickDefaultEnvironment(root);
   const auth = (env && env.auth) || {};
