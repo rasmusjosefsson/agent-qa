@@ -1258,7 +1258,7 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
     if (!discoverable) {
       return badRequest(
         res,
-        'register an auth plugin first (Environments → Auth plugins → Import, or add one to agent-qa.toml)',
+        'no auth plugin available — install an extension that provides one (Extensions → Install from npm / git), or add one to agent-qa.toml',
       );
     }
   }

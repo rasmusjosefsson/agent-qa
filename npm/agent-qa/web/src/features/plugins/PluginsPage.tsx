@@ -168,10 +168,11 @@ export function PluginsPage() {
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3">
         <div>
-          <h1 className="text-base font-semibold tracking-tight">Plugins</h1>
+          <h1 className="text-base font-semibold tracking-tight">Extensions</h1>
           <p className="text-xs text-muted-foreground">
-            Extension packages that add vendor behavior (auth, session policy, setup hooks). Install
-            one from npm or git — no terminal needed.
+            An extension is a <span className="font-medium">package</span> (from npm or git) that
+            bundles <span className="font-medium">plugins</span> (auth, session policy, setup hooks)
+            plus skills, personas, and environments — installed in one step, no terminal needed.
           </p>
         </div>
         <div className="flex items-center gap-1.5">
@@ -322,10 +323,10 @@ export function PluginsPage() {
           <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
             <PlugIcon className="size-8 text-muted-foreground/50" />
             <div>
-              <div className="text-sm font-medium">No plugins installed</div>
+              <div className="text-sm font-medium">No extensions installed</div>
               <p className="mx-auto mt-1 max-w-md text-xs text-muted-foreground">
-                Install an extension package from npm or git and it's wired into your agent-qa config
-                automatically.
+                Install an extension from npm or git — its plugins, skills, personas, and
+                environments are wired into your agent-qa config automatically.
               </p>
             </div>
             <Button size="sm" onClick={() => setInstalling(true)}>
@@ -465,9 +466,10 @@ function InstallDialog({ onClose, onInstalled }: { onClose: () => void; onInstal
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Install plugin package</DialogTitle>
+          <DialogTitle>Install extension</DialogTitle>
           <DialogDescription>
-            Fetches an extension package and wires it into your agent-qa config — no terminal needed.
+            Fetches an extension package and wires its plugins, skills, personas, and environments
+            into your agent-qa config — no terminal needed.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
