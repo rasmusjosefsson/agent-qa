@@ -502,6 +502,48 @@ pub fn eval_expression(session: &str, expression: &str) -> Result<String, AgentB
     Ok(r.stdout)
 }
 
+/// The session tab's current top-level URL (`location.href`), or None on a
+/// blank/unavailable tab. `eval` returns the value JSON-encoded (quoted).
+pub fn current_url(session: &str) -> Option<String> {
+    let raw = eval_expression(session, "location.href").ok()?;
+    let s = raw.trim();
+    let s = s
+        .strip_prefix('"')
+        .and_then(|x| x.strip_suffix('"'))
+        .unwrap_or(s)
+        .trim();
+    if s.is_empty() || s == "about:blank" {
+        None
+    } else {
+        Some(s.to_string())
+    }
+}
+
+/// True when the session is already on `target` — same origin+path, and every
+/// query param the target specifies is present (so `?deployment=Staging` is
+/// respected, but extra params on the live URL don't block a match). Used to
+/// SKIP a redundant `goto` reload on a warm, reused session (a fresh navigation
+/// of a heavy SPA forces a full re-hydration).
+pub fn already_on(session: &str, target: &str) -> bool {
+    let Some(current) = current_url(session) else {
+        return false;
+    };
+    let split = |u: &str| -> (String, String) {
+        match u.split_once('?') {
+            Some((p, q)) => (p.trim_end_matches('/').to_string(), q.to_string()),
+            None => (u.trim_end_matches('/').to_string(), String::new()),
+        }
+    };
+    let (cpath, cq) = split(&current);
+    let (tpath, tq) = split(target);
+    if cpath != tpath {
+        return false;
+    }
+    tq.split('&')
+        .filter(|s| !s.is_empty())
+        .all(|pair| cq.split('&').any(|c| c == pair))
+}
+
 /// Press a key (e.g. "Enter", "Escape").
 pub fn press_key(session: &str, key: &str) -> Result<(), AgentBrowserError> {
     run(session, ["press", key], RunOpts::new())?;

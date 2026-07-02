@@ -58,7 +58,14 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
     match verb {
         Verb::Goto => {
             let url = resolve_literal_string(value, scope, "goto.value")?;
-            browser::open(ctx.session, &url)?;
+            // Warm-page: on a reused, already-signed-in session that's ALREADY
+            // on this URL, skip the reload — re-navigating a heavy SPA forces a
+            // full re-hydration (~20s). Best-effort; any mismatch navigates.
+            if browser::already_on(ctx.session, &url) {
+                eprintln!("[v2-replay] goto: already on {url} — reusing warm page (skipped reload)");
+            } else {
+                browser::open(ctx.session, &url)?;
+            }
             Ok(None)
         }
         Verb::Reload => {
