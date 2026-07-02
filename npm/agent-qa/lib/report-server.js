@@ -1132,6 +1132,38 @@ async function pickDefaultEnvironment(root) {
   return all.find((e) => e.default) || (all.length === 1 ? all[0] : null);
 }
 
+// All personas (local records shadow package-provided ones by id).
+async function listAllPersonas(root) {
+  const out = [];
+  const seen = new Set();
+  let entries = [];
+  try {
+    entries = await fsp.readdir(path.join(root, '_personas'), { withFileTypes: true });
+  } catch {
+    /* none yet */
+  }
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    const rec = await readJson(path.join(root, '_personas', e.name, 'persona.json'));
+    if (rec) {
+      const id = String(rec.id || e.name);
+      out.push({ ...rec, id });
+      seen.add(id);
+    }
+  }
+  for (const rec of await readPackageRecords('personas')) {
+    if (!seen.has(rec.id)) out.push(rec);
+  }
+  return out;
+}
+
+// The persona to auto-sign-in a new chat with: the one flagged `default`, else
+// the sole persona, else null (ambiguous → don't guess).
+async function pickDefaultPersona(root) {
+  const all = await listAllPersonas(root);
+  return all.find((p) => p.default) || (all.length === 1 ? all[0] : null);
+}
+
 async function handleSimpleRecords(req, res, root, seg, cfg) {
   const { dirname, key, plural, normalize } = cfg;
   const method = req.method;
@@ -2027,6 +2059,9 @@ async function chatRecordingState(entry, scenariosRoot) {
     baseline: null,
     flushed: false,
     steps: [],
+    // Background default-persona sign-in state ({state:'connecting'|'connected'|
+    // 'failed', personaId, ...} | null) so the UI can show "signing in…".
+    autoConnect: entry.autoConnect || null,
   };
   const dir = entry.recordDir();
   if (!dir) return out;
@@ -2125,7 +2160,61 @@ async function serveRecordingArtifact(res, entry, scenariosRoot, stepId, kind) {
 //   - { createHub }  : async factory returning a hub (tests / custom wiring)
 //   - { config }     : pi SDK config → build a real per-chat hub via chat-agent.mjs
 //   - undefined      : chat unavailable
-function createChatManager(deps) {
+// A minimal `res` that captures a JSON handler's response instead of writing to
+// a socket — lets the background auto-connect below reuse handleConnect() with
+// no HTTP round-trip (and no dependency on deps.baseUrl being set yet).
+function makeCaptureRes() {
+  const out = { status: 0, body: '' };
+  return {
+    _out: out,
+    setHeader() {},
+    writeHead(code) {
+      out.status = code;
+    },
+    end(buf) {
+      out.body = buf ? buf.toString() : '';
+    },
+  };
+}
+
+// Sign the default persona into a freshly-created chat's browser session, in the
+// background, so the agent navigates an ALREADY-authenticated page instead of
+// racing to connect (and recording a sign-in-page step first). Best-effort +
+// non-blocking; only fires when a default/sole persona AND environment resolve
+// (a configured, auth-walled workbench) — a no-op otherwise. Reuses the exact
+// connect path the agent would call, so it also sets entry.connectedProfile
+// (which makes `agent-qa start` record a useProfile baseline automatically).
+async function autoConnectDefault(root, entry, deps) {
+  try {
+    if (!root || !deps || typeof deps.runCli !== 'function') return;
+    const [persona, env] = await Promise.all([pickDefaultPersona(root), pickDefaultEnvironment(root)]);
+    if (!persona || !env) return;
+    entry.autoConnect = { state: 'connecting', personaId: persona.id, environmentId: env.id, at: Date.now() };
+    const res = makeCaptureRes();
+    await handleConnect({}, res, root, persona.id, deps, {
+      session: entry.browser.name,
+      recordDir: entry.recordDir(),
+      entry,
+      body: { personaId: persona.id, environmentId: env.id },
+    });
+    let parsed = {};
+    try {
+      parsed = JSON.parse(res._out.body || '{}');
+    } catch {
+      /* leave empty */
+    }
+    entry.autoConnect = {
+      state: parsed.authenticated ? 'connected' : 'failed',
+      personaId: persona.id,
+      environmentId: env.id,
+      at: Date.now(),
+    };
+  } catch {
+    if (entry) entry.autoConnect = { state: 'failed', at: Date.now() };
+  }
+}
+
+function createChatManager(deps, root) {
   const chat = deps && deps.chat;
   const recordRoot = deps && deps.recordRoot;
   // Localhost base URL of this server, so each chat's agent can call back to the
@@ -2219,6 +2308,14 @@ function createChatManager(deps) {
     Promise.resolve()
       .then(() => entry.getHub())
       .catch(() => {});
+    // Pre-sign-in the default persona into this chat's session (background) so an
+    // auth-walled recording starts already authenticated — no reliance on the
+    // agent remembering to connect before its first navigation.
+    if (root) {
+      Promise.resolve()
+        .then(() => autoConnectDefault(root, entry, deps))
+        .catch(() => {});
+    }
     return entry;
   }
 
@@ -2570,7 +2667,7 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
 // -------- router --------
 
 function createRequestHandler(root, deps, chat) {
-  const chatManager = chat || createChatManager(deps);
+  const chatManager = chat || createChatManager(deps, root);
   return async function handle(req, res) {
     try {
       const url = new URL(req.url, 'http://127.0.0.1');
@@ -3134,7 +3231,7 @@ function createServer(root, deps) {
       },
     };
   }
-  const chatManager = createChatManager(deps);
+  const chatManager = createChatManager(deps, root);
   const server = http.createServer(createRequestHandler(root, deps, chatManager));
   server._live = deps && deps.live; // for clean shutdown
   server._chat = chatManager; // for clean shutdown
@@ -3302,6 +3399,8 @@ module.exports = {
   lastJsonLine,
   createLiveBridge,
   createChatManager,
+  autoConnectDefault,
+  pickDefaultPersona,
   createServer,
   createRequestHandler,
   start,
