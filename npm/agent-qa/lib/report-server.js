@@ -848,12 +848,16 @@ async function resolveRunAuthEnv(root, deps, opts) {
   const profile = String(persona.profile || '').trim();
   if (!profile) return { error: 'persona has no profile to authenticate' };
 
-  // The environment (optional) names the auth plugin + connection config.
+  // The environment (optional) names the auth plugin + connection config. When
+  // the caller didn't name one, fall back to the default/sole environment so the
+  // plugin still gets the env's shared config (e.g. OUTREACH_CLIENT_ID) — else
+  // bootstrap fails with "auth-failed: <cred> unset".
   let env = null;
   const envId = opts && opts.environmentId ? String(opts.environmentId) : '';
   if (envId && isSafeSegment(envId)) {
     env = await loadEnvironmentById(root, envId);
   }
+  if (!env) env = await pickDefaultEnvironment(root);
   const auth = (env && env.auth) || {};
 
   // Environment's shared creds (base) + persona's identity creds (override).
@@ -1093,6 +1097,41 @@ async function loadEnvironmentById(root, id) {
   );
 }
 
+// All environments (local records shadow package-provided ones by id).
+async function listAllEnvironments(root) {
+  const out = [];
+  const seen = new Set();
+  let entries = [];
+  try {
+    entries = await fsp.readdir(path.join(root, '_environments'), { withFileTypes: true });
+  } catch {
+    /* none yet */
+  }
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    const rec = await readJson(path.join(root, '_environments', e.name, 'environment.json'));
+    if (rec) {
+      const id = String(rec.id || e.name);
+      out.push({ ...rec, id });
+      seen.add(id);
+    }
+  }
+  for (const rec of await readPackageRecords('environments')) {
+    if (!seen.has(rec.id)) out.push(rec);
+  }
+  return out;
+}
+
+// Pick the environment to use when the caller didn't name one: the one flagged
+// `default`, else the sole environment, else null. Lets connect/replay inject an
+// environment's shared config (e.g. OUTREACH_CLIENT_ID) even when the caller —
+// or the chat agent — forgot to pass an environmentId. Ambiguous (2+, none
+// default) → null, so we never silently pick the wrong target.
+async function pickDefaultEnvironment(root) {
+  const all = await listAllEnvironments(root);
+  return all.find((e) => e.default) || (all.length === 1 ? all[0] : null);
+}
+
 async function handleSimpleRecords(req, res, root, seg, cfg) {
   const { dirname, key, plural, normalize } = cfg;
   const method = req.method;
@@ -1245,6 +1284,10 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
   if (envId && isSafeSegment(envId)) {
     env = await loadEnvironmentById(root, envId);
   }
+  // No environment named → fall back to the default/sole one, so the plugin
+  // still gets the environment's shared config (e.g. OUTREACH_CLIENT_ID). This
+  // is why a persona-only connect used to fail with "auth-failed: <cred> unset".
+  if (!env) env = await pickDefaultEnvironment(root);
   const auth = (env && env.auth) || {};
   // An auth plugin can come from three places: the workbench's own registry
   // (UI-imported → AGENT_QA_PLUGINS), an environment's auth.plugin adapter
