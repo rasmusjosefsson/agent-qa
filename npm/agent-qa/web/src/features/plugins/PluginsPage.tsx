@@ -13,6 +13,8 @@ import {
   XIcon,
   UploadIcon,
   RefreshCwIcon,
+  ArrowUpCircleIcon,
+  PackageIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -31,7 +33,13 @@ import {
   setPluginPaths,
   importPlugin,
   installPackage,
+  getPackages,
+  updatePackage,
+  checkPackageUpdates,
   type InstallResult,
+  type InstalledPackage,
+  type PackageUpdate,
+  type AppUpdate,
 } from '@/lib/run-config-api'
 import type { PluginInfo } from '@/features/environments/types'
 
@@ -44,18 +52,56 @@ export function PluginsPage() {
   const [installing, setInstalling] = useState(false)
   const [advanced, setAdvanced] = useState(false)
   const fileRef = useRef<HTMLInputElement | null>(null)
+  // Installed extension packages (the `agent-qa install` registry).
+  const [packages, setPackages] = useState<InstalledPackage[]>([])
+  const [updates, setUpdates] = useState<Record<string, PackageUpdate>>({})
+  const [appUpdate, setAppUpdate] = useState<AppUpdate | null>(null)
+  const [checking, setChecking] = useState(false)
+  const [updatingSource, setUpdatingSource] = useState<string | null>(null)
 
   const load = () =>
-    Promise.all([getPlugins(), getPluginPaths()])
-      .then(([disc, cfg]) => {
+    Promise.all([getPlugins(), getPluginPaths(), getPackages()])
+      .then(([disc, cfg, pkg]) => {
         setPlugins(disc.plugins)
         setAvailable(disc.available)
         setPaths(cfg.paths)
+        setPackages(pkg.packages)
       })
       .catch((e) => setErr(String(e.message || e)))
   useEffect(() => {
     void load()
   }, [])
+
+  // Network-bound: probe each package's remote + the app's npm latest.
+  const doCheckUpdates = async () => {
+    setChecking(true)
+    setErr('')
+    try {
+      const r = await checkPackageUpdates()
+      setUpdates(Object.fromEntries(r.packages.map((u) => [u.source, u])))
+      setAppUpdate(r.app)
+    } catch (e) {
+      setErr(String((e as Error).message || e))
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  // Re-pull a package (re-runs `agent-qa install <source>`).
+  const doUpdate = async (source: string) => {
+    setUpdatingSource(source)
+    setErr('')
+    try {
+      const r = await updatePackage(source)
+      if (!r.ok) setErr(r.error || 'update failed')
+      else setUpdates((prev) => ({ ...prev, [source]: { ...prev[source], updateAvailable: false } }))
+      await load()
+    } catch (e) {
+      setErr(String((e as Error).message || e))
+    } finally {
+      setUpdatingSource(null)
+    }
+  }
 
   const addPath = async () => {
     const p = draft.trim()
@@ -95,6 +141,9 @@ export function PluginsPage() {
           </p>
         </div>
         <div className="flex items-center gap-1.5">
+          <Button variant="ghost" size="sm" onClick={() => void doCheckUpdates()} disabled={checking}>
+            {checking ? <Loader2Icon className="animate-spin" /> : <ArrowUpCircleIcon />} Check for updates
+          </Button>
           <Button variant="ghost" size="sm" onClick={() => void load()}>
             <RefreshCwIcon /> Refresh
           </Button>
@@ -103,6 +152,17 @@ export function PluginsPage() {
           </Button>
         </div>
       </div>
+
+      {appUpdate?.updateAvailable && (
+        <div className="flex items-center gap-2 border-b border-emerald-500/30 bg-emerald-500/10 px-5 py-1.5 text-xs text-emerald-300">
+          <ArrowUpCircleIcon className="size-3.5 shrink-0" />
+          <span>
+            agent-qa <span className="font-mono">{appUpdate.latest}</span> is available (you're on{' '}
+            <span className="font-mono">{appUpdate.current}</span>). Update:{' '}
+            <span className="font-mono">npm i -g {appUpdate.name}@latest</span>
+          </span>
+        </div>
+      )}
 
       {err && (
         <div className="border-b border-destructive/30 bg-destructive/10 px-5 py-1.5 text-xs text-destructive">
@@ -116,6 +176,70 @@ export function PluginsPage() {
       )}
 
       <div className="min-h-0 flex-1 overflow-auto">
+        {packages.length > 0 && (
+          <div className="border-b border-border">
+            <div className="flex items-center gap-2 px-5 pb-1 pt-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <PackageIcon className="size-3.5" /> Installed packages
+            </div>
+            <table className="w-full text-sm">
+              <tbody>
+                {packages.map((pkg) => {
+                  const u = updates[pkg.source]
+                  const busy = updatingSource === pkg.source
+                  const provides =
+                    [
+                      pkg.plugins.length ? `${pkg.plugins.length} plugin` : '',
+                      pkg.skills ? `${pkg.skills} skills` : '',
+                      pkg.personas ? `${pkg.personas} personas` : '',
+                      pkg.environments ? `${pkg.environments} envs` : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' · ') || '—'
+                  return (
+                    <tr key={pkg.source} className="border-b border-border/60">
+                      <td className="px-5 py-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-foreground">{pkg.name}</span>
+                          {u?.updateAvailable && (
+                            <span className="rounded-sm bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-400">
+                              update available{u.latest ? ` → ${u.latest}` : ''}
+                            </span>
+                          )}
+                          {u && !u.updateAvailable && (
+                            <span className="rounded-sm bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-400">
+                              up to date
+                            </span>
+                          )}
+                        </div>
+                        <div className="truncate font-mono text-[11px] text-muted-foreground" title={pkg.source}>
+                          {pkg.source}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2.5 text-xs text-muted-foreground">{provides}</td>
+                      <td className="px-3 py-2.5 text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7"
+                          disabled={busy}
+                          onClick={() => void doUpdate(pkg.source)}
+                          title="Re-pull this package"
+                        >
+                          {busy ? (
+                            <Loader2Icon className="size-4 animate-spin" />
+                          ) : (
+                            <RefreshCwIcon className="size-4" />
+                          )}{' '}
+                          Update
+                        </Button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
         {plugins === null ? (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
             <Loader2Icon className="mr-2 size-4 animate-spin" /> Loading…

@@ -43,16 +43,30 @@ function VerbBadge({ verb }: { verb: unknown }) {
   )
 }
 
+// Per-replay run config: which login/target the NEXT replay of the selected
+// scenario uses. Rendered inline with the Replay button (not a global bar),
+// defaulted upstream to the scenario's recorded persona.
+export interface RunConfig {
+  personas: { id: string; name: string }[]
+  environments: { id: string; name: string }[]
+  personaId: string
+  envId: string
+  setPersonaId: (v: string) => void
+  setEnvId: (v: string) => void
+}
+
 export function CenterPane({
   runs,
   onReplay,
   busy,
+  runConfig,
 }: {
   runs: RunsApi
   onReplay: (sid: string) => void
   // A replay of the selected scenario is already in flight — disable Replay so
   // a second run can't collide with it on the shared browser session.
   busy?: boolean
+  runConfig?: RunConfig
 }) {
   const { detail, scenarioDef, sel, runDefSteps, runsBySid } = runs
 
@@ -79,23 +93,57 @@ export function CenterPane({
             )}
           </div>
           {sel.sid && (
-            <button
-              type="button"
-              onClick={() => onReplay(sel.sid!)}
-              disabled={busy}
-              title={busy ? 'A replay is already running for this scenario' : undefined}
-              className="flex shrink-0 items-center gap-2 rounded-md border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-card"
-            >
-              {busy ? (
-                <>
-                  <Loader2Icon className="size-4 animate-spin" /> Replaying…
-                </>
-              ) : (
-                <>
-                  <PlayIcon className="size-4 fill-emerald-400 text-emerald-400" /> Replay
-                </>
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              {runConfig && (runConfig.personas.length > 0 || runConfig.environments.length > 0) && (
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <span>as</span>
+                  <select
+                    value={runConfig.personaId}
+                    onChange={(e) => runConfig.setPersonaId(e.target.value)}
+                    disabled={busy}
+                    className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none focus-visible:border-ring disabled:opacity-50"
+                  >
+                    <option value="">default login</option>
+                    {runConfig.personas.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                  <span>on</span>
+                  <select
+                    value={runConfig.envId}
+                    onChange={(e) => runConfig.setEnvId(e.target.value)}
+                    disabled={busy}
+                    className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none focus-visible:border-ring disabled:opacity-50"
+                  >
+                    <option value="">default environment</option>
+                    {runConfig.environments.map((en) => (
+                      <option key={en.id} value={en.id}>
+                        {en.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               )}
-            </button>
+              <button
+                type="button"
+                onClick={() => onReplay(sel.sid!)}
+                disabled={busy}
+                title={busy ? 'A replay is already running for this scenario' : undefined}
+                className="flex shrink-0 items-center gap-2 rounded-md border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-card"
+              >
+                {busy ? (
+                  <>
+                    <Loader2Icon className="size-4 animate-spin" /> Replaying…
+                  </>
+                ) : (
+                  <>
+                    <PlayIcon className="size-4 fill-emerald-400 text-emerald-400" /> Replay
+                  </>
+                )}
+              </button>
+            </div>
           )}
         </div>
         <ol className="min-h-0 flex-1 overflow-auto p-2">

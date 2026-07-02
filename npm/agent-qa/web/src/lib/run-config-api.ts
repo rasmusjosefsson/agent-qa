@@ -84,6 +84,42 @@ export function installPackage(source: string): Promise<InstallResult> {
   return postJson('/api/config/plugins/install', { source })
 }
 
+// --- installed packages: list / update / check-for-updates ---
+export interface InstalledPackage {
+  source: string
+  name: string
+  scheme: string
+  plugins: string[]
+  skills: number
+  personas: number
+  environments: number
+}
+export function getPackages(): Promise<{ packages: InstalledPackage[] }> {
+  return getJson('/api/config/packages')
+}
+// Re-pull a package (re-runs `agent-qa install <source>`).
+export function updatePackage(source: string): Promise<{ ok: boolean; updated?: string[]; error?: string }> {
+  return postJson('/api/config/plugins/update', { source })
+}
+export interface PackageUpdate {
+  source: string
+  name: string
+  scheme: string
+  current: string
+  latest: string
+  updateAvailable: boolean
+}
+export interface AppUpdate {
+  name: string
+  current: string
+  latest: string
+  updateAvailable: boolean
+}
+// Network-bound: checks each package's remote + the app vs its npm latest.
+export function checkPackageUpdates(): Promise<{ packages: PackageUpdate[]; app: AppUpdate | null }> {
+  return getJson('/api/config/packages/updates')
+}
+
 // --- connect (bootstrap a persona's login for an environment) ---
 export interface ConnectStep {
   step: string

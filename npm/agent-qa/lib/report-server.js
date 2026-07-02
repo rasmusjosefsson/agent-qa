@@ -2691,6 +2691,100 @@ function createRequestHandler(root, deps, chat) {
         }
       }
 
+      // Installed extension packages (the `agent-qa install` registry) — for
+      // the Plugins page's Update/Remove UI. Read-only, safe fields only.
+      if (
+        segAll[0] === 'api' &&
+        segAll[1] === 'config' &&
+        segAll[2] === 'packages' &&
+        segAll.length === 3 &&
+        req.method === 'GET'
+      ) {
+        let pkgs;
+        try {
+          pkgs = require('./packages.js');
+        } catch {
+          return sendJson(res, 200, { packages: [] });
+        }
+        const list = (pkgs.listPackages() || []).map((p) => ({
+          source: p.source,
+          name: p.name,
+          scheme: p.scheme,
+          plugins: (p.plugins || []).flatMap((x) => x.kinds || []),
+          skills: (p.skills || []).length,
+          personas: (p.personas || []).length,
+          environments: (p.environments || []).length,
+        }));
+        return sendJson(res, 200, { packages: list });
+      }
+
+      // Re-pull (update) an installed package. Body { source }.
+      if (
+        segAll[0] === 'api' &&
+        segAll[1] === 'config' &&
+        segAll[2] === 'plugins' &&
+        segAll[3] === 'update' &&
+        segAll.length === 4 &&
+        req.method === 'POST'
+      ) {
+        let body;
+        try {
+          body = await readJsonBody(req);
+        } catch (e) {
+          return badRequest(res, String((e && e.message) || e));
+        }
+        const source = String((body && body.source) || '').trim();
+        if (!source) return badRequest(res, 'source is required');
+        let pkgs;
+        try {
+          pkgs = require('./packages.js');
+        } catch {
+          return sendJson(res, 503, { error: 'package installer unavailable' });
+        }
+        try {
+          const r = pkgs.update(source);
+          if (!r.length) return sendJson(res, 200, { ok: false, error: `no installed package matching ${source}` });
+          return sendJson(res, 200, { ok: true, updated: r.map((x) => x.name) });
+        } catch (e) {
+          return sendJson(res, 200, { ok: false, error: String((e && e.message) || e).slice(0, 2000) });
+        }
+      }
+
+      // Check for updates — per installed package + the app itself. Network-
+      // bound (git ls-remote / npm view), so it's a GET the UI calls on demand.
+      if (
+        segAll[0] === 'api' &&
+        segAll[1] === 'config' &&
+        segAll[2] === 'packages' &&
+        segAll[3] === 'updates' &&
+        segAll.length === 4 &&
+        req.method === 'GET'
+      ) {
+        let packages = [];
+        try {
+          packages = require('./packages.js').checkUpdates();
+        } catch {
+          /* installer unavailable */
+        }
+        let app = null;
+        try {
+          const pkgJson = require('../package.json');
+          const current = await resolveAppVersion(deps);
+          const latest = require('node:child_process')
+            .execFileSync('npm', ['view', pkgJson.name, 'version'], { encoding: 'utf8', timeout: 20000 })
+            .trim();
+          app = {
+            name: pkgJson.name,
+            current,
+            latest,
+            updateAvailable: !!latest && latest !== current && current !== 'dev',
+          };
+        } catch {
+          /* offline / not published */
+        }
+        return sendJson(res, 200, { packages, app });
+      }
+
       // UI-managed plugin registry — list/set the auth-plugin paths the
       // workbench injects as AGENT_QA_PLUGINS. Pure JSON under <root>/_config.
       if (segAll[0] === 'api' && segAll[1] === 'config' && segAll[2] === 'plugins' && segAll.length === 3) {
