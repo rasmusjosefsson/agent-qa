@@ -2750,6 +2750,39 @@ function createRequestHandler(root, deps, chat) {
         }
       }
 
+      // Uninstall an installed package. Body { source }. Drops it from the
+      // registry, rewires agent-qa.toml, and deletes its fetched files.
+      if (
+        segAll[0] === 'api' &&
+        segAll[1] === 'config' &&
+        segAll[2] === 'plugins' &&
+        segAll[3] === 'uninstall' &&
+        segAll.length === 4 &&
+        req.method === 'POST'
+      ) {
+        let body;
+        try {
+          body = await readJsonBody(req);
+        } catch (e) {
+          return badRequest(res, String((e && e.message) || e));
+        }
+        const source = String((body && body.source) || '').trim();
+        if (!source) return badRequest(res, 'source is required');
+        let pkgs;
+        try {
+          pkgs = require('./packages.js');
+        } catch {
+          return sendJson(res, 503, { error: 'package installer unavailable' });
+        }
+        try {
+          const removed = pkgs.remove(source);
+          if (!removed) return sendJson(res, 200, { ok: false, error: `no installed package matching ${source}` });
+          return sendJson(res, 200, { ok: true, removed });
+        } catch (e) {
+          return sendJson(res, 200, { ok: false, error: String((e && e.message) || e).slice(0, 2000) });
+        }
+      }
+
       // Check for updates — per installed package + the app itself. Network-
       // bound (git ls-remote / npm view), so it's a GET the UI calls on demand.
       if (

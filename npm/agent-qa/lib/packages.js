@@ -386,12 +386,23 @@ function update(nameOrSource) {
   return targets.map((p) => install(p.source));
 }
 
+// Uninstall a package: drop it from the registry, rewire the toml (dropping its
+// managed skill/persona/env dirs + plugins), and delete its fetched files. The
+// fetch base is <packagesDir>/<scheme>/<safeDir(name)> for both npm and git.
 function remove(input) {
   const reg = readRegistry();
   const before = (reg.packages || []).length;
+  const gone = (reg.packages || []).filter((p) => p.source === input || p.name === input);
   reg.packages = (reg.packages || []).filter((p) => p.source !== input && p.name !== input);
   writeRegistry(reg);
   rewireToml();
+  for (const p of gone) {
+    try {
+      fs.rmSync(path.join(packagesDir(), p.scheme, safeDir(p.name)), { recursive: true, force: true });
+    } catch {
+      /* best effort — registry + toml are already clean */
+    }
+  }
   return before - reg.packages.length;
 }
 

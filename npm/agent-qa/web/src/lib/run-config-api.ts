@@ -101,6 +101,11 @@ export function getPackages(): Promise<{ packages: InstalledPackage[] }> {
 export function updatePackage(source: string): Promise<{ ok: boolean; updated?: string[]; error?: string }> {
   return postJson('/api/config/plugins/update', { source })
 }
+// Uninstall a package: removes it from the registry, rewires the config, and
+// deletes its fetched files.
+export function uninstallPackage(source: string): Promise<{ ok: boolean; removed?: number; error?: string }> {
+  return postJson('/api/config/plugins/uninstall', { source })
+}
 export interface PackageUpdate {
   source: string
   name: string

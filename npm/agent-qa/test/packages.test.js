@@ -129,3 +129,48 @@ test('resolveResources + mergeToml carry personas + environments', () => {
   assert.ok(!cleared.includes('[personas]'));
   assert.ok(!cleared.includes(JSON.stringify(pDir)));
 });
+
+test('remove uninstalls a package: registry entry gone, files deleted, toml rewired', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-home-'));
+  const prev = process.env.AGENT_QA_HOME;
+  process.env.AGENT_QA_HOME = home;
+  try {
+    // Seed a fetched git package under <packages>/git/<name> + a registry entry.
+    const pkgBase = path.join(pkgs._packagesDir(), 'git', 'demo-ext');
+    const pluginPath = path.join(pkgBase, 'bin', 'agent-qa-plugin-demo');
+    fs.mkdirSync(path.join(pkgBase, 'skills'), { recursive: true });
+    fs.mkdirSync(path.dirname(pluginPath), { recursive: true });
+    fs.writeFileSync(pluginPath, '#!/bin/sh\n');
+    const reg = {
+      schema: 'packages/1',
+      packages: [
+        {
+          source: 'git:github.com/u/demo-ext',
+          scheme: 'git',
+          name: 'demo-ext',
+          dir: pkgBase,
+          plugins: [{ path: pluginPath, kinds: ['auth'] }],
+          skills: [path.join(pkgBase, 'skills')],
+          personas: [],
+          environments: [],
+        },
+      ],
+    };
+    fs.writeFileSync(path.join(pkgs._packagesDir(), 'registry.json'), JSON.stringify(reg));
+    fs.writeFileSync(pkgs._tomlFile(), '# user\n');
+
+    const n = pkgs.remove('git:github.com/u/demo-ext');
+    assert.equal(n, 1); // one package removed
+
+    const after = JSON.parse(fs.readFileSync(path.join(pkgs._packagesDir(), 'registry.json'), 'utf8'));
+    assert.equal(after.packages.length, 0); // registry entry gone
+    assert.ok(!fs.existsSync(pkgBase)); // fetched files deleted
+    assert.ok(!fs.readFileSync(pkgs._tomlFile(), 'utf8').includes('agent-qa-plugin-demo')); // toml rewired
+
+    assert.equal(pkgs.remove('git:github.com/u/nope'), 0); // no match → 0
+  } finally {
+    if (prev === undefined) delete process.env.AGENT_QA_HOME;
+    else process.env.AGENT_QA_HOME = prev;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});

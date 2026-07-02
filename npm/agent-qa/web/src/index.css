@@ -215,16 +215,16 @@
   animation: aqa-shimmer 1.8s linear infinite;
 }
 
-/* "Agent is working" waveform bars — a lightweight, dependency-free loader
-   (no WebGL / audio libs). Each bar pulses on a staggered delay. */
-@keyframes aqa-wave {
-  0%, 100% { transform: scaleY(0.3); }
-  50% { transform: scaleY(1); }
+/* "Agent is working" dots — a lightweight, dependency-free loader (no WebGL /
+   audio libs). Three dots fade + lift in a staggered "thinking" wave, with a
+   soft glow at the peak. */
+@keyframes aqa-dot {
+  0%, 70%, 100% { opacity: 0.25; transform: translateY(0) scale(0.72); box-shadow: 0 0 0 0 transparent; }
+  35% { opacity: 1; transform: translateY(-2px) scale(1); box-shadow: 0 0 6px 0 color-mix(in oklab, var(--primary) 55%, transparent); }
 }
-.aqa-wave {
-  transform-origin: center;
-  animation: aqa-wave 1s ease-in-out infinite;
+.aqa-dot {
+  animation: aqa-dot 1.25s ease-in-out infinite;
 }
 @media (prefers-reduced-motion: reduce) {
-  .aqa-wave { animation: none; transform: scaleY(0.6); }
+  .aqa-dot { animation: none; opacity: 0.6; }
 }

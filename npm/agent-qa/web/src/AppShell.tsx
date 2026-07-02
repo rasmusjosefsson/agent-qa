@@ -27,7 +27,7 @@ const LABELS: Record<Tab, string> = {
   plans: "Test Plans",
   runs: "Test Runs",
   editor: "Editor",
-  chat: "Copilot",
+  chat: "Copilot QA",
   personas: "Personas",
   environments: "Environments",
   knowledge: "Knowledge",

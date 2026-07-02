@@ -39,24 +39,29 @@ type NavItem = {
   soon?: boolean
 }
 
-// Working sections (each maps to an MPA entry / tab). "Copilot" is the chat
-// agent; "Knowledge" is the connector hub (import/integrations).
-const PROJECT: NavItem[] = [
-  { label: "Test Cases", icon: ClipboardListIcon, tab: "cases", href: "/cases" },
-  { label: "Test Sets", icon: LayersIcon, tab: "sets", href: "/sets" },
-  { label: "Test Plans", icon: FolderTreeIcon, tab: "plans", href: "/plans" },
-  { label: "Test Runs", icon: CirclePlayIcon, tab: "runs", href: "/" },
+// Authoring — the two ways you create/drive a test: talk to the Copilot QA
+// agent, or hand-edit a recorded scenario. Kept at the top as the entry points.
+const AUTHORING: NavItem[] = [
+  { label: "Copilot QA", icon: SparklesIcon, tab: "chat", href: "/chat" },
   { label: "Editor", icon: SquarePenIcon, tab: "editor", href: "/editor" },
-  { label: "Copilot", icon: SparklesIcon, tab: "chat", href: "/chat" },
+]
+
+// Tests — the case → set → plan → run pipeline. The group header carries the
+// "Test" context, so the items drop the redundant prefix.
+const TESTS: NavItem[] = [
+  { label: "Cases", icon: ClipboardListIcon, tab: "cases", href: "/cases" },
+  { label: "Sets", icon: LayersIcon, tab: "sets", href: "/sets" },
+  { label: "Plans", icon: FolderTreeIcon, tab: "plans", href: "/plans" },
+  { label: "Runs", icon: CirclePlayIcon, tab: "runs", href: "/" },
+]
+
+// Setup — identities, targets, knowledge, and extension packages.
+const SETUP: NavItem[] = [
   { label: "Personas", icon: UsersIcon, tab: "personas", href: "/personas" },
   { label: "Environments", icon: GlobeIcon, tab: "environments", href: "/environments" },
   { label: "Knowledge", icon: BookOpenIcon, tab: "knowledge", href: "/knowledge" },
   { label: "Plugins", icon: PlugIcon, tab: "plugins", href: "/plugins" },
 ]
-
-// Standard QA objects we don't cover yet — shown disabled so the model is
-// legible. Wired up as they land.
-const SOON: NavItem[] = []
 
 const WORKSPACE: NavItem[] = [{ label: "Settings", icon: Settings2Icon, soon: true }]
 
@@ -120,24 +125,30 @@ export function AppSidebar({ tab, ...props }: { tab: Tab } & ComponentProps<type
 
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Project</SidebarGroupLabel>
           <SidebarMenu>
-            {PROJECT.map((item) => (
+            {AUTHORING.map((item) => (
               <NavRow key={item.label} item={item} tab={tab} />
             ))}
           </SidebarMenu>
         </SidebarGroup>
 
-        {SOON.length > 0 && (
-          <SidebarGroup>
-            <SidebarGroupLabel>Coming soon</SidebarGroupLabel>
-            <SidebarMenu>
-              {SOON.map((item) => (
-                <NavRow key={item.label} item={item} tab={tab} />
-              ))}
-            </SidebarMenu>
-          </SidebarGroup>
-        )}
+        <SidebarGroup>
+          <SidebarGroupLabel>Tests</SidebarGroupLabel>
+          <SidebarMenu>
+            {TESTS.map((item) => (
+              <NavRow key={item.label} item={item} tab={tab} />
+            ))}
+          </SidebarMenu>
+        </SidebarGroup>
+
+        <SidebarGroup>
+          <SidebarGroupLabel>Setup</SidebarGroupLabel>
+          <SidebarMenu>
+            {SETUP.map((item) => (
+              <NavRow key={item.label} item={item} tab={tab} />
+            ))}
+          </SidebarMenu>
+        </SidebarGroup>
       </SidebarContent>
 
       <SidebarFooter>
