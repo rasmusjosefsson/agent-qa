@@ -784,7 +784,7 @@ async function handlePlans(req, res, root, seg, deps) {
         skipped.push({ caseId: cid, reason: 'scenario missing' });
         continue;
       }
-      const out = await deps.replay(sid, replaySessionFor(sid), runOpts);
+      const out = await deps.replay(sid, sessionForReplay(sid, runOpts.profile), runOpts);
       if (out.ok) started.push({ caseId: cid, sid });
       else skipped.push({ caseId: cid, reason: out.error || 'replay failed to start' });
     }
@@ -1499,6 +1499,28 @@ function makeCliRunner({ bin, env, cwd }) {
 // the replay runs.
 function replaySessionFor(sid) {
   return `replay-${sid}`;
+}
+
+// The agent-browser session an authed replay drives. With a persona, reuse the
+// profile's PERSISTENT, already-signed-in session (`<profile>-session`, the
+// plugin's default) instead of a throwaway `replay-<sid>`: replay's useProfile
+// bootstrap then no-ops on an authenticated session (and `/connect` pre-warms
+// it), so re-runs skip the ~30s OAuth and are near-instant. Public (no-persona)
+// scenarios keep a fresh per-sid session. Same-persona replays share one
+// browser, so they serialise — covered by the "no double-fire" guard.
+function sessionForReplay(sid, profile) {
+  return profile ? `${profile}-session` : replaySessionFor(sid);
+}
+
+// Resolve the session a scenario's latest run drove (for the live screencast),
+// from that run's recorded profile. Falls back to the fresh per-sid session.
+async function replayStreamSession(root, sid) {
+  const latest = await latestRunId(path.join(root, sid));
+  if (latest) {
+    const audit = await readJson(path.join(root, sid, 'replays', latest, 'audit.json'));
+    if (audit && audit.profile) return sessionForReplay(sid, audit.profile);
+  }
+  return replaySessionFor(sid);
 }
 
 // List live agent-browser session names by reading the per-session unix
@@ -2717,7 +2739,7 @@ function createRequestHandler(root, deps, chat) {
         if (auth.error) return sendJson(res, 200, { ok: false, error: auth.error });
         replayOpts.env = auth.env;
         if (auth.profile) replayOpts.profile = auth.profile;
-        const out = await deps.replay(sid, replaySessionFor(sid), replayOpts);
+        const out = await deps.replay(sid, sessionForReplay(sid, replayOpts.profile), replayOpts);
         if (!out.ok) return sendJson(res, 500, { error: out.error || 'replay failed to start' });
         return sendJson(res, 202, { ok: true, sid, started: true });
       }
@@ -2822,7 +2844,7 @@ function createRequestHandler(root, deps, chat) {
           if (!deps || typeof deps.liveForSession !== 'function') {
             return sendJson(res, 503, { error: 'live replay unavailable: agent-qa CLI not resolved' });
           }
-          const bridge = deps.liveForSession(replaySessionFor(sid));
+          const bridge = deps.liveForSession(await replayStreamSession(root, sid));
           res.writeHead(200, {
             'content-type': 'text/event-stream',
             'cache-control': 'no-cache',

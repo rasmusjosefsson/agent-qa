@@ -362,18 +362,33 @@ fn reset_browser_state(session: &str) -> Result<()> {
     Ok(())
 }
 
-/// Implementation of `EnvOp::UseProfile`. Shells out to
-/// `agent-qa profile-bootstrap <name> --session <replay session>` (the same
-/// verb authors run at recording time) so replay reaches the same
-/// authenticated baseline. Targeting the REPLAY session (not the profile's
-/// default `<name>-session`) is what makes this idempotent: the auth plugin
-/// probes that session first and no-ops if it is already signed in — so a
-/// replay against a session a host already authenticated (e.g. the workbench
-/// after `/connect`) needs no credentials. A fresh session still triggers a
-/// full `auth login`, which requires the profile's credentials in env.
+/// Implementation of `EnvOp::UseProfile`. Reaches the profile's authenticated
+/// baseline for `session`, cheaply when possible:
+///
+///   1. `profile-status` (plugin `auth probe`, ~1-2s) — if the session is
+///      ALREADY signed in (a warm/reused session: `/connect`, or a prior replay
+///      on the same `<name>-session`), we're done. This is what makes reused
+///      sessions near-instant.
+///   2. otherwise `profile-bootstrap` (plugin `auth login`, the full OAuth,
+///      ~30s), which needs the profile's credentials in env.
+///
+/// Doing the probe here (rather than relying on the plugin to no-op inside
+/// `auth login`) is what actually skips the ~30s login on a warm session.
 fn bootstrap_profile(name: &str, session: &str) -> Result<()> {
     use std::process::Command;
     let exe = std::env::current_exe().unwrap_or_else(|_| "agent-qa".into());
+
+    // Cheap preflight — `profile-status` exits 0 iff the session is authenticated.
+    let probe = Command::new(&exe)
+        .args(["profile-status", name, "--session", session])
+        .output();
+    if matches!(&probe, Ok(o) if o.status.success()) {
+        eprintln!(
+            "[v2-replay] useProfile: {name} already authenticated on {session} — reusing session (skipped auth login)"
+        );
+        return Ok(());
+    }
+
     let status = Command::new(exe)
         .args(["profile-bootstrap", name, "--session", session])
         .status()

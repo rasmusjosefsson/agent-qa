@@ -1117,9 +1117,14 @@ fn capture_step_sidecars(run: &crate::sidecar::RunPaths, step_id: &str, session:
     // navigating click / async render is reflected in the screenshot + ARIA
     // snapshot rather than a half-loaded frame. Soft-fail: a page that is
     // already idle (or a networkidle timeout on a chatty page) must never
-    // fail the run — this only governs artifact fidelity.
-    let _ = browser::wait_for_load(session, "networkidle");
-    match browser::snapshot_full(session) {
+    // fail the run — this only governs artifact fidelity. BOUNDED: a chatty SPA
+    // (e.g. a dashboard that polls) never reaches networkidle, so an unbounded
+    // settle would stall each step for the full agent-browser timeout (~30s).
+    // 3s is plenty for the common "settling after a nav/click" case.
+    const SETTLE_CAP_MS: u64 = 3000;
+    const SNAPSHOT_CAP_MS: u64 = 4000;
+    let _ = browser::wait_for_load_capped(session, "networkidle", SETTLE_CAP_MS);
+    match browser::snapshot_full_capped(session, SNAPSHOT_CAP_MS) {
         Ok(text) => {
             if let Err(e) =
                 write_step_sidecar(run, SidecarKind::Snapshots, step_id, text.as_bytes())
@@ -1133,7 +1138,7 @@ fn capture_step_sidecars(run: &crate::sidecar::RunPaths, step_id: &str, session:
         let _ = dir; // keep the directory creation eager
     }
     if let Ok(path) = step_sidecar_path(run, SidecarKind::Screenshots, step_id) {
-        match browser::screenshot(session, &path, true) {
+        match browser::screenshot(session, &path, true, Some(SNAPSHOT_CAP_MS)) {
             Ok(true) => {}
             Ok(false) => eprintln!("[v2-replay] screenshot {step_id} returned non-zero (lenient)"),
             Err(e) => eprintln!("[v2-replay] screenshot {step_id} failed: {e}"),
