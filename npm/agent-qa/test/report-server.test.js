@@ -633,7 +633,9 @@ test('POST /api/plans/:id/run replays each member scenario via deps.replay', asy
   assert.deepEqual(calls, [
     {
       sid: fx.sid,
-      session: `replay-${fx.sid}`,
+      // A persona-scoped replay reuses the profile's persistent, authed session
+      // (so re-runs skip the OAuth) rather than a throwaway replay-<sid>.
+      session: 'qa-admin-session',
       // env is the injected plugin registry — empty here (none registered)
       opts: { profile: 'qa-admin', params: { baseUrl: 'https://staging.example.com' }, env: {} },
     },

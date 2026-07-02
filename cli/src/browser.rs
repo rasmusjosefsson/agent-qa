@@ -195,6 +195,11 @@ pub struct RunOpts {
     /// When true, stdout is captured into the returned struct. Default false
     /// so daemonised agent-browser grandchildren cannot keep our pipe open.
     pub capture_stdout: bool,
+    /// Per-call process timeout (ms). Overrides the global
+    /// AGENT_QA_AGENT_BROWSER_TIMEOUT_MS. Used to BOUND best-effort waits — the
+    /// post-step `networkidle` settle must not stall replay on a chatty SPA
+    /// that never goes idle.
+    pub timeout_ms: Option<u64>,
 }
 
 impl RunOpts {
@@ -203,6 +208,7 @@ impl RunOpts {
             throw_on_error: true,
             capture_stderr: false,
             capture_stdout: false,
+            timeout_ms: None,
         }
     }
     pub fn capture(mut self) -> Self {
@@ -212,6 +218,10 @@ impl RunOpts {
     }
     pub fn lenient(mut self) -> Self {
         self.throw_on_error = false;
+        self
+    }
+    pub fn timeout_ms(mut self, ms: u64) -> Self {
+        self.timeout_ms = Some(ms);
         self
     }
 }
@@ -249,7 +259,13 @@ fn run_with_bin(
         .map(|a| a.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    let mut first = spawn_once(bin, session, args, opts.capture_stdout, opts.capture_stderr)?;
+    // Per-call timeout overrides the global one (bounds the networkidle settle).
+    let timeout = opts
+        .timeout_ms
+        .map(Duration::from_millis)
+        .or_else(agent_browser_timeout);
+
+    let mut first = spawn_once(bin, session, args, opts.capture_stdout, opts.capture_stderr, timeout)?;
 
     if first.exit_code != 0
         && !auto_recovery_disabled()
@@ -266,7 +282,7 @@ fn run_with_bin(
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
-        first = spawn_once(bin, session, args, opts.capture_stdout, opts.capture_stderr)?;
+        first = spawn_once(bin, session, args, opts.capture_stdout, opts.capture_stderr, timeout)?;
     }
 
     if opts.throw_on_error && first.exit_code != 0 {
@@ -291,8 +307,8 @@ fn spawn_once(
     args: &[std::ffi::OsString],
     capture_stdout: bool,
     capture_stderr: bool,
+    timeout: Option<Duration>,
 ) -> Result<RunResult, AgentBrowserError> {
-    let timeout = agent_browser_timeout();
     let mut cmd = Command::new(bin);
     cmd.arg("--session").arg(session).args(args);
     cmd.stdin(Stdio::null());
@@ -462,6 +478,19 @@ pub fn wait_for_load(session: &str, state: &str) -> Result<(), AgentBrowserError
         session,
         ["wait", "--load", state],
         RunOpts::new().lenient().capture(),
+    )?;
+    Ok(())
+}
+
+/// Like [`wait_for_load`] but bounded to `cap_ms`: a chatty SPA never reaches
+/// `networkidle`, so an unbounded settle stalls replay for the full agent-browser
+/// timeout (~30s). Best-effort — if the state isn't reached in `cap_ms`, the
+/// process is killed and we proceed (assertions have their own retry).
+pub fn wait_for_load_capped(session: &str, state: &str, cap_ms: u64) -> Result<(), AgentBrowserError> {
+    run(
+        session,
+        ["wait", "--load", state],
+        RunOpts::new().lenient().capture().timeout_ms(cap_ms),
     )?;
     Ok(())
 }
@@ -751,6 +780,7 @@ pub fn screenshot(
     session: &str,
     out_path: &std::path::Path,
     full_page: bool,
+    timeout_ms: Option<u64>,
 ) -> Result<bool, AgentBrowserError> {
     let mut args: Vec<&str> = vec!["screenshot"];
     if full_page {
@@ -758,7 +788,11 @@ pub fn screenshot(
     }
     let p = out_path.display().to_string();
     args.push(p.as_str());
-    let r = run(session, args, RunOpts::new().lenient().capture())?;
+    let mut opts = RunOpts::new().lenient().capture();
+    if let Some(ms) = timeout_ms {
+        opts = opts.timeout_ms(ms);
+    }
+    let r = run(session, args, opts)?;
     Ok(r.exit_code == 0)
 }
 
@@ -782,6 +816,20 @@ pub fn snapshot_interactive(session: &str) -> Result<String, AgentBrowserError> 
 /// the interactive snapshot drops.
 pub fn snapshot_full(session: &str) -> Result<String, AgentBrowserError> {
     let r = run(session, ["snapshot"], RunOpts::new().capture())?;
+    Ok(r.stdout)
+}
+
+/// Best-effort ARIA snapshot bounded to `cap_ms`. On a heavy SPA still
+/// hydrating after a cold navigation, `snapshot` can block on the busy main
+/// thread for tens of seconds; for a post-step ARTIFACT capture that's not
+/// worth stalling replay, so we cap it and return whatever came back (possibly
+/// empty). Lenient — a timeout is not an error.
+pub fn snapshot_full_capped(session: &str, cap_ms: u64) -> Result<String, AgentBrowserError> {
+    let r = run(
+        session,
+        ["snapshot"],
+        RunOpts::new().lenient().capture().timeout_ms(cap_ms),
+    )?;
     Ok(r.stdout)
 }
 

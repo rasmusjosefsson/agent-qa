@@ -275,7 +275,7 @@ fn capture_recording_sidecars(
     {
         // Ensure the screenshots directory exists before the binary tries to write.
         let _ = crate::sidecar::ensure_kind_dir(&run, crate::sidecar::SidecarKind::Screenshots);
-        if let Err(e) = browser::screenshot(session, &p, true) {
+        if let Err(e) = browser::screenshot(session, &p, true, None) {
             eprintln!("[record-step] screenshot {step_id} failed: {e}");
         }
     }
