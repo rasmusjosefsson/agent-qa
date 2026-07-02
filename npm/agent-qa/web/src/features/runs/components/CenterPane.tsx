@@ -183,6 +183,17 @@ export function CenterPane({
     const setupFail = (detail.events || []).find((e) => e.kind === 'setup' && e.status === 'fail')
     const setupError = setupFail && setupFail.error ? cleanSummary(setupFail.error) : null
 
+    // A STEP failure (e.g. a `goto` that hit net::ERR_CONNECTION_REFUSED) carries
+    // its reason on the event, but that's a click away in StepDetail — surface it
+    // at the top too, so a failed run is never "failed for no visible reason".
+    const stepFail = !setupError
+      ? (detail.events || []).find((e) => e.kind !== 'setup' && e.status === 'fail')
+      : null
+    const stepError = stepFail && stepFail.error
+      ? stepFail.error.replace(/^.*?exited \d+:\s*/, '').replace(/^[✗✘x]\s*/, '').trim()
+      : null
+    const looksUnreachable = stepError ? /ERR_CONNECTION|ERR_NAME_NOT_RESOLVED|ERR_TIMED_OUT|Navigation failed/i.test(stepError) : false
+
     return (
       <Pane>
         <div className="border-b border-border px-4 py-3">
@@ -216,6 +227,21 @@ export function CenterPane({
                 This scenario signs in first. Pick the right <span className="font-medium">Replay as</span> persona
                 (and environment) at the top, then replay.
               </div>
+            </div>
+          )}
+          {stepError && (
+            <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-xs text-destructive">
+              <div className="font-medium">
+                Failed at step {stepFail?.idx ?? '?'}/{stepFail?.total ?? rows.length}
+                {stepFail?.intent ? ` — ${cleanSummary(stepFail.intent)}` : ''}
+              </div>
+              <div className="mt-0.5 font-mono opacity-90">{stepError}</div>
+              {looksUnreachable && (
+                <div className="mt-1 text-muted-foreground">
+                  The target app refused the connection or was unreachable. Check the app/staging is up and
+                  you're on the right network (VPN), then replay — transient blips are retried automatically.
+                </div>
+              )}
             </div>
           )}
         </div>

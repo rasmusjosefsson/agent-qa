@@ -442,18 +442,27 @@ fn socket_stall_hint(stderr: &str, stdout: &str, verb: &str, session: &str) -> S
 
 // ---------- public helpers ----------
 
-/// Open a URL in the named session's live tab.
+/// Number of `open` attempts before giving up on a transient navigation error.
+const OPEN_MAX_ATTEMPTS: u32 = 5;
+
+/// Open a URL in the named session's live tab. Transient navigation failures
+/// (connection refused/reset, timeouts, or a staging endpoint that's briefly
+/// unreachable / cold-starting) are retried with exponential backoff — 1s, 2s,
+/// 4s, 8s between attempts (~15s total) — so a short blip doesn't fail the whole
+/// replay. Non-transient failures return immediately.
 pub fn open(session: &str, url: &str) -> Result<(), AgentBrowserError> {
     let mut last_err = None;
-    for attempt in 1..=3 {
+    for attempt in 1..=OPEN_MAX_ATTEMPTS {
         match run(session, ["open", url], RunOpts::new().capture()) {
             Ok(_) => return Ok(()),
-            Err(err) if is_transient_navigation_error(&err) && attempt < 3 => {
+            Err(err) if is_transient_navigation_error(&err) && attempt < OPEN_MAX_ATTEMPTS => {
+                let backoff = Duration::from_millis((1000u64 << (attempt - 1)).min(8000));
                 eprintln!(
-                    "[agent-browser] transient navigation error opening {url}; retrying attempt {}/3: {err}",
-                    attempt + 1
+                    "[agent-browser] transient navigation error opening {url}; retrying attempt {}/{OPEN_MAX_ATTEMPTS} in {}ms: {err}",
+                    attempt + 1,
+                    backoff.as_millis()
                 );
-                std::thread::sleep(Duration::from_millis(500 * attempt as u64));
+                std::thread::sleep(backoff);
                 last_err = Some(err);
             }
             Err(err) => return Err(err),

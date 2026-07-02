@@ -1630,7 +1630,27 @@ function makeReplaySpawner({ bin, env, cwd }) {
         }
       }
       const childEnv = opts && opts.env ? { ...env, ...opts.env } : env;
-      const child = spawn(bin, args, { env: childEnv, cwd, stdio: 'ignore', detached: true });
+      const child = spawn(bin, args, { env: childEnv, cwd, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+      // Capture the replay child's output so a run that fails BEFORE writing a
+      // step event (a crash, or an env.open bootstrap failure) still leaves a
+      // diagnosable trail instead of a silently swallowed exit code. We keep the
+      // detached/fire-and-forget model (the viewer follows status.json); we just
+      // tee the tail to a per-scenario log and warn to the server log on failure.
+      let tail = '';
+      const onOut = (b) => { tail = (tail + b.toString()).slice(-4000); };
+      if (child.stdout) child.stdout.on('data', onOut);
+      if (child.stderr) child.stderr.on('data', onOut);
+      child.once('exit', (code) => {
+        if (code && code !== 0) {
+          try {
+            require('node:fs').writeFileSync(
+              require('node:path').join(require('node:os').tmpdir(), `aqa-replay-${sid}.log`),
+              tail,
+            );
+          } catch { /* best effort */ }
+          console.error(`[replay ${sid}] exited ${code}:\n${tail.slice(-1500)}`);
+        }
+      });
       let done = false;
       child.once('spawn', () => {
         if (done) return;
