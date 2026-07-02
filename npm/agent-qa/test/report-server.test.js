@@ -1048,6 +1048,58 @@ test('replay with no environmentId falls back to the default/sole environment (i
   assert.equal(replays[0].opts.env.APP_EMAIL, 'a@b.com');
 });
 
+test('autoConnectDefault signs in the default persona for a new chat (background pre-connect)', async (t) => {
+  const fx = makeFixture();
+  const calls = [];
+  const deps = {
+    runCli: async (args, extraEnv) => {
+      calls.push({ args, extraEnv });
+      if (args[0] === 'profile-status') return { code: 0, stdout: 'authenticated', stderr: '' };
+      return { code: 0, stdout: 'ok', stderr: '' };
+    },
+  };
+  const { server, base } = await boot(fx.root, deps);
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  // A single persona + environment (sole → treated as default).
+  await j('POST', '/api/environments/staging', {
+    name: 'Staging',
+    auth: { plugin: 'agent-qa-plugin-acme', creds: { APP_CLIENT_ID: 'cid' } },
+  });
+  await j('POST', '/api/personas/admin', {
+    name: 'Admin',
+    profile: 'admin-user',
+    credentials: { entries: { APP_EMAIL: 'a@b.com' } },
+  });
+
+  const { autoConnectDefault } = require('../lib/report-server.js');
+  const entry = { browser: { name: 'chat-test' }, recordDir: () => null };
+  await autoConnectDefault(fx.root, entry, deps);
+
+  assert.equal(entry.autoConnect.state, 'connected');
+  assert.equal(entry.connectedProfile, 'admin-user'); // bound so `start` records a useProfile baseline
+  const boot2 = calls.find((c) => c.args[0] === 'profile-bootstrap');
+  assert.ok(boot2, 'auto-connect ran profile-bootstrap');
+  assert.equal(boot2.extraEnv.APP_EMAIL, 'a@b.com'); // persona identity cred
+  assert.equal(boot2.extraEnv.APP_CLIENT_ID, 'cid'); // environment shared cred
+  assert.equal(boot2.args[boot2.args.indexOf('--session') + 1], 'chat-test'); // into the chat's own session
+});
+
+test('autoConnectDefault is a no-op when no persona/environment is configured', async (t) => {
+  const fx = makeFixture();
+  const calls = [];
+  const deps = { runCli: async (args) => (calls.push(args), { code: 0, stdout: 'ok', stderr: '' }) };
+  const { server } = await boot(fx.root, deps);
+  t.after(() => server.close());
+  const { autoConnectDefault } = require('../lib/report-server.js');
+  const entry = { browser: { name: 'chat-test' }, recordDir: () => null };
+  await autoConnectDefault(fx.root, entry, deps);
+  assert.equal(entry.autoConnect, undefined); // nothing to connect → never started
+  assert.ok(!calls.some((a) => a[0] === 'profile-bootstrap'));
+});
+
 test('package-provided personas are discovered read-only; local shadows; writes refused', async (t) => {
   const fx = makeFixture();
   // Isolated config home with a package persona dir registered in agent-qa.toml.
