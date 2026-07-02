@@ -265,7 +265,14 @@ fn run_with_bin(
         .map(Duration::from_millis)
         .or_else(agent_browser_timeout);
 
-    let mut first = spawn_once(bin, session, args, opts.capture_stdout, opts.capture_stderr, timeout)?;
+    let mut first = spawn_once(
+        bin,
+        session,
+        args,
+        opts.capture_stdout,
+        opts.capture_stderr,
+        timeout,
+    )?;
 
     if first.exit_code != 0
         && !auto_recovery_disabled()
@@ -282,7 +289,14 @@ fn run_with_bin(
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
-        first = spawn_once(bin, session, args, opts.capture_stdout, opts.capture_stderr, timeout)?;
+        first = spawn_once(
+            bin,
+            session,
+            args,
+            opts.capture_stdout,
+            opts.capture_stderr,
+            timeout,
+        )?;
     }
 
     if opts.throw_on_error && first.exit_code != 0 {
@@ -486,7 +500,11 @@ pub fn wait_for_load(session: &str, state: &str) -> Result<(), AgentBrowserError
 /// `networkidle`, so an unbounded settle stalls replay for the full agent-browser
 /// timeout (~30s). Best-effort — if the state isn't reached in `cap_ms`, the
 /// process is killed and we proceed (assertions have their own retry).
-pub fn wait_for_load_capped(session: &str, state: &str, cap_ms: u64) -> Result<(), AgentBrowserError> {
+pub fn wait_for_load_capped(
+    session: &str,
+    state: &str,
+    cap_ms: u64,
+) -> Result<(), AgentBrowserError> {
     run(
         session,
         ["wait", "--load", state],

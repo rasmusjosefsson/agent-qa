@@ -62,7 +62,9 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
             // on this URL, skip the reload — re-navigating a heavy SPA forces a
             // full re-hydration (~20s). Best-effort; any mismatch navigates.
             if browser::already_on(ctx.session, &url) {
-                eprintln!("[v2-replay] goto: already on {url} — reusing warm page (skipped reload)");
+                eprintln!(
+                    "[v2-replay] goto: already on {url} — reusing warm page (skipped reload)"
+                );
             } else {
                 browser::open(ctx.session, &url)?;
             }
