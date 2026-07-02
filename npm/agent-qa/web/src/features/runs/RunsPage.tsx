@@ -91,7 +91,17 @@ export function RunsPage() {
     }
   }
 
-  const hasRunConfig = personas.length > 0 || environments.length > 0
+  // Per-replay run config, handed to the scenario's Replay controls (not a
+  // global top bar) — so you pick the login/target for the scenario you're
+  // about to replay, defaulted to its recorded persona.
+  const runConfig = {
+    personas,
+    environments,
+    personaId,
+    envId,
+    setPersonaId,
+    setEnvId,
+  }
 
   // Right pane: live screencast while the run is in flight and no step pinned,
   // otherwise the static step detail (which renders its own empty state).
@@ -99,36 +109,6 @@ export function RunsPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {hasRunConfig && (
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border px-4 py-2 text-xs text-muted-foreground">
-          <span>Replay as</span>
-          <select
-            value={personaId}
-            onChange={(e) => setPersonaId(e.target.value)}
-            className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none focus-visible:border-ring"
-          >
-            <option value="">default login</option>
-            {personas.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-          <span>on</span>
-          <select
-            value={envId}
-            onChange={(e) => setEnvId(e.target.value)}
-            className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none focus-visible:border-ring"
-          >
-            <option value="">default environment</option>
-            {environments.map((en) => (
-              <option key={en.id} value={en.id}>
-                {en.name}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
       {replayErr && (
         <div className="border-b border-destructive/30 bg-destructive/10 px-4 py-1.5 text-xs text-destructive">{replayErr}</div>
       )}
@@ -140,7 +120,7 @@ export function RunsPage() {
         </Panel>
         <ResizeHandle />
         <Panel defaultSize={56} minSize={30} className="min-h-0">
-          <CenterPane runs={runs} onReplay={(sid) => void onReplay(sid)} busy={busy} />
+          <CenterPane runs={runs} onReplay={(sid) => void onReplay(sid)} busy={busy} runConfig={runConfig} />
         </Panel>
         <ResizeHandle />
         <Panel defaultSize={22} minSize={16} className="min-h-0">

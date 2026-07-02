@@ -303,6 +303,10 @@ function ChatConversation({
     return v >= 25 && v <= 80 ? v : 58
   })
   const [rec, setRec] = useState<RecordingState | null>(null)
+  // Transient "Scenario saved" toast, fired when a recording flushes.
+  const [savedNotice, setSavedNotice] = useState<{ sid: string; steps: number } | null>(null)
+  const prevRec = useRef<RecordingState | null>(null)
+  const savedTimer = useRef<number | undefined>(undefined)
 
   useEffect(() => {
     localStorage.setItem(SPLIT_KEY, String(Math.round(leftPct)))
@@ -313,9 +317,18 @@ function ChatConversation({
   useEffect(() => {
     let alive = true
     let timer: number | undefined
+    prevRec.current = null
     const tick = async () => {
       const r = await getRecording(cid)
       if (!alive) return
+      // Flush transition (was recording this sid, now saved) → toast.
+      const p = prevRec.current
+      if (r?.flushed && r.sid && p && p.sid === r.sid && !p.flushed) {
+        setSavedNotice({ sid: r.sid, steps: (r.steps || []).length })
+        window.clearTimeout(savedTimer.current)
+        savedTimer.current = window.setTimeout(() => setSavedNotice(null), 6000)
+      }
+      prevRec.current = r
       setRec(r)
       timer = window.setTimeout(tick, 1500)
     }
@@ -541,6 +554,23 @@ function ChatConversation({
           )}
         </div>
       </div>
+
+      {savedNotice && (
+        <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300 shadow-lg backdrop-blur">
+          <CheckIcon className="size-4 shrink-0" />
+          <span>
+            Scenario saved — {savedNotice.steps} step{savedNotice.steps === 1 ? '' : 's'}
+          </span>
+          <button
+            type="button"
+            onClick={() => setSavedNotice(null)}
+            className="ml-1 opacity-60 hover:opacity-100"
+            title="Dismiss"
+          >
+            <XIcon className="size-3.5" />
+          </button>
+        </div>
+      )}
     </div>
   )
 }

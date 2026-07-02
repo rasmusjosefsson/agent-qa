@@ -330,6 +330,50 @@ function listPackages() {
   return readRegistry().packages || [];
 }
 
+// Compare an installed package against its remote to detect an available
+// update. git → local HEAD vs `origin` HEAD; npm → installed package.json
+// version vs `npm view <name> version`. Best-effort + network-bounded; any
+// failure reports current='?' updateAvailable=false rather than throwing.
+function packageUpdate(p) {
+  try {
+    if (p.scheme === 'npm') {
+      const cur = JSON.parse(fs.readFileSync(path.join(p.dir, 'package.json'), 'utf8')).version || '?';
+      const latest = execFileSync('npm', ['view', p.name, 'version'], {
+        encoding: 'utf8',
+        timeout: 20000,
+      }).trim();
+      return { current: cur, latest, updateAvailable: !!latest && latest !== cur };
+    }
+    const cur = execFileSync('git', ['-C', p.dir, 'rev-parse', 'HEAD'], {
+      encoding: 'utf8',
+      timeout: 20000,
+    }).trim();
+    const out = execFileSync('git', ['-C', p.dir, 'ls-remote', 'origin', 'HEAD'], {
+      encoding: 'utf8',
+      timeout: 25000,
+    }).trim();
+    const latest = (out.split(/\s+/)[0] || '').trim();
+    return {
+      current: cur.slice(0, 7),
+      latest: latest.slice(0, 7),
+      updateAvailable: !!latest && latest !== cur,
+    };
+  } catch {
+    return { current: '?', latest: '?', updateAvailable: false };
+  }
+}
+
+// Per-package update status for the whole registry (each entry gains
+// current/latest/updateAvailable). Network-bound — call on demand.
+function checkUpdates() {
+  return listPackages().map((p) => ({
+    source: p.source,
+    name: p.name,
+    scheme: p.scheme,
+    ...packageUpdate(p),
+  }));
+}
+
 // Re-install (re-pull) installed packages so newly-shipped resources —
 // personas, environments, skills, plugin updates — flow in. With no argument,
 // updates every registered package; else the one matching a name or source.
@@ -358,6 +402,7 @@ module.exports = {
   mergeToml,
   install,
   update,
+  checkUpdates,
   listPackages,
   remove,
   // paths (for tests)

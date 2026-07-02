@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { PlusIcon, Loader2Icon, GlobeIcon, Trash2Icon, XIcon, UploadIcon, CopyIcon } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { PlusIcon, Loader2Icon, GlobeIcon, Trash2Icon, XIcon, CopyIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -12,16 +12,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import {
-  getEnvironments,
-  upsertEnvironment,
-  deleteEnvironment,
-  getPlugins,
-  getPluginPaths,
-  setPluginPaths,
-  importPlugin,
-} from '@/lib/run-config-api'
-import type { EnvironmentRecord, PluginInfo } from './types'
+import { getEnvironments, upsertEnvironment, deleteEnvironment } from '@/lib/run-config-api'
+import type { EnvironmentRecord } from './types'
 
 function slugify(s: string): string {
   return (
@@ -35,8 +27,6 @@ function slugify(s: string): string {
 
 export function EnvironmentsPage() {
   const [envs, setEnvs] = useState<EnvironmentRecord[] | null>(null)
-  const [plugins, setPlugins] = useState<PluginInfo[]>([])
-  const [paths, setPaths] = useState<string[]>([])
   const [err, setErr] = useState('')
   // 'new' → blank; a record → edit; { seed } → clone a read-only package env.
   const [editing, setEditing] = useState<
@@ -47,38 +37,9 @@ export function EnvironmentsPage() {
     getEnvironments()
       .then((r) => setEnvs(r.environments))
       .catch((e) => setErr(String(e.message || e)))
-  const refreshPlugins = () =>
-    Promise.all([getPluginPaths(), getPlugins()])
-      .then(([cfg, disc]) => {
-        setPaths(cfg.paths)
-        setPlugins(disc.plugins)
-      })
-      .catch(() => {})
   useEffect(() => {
     void load()
-    void refreshPlugins()
   }, [])
-
-  const removePlugin = async (p: string) => {
-    await setPluginPaths(paths.filter((x) => x !== p)).catch((e) => setErr(String(e.message || e)))
-    void refreshPlugins()
-  }
-  const fileRef = useRef<HTMLInputElement | null>(null)
-  const onImportFile = async (file: File) => {
-    try {
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const r = new FileReader()
-        r.onload = () => resolve(String(r.result))
-        r.onerror = () => reject(r.error)
-        r.readAsDataURL(file)
-      })
-      const b64 = dataUrl.split(',')[1] || ''
-      await importPlugin(file.name, b64)
-      void refreshPlugins()
-    } catch (e) {
-      setErr(String((e as Error).message || e))
-    }
-  }
 
   const remove = async (id: string) => {
     await deleteEnvironment(id).catch((e) => setErr(String(e.message || e)))
@@ -104,45 +65,6 @@ export function EnvironmentsPage() {
           {err}
         </div>
       )}
-
-      <div className="border-b border-border bg-muted/20 px-5 py-2 text-[11px]">
-        <div className="mb-1 font-medium text-muted-foreground">Auth plugins</div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          {paths.map((p) => (
-            <span key={p} className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 font-mono">
-              {p}
-              <button onClick={() => void removePlugin(p)} className="opacity-60 hover:opacity-100" title="Remove">
-                <XIcon className="size-3" />
-              </button>
-            </span>
-          ))}
-          <Button variant="ghost" size="sm" className="h-6 px-2" onClick={() => fileRef.current?.click()}>
-            <UploadIcon /> Import plugin
-          </Button>
-          <input
-            ref={fileRef}
-            type="file"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0]
-              if (f) void onImportFile(f)
-              e.target.value = ''
-            }}
-          />
-        </div>
-        <div className="mt-1 text-muted-foreground">
-          {plugins.length > 0
-            ? `Discovered: ${plugins
-                .map((p) => {
-                  const base = (p.binary || '').split('/').pop() || '?'
-                  const kinds = (p.kinds || []).join(', ')
-                  const bad = p.pingFailed ? ' — ping failed' : ''
-                  return kinds ? `${base} [${kinds}]${bad}` : `${base}${bad}`
-                })
-                .join(', ')}`
-            : 'None loaded yet — import your auth-plugin binary above (or install a package from Plugins).'}
-        </div>
-      </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
         {envs === null ? (
