@@ -15,6 +15,7 @@ import {
   RefreshCwIcon,
   ArrowUpCircleIcon,
   PackageIcon,
+  Trash2Icon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -28,6 +29,17 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
+import {
   getPlugins,
   getPluginPaths,
   setPluginPaths,
@@ -35,6 +47,7 @@ import {
   installPackage,
   getPackages,
   updatePackage,
+  uninstallPackage,
   checkPackageUpdates,
   type InstallResult,
   type InstalledPackage,
@@ -58,6 +71,7 @@ export function PluginsPage() {
   const [appUpdate, setAppUpdate] = useState<AppUpdate | null>(null)
   const [checking, setChecking] = useState(false)
   const [updatingSource, setUpdatingSource] = useState<string | null>(null)
+  const [removingSource, setRemovingSource] = useState<string | null>(null)
 
   const load = () =>
     Promise.all([getPlugins(), getPluginPaths(), getPackages()])
@@ -100,6 +114,26 @@ export function PluginsPage() {
       setErr(String((e as Error).message || e))
     } finally {
       setUpdatingSource(null)
+    }
+  }
+
+  // Uninstall a package (drops it from the config + deletes its files).
+  const doUninstall = async (source: string) => {
+    setRemovingSource(source)
+    setErr('')
+    try {
+      const r = await uninstallPackage(source)
+      if (!r.ok) setErr(r.error || 'uninstall failed')
+      else setUpdates((prev) => {
+        const next = { ...prev }
+        delete next[source]
+        return next
+      })
+      await load()
+    } catch (e) {
+      setErr(String((e as Error).message || e))
+    } finally {
+      setRemovingSource(null)
     }
   }
 
@@ -186,6 +220,7 @@ export function PluginsPage() {
                 {packages.map((pkg) => {
                   const u = updates[pkg.source]
                   const busy = updatingSource === pkg.source
+                  const removing = removingSource === pkg.source
                   const provides =
                     [
                       pkg.plugins.length ? `${pkg.plugins.length} plugin` : '',
@@ -217,21 +252,60 @@ export function PluginsPage() {
                       </td>
                       <td className="px-3 py-2.5 text-xs text-muted-foreground">{provides}</td>
                       <td className="px-3 py-2.5 text-right">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7"
-                          disabled={busy}
-                          onClick={() => void doUpdate(pkg.source)}
-                          title="Re-pull this package"
-                        >
-                          {busy ? (
-                            <Loader2Icon className="size-4 animate-spin" />
-                          ) : (
-                            <RefreshCwIcon className="size-4" />
-                          )}{' '}
-                          Update
-                        </Button>
+                        <div className="flex items-center justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7"
+                            disabled={busy || removing}
+                            onClick={() => void doUpdate(pkg.source)}
+                            title="Re-pull this package"
+                          >
+                            {busy ? (
+                              <Loader2Icon className="size-4 animate-spin" />
+                            ) : (
+                              <RefreshCwIcon className="size-4" />
+                            )}{' '}
+                            Update
+                          </Button>
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-muted-foreground hover:text-destructive"
+                                disabled={busy || removing}
+                                title="Uninstall this package"
+                                aria-label={`Uninstall ${pkg.name}`}
+                              >
+                                {removing ? (
+                                  <Loader2Icon className="size-4 animate-spin" />
+                                ) : (
+                                  <Trash2Icon className="size-4" />
+                                )}
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Uninstall {pkg.name}?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  Removes it from your agent-qa config and deletes its downloaded
+                                  files. Its plugins, skills, personas, and environments will no
+                                  longer be available. You can reinstall it from the source any time.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                <AlertDialogAction
+                                  variant="destructive"
+                                  onClick={() => void doUninstall(pkg.source)}
+                                >
+                                  Uninstall
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        </div>
                       </td>
                     </tr>
                   )
