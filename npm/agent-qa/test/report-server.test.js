@@ -1014,6 +1014,40 @@ test('environment shared creds layer under persona creds (persona wins on confli
   assert.deepEqual(got.environment.auth.creds, { APP_CLIENT_ID: 'cid-shared', OVERLAP: 'from-env' });
 });
 
+test('replay with no environmentId falls back to the default/sole environment (injects its shared creds)', async (t) => {
+  const fx = makeFixture();
+  const replays = [];
+  const deps = {
+    runCli: async () => ({ code: 0, stdout: 'ok', stderr: '' }),
+    replay: async (sid, session, opts) => {
+      replays.push({ sid, session, opts });
+      return { ok: true };
+    },
+  };
+  const { server, base } = await boot(fx.root, deps);
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  // A single environment carrying the shared app cred, and a persona.
+  await j('POST', '/api/environments/staging', {
+    name: 'Staging',
+    auth: { plugin: 'agent-qa-plugin-acme', creds: { APP_CLIENT_ID: 'cid-shared' } },
+  });
+  await j('POST', '/api/personas/admin', {
+    name: 'Admin',
+    profile: 'admin-user',
+    credentials: { entries: { APP_EMAIL: 'a@b.com' } },
+  });
+
+  // Replay names the persona but NOT the environment — the sole env is used.
+  const rep = await j('POST', `/api/scenarios/${fx.sid}/replay`, { personaId: 'admin' });
+  assert.equal(rep.status, 202);
+  assert.equal(replays.length, 1);
+  assert.equal(replays[0].opts.env.APP_CLIENT_ID, 'cid-shared'); // shared cred injected from the default env
+  assert.equal(replays[0].opts.env.APP_EMAIL, 'a@b.com');
+});
+
 test('package-provided personas are discovered read-only; local shadows; writes refused', async (t) => {
   const fx = makeFixture();
   // Isolated config home with a package persona dir registered in agent-qa.toml.
