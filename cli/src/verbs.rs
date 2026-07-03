@@ -208,6 +208,36 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
     }
 }
 
+/// Whether a step is a click on popup CONTENT (an option/menuitem/treeitem) —
+/// elements that only exist while a popup is open. If such a click fails, the
+/// popup was almost certainly dismissed (e.g. by an inter-step keyframe capture
+/// or a re-render) and re-opening it is the right recovery.
+pub fn is_popup_content_click(step: &Step) -> bool {
+    match step {
+        Step::Do {
+            verb: Verb::Click,
+            on: Some(Locator::Role(role)),
+            ..
+        } => matches!(
+            role.role.as_str(),
+            "option" | "menuitem" | "menuitemcheckbox" | "menuitemradio" | "treeitem"
+        ),
+        _ => false,
+    }
+}
+
+/// Whether a step is any click — used to remember the last opener so a dismissed
+/// popup can be re-opened before retrying its content click.
+pub fn is_click_step(step: &Step) -> bool {
+    matches!(
+        step,
+        Step::Do {
+            verb: Verb::Click,
+            ..
+        }
+    )
+}
+
 // ---------- helpers ----------
 
 /// Set a `<select>` element's value via raw locator + dispatch a change
@@ -222,7 +252,23 @@ fn select_option(
     value: &str,
     scope: &mut ValueScope,
 ) -> anyhow::Result<()> {
-    use anyhow::bail;
+    // Role+name combobox: open the opener, confirm a popup appeared (escalate
+    // to the W3C keyboard opener contract if the click was swallowed), then
+    // pick the option by name via native DOM activation. Native `<select>` and
+    // raw-locator flows fall through to the DOM-mutation path below.
+    if let Locator::Role(role) = loc {
+        let opener_name = match &role.name {
+            Some(NameMatch::Plain(s)) => crate::value::substitute_scenario_vars(s, scope),
+            Some(NameMatch::Pattern { pattern, .. }) => {
+                crate::value::substitute_scenario_vars(pattern, scope)
+            }
+            Some(NameMatch::I18n { i18n_key }) => {
+                bail!("select opener name.i18nKey ({i18n_key:?}) is not yet supported")
+            }
+            None => String::new(),
+        };
+        return select_via_combobox(session, &role.role, &opener_name, value);
+    }
     let value_lit = json_str(value);
     let option_lit = json_str(value);
     let body = |selector_lit: String| -> String {
@@ -254,14 +300,50 @@ fn select_option(
                 ),
             }
         }
-        Locator::Role(_) => {
-            bail!(
-                "select with role+name locators is not yet supported (use raw.css or raw.xpath; combobox-role flows want a snapshot-aware click-then-pick interaction)"
-            );
-        }
+        Locator::Role(_) => unreachable!("role locators handled above"),
     };
     browser::eval_expression(session, &expr)?;
     Ok(())
+}
+
+/// Open a combobox/listbox opener by name, confirm the popup opened (else press
+/// the W3C keyboard opener key), then pick the named option. The whole flow
+/// uses native DOM activation + a popup-count probe rather than coordinate
+/// clicks, so overlay interception and mousedown-bound openers both work.
+fn select_via_combobox(
+    session: &str,
+    role: &str,
+    opener_name: &str,
+    option: &str,
+) -> anyhow::Result<()> {
+    use crate::dom_activate;
+    let before = dom_activate::popup_count(session);
+    // Open the opener. Empty name → first matching combobox.
+    let opener_role = if role.is_empty() { "combobox" } else { role };
+    let opened = if opener_name.is_empty() {
+        dom_activate::activate_role_name(session, opener_role, "")?
+    } else {
+        dom_activate::activate_role_name(session, opener_role, opener_name)?
+            || dom_activate::activate_text(session, opener_name)?
+    };
+    if !opened {
+        bail!("select: could not find combobox opener {opener_name:?} (role={opener_role})");
+    }
+    // Confirm the popup grew; if a mousedown-bound opener swallowed the click,
+    // fall back to focusing it and pressing the ARIA opener key.
+    if dom_activate::popup_count(session) <= before {
+        if !opener_name.is_empty() {
+            let _ = browser::find_role_act_quiet(session, opener_role, opener_name, RoleAct::Focus, None);
+        }
+        let _ = browser::press_key(session, "ArrowDown");
+    }
+    // Pick the option by name (role=option), then fall back to visible text.
+    if dom_activate::activate_role_name(session, "option", option)?
+        || dom_activate::activate_text(session, option)?
+    {
+        return Ok(());
+    }
+    bail!("select: opened combobox {opener_name:?} but found no option matching {option:?}")
 }
 
 // ---------- end helpers ----------
@@ -549,58 +631,26 @@ fn try_named_control_fill(session: &str, name: &str, value: &str) -> anyhow::Res
     Ok(out.trim() == "true")
 }
 
-/// Named buttons/links can appear in snapshots by input value or implicit
-/// button text even when the role finder misses. Recover by matching common
-/// name-bearing attributes and invoking native click/submit behaviour.
+/// Activate an interactive control by role + accessible name via native DOM
+/// events, bypassing coordinate clicks (which overlays intercept and which
+/// miss mousedown-bound handlers like MUI Select). Covers every interactive
+/// role — button, link, combobox, option, menuitem, tab, checkbox, … — not
+/// just button/link. Non-interactive roles return `Ok(false)` so the caller
+/// falls back to agent-browser's role finder. See [`crate::dom_activate`].
 fn try_named_control_click(session: &str, role: &str, name: &str) -> anyhow::Result<bool> {
-    if role != "button" && role != "link" {
+    if !crate::dom_activate::is_interactive_role(role) {
         return Ok(false);
     }
-    let selector = if role == "link" {
-        "a,[role=link]"
-    } else {
-        "button,input[type=button],input[type=submit],input[type=reset],[role=button]"
-    };
-    let expr = format!(
-        r#"(() => {{
-  const want = {name_lit}.toLowerCase();
-  const text = (s) => (s || '').trim().toLowerCase();
-  const candidates = Array.from(document.querySelectorAll({selector_lit}));
-  const primary = (node) => [
-    node.innerText,
-    node.textContent,
-    node.value,
-    node.getAttribute('aria-label'),
-    node.getAttribute('name'),
-  ].some((candidate) => text(candidate) === want);
-  const secondary = (node) => want.length >= 3 && [
-    node.innerText,
-    node.textContent,
-    node.value,
-    node.getAttribute('aria-label'),
-    node.getAttribute('name'),
-    node.id,
-    node.getAttribute('data-test'),
-    node.getAttribute('data-testid'),
-  ].some((candidate) => text(candidate).includes(want));
-  const el = candidates.find(primary) || candidates.find(secondary);
-  if (!el) return false;
-  const form = el.form || el.closest('form');
-  const isSubmit = el.tagName === 'BUTTON' || (el.tagName === 'INPUT' && ['submit', 'button', 'reset'].includes((el.type || '').toLowerCase()));
-  if (form && isSubmit && typeof form.requestSubmit === 'function') {{
-    form.requestSubmit(el);
-  }} else {{
-    el.dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true, cancelable: true, view: window }}));
-    el.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true, cancelable: true, view: window }}));
-    el.click();
-  }}
-  return true;
-}})()"#,
-        name_lit = json_str(name),
-        selector_lit = json_str(selector)
-    );
-    let out = browser::eval_expression(session, &expr)?;
-    Ok(out.trim() == "true")
+    crate::dom_activate::activate_role_name(session, role, name)
+}
+
+/// Click an element resolved by visible text via native DOM events, walking up
+/// to the nearest interactive ancestor when the text sits on a covered label
+/// node (the classic "button label is a separate div under an overlay" case).
+/// Returns `Ok(false)` when nothing matches so the caller can fall back to
+/// agent-browser's `find text` coordinate click.
+fn try_text_native_click(session: &str, text: &str) -> anyhow::Result<bool> {
+    crate::dom_activate::activate_text(session, text)
 }
 
 /// agent-browser's top-level `click <selector>` can report success for a
@@ -683,15 +733,34 @@ fn act_on_locator(
             // Probe role+name quietly so a recovering miss doesn't spam
             // the user with a `✗ Element not found` line they have to
             // mentally discard.
-            if matches!(act, RoleAct::Click)
-                && !name_str.is_empty()
-                && try_named_control_click(session, &role.role, name_str)?
-            {
-                eprintln!(
-                    "[v2-replay] role='{}' name='{}' activated via named control click",
-                    role.role, name_str
-                );
-                return Ok(());
+            if matches!(act, RoleAct::Click) && !name_str.is_empty() {
+                // For popup openers (combobox/listbox), remember how many popup
+                // surfaces are open so we can tell whether the activation opened
+                // one — and escalate to the keyboard opener key if a
+                // mousedown-only handler swallowed the synthetic click.
+                let opener = crate::dom_activate::is_popup_opener_role(&role.role);
+                let before = if opener {
+                    crate::dom_activate::popup_count(session)
+                } else {
+                    0
+                };
+                if try_named_control_click(session, &role.role, name_str)? {
+                    if opener && crate::dom_activate::popup_count(session) <= before {
+                        let _ = browser::find_role_act_quiet(
+                            session,
+                            &role.role,
+                            name_str,
+                            RoleAct::Focus,
+                            None,
+                        );
+                        let _ = browser::press_key(session, "ArrowDown");
+                    }
+                    eprintln!(
+                        "[v2-replay] role='{}' name='{}' activated via named control click",
+                        role.role, name_str
+                    );
+                    return Ok(());
+                }
             }
 
             match browser::find_role_act_quiet(session, &role.role, name_str, act, value) {
@@ -757,14 +826,19 @@ fn act_on_locator(
                 RawLocatorKind::Text => {
                     // agent-browser's `find text` doesn't support focus; for
                     // focus we fall back to a DOM-eval click on the first
-                    // text-matching element. Click/hover/fill go through the
-                    // native locator which has scroll/visibility heuristics.
+                    // text-matching element.
                     if matches!(act, RoleAct::Focus) {
                         let expr = format!(
                             "(() => {{ const want = {q}; const all = [...document.querySelectorAll('a,button,[role]')]; const hit = all.find(el => (el.innerText || el.textContent || '').includes(want)); if (hit) hit.focus(); }})()",
                             q = json_str(&v)
                         );
                         browser::eval_expression(session, &expr)?;
+                    } else if matches!(act, RoleAct::Click) && try_text_native_click(session, &v)? {
+                        // Native DOM activation (scrollIntoView + full
+                        // pointer/mouse chain on the node, with covered-label
+                        // recovery) beats agent-browser's coordinate `find
+                        // text click`, which an overlay can intercept.
+                        eprintln!("[v2-replay] text '{v}' activated via native DOM click");
                     } else {
                         browser::find_text_act(session, &v, act, value)?;
                     }
@@ -1039,6 +1113,45 @@ mod tests {
     }
 
     #[test]
+    fn raw_text_click_prefers_native_dom_activation() {
+        // eval → "true": the text locator activates via native DOM (covered-
+        // label recovery) instead of agent-browser's `find text click`.
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake_eval_true(tmp.path(), &log);
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "click",
+            "on": { "raw": { "kind": "text", "value": "Select a license" }, "reason": "visible text" }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        assert!(out.contains("--session sess eval"), "no eval: {out}");
+        assert!(out.contains("Select a license"), "text missing: {out}");
+        assert!(
+            !out.contains("find text"),
+            "should not fall through to find text: {out}"
+        );
+    }
+
+    #[test]
+    fn raw_text_click_falls_back_to_find_text_when_dom_misses() {
+        // eval → "" (no match): falls through to agent-browser `find text`.
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "click",
+            "on": { "raw": { "kind": "text", "value": "Nowhere" }, "reason": "visible text" }
+        }));
+        let out = run_one(&s);
+        assert!(out.contains("find text Nowhere click"), "got: {out}");
+    }
+
+    #[test]
     fn raw_testid_locator_synthesises_css() {
         let s = parse(json!({
             "id": "s1", "intent": "x", "kind": "do", "verb": "click",
@@ -1210,7 +1323,35 @@ mod tests {
     }
 
     #[test]
-    fn select_role_locator_errors() {
+    fn select_role_combobox_opens_opener_and_picks_option() {
+        // Fake browser: eval always returns "true" (opener + option activate),
+        // popup probe returns a growing count so no keyboard fallback fires.
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake_eval_true(tmp.path(), &log);
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "select",
+            "on": { "role": "combobox", "name": "Country" },
+            "value": { "from": "literal", "literal": "United States" }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        // Opener name and the option both flow into eval'd activation JS.
+        assert!(out.contains("Country"), "opener name missing: {out}");
+        assert!(out.contains("United States"), "option missing: {out}");
+        assert!(out.contains("--session sess eval"), "no eval: {out}");
+    }
+
+    #[test]
+    fn select_role_combobox_errors_when_opener_missing() {
+        // Plain fake: eval returns nothing → activation reports no match.
         let s = parse(json!({
             "id": "s1", "intent": "x", "kind": "do", "verb": "select",
             "on": { "role": "combobox", "name": "Country" },
@@ -1227,7 +1368,7 @@ mod tests {
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         clear_fake();
         assert!(
-            err.contains("role+name locators is not yet supported"),
+            err.contains("could not find combobox opener"),
             "got: {err}"
         );
     }

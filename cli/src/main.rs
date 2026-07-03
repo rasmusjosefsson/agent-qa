@@ -18,6 +18,7 @@ mod claims;
 mod compare;
 mod config;
 mod doctor;
+mod dom_activate;
 mod env_ops;
 mod fill_unique;
 mod flush;
