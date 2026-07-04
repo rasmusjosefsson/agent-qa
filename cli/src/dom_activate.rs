@@ -371,4 +371,3 @@ mod tests {
         assert!(js.contains("aria-expanded=\\\"true\\\"") || js.contains("aria-expanded=\"true\""));
     }
 }
-

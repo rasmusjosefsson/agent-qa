@@ -333,7 +333,13 @@ fn select_via_combobox(
     // fall back to focusing it and pressing the ARIA opener key.
     if dom_activate::popup_count(session) <= before {
         if !opener_name.is_empty() {
-            let _ = browser::find_role_act_quiet(session, opener_role, opener_name, RoleAct::Focus, None);
+            let _ = browser::find_role_act_quiet(
+                session,
+                opener_role,
+                opener_name,
+                RoleAct::Focus,
+                None,
+            );
         }
         let _ = browser::press_key(session, "ArrowDown");
     }
@@ -1367,10 +1373,7 @@ mod tests {
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         clear_fake();
-        assert!(
-            err.contains("could not find combobox opener"),
-            "got: {err}"
-        );
+        assert!(err.contains("could not find combobox opener"), "got: {err}");
     }
 
     #[test]

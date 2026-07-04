@@ -551,9 +551,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                     // failed usually means the popup was dismissed between steps
                     // (inter-step keyframe capture, a re-render). Re-fire the
                     // previous opener click to reopen it, then retry once.
-                    if outcome.is_err()
-                        && crate::verbs::is_popup_content_click(&patched_step)
-                    {
+                    if outcome.is_err() && crate::verbs::is_popup_content_click(&patched_step) {
                         if let Some(opener) = &prev_click {
                             eprintln!(
                                 "[v2-replay] popup content click failed; re-opening via previous opener and retrying"
