@@ -1407,6 +1407,7 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
     if (opts.entry) {
       opts.entry.connectedProfile = profile;
       opts.entry.connectedPersonaId = personaId;
+      opts.entry.connectedEnvironmentId = (env && env.id) || null;
     }
     if (opts.recordDir) await bindRecordingProfile(opts.recordDir, profile);
   }
@@ -2540,20 +2541,22 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
     if (!personaId || !profile) {
       return badRequest(res, 'connect a persona first (POST /api/chat/c/<id>/connect)');
     }
-    const persona = await loadPersonaById(scenariosRoot, personaId);
-    const entries = (persona && persona.credentials && persona.credentials.entries) || {};
-    const { env: resolvedEnv, unresolved } = await resolveVaultRefs(entries);
-    if (unresolved.length) {
-      return sendJson(res, 200, {
-        ok: false,
-        error: `could not resolve vault refs: ${unresolved.join(', ')}. Run \`vault login\` and set VAULT_ADDR.`,
-      });
-    }
-    const extraEnv = { ...pluginsEnv(await readPluginPaths(scenariosRoot)), ...resolvedEnv };
+    // Same cred layering as /connect and the Runs tab (resolveRunAuthEnv):
+    // environment shared creds (e.g. the OAuth client id) under the persona's
+    // identity creds, plus AGENT_QA_ENV_* — replay's useProfile re-bootstrap
+    // needs all of it, not just the persona's entries. Environment: the one
+    // named in the body, else the one connect used, else the default/sole.
+    const envId = body.environmentId ? String(body.environmentId) : entry.connectedEnvironmentId || '';
+    const resolved = await resolveRunAuthEnv(scenariosRoot, deps, {
+      personaId,
+      environmentId: envId,
+    });
+    if (resolved.error) return sendJson(res, 200, { ok: false, error: resolved.error });
+    const extraEnv = { ...resolved.env };
     const rdir = entry.recordDir();
     if (rdir) extraEnv.AGENT_QA_RECORD_DIR = rdir;
     const r = await deps.runCli(
-      ['replay', sid, '--session', entry.browser.name, '--profile', profile],
+      ['replay', sid, '--session', entry.browser.name, '--profile', resolved.profile || profile],
       extraEnv,
     );
     const tail = (s) =>
