@@ -177,62 +177,19 @@ fn try_text_fallback(session: &str, name: &str) -> Option<String> {
     None
 }
 
-/// Named buttons/links can be present in the snapshot while agent-browser's
-/// click lands without triggering app handlers. Prefer native DOM activation
-/// for common controls; fall back to agent-browser's role/text/ref ladder.
+/// Named interactive controls can be present in the snapshot while
+/// agent-browser's coordinate click lands without triggering app handlers
+/// (overlay interception, or a mousedown-bound handler). Prefer native DOM
+/// activation — role + name resolution, scrollIntoView, and the full
+/// pointer/mouse event chain on the node — for every interactive role, not
+/// just button/link. Non-interactive roles return `Ok(false)` so the caller
+/// falls back to agent-browser's role/text/ref ladder. See
+/// [`crate::dom_activate`].
 fn try_named_control_click(session: &str, role: &str, name: &str) -> Result<bool> {
-    if role != "button" && role != "link" {
+    if !crate::dom_activate::is_interactive_role(role) {
         return Ok(false);
     }
-    let selector = if role == "link" {
-        "a,[role=link]"
-    } else {
-        "button,input[type=button],input[type=submit],input[type=reset],[role=button]"
-    };
-    let expr = format!(
-        r#"(() => {{
-  const want = {name_lit}.toLowerCase();
-  const text = (s) => (s || '').trim().toLowerCase();
-  const candidates = Array.from(document.querySelectorAll({selector_lit}));
-  const primary = (node) => [
-    node.innerText,
-    node.textContent,
-    node.value,
-    node.getAttribute('aria-label'),
-    node.getAttribute('name'),
-  ].some((candidate) => text(candidate) === want);
-  const secondary = (node) => want.length >= 3 && [
-    node.innerText,
-    node.textContent,
-    node.value,
-    node.getAttribute('aria-label'),
-    node.getAttribute('name'),
-    node.id,
-    node.getAttribute('data-test'),
-    node.getAttribute('data-testid'),
-  ].some((candidate) => text(candidate).includes(want));
-  const el = candidates.find(primary) || candidates.find(secondary);
-  if (!el) return false;
-  const form = el.form || el.closest('form');
-  const isSubmit = el.tagName === 'BUTTON' || (el.tagName === 'INPUT' && ['submit', 'button', 'reset'].includes((el.type || '').toLowerCase()));
-  if (form && isSubmit && typeof form.requestSubmit === 'function') {{
-    form.requestSubmit(el);
-  }} else {{
-    el.dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true, cancelable: true, view: window }}));
-    el.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true, cancelable: true, view: window }}));
-    el.click();
-  }}
-  return true;
-}})()"#,
-        name_lit = json_str(name),
-        selector_lit = json_str(selector)
-    );
-    let out = browser::eval_expression(session, &expr)?;
-    Ok(out.trim() == "true")
-}
-
-fn json_str(s: &str) -> String {
-    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into())
+    crate::dom_activate::activate_role_name(session, role, name)
 }
 
 /// Final fallback rung: take a fresh ARIA snapshot, find the line that

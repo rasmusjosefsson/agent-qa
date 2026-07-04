@@ -487,6 +487,10 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         ) {
             eprintln!("[v2-replay] status.json init failed: {e}");
         }
+        // The last click dispatched — re-fired to reopen a popup that a
+        // subsequent option/menuitem click finds dismissed. See the
+        // transient-popup recovery in the dispatch match below.
+        let mut prev_click: Option<Step> = None;
         for step in &flat {
             summary.total += 1;
             let idx = summary.total;
@@ -541,17 +545,39 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 step.clone()
             };
             let result = match &patched_step {
-                Step::Do { save_as, .. } => match dispatch_do(&patched_step, &do_ctx, &mut scope) {
-                    Ok(saved) => {
-                        if let (Some(name), Some(value)) = (save_as.as_deref(), saved) {
-                            scope.saved_steps.insert(name.to_string(), value);
+                Step::Do { save_as, .. } => {
+                    let mut outcome = dispatch_do(&patched_step, &do_ctx, &mut scope);
+                    // Transient-popup recovery: an option/menuitem click that
+                    // failed usually means the popup was dismissed between steps
+                    // (inter-step keyframe capture, a re-render). Re-fire the
+                    // previous opener click to reopen it, then retry once.
+                    if outcome.is_err() && crate::verbs::is_popup_content_click(&patched_step) {
+                        if let Some(opener) = &prev_click {
+                            eprintln!(
+                                "[v2-replay] popup content click failed; re-opening via previous opener and retrying"
+                            );
+                            let _ = dispatch_do(opener, &do_ctx, &mut scope);
+                            std::thread::sleep(std::time::Duration::from_millis(300));
+                            outcome = dispatch_do(&patched_step, &do_ctx, &mut scope);
                         }
-                        Ok(())
                     }
-                    Err(e) => Err(e),
-                },
+                    match outcome {
+                        Ok(saved) => {
+                            if let (Some(name), Some(value)) = (save_as.as_deref(), saved) {
+                                scope.saved_steps.insert(name.to_string(), value);
+                            }
+                            Ok(())
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
                 Step::Check { claim, .. } => dispatch_check(claim, &check_ctx, &mut scope, None),
             };
+            // Remember the last click as a potential popup opener for the
+            // transient-popup recovery above.
+            if crate::verbs::is_click_step(&patched_step) {
+                prev_click = Some(patched_step.clone());
+            }
             let step_ms = step_started.elapsed().as_millis() as u64;
             // When sidecars are enabled the runner captures a
             // screenshot + ARIA snapshot per step at stable, convention
