@@ -450,6 +450,26 @@ const OPEN_MAX_ATTEMPTS: u32 = 5;
 /// unreachable / cold-starting) are retried with exponential backoff — 1s, 2s,
 /// 4s, 8s between attempts (~15s total) — so a short blip doesn't fail the whole
 /// replay. Non-transient failures return immediately.
+/// The env var agent-browser reads to launch a session's Chrome with a visible
+/// window instead of headless.
+pub const HEADED_ENV: &str = "AGENT_BROWSER_HEADED";
+
+/// Set the browser launch mode for every agent-browser child this process
+/// spawns. Headless is the default: when `headed` is false we *remove* the env
+/// var (rather than leave it), so a value inherited from a parent shell or a
+/// prior session can never silently force a visible window. When `headed` is
+/// true we set it, so a freshly-launched session shows its window.
+///
+/// Note: agent-browser fixes the mode when the session's daemon launches; an
+/// already-running session keeps its mode until it is closed and relaunched.
+pub fn set_headed_mode(headed: bool) {
+    if headed {
+        std::env::set_var(HEADED_ENV, "1");
+    } else {
+        std::env::remove_var(HEADED_ENV);
+    }
+}
+
 pub fn open(session: &str, url: &str) -> Result<(), AgentBrowserError> {
     let mut last_err = None;
     for attempt in 1..=OPEN_MAX_ATTEMPTS {

@@ -60,6 +60,10 @@ pub struct RunOptions {
     /// files. At step dispatch time, any do-step whose id appears in
     /// the map has its `value` replaced with the corrected literal.
     pub heal_from_run: Option<String>,
+    /// `--headed` launches the browser with a visible window; `--headless`
+    /// (the default) keeps it hidden. Applied to a freshly-launched session;
+    /// a reused warm session keeps whatever mode it launched in.
+    pub headed: bool,
     /// `--param name=value` overrides. Resolved + coerced against the
     /// declared input type at runner start; sensitive entries are
     /// recorded as `[REDACTED]` in `audit.parameters[]` but flow
@@ -327,6 +331,11 @@ fn abs_display(p: &Path) -> String {
 // ---------- entry point ----------
 
 pub fn run(opts: &RunOptions) -> Result<RunSummary> {
+    // 0. Browser launch mode (headless by default; --headed shows the window).
+    // Set before any agent-browser child is spawned so a freshly-launched
+    // session picks it up.
+    crate::browser::set_headed_mode(opts.headed);
+
     // 1. Load + validate.
     let (scenario_file, scenario_dir) = resolve_source(&opts.source)?;
     let bytes =
@@ -1253,6 +1262,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut profile: Option<String> = None;
     let mut session: Option<String> = None;
     let mut heal_from_run: Option<String> = None;
+    let mut headed = false;
     let mut dry_run = false;
     let mut no_sidecars = false;
     let mut quiet = false;
@@ -1276,6 +1286,8 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             s if s.starts_with("--heal-from-run=") => {
                 heal_from_run = Some(s["--heal-from-run=".len()..].to_string())
             }
+            "--headed" => headed = true,
+            "--headless" => headed = false,
             "--dry-run" => dry_run = true,
             "--no-sidecars" => no_sidecars = true,
             "--quiet" | "-q" => quiet = true,
@@ -1334,6 +1346,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         profile,
         session_name,
         heal_from_run,
+        headed,
         input_overrides,
         dry_run,
         no_sidecars,
@@ -1475,6 +1488,7 @@ mod tests {
             profile: None,
             session_name: "test".into(),
             heal_from_run: None,
+            headed: false,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: false,
@@ -1529,6 +1543,7 @@ mod tests {
             profile: None,
             session_name: "x".into(),
             heal_from_run: None,
+            headed: false,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: false,
@@ -1571,6 +1586,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             profile: None,
             session_name: "sx".into(),
             heal_from_run: None,
+            headed: false,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: false,
@@ -1628,6 +1644,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             profile: None,
             session_name: "x".into(),
             heal_from_run: None,
+            headed: false,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: false,
@@ -1997,6 +2014,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             profile: None,
             session_name: "sx".into(),
             heal_from_run: None,
+            headed: false,
             input_overrides: BTreeMap::new(),
             dry_run: true,
             no_sidecars: false,
@@ -2078,6 +2096,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             profile: None,
             session_name: "sx".into(),
             heal_from_run: Some("rPRIOR".into()),
+            headed: false,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: false,
@@ -2201,6 +2220,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             profile: None,
             session_name: "evt".into(),
             heal_from_run: None,
+            headed: false,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: false,
@@ -2284,6 +2304,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             profile: None,
             session_name: "evtf".into(),
             heal_from_run: None,
+            headed: false,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: false,
@@ -2346,6 +2367,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             profile: None,
             session_name: "evtn".into(),
             heal_from_run: None,
+            headed: false,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: true,
@@ -2386,6 +2408,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             profile: None,
             session_name: "evtd".into(),
             heal_from_run: None,
+            headed: false,
             input_overrides: BTreeMap::new(),
             dry_run: true,
             no_sidecars: false,
@@ -2563,6 +2586,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             profile: None,
             session_name: "s".into(),
             heal_from_run: None,
+            headed: false,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: false,

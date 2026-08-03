@@ -52,6 +52,7 @@ struct Opts {
     open_url: Option<String>,
     profile: Option<String>,
     keep_session: bool,
+    headed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -68,6 +69,7 @@ fn parse_args(args: &[String]) -> Result<Opts> {
     let mut open_url: Option<String> = None;
     let mut profile: Option<String> = None;
     let mut keep_session = false;
+    let mut headed = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -82,6 +84,8 @@ fn parse_args(args: &[String]) -> Result<Opts> {
             "--profile" => profile = it.next().cloned(),
             s if s.starts_with("--profile=") => profile = Some(s["--profile=".len()..].to_string()),
             "--keep-session" => keep_session = true,
+            "--headed" => headed = true,
+            "--headless" => headed = false,
             other if other.starts_with("--") => bail!("unknown flag {other:?}"),
             other => {
                 if intent.is_some() {
@@ -116,6 +120,7 @@ fn parse_args(args: &[String]) -> Result<Opts> {
         open_url,
         profile,
         keep_session,
+        headed,
     })
 }
 
@@ -147,6 +152,9 @@ Effects:
 }
 
 fn start(opts: &Opts) -> Result<StartSummary> {
+    // Browser launch mode (headless by default; --headed shows the window),
+    // applied before the session's first agent-browser command launches it.
+    browser::set_headed_mode(opts.headed);
     let sid = mint_sid();
     let scenario_dir = paths::scenario_dir(&sid)?;
     fs::create_dir_all(&scenario_dir)
@@ -272,6 +280,7 @@ mod tests {
             open_url: None,
             profile: None,
             keep_session: false,
+            headed: false,
         };
         let s = start(&opts).unwrap();
         assert!(s.sid.starts_with("s-"));
@@ -307,6 +316,7 @@ mod tests {
             open_url: Some("https://example.com/".into()),
             profile: None,
             keep_session: false,
+            headed: false,
         };
         let s = start(&opts).unwrap();
         assert_eq!(s.opened_url.as_deref(), Some("https://example.com/"));
