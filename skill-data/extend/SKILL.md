@@ -21,8 +21,8 @@ releases; your repo (and your `$HOME`) own the vendor logic and runbooks.
 
 ## The config home (global)
 
-Mirrors the `~/.agent-browser`, `~/.aws`, `~/.kube`, `~/.pi` family
-convention. agent-qa looks for, in order:
+Follows the common per-tool user-config directory convention. agent-qa looks
+for, in order:
 
 1. `~/.agent-qa/agent-qa.toml`                 — **primary**
 2. `$XDG_CONFIG_HOME/agent-qa/agent-qa.toml`   — XDG fallback
@@ -87,7 +87,7 @@ agent-qa skills list       # merged catalogue: embedded + external
 ### When to write a plugin
 
 Reach for a plugin when agent-qa needs to **do** something product-specific
-during recording or replay: log into Okta, mint a session cookie, apply a
+during recording or replay: sign in through an identity provider, mint a session cookie, apply a
 custom session-policy expiry, invoke a setup hook before the first step,
 or supply a vendor-specific healing strategy.
 
@@ -146,7 +146,7 @@ case "$kind" in
     ;;
   auth)
     payload=$(cat)   # request JSON on stdin
-    # …perform Okta/SSO/whatever using "$payload"…
+    # …perform the target app's sign-in flow using "$payload"…
     echo '{"protocolVersion":1,"response":{"ok":true,"session":{"cookies":[]}}}'
     ;;
   *)

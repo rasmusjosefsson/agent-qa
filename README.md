@@ -86,10 +86,9 @@ agent-qa replay <sid>
 agent-qa list <sid>
 agent-qa compare <sid>
 
-# 6. When a replay flags a value-rejection, decide and re-execute
-agent-qa heal-respond <sid> --step s3 --value qa-other@example.com
-agent-qa heal-apply <sid> --step s3
-agent-qa replay <sid>
+# 6. After inspecting a failed run, record a string correction and re-execute
+agent-qa heal-respond <sid> --run <failed-run-id> --step s1 --value qa-other@example.com
+agent-qa replay <sid> --heal-from-run <failed-run-id>
 ```
 
 ## Verbs

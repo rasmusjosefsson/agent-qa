@@ -1,7 +1,7 @@
 //! Global (user-level) config home for agent-qa.
 //!
-//! Mirrors the `~/.agent-browser/`, `~/.aws/`, `~/.kube/`, `~/.gnupg/`,
-//! `~/.pi/` family convention. Looked up *in addition to* the per-repo
+//! Follows the common per-tool user-config directory convention. Looked up
+//! *in addition to* the per-repo
 //! `agent-qa.toml` walked up from cwd, so a single global file can hold
 //! defaults (plugins, skill-data dirs, future session vault) for every
 //! invocation regardless of which repo you're in.

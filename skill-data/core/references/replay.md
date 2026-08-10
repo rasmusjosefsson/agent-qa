@@ -115,34 +115,36 @@ Reusable v1 templates live under:
 
 ## Exit Codes
 
-| Code  | Meaning                                                                                                                                        |
-| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0`   | every step passed                                                                                                                              |
-| `1`   | a step failed; or strict-mode heal-drift detected (suggested-diff written)                                                                     |
-| `2`   | bad arguments, missing scenario, parse error, or schema validation failure                                                                      |
-| `7`   | caller-driven heal pending — a value-rejection step needs `heal-respond` + `replay --heal-from-run` to retry (only when `AGENT_QA_HEAL_LLM=1`) |
-| `127` | agent-browser preflight failed                                                                                                                 |
+| Code  | Meaning                                                                   |
+| ----- | ------------------------------------------------------------------------- |
+| `0`   | every step passed                                                         |
+| `1`   | a step failed                                                             |
+| `2`   | bad arguments, missing scenario, parse error, or schema validation failure |
+| `127` | agent-browser preflight failed                                            |
 
-## Heal at replay time
+## Manual value override at replay time
 
-When a step fails, the runner invokes the scenario/2 heal pipeline before aborting. Rule-based locator strategies (whitespace / Unicode-punctuation collapse, digit-suffix tolerance) attempt to correct the locator against the live snapshot. On match, the runner retries the step once with the override and writes a suggested-diff file at `<scenarioDir>/replays/<runId>/diffs/<stepId>.patch.json` for operator review via `agent-qa heal-promote`. Value-rejection misses (recent GraphQL errors[]) trigger the caller-driven path when `AGENT_QA_HEAL_LLM=1` — see [`heal.md`](./heal.md) for the strategy registry, disposition table, the `heal-promote` round-trip, and the `heal-respond` + `--heal-from-run` caller-driven protocol.
+Core replay does not classify a failure or generate a heal request. After you
+inspect a failed run, you can record a string correction manually and load it
+on the next replay:
 
-### Heal env vars
-
-| Env                    | Default                          | Effect                                                                                                                                                                                                                                                                                   |
-| ---------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AGENT_QA_HEAL_STRICT` | `1` iff `CI` is truthy; else `0` | When `1`, a `matched-drift-*` disposition forces non-zero exit even when every step passed. The suggested-diff still lands; only the exit code changes. Interactive recorder / ad-hoc replay default off; CI default on.                                                                 |
-| `AGENT_QA_HEAL_LLM`    | `0`                              | When `1`, value-rejection misses with no rule-based match write a request file to `replays/<runId>/heal-requests/<stepId>.json` and exit 7 — the calling agent reads the request, runs `agent-qa heal-respond`, and re-invokes `replay --heal-from-run <runId>` to apply the correction. |
-
-Surfaced at runner start: `[v2-replay] heal: strict=on|off`.
-
-### --heal-from-run
-
-```
-agent-qa replay <sid> --heal-from-run <runId>
+```bash
+agent-qa heal-respond <sid> --run <failedRunId> --step <stepId> \
+  --value '<corrected-string>' --rationale '<why>'
+agent-qa replay <sid> --heal-from-run <failedRunId> [the original replay flags]
 ```
 
-Loads `replays/<runId>/heal-responses/<stepId>.json` files emitted by a prior `heal-respond` round-trip and applies them as per-step value overrides. For `do` verbs with `step.value`, the override replaces the value. For `callGql`, an object override merges into `step.params.variables`. Each overridden step is annotated `[heal-override applied]` in stdout. Combine with the original CLI args (profile, params, etc.) — `--heal-from-run` is purely additive.
+`--heal-from-run` loads `value-correction` response files under
+`replays/<runId>/heal-responses/`. For a matching do-step it replaces
+`step.value` with a string literal before dispatch. It does not merge JSON into
+`callGql` variables, patch check steps, or modify `scenario.json`.
+
+Role/name click activation includes exact, substring, and digit-normalized
+matching. Popup-content clicks can also re-open the previous opener and retry
+once. Those are dispatch robustness paths, not an audited auto-heal pipeline;
+other misses fail the run normally.
+
+See [`heal.md`](./heal.md) for current correction and locator-patch limits.
 
 ## Related Commands
 
@@ -150,6 +152,7 @@ Loads `replays/<runId>/heal-responses/<stepId>.json` files emitted by a prior `h
 agent-qa compare <sid>                                  # unified 1:1 or N-way diff
 agent-qa diff <sid>                                     # alias of compare
 agent-qa list <sid>                                     # inspect steps/replays/compare runs
-agent-qa heal-promote <sid> [--apply]                   # promote replay-side suggested-diffs into scenario.json
-agent-qa heal-respond <sid> --step <id> --value <X>     # caller-driven response to a value-rejection request
+agent-qa heal-respond <sid> --step <id> --value <X>     # record a manual string correction
+agent-qa heal-list <sid>                                # list recorded corrections
+agent-qa heal-promote <sid> [--apply]                   # consume externally supplied locator patches
 ```

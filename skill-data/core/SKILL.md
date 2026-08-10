@@ -9,7 +9,7 @@ allowed-tools: Bash(agent-qa:*), Bash(yarn agent-qa:*), Bash(agent-browser:*)
 Drive the tab via CDP. Two complementary modes:
 
 - **Scenario mode** — record each step + per-step page capture, emit a `scenario.json` the orchestrator (or any consumer) can replay later. The recorder OBSERVES; the agent EXECUTES the actions. This is what the rest of this file covers in depth.
-- **Inspection mode** — debug or validate a live page without producing a scenario: `perf-snapshot`, `inspect`, plus `agent-browser` primitives (`snapshot`, `react tree --json`, `react inspect <id> --json`, `network har`, `network requests`, `trace`). Most commonly paired with `--byo` to drive the user's own browser. See [`references/inspect.md`](references/inspect.md) for the inspection-mode catalogue and `agent-qa skills get byo` for the BYO bridge.
+- **Inspection mode** — debug or validate a live page without producing a scenario: `perf-snapshot` plus `agent-browser` primitives (`snapshot`, `react tree --json`, `react inspect <id> --json`, `network har`, `network requests`, `trace`). Most commonly paired with `--byo` to drive the user's own browser. See [`references/inspect.md`](references/inspect.md) for the inspection-mode catalogue and `agent-qa skills get byo` for the BYO bridge.
 
 > **STOP — this skill is the complete source of truth. READ THIS PARAGRAPH BEFORE ANY TOOL CALL.**
 >
@@ -40,16 +40,16 @@ Drive the tab via CDP. Two complementary modes:
 
 ## Bundled verbs (high-level)
 
-20 verbs grouped by lifecycle stage. Invoke them via `agent-qa <verb> [args]`. Do NOT rebuild them as ad-hoc bash. Run `agent-qa` (no args) for the grouped help screen with one-liners; `agent-qa skills get core --full` includes the full per-verb reference (`references/verbs.md`).
+Verbs are grouped by lifecycle stage. Invoke them via `agent-qa <verb> [args]`. Do NOT rebuild them as ad-hoc bash. Run `agent-qa` (no args) for the grouped help screen with one-liners; `agent-qa skills get core --full` includes the full per-verb reference (`references/verbs.md`).
 
-| Stage         | Verbs                                                                                                                                                    |
-| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Recording** | `start`, `smart-click`, `fill-unique`, `record-step`, `truncate`, `flush`, `verify` ([recovery](references/recovery.md))                                 |
-| **Inspect**   | `inspect`, `list`, (internal: `probe-step`, `parse-probe`)                                                                                               |
-| **Heal**      | `detect-failure`, `quarantine`, `heal-promote`, `heal-respond`, `heal-apply` ([reference](references/heal.md), [`heal-apply`](references/heal-apply.md)) |
-| **Replay**    | `replay`, `diff`, `compare`                                                                                                                              |
-| **Profiles**  | `profile-bootstrap`, `profile-status`                                                                                                                    |
-| **Skills**    | `skills` (list / get / path)                                                                                                                             |
+| Stage | Verbs |
+| --- | --- |
+| **Recording** | `start`, `smart-click`, `fill-unique`, `record-step`, `run-step`, `buffer`, `truncate`, `flush`, `verify` ([recovery](references/recovery.md)) |
+| **Inspect / diagnostics** | `aria-snapshot`, `cdp-url`, `perf-snapshot`, `doctor`, `info`, `byo-doctor` |
+| **Manual correction** | `heal-respond`, `heal-apply`, `heal-promote`, `heal-list` ([reference](references/heal.md)) |
+| **Replay / evidence** | `replay`, `list`, `diff`, `compare`, `audit` |
+| **Profiles** | `profile-add`, `profile-bootstrap`, `profile-status`, `profile-list` |
+| **Operational** | `scenario`, `config`, `plugins`, `skills`, `version` |
 
 ## The recording loop (read this carefully)
 
@@ -66,7 +66,7 @@ Use one browser session for the whole recording. If you drive any action manuall
 
 `record-step` validates the trigger payload up front (allow-listed methods, required fields), so typos fail at the record site with a copy-pasteable hint. It does NOT drive the browser — it only writes the row + the per-step ARIA snapshot + screenshot sidecars.
 
-Returning failure (or any non-OK outcome from `smart-click` / `fill-unique`) means the scenario is in a bad state — **stop, do not plow forward, and run the heal loop** (see [`references/heal.md`](references/heal.md)).
+Returning failure (or any non-OK outcome from `smart-click` / `fill-unique`) means the scenario may be in a bad state — **stop and inspect the live page before retrying**. Use the explicit recovery paths in [`references/recovery.md`](references/recovery.md); there is no autonomous heal loop.
 
 **NEVER batch multiple `record-step` calls into one tool message.** A flock guards the steps file and the script will refuse to overwrite an existing keyframe at the same index, so a parallel batch will fail loudly rather than silently corrupt. The OBSERVATION the recorder makes is of the live tab — if you start the next action before the prior keyframe captured, the keyframe captures post-action state, not pre-action.
 
@@ -97,7 +97,7 @@ agent-qa record-step wait       '{"condition":{"kind":"url","pattern":"/dashboar
 agent-qa record-step assert     '{"kind":"url","args":["/dashboard"],"intent":"signed in"}'
 ```
 
-Prefer `agent-qa smart-click "<accessible name>"` over hand-rolled `clickRole` payloads — it records the step AND runs the click in one go, with built-in retry/heal hooks.
+Prefer `agent-qa smart-click "<accessible name>"` over hand-rolled `clickRole` payloads — it runs the click and records the step in one call, using native DOM, role/name, text, and fresh-snapshot fallbacks. It does not verify post-click app state; record an explicit wait or assertion when the outcome matters.
 
 ## Reading non-zero exits — NEVER pipe through `| tail -10`
 
@@ -114,7 +114,7 @@ The verb's stack trace IS in the stream — it's just above yarn's footer. **Re-
 agent-qa smart-click "Add user" 2>&1
 ```
 
-When `smart-click` (or any verb that issues CDP eval calls) fails with an internal error mid-poll, the click syscall has typically already fired in the browser — **snapshot the page first** before retrying. If state changed, treat the click as successful and proceed with `record-step`; do NOT blindly re-click. `smart-click` exits code **4** specifically for "internal error during verification" with a structured message and a recovery hint; codes 1/3 are "click landed but verification disagreed" / "submit rejected"; code **5** is `not-found` / `ambiguous` / `ref-mismatch` (the verb refused to click — re-snapshot, fix the args, retry).
+When `smart-click` fails, **snapshot the page before retrying**. A failure can occur after a browser-side action but before the recording row is safely appended. `smart-click` has no post-click state verifier or custom not-found/ambiguity exit-code contract, so inspect both the live page and `<record_root>/scenario.steps.jsonl` before deciding whether to retry or recover.
 
 **The same `tail` rule applies to OK-exit verbs.** `agent-qa verify` prints the OK status as the FIRST line followed by 2 path lines, so `| tail -2` HIDES the OK / FAIL verdict. `agent-qa flush` prints a JSON summary then a path line. `agent-qa list` is variable-length. **Default to no tail; if you must tail, use `-200` or read the verb's known line count first.** Skill files for each verb document their output shape — check before trimming.
 
@@ -131,7 +131,7 @@ When `smart-click` (or any verb that issues CDP eval calls) fails with an intern
 - **Some apps run TWO React renderers** (React 17.0.2 PROD + React 18.3.1 DEV side-by-side). `react tree` returns the PROD tree; if you need the DEV one, filter by renderer id. Component names match `displayName ?? type.name`.
 - **`react tree` text mode is broken** on agent-browser 0.27.0 — exits "✓ Done" with empty body. **Always use `--json`.**
 - **`react inspect <id> --json`** returns `{source, text}`. `source` is `[file, line, col]`. `text` is a React-DevTools-style multi-line string with: prop names + primitive values (`taskQueueReady: true`), top-level object keys (`ownerState: {variant: "body1", ...}`), hook names + subscription counts (`UserValue: undefined (3 sub)`), useState primitive values (`[44] State: false`), and the full `rendered by: Header > Layout > Main > …` ancestry chain. **What's NOT in there**: deep object/array contents (`{...}` / `[{…}]` truncation) and hook values (always show as `undefined`, even when they aren't). Enough for structural + shallow-primitive assertions; for deep data-layer values, drive `agent-browser eval` with a custom fiber walker.
-- **`agent-qa perf-snapshot [--sid <sid>] [--profile <p>]`** — opt-in performance sidecar (verb is in the `inspect` group). Writes to `<sid>/perf/`: `vitals.json` (Core Web Vitals + React hydration phases), `suspense.json` (boundary classifier). With `--record-renders <ms>` adds `renders.json` (React commit profile). With `--cpu-profile <ms>` adds `cpu.cpuprofile` (Chrome V8 sampling profile, openable in DevTools Performance tab). With `--trace <ms>` adds `trace.json` (Chrome timeline, also openable in DevTools). **`--cpu-profile` and `--trace` are mutually exclusive** — Chrome only allows one tracing/profiling session at a time. Use cases: "debug perf on /sequences" (no flags), "profile this flow" (`--record-renders 5000 --cpu-profile 5000`). Recording verbs do NOT call `perf-snapshot` — perf is orthogonal to scenario content. Full reference: [`references/perf-snapshot.md`](./references/perf-snapshot.md).
+- **`agent-qa perf-snapshot [--sid <sid>] [--profile <p>]`** — opt-in performance sidecar (verb is in the `inspect` group). Writes to `<sid>/perf/`: `vitals.json` (Core Web Vitals + React hydration phases), `suspense.json` (boundary classifier). With `--record-renders <ms>` adds `renders.json` (React commit profile). With `--cpu-profile <ms>` adds `cpu.cpuprofile` (Chrome V8 sampling profile, openable in DevTools Performance tab). With `--trace <ms>` adds `trace.json` (Chrome timeline, also openable in DevTools). **`--cpu-profile` and `--trace` are mutually exclusive** — Chrome only allows one tracing/profiling session at a time. Use cases: "debug perf on /users" (no flags), "profile this flow" (`--record-renders 5000 --cpu-profile 5000`). Recording verbs do NOT call `perf-snapshot` — perf is orthogonal to scenario content. Full reference: [`references/perf-snapshot.md`](./references/perf-snapshot.md).
 - **`agent-qa replay <sid | path-to-scenario.json> [--profile <p>] [--session <name>] [--param <name>=<value> ...]`** — active replay CLI. Walks the scenario end-to-end against a live agent-browser session. Single-profile replay is supported via `--profile`; use `compare --profiles ...` for serial profile comparison. `--param` (alias `-p`) overrides a scenario-declared parameter at replay time (repeatable; coerced per declared `type`; sensitive values redacted in `replay.json` + stderr; duplicate keys are last-wins). The CLI writes its current replay sidecars/manifest under `<scenarioDir>/replays/<replayId>`; the internal v1 runner/evidence helpers use stepId-keyed paths, but the public replay verb is not yet fully wired to that layout. Exit 0 = all steps passed, 1 = a step failed, 2 = bad args / schema validation / undeclared `--param` / type mismatch. Full reference: [`references/replay.md`](./references/replay.md).
 
 ## Setup (once per session)
@@ -234,24 +234,14 @@ its built-in default profile. If the scenario declares `setup` / `teardown`
 (featureFlags, gql, cookies, localStorage, nav), the runner applies those
 hooks automatically — no extra flag, no external file.
 
-### Caveats NOT to surface
+### Accessible-name drift caveat
 
-The framework handles the following automatically; flagging them as
-"future-replay-fragile" in your closing summary is noise that wastes
-the user's attention on a non-issue.
-
-- **Numeric-suffix drift in accessible names** (e.g. `option "Submit
-19987 items pending"`, `row "Item 654321"`, `text "Parent
-abcdefgh"` from a generated suffix). The replay-side `clickRole` dispatcher
-  has digit-tolerant + alphanumeric-suffix matchers — look for
-  `[replay] digit-tolerant match: ...` / `[replay] generated-suffix
-match: ...` lines in replay logs. The scenario is fine as recorded.
-  Only flag accessible-name drift when the changed characters are
-  NOT digits or generated suffixes (e.g. an entire word changed, i18n
-  flipped). Full reference: `gotchas.md`. If the recorded name IS
-  load-bearing for the test (clicking a different row is a false
-  positive), set `heal: { "mode": "off" }` on the locator — see
-  `references/heal-opt-out.md`.
+Role/name DOM activation includes a digit-normalized fallback, so count-only
+changes may still resolve on supported click paths. It does not implement a
+generated-suffix strategy, ambiguity rejection, per-locator opt-out, or an
+audited heal event. If the exact accessible name identifies the entity under
+test, use a stable raw locator (for example a test id) or surface the drift as
+a replay risk. See `gotchas.md` and `references/heal-opt-out.md`.
 
 ### Why all five sections
 
@@ -273,7 +263,7 @@ A scenario is "done" when:
 3. The user-stated assertion (passed to `start "<instruction>"`) is captured as an `assert` step at the end of `scenario.steps[]` and reproduces on a fresh replay (`agent-qa replay $SID && agent-qa compare`, adding `--profile <name>` if `profile-list` shows one).
 4. **Your final message to the user includes the full closing summary** (see "ALWAYS surface a complete closing summary to the user" above): assertion proved, SID, on-disk path, step recap, AND replay commands with inline comments. A bare "SID + 3 commands" message is a regression.
 
-If any of those is false, you're not done — go heal (see [`references/heal.md`](references/heal.md)) or re-record.
+If any of those is false, you're not done — use the manual correction or truncation flow in [`references/recovery.md`](references/recovery.md), then re-record or replay.
 
 ## Deeper references (load with `--full`)
 
@@ -284,10 +274,10 @@ If any of those is false, you're not done — go heal (see [`references/heal.md`
 | `verbs.md`             | Per-verb syntax, exit codes, options. The full reference for the table at the top of this file.                                                                                                                                                                                                                                           |
 | `inspect.md`           | **Inspection mode** — use agent-qa as a live-page debugger/validator (perf, React tree, network, ARIA, asserts) without producing a scenario. Most commonly paired with `--byo`. The right starting point when the user's ask is debug/validate, not record/replay.                                                                        |
 | `compare.md`           | The unified `compare` verb (and `diff` alias). 1:1 (recording vs replay) and N-way (cross-profile / cross-replay) per-pair diff with two subsystems (ARIA snapshot + screenshot pixels). Output layout under `<sid>/compare/<TS>__<labels>/`, exit codes, replay-reuse policy. |
-| `heal.md`              | The canonical heal loop — replay-side locator-drift heal, `heal-respond` for caller-driven value corrections, `heal-promote` to bake locator hints. Start here for any non-OK outcome.                                                                                                                                                    |
-| `heal-apply.md`        | `heal-apply` — record-time in-place patch of a recorded value template after `heal-respond`; never touches the live tab.                                                                                                                                                                                                                  |
-| `recovery.md`          | The record-time recovery flow: `truncate <N>` for disk bookkeeping plus the agent-browser tab gestures the agent drives to re-position the page.                                                                                                                                                                                          |
-| `heal-opt-out.md`      | Per-locator `heal: { "mode": "off" }` — opt a single `Locator` out of the resolver's drift-tolerant tiers (digit-tolerant, generated-suffix). Use when the recorded accessible name is load-bearing and a drifted match would be a false positive.                                                                                          |
+| `heal.md`              | Current manual correction surfaces: `heal-respond`, `replay --heal-from-run`, `heal-apply`, and externally supplied locator patches. Explicitly distinguishes shipped behavior from planned auto-heal. |
+| `heal-apply.md`        | `heal-apply` — in-place patch of one active recording-buffer string value after `heal-respond`; never touches the live tab. |
+| `recovery.md`          | Recording/replay recovery: `truncate <N>` plus tab repositioning, or a manual string correction. |
+| `heal-opt-out.md`      | Reserved locator-tolerance metadata and the current lack of a per-locator matching opt-out. |
 | `asserts.md`           | All assert kinds (`url`, `present`, `absent`, `text`, `count`, `value`), the determinism-ordered ladder, exit codes, the bind-required rule for DOM-identity asserts.                                                                                                                                                                     |
 | `unique-tokens.md`     | The `{{vars._unique}}` template grammar and `--save-as <name>` for downstream substitution.                                                                                                                                                                                                                                               |
 | `prep.md`              | Scenario/v1 root `setup` / `teardown`: GraphQL fixtures, feature flags, cookies, localStorage, nav, and named bindings.                                                                                                                                                                                                                    |

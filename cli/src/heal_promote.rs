@@ -1,10 +1,10 @@
 //! `heal-promote` verb — apply replay-side suggested locator patches back
 //! into `scenario.json`.
 //!
-//! Reads `<sid>/replays/<runId>/diffs/<stepId>.patch.json` files (one per
-//! step the heal pipeline produced a candidate for) and rewrites the
-//! matching step's `on` field. Default mode is dry-run; `--apply`
-//! atomically rewrites the contract.
+//! Reads externally supplied
+//! `<sid>/replays/<runId>/diffs/<stepId>.patch.json` files and rewrites the
+//! matching step's `on` field. Core replay does not yet produce these files.
+//! Default mode is dry-run; `--apply` atomically rewrites the contract.
 //!
 //! Drift guard: each patch file may carry a `scenarioContentHash` field
 //! recorded at the time the replay produced the patch. When a patch's

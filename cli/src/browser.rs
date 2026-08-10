@@ -778,7 +778,7 @@ pub fn click_ref(session: &str, snapshot_ref: &str) -> Result<(), AgentBrowserEr
 ///
 /// Snapshot lines look like:
 ///   `- button "Resources" [expanded=false, ref=e54]`
-///   `- link "Docs Vercel documentation" [ref=e69]`
+///   `- link "Guides API documentation" [ref=e69]`
 ///
 /// We match `"<role>\s+\"<name>\""` followed by anything up to a
 /// `ref=(eN)` token. Name match is exact (post-trim). If the same
@@ -961,12 +961,12 @@ mod tests {
 
     #[test]
     fn find_ref_handles_link_with_compound_name() {
-        let snap = r#"  - link "Docs Vercel documentation" [ref=e69]
+        let snap = r#"  - link "Guides API documentation" [ref=e69]
     - image
-    - StaticText "Docs"
+    - StaticText "Guides"
 "#;
         assert_eq!(
-            find_ref_in_snapshot(snap, "link", "Docs Vercel documentation"),
+            find_ref_in_snapshot(snap, "link", "Guides API documentation"),
             Some("e69".to_string())
         );
     }

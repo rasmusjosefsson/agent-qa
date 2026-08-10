@@ -99,15 +99,15 @@
       "properties": {
         "digits": {
           "type": "boolean",
-          "$comment": "Digit runs anywhere in the name are noise (counters, ids). Silences `digit-anywhere` and `digit-tolerant` matches without emitting a patch file."
+          "$comment": "Reserved author metadata: digit runs in the name are expected to vary. The current runner does not enforce this field."
         },
         "generatedSuffix": {
           "type": "boolean",
-          "$comment": "Trailing 6-12 char lowercase alphanumeric is noise (generated-id convention). Silences `generated-suffix` matches."
+          "$comment": "Reserved author metadata: a generated suffix is expected to vary. The current runner does not enforce this field."
         },
         "selectionAugmentedLabel": {
           "type": "boolean",
-          "$comment": "Recorded name is a whole-word prefix of the live label (combobox / MUI Select augmentation). Silences `name-prefix` matches."
+          "$comment": "Reserved author metadata: the live label may append the selected value. The current runner does not enforce this field."
         },
         "reason": {
           "type": "string",
@@ -115,7 +115,7 @@
           "$comment": "Human-authored justification for silencing this drift. Carried so PR review + `git blame` see WHY the silencing decision was made. Free-form."
         }
       },
-      "$comment": "Author-declared tolerance for known-volatile dimensions of the recorded `name`. At least one of `digits`, `generatedSuffix`, `selectionAugmentedLabel` MUST be true AND `reason` is required. The `whitespace-collapsed` strategy is absorbed always-on at the pipeline level — no flag here. When a tolerated dimension's strategy matches, the disposition is rewritten to `matched-drift-absorb-by-policy`: no patch file, no `[healed]` log, no driftSeen() flag. Genuine structural drift (stem change, role change, dimension not tolerated) still fails the run loudly."
+      "$comment": "Reserved author metadata for known-volatile dimensions of the recorded `name`. At least one dimension must be true and `reason` is required. The current runner parses but does not enforce these declarations."
     },
     "NameMatch": {
       "oneOf": [

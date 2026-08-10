@@ -8,9 +8,9 @@
 //!      node that sits *under* the real control (e.g. a "Select a license"
 //!      button whose label is a separate `div`), so the coordinate click lands
 //!      on the covering element and the app's handler never fires.
-//!   2. **mousedown-bound handlers** — MUI Select / React-Select / many menu
-//!      components open on `mousedown`, not `click`, so a synthetic click is
-//!      silently swallowed even when it lands on the right node.
+//!   2. **mousedown-bound handlers** — many custom select and menu components
+//!      open on `mousedown`, not `click`, so a synthetic click is silently
+//!      swallowed even when it lands on the right node.
 //!
 //! This module builds JS that resolves the target by ARIA role + accessible
 //! name (or by visible text), scrolls it into view, and dispatches the full
