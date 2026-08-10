@@ -3,10 +3,11 @@
 //!
 //! Pure disk: never drives the live tab. Matches the row in
 //! `<record_root>/scenario.steps.jsonl` (default: same stepId; override
-//! with `--target-step <stepIndex|stepId>`), replaces its
-//! `payload.value.literal` with the corrected value carried in the
-//! sibling heal-response file, and renames that file `.json` →
-//! `.applied.json` so a re-run of the verb can't double-apply.
+//! with `--target-step <stepIndex|stepId>`), replaces the recorder-native
+//! action value in `payload.args` (or the legacy canonical
+//! `payload.value.literal`) with the corrected value carried in the sibling
+//! heal-response file, and renames that file `.json` → `.applied.json` so a
+//! re-run of the verb can't double-apply.
 //!
 //! CLI shape:
 //!
@@ -17,7 +18,7 @@
 //!
 //! Effects:
 //!   - Read <sid>/replays/<runId>/heal-responses/<stepId>.json
-//!   - Update tmp/agent-qa-record/scenario.steps.jsonl in place (atomic)
+//!   - Update tmp/agent-qa-record/scenario.steps.jsonl in place
 //!   - Rename the heal-response file to `<stepId>.applied.json`
 //!   - Append an audit row to <sid>/recording/heal.jsonl
 //!
@@ -56,7 +57,7 @@ pub fn run(args: &[String]) -> Result<u8> {
 
 fn print_help() {
     println!(
-        "agent-qa heal-apply \u{2014} patch the in-flight recording buffer\n\nUsage:\n  agent-qa heal-apply <sid> --step <stepId>\n                              [--target-step <stepIndex|stepId>]\n                              [--run <runId>]\n                              [--dry-run]\n\nReads <sid>/replays/<runId>/heal-responses/<stepId>.json (set by\n`heal-respond`), patches the matching row's payload.value.literal in\n<record_root>/scenario.steps.jsonl, renames the response file to\n<stepId>.applied.json so it can't be re-applied, and appends an audit\nrow to <sid>/recording/heal.jsonl.\n\nNEVER touches the live tab \u{2014} drive it yourself before re-issuing\nrecord-step from the patched index."
+        "agent-qa heal-apply \u{2014} patch the in-flight recording buffer\n\nUsage:\n  agent-qa heal-apply <sid> --step <stepId>\n                              [--target-step <stepIndex|stepId>]\n                              [--run <runId>]\n                              [--dry-run]\n\nReads <sid>/replays/<runId>/heal-responses/<stepId>.json (set by\n`heal-respond`), patches the matching value-bearing action argument (or\nlegacy payload.value.literal) in <record_root>/scenario.steps.jsonl, renames\nthe response file to <stepId>.applied.json so it can't be re-applied, and appends an audit\nrow to <sid>/recording/heal.jsonl.\n\nNEVER touches the live tab \u{2014} drive it yourself before re-issuing\nrecord-step from the patched index."
     );
 }
 
@@ -193,27 +194,11 @@ fn apply(opts: &Opts) -> Result<Summary> {
         .get_mut(target_idx)
         .ok_or_else(|| anyhow!("target index {target_idx} out of range"))?;
 
-    // Capture previous value for the summary.
-    let previous_value = target_row
-        .get("payload")
-        .and_then(|p| p.get("value"))
-        .and_then(|v| v.get("literal"))
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
-
-    // Patch payload.value.literal — create the path if it doesn't exist.
     let payload = target_row
         .get_mut("payload")
-        .and_then(|p| p.as_object_mut())
         .ok_or_else(|| anyhow!("buffer row at index {target_idx} has no payload"))?;
-    let value = payload
-        .entry("value")
-        .or_insert_with(|| serde_json::json!({ "from": "literal", "literal": "" }));
-    let value_obj = value
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("payload.value is not an object"))?;
-    value_obj.insert("from".into(), serde_json::json!("literal"));
-    value_obj.insert("literal".into(), serde_json::json!(new_value.clone()));
+    let previous_value = patch_payload_value(payload, &new_value)
+        .with_context(|| format!("patch buffer row {target_idx}"))?;
 
     let new_buffer: String = rows
         .iter()
@@ -270,6 +255,55 @@ fn apply(opts: &Opts) -> Result<Summary> {
         new_value,
         applied_marker,
     })
+}
+
+/// Patch the value consumed by `recorder_shape::map_row`.
+///
+/// Current recording rows use friendly action payloads whose value lives in
+/// `args`. The legacy canonical shape is retained as a fallback for buffers
+/// produced by older builds and for hand-authored recovery fixtures.
+fn patch_payload_value(payload: &mut Json, new_value: &str) -> Result<Option<String>> {
+    if let Some(method) = payload
+        .get("method")
+        .and_then(Json::as_str)
+        .map(str::to_string)
+    {
+        let value_idx = match method.as_str() {
+            "fillByLabel" | "fillBySelector" | "uploadBySelector" | "pressSelector"
+            | "selectBySelector" => 1,
+            "selectByRole" => 2,
+            "pressKey" | "navigate" => 0,
+            other => bail!("recorded action method {other:?} has no correctable string value"),
+        };
+        let args = payload
+            .get_mut("args")
+            .and_then(Json::as_array_mut)
+            .ok_or_else(|| anyhow!("recorded action {method:?} has no args array"))?;
+        let slot = args.get_mut(value_idx).ok_or_else(|| {
+            anyhow!("recorded action {method:?} has no value at args[{value_idx}]")
+        })?;
+        let previous = match &*slot {
+            Json::String(s) => Some(s.clone()),
+            Json::Null => None,
+            other => Some(other.to_string()),
+        };
+        *slot = Json::String(new_value.to_string());
+        return Ok(previous);
+    }
+
+    let value = payload
+        .get_mut("value")
+        .and_then(Json::as_object_mut)
+        .ok_or_else(|| {
+            anyhow!("payload is neither a recorded action nor a canonical value step")
+        })?;
+    let previous = value
+        .get("literal")
+        .and_then(Json::as_str)
+        .map(str::to_string);
+    value.insert("from".into(), Json::String("literal".to_string()));
+    value.insert("literal".into(), Json::String(new_value.to_string()));
+    Ok(previous)
 }
 
 fn resolve_target(rows: &[Json], hint: &str) -> Result<usize> {
@@ -344,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_patches_value_literal_and_renames_response() {
+    fn apply_patches_recorded_fill_value_and_flushes_correction() {
         let _g = lock_env();
         let tmp = TempDir::new().unwrap();
         setup(tmp.path());
@@ -353,10 +387,9 @@ mod tests {
         append_buffer(
             &rec,
             json!({
-                "stepIndex": 0, "stepId": "s0", "kind": "do",
-                "payload": { "intent": "fill", "verb": "type",
-                  "on": { "role": "textbox", "name": "Email" },
-                  "value": { "from": "literal", "literal": "old@e.com" } },
+                "stepIndex": 0, "stepId": "s0", "kind": "action",
+                "payload": { "method": "fillByLabel", "args": ["Email", "old@e.com"],
+                  "intent": "fill email" },
                 "recordedAt": "now"
             }),
         );
@@ -373,18 +406,27 @@ mod tests {
         assert_eq!(s.previous_value.as_deref(), Some("old@e.com"));
         assert_eq!(s.new_value, "new@e.com");
 
-        // Buffer patched.
+        // The recorder-native args value is what flush consumes.
         let body = fs::read_to_string(rec.join("scenario.steps.jsonl")).unwrap();
         let row: Json = serde_json::from_str(body.trim()).unwrap();
-        assert_eq!(row["payload"]["value"]["literal"], "new@e.com");
+        assert_eq!(row["payload"]["args"][1], "new@e.com");
 
-        // Response renamed to .applied.json.
-        let applied = jdir.join("replays/rA/heal-responses/s0.applied.json");
-        assert!(applied.is_file());
-        let original = jdir.join("replays/rA/heal-responses/s0.json");
-        assert!(!original.exists());
+        // Seal the buffer and prove the corrected value reaches scenario.json.
+        fs::write(
+            rec.join("scenario.env"),
+            "SID=j1\nINTENT='heal apply integration'\nSESSION=default\nBASELINE=KEEP_SESSION\n",
+        )
+        .unwrap();
+        crate::flush::run(&[]).unwrap();
+        let scenario: Json =
+            serde_json::from_slice(&fs::read(jdir.join("scenario.json")).unwrap()).unwrap();
+        assert_eq!(scenario["steps"][0]["value"]["literal"], "new@e.com");
 
-        // Audit row appended.
+        // Response renamed to .applied.json and audit row appended.
+        assert!(jdir
+            .join("replays/rA/heal-responses/s0.applied.json")
+            .is_file());
+        assert!(!jdir.join("replays/rA/heal-responses/s0.json").exists());
         let audit = fs::read_to_string(jdir.join("recording/heal.jsonl")).unwrap();
         assert!(audit.contains("\"mode\":\"caller-driven-resolved\""));
         assert!(audit.contains("\"newValue\":\"new@e.com\""));
@@ -402,10 +444,9 @@ mod tests {
         append_buffer(
             &rec,
             json!({
-                "stepIndex": 0, "stepId": "s0", "kind": "do",
-                "payload": { "intent": "fill", "verb": "type",
-                  "on": { "role": "textbox", "name": "Email" },
-                  "value": { "from": "literal", "literal": "old@e.com" } },
+                "stepIndex": 0, "stepId": "s0", "kind": "action",
+                "payload": { "method": "fillByLabel", "args": ["Email", "old@e.com"],
+                  "intent": "fill email" },
                 "recordedAt": "now"
             }),
         );
@@ -437,18 +478,16 @@ mod tests {
         append_buffer(
             &rec,
             json!({
-                "stepIndex": 0, "stepId": "s0", "kind": "do",
-                "payload": { "intent": "x", "verb": "type", "on": {"role":"textbox","name":"E"},
-                  "value": { "from": "literal", "literal": "untouched" } },
+                "stepIndex": 0, "stepId": "s0", "kind": "action",
+                "payload": { "method": "fillByLabel", "args": ["Email", "untouched"] },
                 "recordedAt": "now"
             }),
         );
         append_buffer(
             &rec,
             json!({
-                "stepIndex": 1, "stepId": "s1", "kind": "do",
-                "payload": { "intent": "y", "verb": "type", "on": {"role":"textbox","name":"E"},
-                  "value": { "from": "literal", "literal": "old" } },
+                "stepIndex": 1, "stepId": "s1", "kind": "action",
+                "payload": { "method": "fillByLabel", "args": ["Email", "old"] },
                 "recordedAt": "now"
             }),
         );
@@ -466,8 +505,8 @@ mod tests {
         let lines: Vec<&str> = body.lines().collect();
         let r0: Json = serde_json::from_str(lines[0]).unwrap();
         let r1: Json = serde_json::from_str(lines[1]).unwrap();
-        assert_eq!(r0["payload"]["value"]["literal"], "untouched");
-        assert_eq!(r1["payload"]["value"]["literal"], "new");
+        assert_eq!(r0["payload"]["args"][1], "untouched");
+        assert_eq!(r1["payload"]["args"][1], "new");
         teardown();
     }
 
@@ -481,10 +520,8 @@ mod tests {
         append_buffer(
             &rec,
             json!({
-                "stepIndex": 0, "stepId": "s0", "kind": "do",
-                "payload": { "intent": "x", "verb": "type",
-                  "on": { "role": "textbox", "name": "E" },
-                  "value": { "from": "literal", "literal": "v" } },
+                "stepIndex": 0, "stepId": "s0", "kind": "action",
+                "payload": { "method": "fillByLabel", "args": ["Email", "v"] },
                 "recordedAt": "now"
             }),
         );
@@ -499,6 +536,47 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("value-correction"), "got: {err}");
+        teardown();
+    }
+
+    #[test]
+    fn apply_rejects_non_value_action_without_consuming_response() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        setup(tmp.path());
+        let jdir = tmp.path().join("j1");
+        let rec = tmp.path().join("rec");
+        append_buffer(
+            &rec,
+            json!({
+                "stepIndex": 0, "stepId": "s0", "kind": "action",
+                "payload": { "method": "clickRole", "args": ["button", "Save"] },
+                "recordedAt": "now"
+            }),
+        );
+        let buffer = rec.join("scenario.steps.jsonl");
+        let before = fs::read_to_string(&buffer).unwrap();
+        write_response(&jdir, "rA", "s0", Some("new"), "value-correction");
+
+        let err = apply(&Opts {
+            sid: "j1".into(),
+            step_id: "s0".into(),
+            target_step: None,
+            run_id: Some("rA".into()),
+            dry_run: false,
+        })
+        .unwrap_err();
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("no correctable string value"),
+            "got: {message}"
+        );
+        assert_eq!(fs::read_to_string(&buffer).unwrap(), before);
+        assert!(jdir.join("replays/rA/heal-responses/s0.json").is_file());
+        assert!(!jdir
+            .join("replays/rA/heal-responses/s0.applied.json")
+            .exists());
+
         teardown();
     }
 

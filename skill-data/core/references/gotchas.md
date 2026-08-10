@@ -1,44 +1,63 @@
 ## Gotchas
 
-- **Click by name, record by intent.** At record time, call `smart-click "<accessible-name>"` — the verb takes its OWN fresh snapshot, resolves the target by name, AND auto-records the gesture in-process (no separate `record-step` call needed; pass `--no-record` to opt out for legacy scripts). **Never pass a ref as the primary identifier** (the verb refuses it with exit 5). Pass `--role <role>` only when the same name appears on different control types (e.g. heading "Save" vs button "Save"). Pass `--ref @<eN>` only when role+name still match more than one element — and even then the verb cross-checks the ref against the args, so a stale ref typed N actions ago fails fast with a `ref-mismatch` error instead of clicking the wrong element. Replay uses `(role, name)` for the same reason. The agent-browser `find role` shortcut fuzzy-matches and can hit the wrong element silently — avoid for scenario-recording.
-- **In-app messaging overlays must be blocked first.** Without a `Setup` network-block route for the messaging CDN, in-app guides / release-notes modals load on first paint and pollute every keyframe.
-- **Pathname surprises.** the target app SPA routes don't always match the URL bar. Some dialogs (e.g. Add user) overlay an unrelated route — the keyframe's `pathname` may differ from where the URL bar suggests. Real product behavior; don't "fix" it.
-- **One scenario at a time per Chrome tab.** The settle gate's in-flight-fetch counter is global; concurrent scenarios on the same tab will see each other's traffic.
-- **Don't paper over missing waits.** If you find yourself adding a `recordWait({kind:'duration',ms:N})` to "give it time," record the actual condition instead (a selector or text) so replay reproduces correctly.
-- **Always click via `smart-click`, not raw `agent-browser click`.** Long forms, modals, and lists routinely place controls outside the visible scroll viewport. A synthetic click on an offscreen element often lands as a no-op — the popover never mounts, the focus trap swallows the event, or the click-away listener dismisses. `smart-click` scrolls the target into view first and verifies that the page actually changed after the click. If it reports "no expected state change" (exit 1), the element is disabled, you targeted the wrong wrapper, or the page is stuck — re-snapshot and try a different name/role. If it reports `not-found` (exit 5), the page state isn't what you think; re-snapshot to see what's actually rendered.
-- **Smart-click takes a NAME, not a ref.** `smart-click "Add user"` resolves the target against a fresh snapshot taken at click-time. **Never** pre-grep the snapshot to extract a ref and pass it as the positional — the verb refuses `smart-click @<ref>` outright (exit 2) because refs are per-snapshot ephemeral and stale refs are the #1 source of "wrong element clicked" bugs. Accessible names match byte-for-byte after trimming trailing whitespace on both sides; copy the visible label as-is. **`smart-click` auto-records the gesture in-process on success** (mirrors `fill-unique`) — do NOT also call `record-step action` afterwards, that produces a duplicate row. Pass `--no-record` for legacy scripts that already pair smart-click with an explicit `record-step action`.
-- **CDP click on ARIA popup openers (MUI Select, Autocomplete, Menu) is silently swallowed — fallback is automatic now.** Some component libraries bind their open handler to `mousedown` rather than `click`, so a synthetic CDP click event lands on the right element but doesn't fire the React handler. `aria-expanded` stays `false`, the listbox / menu never opens, and downstream gestures (clicking an option) fail with "no node matched by=role value='option'". Both `smart-click` (record-time) and the replay `click` verb auto-detect popup openers via `isPopupOpener` (role `combobox` / `menubutton` / has `aria-haspopup` / has `aria-expanded`) and fall back to the W3C ARIA keyboard contract — `focus` + press `Enter`, then `Space` — when the first click produces no popup growth. Works for any web app's combobox / dropdown opener, no library-specific selectors. If you still see the symptom, the element doesn't expose any of the four ARIA signals; either fix the page or surface the gap (it's likely a real accessibility bug worth filing upstream).
-- **Recovery: `truncate <N>` drops the disk rows, YOU drive the tab.** `agent-qa truncate <N> [--archive-tag <slug>]` is pure disk bookkeeping (drops rows ≥ N from `tmp/scenario.steps.jsonl`, stores sidecars to `<sid>/failed/truncate-<isoTs>[-<tag>]/`) and **never touches the live tab**. Tab gestures are the agent's job via `agent-browser` primitives the agent is already calling for every other step (`agent-browser open <url>`, `click "<accessible-name>"`, `keypress Escape`, `fill <sel> ""`, history back via `eval 'history.back()'`). The full recovery decision matrix + cheat-sheet lives in [`references/recovery.md`](recovery.md). Use `--archive-tag <slug>` when running multiple truncations in one heal session so the forensic stores don't collide on isoTs.
-- **Always run `verify` before declaring success.** A `wait` step whose condition never matched still produces a keyframe — but with `status: "settle-timeout"`. The recorded step looks identical to a successful one in `scenario.json`; only the keyframe's status reveals the failure.
-- **Step index is the line count of `tmp/scenario.steps.jsonl`** — single source of truth. `record-step` no longer keeps a separate `STEP=` counter in `tmp/scenario.env`. If you ever need to peek the next index manually: `wc -l < tmp/scenario.steps.jsonl`.
-- **Stale lock from a crashed run.** `start` clears `tmp/scenario.lock` on every new scenario. If you skipped `start` and `record-step` complains about not acquiring the lock, `rm -rf tmp/scenario.lock` and retry.
-- **Orphan agent-browser daemon (child Chrome died, daemon PID alive).** After laptop sleep, OOM, or a manual `kill` of Chrome, the agent-browser native daemon for a named session keeps its sidecars in `~/.agent-browser/<session>.{pid,sock,engine,stream,version}` but refuses to relaunch its child. Every subsequent `agent-browser` call (and therefore every agent-qa verb — `start`, `profile-bootstrap`, `smart-click`, every probe) fails with stderr like `✗ Auto-launch failed: All CDP discovery methods failed for 127.0.0.1:9222: /json/version: Failed to connect to CDP at 127.0.0.1:9222`. agent-qa now auto-recovers ONCE per invocation by shelling `agent-browser close --session <s>` and retrying the original call; you'll see `[agent-browser] orphan daemon detected for session=<s>; ...` on stderr when it triggers. If auto-recovery itself fails, hand-recover in this order:
-  ```bash
-  npx agent-browser close --session <session>
-  npx agent-browser close --all
-  npx agent-browser doctor --fix
-  # last resort:
-  kill $(cat ~/.agent-browser/<session>.pid) 2>/dev/null
-  rm -f ~/.agent-browser/<session>.{pid,sock,engine,stream,version}
-  ```
-  Opt out of auto-recovery with `AGENT_QA_AGENT_BROWSER_NO_AUTO_RECOVER=1` when debugging the daemon itself (otherwise the retry hides the failure signal you're trying to inspect).
-- **`~/.agent-browser/config.json` is NOT how this skill configures network policy.** Every verb here calls `applyAgentBrowserEnv()` from `cli/src/start.rs`, which reads `DEFAULT_POLICY.allowedDomains` and only sets `AGENT_BROWSER_ALLOWED_DOMAINS` when the policy lists explicit origins. The default ships **empty** (allow-all), so agent-browser does no domain filtering and every third-party SDK loads — analytics, feature flags, in-app messaging, etc. — just works. To deny something specific, add a `networkBlocks` entry (the policy already uses it for an in-app-messaging CDN); to scope tighter (e.g. for an isolated test), put a non-empty `allowedDomains` list in `.agent-qa/capture-session.config.json`. Editing your home dir's `~/.agent-browser/config.json` won't help — when the env var IS set, it takes precedence.
-- **SID is resolved from sidecars, not from the directory you're standing in.** `record-step`, `truncate`, `flush`, `verify`, and `quarantine` read the active SID from `tmp/scenario.env` (written by `start`). `replay`, `diff`, `compare`, and `list` accept a SID arg, but if you pass a copy of someone else's scenario under a fresh directory, replay still resolves the SID from the scenario's `meta.sid` and writes its `replays/` subfolder under the SOURCE SID's directory — not under your copied path. To work with a fixture or someone else's recording as if it were yours, either rename the destination directory to match `meta.sid`, or update `meta.sid` (and `tmp/scenario.env`) before invoking the verb. Don't trust pwd to disambiguate.
-- **When a downstream verb errors with "no manifest" / "no replay folder", read the upstream artifact first.** `compare` (and its `diff` alias) and `list` depend on `replays/<id>/replay.json` being readable. If the upstream `replay` halted at step N, the per-step `missing` cells in `compare`'s `summary.md` mark which keyframes never landed — open `replay.json`, read `halted.{reason, stepIndex}`, fix the actual cause (selector drift, missing wait, race), then re-run the upstream verb. Don't change the downstream invocation; it's reporting symptom not cause.
-- **`record-step` refuses to overwrite an existing keyframe.** This is a feature — it prevents silent corruption when two callers race or when a recovery flow forgets to truncate. The recovery flow handles this for you: `truncate <N>` drops rows ≥ N from `steps.jsonl` + stores stale keyframes/probes for those step ids under `<sid>/failed/truncate-<isoTs>/` so the subsequent re-record appends cleanly. If you need to re-drive the live tab back to step N's pre-state (e.g. modal closed, navigation lost), do that yourself with `agent-browser` primitives BEFORE truncating — see [`references/recovery.md`](recovery.md). If you're building a non-truncate flow that re-drives previously-recorded steps (a custom recovery script), replicate the truncation locally: truncate `tmp/scenario.steps.jsonl` to N rows; `rm` `recording/probes/<stepId>.json` + `recording/probes/<stepId>.*` for the dropped step ids.
-- **Numeric-suffix drift in accessible names is handled by replay — DO NOT flag it as a caveat in the closing summary.** When a recorded option / button name embeds a live counter (e.g. `option "Submit 19987 items pending"`, `row "Item 654321"`, `text "Parent abcdefgh"` from a generated suffix), the digits/suffix will be different on the next replay run. The replay-side `clickRole` dispatcher already has **digit-tolerant** and **generated-suffix** (alphanumeric-suffix fuzz) matchers that resolve these drifted names automatically — see `[replay] digit-tolerant match: ...` / `[replay] generated-suffix match: ...` in replay logs. The scenario is fine as recorded; no heal, no manual rename, no warning to the user. Surfacing this as a "future-replay-fragile" caveat is noise that wastes the user's attention on a non-issue. Only flag accessible-name drift when the differing characters are NOT digits or alphanumeric generated suffixes (e.g. an entire word changed, i18n flipped).
-- **`record-step` yarn-level non-zero exit can still leave a row + keyframe on disk — but the new persistence beacon makes this loud.** Every successful row append now emits `[scenario] row-persisted step N (kind) — DO NOT re-issue record-step for this gesture; if a non-zero exit follows, the row is still on disk and you must either truncate N (to drop this row + later, then re-drive the tab yourself with agent-browser and retry) or proceed forward`. **Grep stderr for that beacon BEFORE retrying any failed `record-step` call.** If you see it, the row is on disk; re-issuing will silently double-record at the next index. Recovery: `truncate N` to drop the bad row + store its sidecars (then drive the tab back yourself if needed — see [`recovery.md`](recovery.md)) or, if you must hand-recover:
-  ```bash
-  N=$(wc -l < tmp/scenario.steps.jsonl)
-  sed -i '' -e '$d' tmp/scenario.steps.jsonl   # only after positively confirming the dup
-  # Then remove the corresponding sidecars for the dropped step's stepId.
-  ```
-- **A `[role=alert]` toast from a failed submit no longer trips s1 on every subsequent step — but if the toast text changes between steps (e.g. the SPA re-renders it with a new timestamp or count), the new text reads as a NEW alert and s1 fires.** s1 now scrubs alerts whose text is identical to an alert in the prior probe (symmetric with s2's lingering-dialog scoping). The detector only fires on alerts NEW since the prior step's gesture. If you still see s1 firing on a clearly-stale toast, the toast text mutated between steps — workaround at record time:
-  ```bash
-  agent-browser --session default-user-session eval \
-    "document.querySelectorAll('[role=alert],[aria-live=\"assertive\"]').forEach(n=>n.remove())"
-  ```
-  Use only between heal-pending and the re-driven step that produced the toast — never as default cleanup, since suppressing live alerts on real steps hides genuine failures.
-- **Recovery shape: `truncate` + `heal-respond` / `heal-promote`.** `truncate <N>` is the disk-bookkeeping verb (drops `steps.jsonl` rows ≥ N + stores sidecars under `<sid>/failed/truncate-<isoTs>/`; does NOT touch the live tab — drive it yourself per [`recovery.md`](recovery.md)). `heal-respond` is the caller-driven value-correction handshake; `heal-promote` bakes replay-suggested locator diffs back into `scenario.json`. See [`references/heal.md`](heal.md).
-- **`agent-browser fill 'Label' '<value>'` (resolve-by-label) is unreliable for some MUI inputs — fall back to `fill @<ref>`.** The `fill` verb's label resolver does not always find inputs whose `<label>` is associated via a `for=` pointing at a wrapping container instead of the `<input>` itself (common in MUI form fields). When `agent-browser fill 'Email address' 'x'` returns "Element not found" but the field is clearly visible, snapshot the page and pass the input's ref directly: `agent-browser fill @e123 'x'`. (`smart-click` does NOT have this problem — it walks the snapshot tree and so handles wrapper-labelled controls correctly.)
-- **`fill-unique --save-as <name>` bindings can be invisible to `record-step assert`'s token validator.** The fill verb writes the binding into the keyframe (`probes/NNN.json` contains `"binding": { ... "<name>" ... }`), but a subsequent `record-step assert '{"args":["heading","{{vars.<name>}}"]}'` fails with `token references undeclared binding '<name>'. Declared bindings: (none).` even though the binding clearly exists on disk. Root cause unconfirmed — likely the validator reads from `tmp/scenario.steps.jsonl` while `fill-unique` writes the binding to the keyframe rather than (or in addition to) the steps file. **Workaround procedure (NOT just "fall back to URL"):** follow the snapshot-first assert discovery routine in `asserts.md` — snapshot the page, grep for the typed value, identify every rung the page exposes, then surface those options to the user verbatim and let them pick. Recording URL-only when DOM-identity evidence is visible on screen is a silent downgrade and violates the asserts contract ("don't downgrade silently"). **Do NOT spelunk `/var/folders/` for the steps file looking for the bindings** — the skill says to ask + fix the doc, not grep internals.
+- **`smart-click` takes an accessible name, not a snapshot ref.** Supported
+  flags are `--role`, `--session`, and `--no-record`. It first tries native DOM
+  activation by role/name, then agent-browser role/name, text/chunk fallbacks,
+  and finally an internally resolved ref from a fresh ARIA snapshot. There is no
+  public `--ref` flag, stale-ref cross-check, or ambiguity error contract.
+
+- **A successful `smart-click` dispatch is not proof that app state changed.**
+  The command records after the click path returns successfully, but it has no
+  post-click state verifier. Snapshot or assert the resulting state when the
+  outcome matters. If the command fails after the browser may have changed,
+  snapshot before retrying so you do not double-click.
+
+- **Do not double-record helper gestures.** `smart-click` and `fill-unique`
+  append their recording rows automatically unless `--no-record` is passed.
+  Do not follow a successful helper call with a duplicate `record-step`.
+
+- **Replay has one popup-opener fallback.** For role `combobox` or `listbox`,
+  replay counts open dialog/listbox/menu surfaces before native activation. If
+  no new popup appears, it focuses the role/name target and presses
+  `ArrowDown`. Recording-side `smart-click` does not perform this popup-growth
+  probe. Other roles and attributes are not opener signals today.
+
+- **Digit-only accessible-name drift may resolve, but it is not an audited heal
+  guarantee.** Role/name DOM activation normalizes digit runs after exact and
+  substring matching. There is no generated-suffix strategy, ambiguity
+  rejection, per-locator opt-out, strict mode, or heal audit row. If the exact
+  name identifies the entity under test, prefer a stable raw locator such as a
+  test id.
+
+- **Recording is serial.** Wait for each browser action and its recording call
+  to finish before starting the next gesture. The keyframe captures the live
+  tab; concurrent actions can make it describe the wrong state.
+
+- **`truncate` is disk bookkeeping only.** `agent-qa truncate <N>` removes
+  buffered rows with index `>= N` and archives their sidecars. Re-position the
+  live tab yourself before re-recording. The active buffer lives at
+  `<record_root>/scenario.steps.jsonl` (normally
+  `tmp/agent-qa-record/scenario.steps.jsonl`).
+
+- **Manual value correction is explicit.** `heal-respond` records a string
+  correction. Feed it to `replay --heal-from-run` for a transient replay
+  override, or to `heal-apply` for a recorder-native value-bearing action in
+  the active buffer. Core replay does not generate heal requests or locator
+  patches automatically. See [`heal.md`](heal.md) and
+  [`recovery.md`](recovery.md).
+
+- **Label-based fill can miss wrapper-based form controls.** If
+  `agent-browser fill 'Label' '<value>'` cannot resolve a visible input, take a
+  fresh snapshot and use that input's current ref for the one browser action;
+  record the durable role/name or raw locator separately.
+
+- **Agent-browser daemon recovery is automatic once.** When the named daemon is
+  alive but its child browser is gone, agent-qa closes that session and retries
+  the original command once. Opt out with
+  `AGENT_QA_AGENT_BROWSER_NO_AUTO_RECOVER=1` when debugging the daemon. If
+  recovery still fails, use `agent-browser close --session <name>`, then
+  `agent-browser close --all`, then `agent-browser doctor --fix`.
+
+- **Run `verify` before declaring a recording complete.** It checks the sealed
+  scenario and its recording evidence. A row on disk or a successful browser
+  gesture alone is not completion evidence.

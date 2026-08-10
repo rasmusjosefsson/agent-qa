@@ -4,7 +4,7 @@ Capture passive performance signals from the live tab. Strictly orthogonal to re
 
 ### When to use it
 
-- "**Debug perf on /sequences and /accounts**" — call `agent-qa perf-snapshot` on each problem page; compare `vitals.json` and `suspense.json` reports across them.
+- "**Debug perf on /users and /settings**" — call `agent-qa perf-snapshot` on each problem page; compare `vitals.json` and `suspense.json` reports across them.
 - "**Profile this user-creation flow**" — between gestures, call `agent-qa perf-snapshot --record-renders 5000 --cpu-profile 5000` to capture both React commit details and Chrome's CPU sampling profile over the same window.
 - "**Get a full timeline trace**" — `agent-qa perf-snapshot --trace 5000` writes a `.trace.json` openable in Chrome DevTools' Performance tab (drag-and-drop).
 
@@ -24,7 +24,7 @@ agent-qa perf-snapshot [--sid <sid>] [--profile <p>] \
 
 Defaults:
 
-- `--sid` defaults to the active recording's SID (from `tmp/scenario.env`); pass explicitly to attach to a specific recording.
+- `--sid` defaults to the active recording's SID (from `<record_root>/scenario.env`); pass explicitly to attach to a specific recording.
 - `--profile default-user` — same convention as the recording verbs.
 - All time-windowed flags are opt-in. With NO flags, only `vitals.json` + `suspense.json` are written (point-in-time signals, ~5s wall).
 
@@ -96,12 +96,12 @@ agent-qa perf-snapshot
 Cross-page comparison:
 
 ```bash
-for path in /home /sequences /accounts; do
+for path in /home /users /settings; do
   agent-browser --session default-user-session open "https://app.example.com${path}?deployment=Staging"
   agent-qa perf-snapshot
   cp tmp/agent-qa-scenarios/<sid>/perf/vitals.json /tmp/vitals${path//\//-}.json
 done
-diff /tmp/vitals-home.json /tmp/vitals-sequences.json
+diff /tmp/vitals-home.json /tmp/vitals-users.json
 ```
 
 ### Exit codes

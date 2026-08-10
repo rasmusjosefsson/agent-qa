@@ -1,10 +1,10 @@
 //! `smart-click` verb — click an element by accessible name and auto-record
 //! the matching do/click step.
 //!
-//! Surface: pure passthrough to `agent-browser find role <r> click
-//! --name <n>` plus an append to `<record_root>/scenario.steps.jsonl`.
-//! Intent classification, settle-gate polling, and heal-history plumbing
-//! land alongside the heal pipeline (separate PR).
+//! Resolves through native DOM role/name activation first, then
+//! agent-browser role/name, text/chunk, and fresh-snapshot-ref fallbacks. A
+//! successful dispatch is appended to `<record_root>/scenario.steps.jsonl`
+//! unless `--no-record` is set. This verb does not verify post-click app state.
 //!
 //! CLI shape:
 //!
@@ -181,9 +181,9 @@ fn try_text_fallback(session: &str, name: &str) -> Option<String> {
 /// agent-browser's coordinate click lands without triggering app handlers
 /// (overlay interception, or a mousedown-bound handler). Prefer native DOM
 /// activation — role + name resolution, scrollIntoView, and the full
-/// pointer/mouse event chain on the node — for every interactive role, not
-/// just button/link. Non-interactive roles return `Ok(false)` so the caller
-/// falls back to agent-browser's role/text/ref ladder. See
+/// pointer/mouse event chain on the node — for a broad set of interactive
+/// roles, not just button/link. Non-interactive roles return `Ok(false)` so
+/// the caller falls back to agent-browser's role/text/ref ladder. See
 /// [`crate::dom_activate`].
 fn try_named_control_click(session: &str, role: &str, name: &str) -> Result<bool> {
     if !crate::dom_activate::is_interactive_role(role) {
@@ -211,7 +211,7 @@ fn try_snapshot_fallback(session: &str, role: &str, name: &str) -> Result<()> {
 
 fn print_help() {
     println!(
-        "agent-qa smart-click \u{2014} click an element by accessible name + auto-record\n\nUsage:\n  agent-qa smart-click \"<accessible-name>\"\n                       [--role <role>]    (default: button)\n                       [--no-record]\n                       [--session <name>]\n\nResolves the element via agent-browser's `find role <r> click --name <n>`,\nclicks it, and appends a do/click row to scenario.steps.jsonl carrying\nthe role + accessible name. Replay re-resolves the element by the same\nrole+name combination.\n\nIntent classification, settle-gate polling, and heal-history plumbing\nland with the heal pipeline."
+        "agent-qa smart-click \u{2014} click an element by accessible name + auto-record\n\nUsage:\n  agent-qa smart-click \"<accessible-name>\"\n                       [--role <role>]    (default: button)\n                       [--no-record]\n                       [--session <name>]\n\nTries native DOM activation by role + accessible name, then agent-browser\nrole/name, text/chunk, and fresh-snapshot-ref fallbacks. On successful\ndispatch it appends a click row to <record_root>/scenario.steps.jsonl.\nIt does not verify post-click app state; record a wait/assertion when the\noutcome matters."
     );
 }
 

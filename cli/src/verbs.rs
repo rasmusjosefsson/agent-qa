@@ -576,9 +576,9 @@ fn role_act_supports_text_fallback(act: RoleAct) -> bool {
 /// Try `agent-browser find text` with the recorded name verbatim, then
 /// (if that misses) each whitespace-separated chunk of length ≥ 3. The
 /// chunked retry covers the common snapshot-stitches-text-nodes-with-a
-/// space case (e.g. snapshot prints `"Docs Vercel documentation"` for an
-/// element whose accessible name is actually `"DocsVercel documentation"`,
-/// where the second word `"Vercel"` or `"documentation"` is unique).
+/// space case (e.g. snapshot prints `"Guides API documentation"` for an
+/// element whose accessible name is actually `"GuidesAPI documentation"`,
+/// where the second word `"API"` or `"documentation"` is unique).
 ///
 /// Returns true on first success.
 fn try_text_fallback(session: &str, name: &str, act: RoleAct, value: Option<&str>) -> bool {
@@ -639,9 +639,9 @@ fn try_named_control_fill(session: &str, name: &str, value: &str) -> anyhow::Res
 
 /// Activate an interactive control by role + accessible name via native DOM
 /// events, bypassing coordinate clicks (which overlays intercept and which
-/// miss mousedown-bound handlers like MUI Select). Covers every interactive
-/// role — button, link, combobox, option, menuitem, tab, checkbox, … — not
-/// just button/link. Non-interactive roles return `Ok(false)` so the caller
+/// miss mousedown-bound handlers on custom select controls). Covers a broad set
+/// of interactive roles — button, link, combobox, option, menuitem, tab,
+/// checkbox, and others — rather than only button/link. Non-interactive roles return `Ok(false)` so the caller
 /// falls back to agent-browser's role finder. See [`crate::dom_activate`].
 fn try_named_control_click(session: &str, role: &str, name: &str) -> anyhow::Result<bool> {
     if !crate::dom_activate::is_interactive_role(role) {

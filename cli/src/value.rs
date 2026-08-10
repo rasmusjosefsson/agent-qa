@@ -185,7 +185,8 @@ fn resolve_var_token(name: &str, tail: &str, scope: &mut ValueScope) -> Option<S
     }
     let root_resolved: Json = if let Some(stored) = scope.saved_steps.get(name).cloned() {
         resolve_if_value(stored, scope)
-    } else if let Some(stored) = scope.inputs.get(name).cloned() {
+    } else {
+        let stored = scope.inputs.get(name).cloned()?;
         // Input-mint disambiguation: cache by `<scope>::vars.<name>`.
         if let Some(mint) = as_mint_value(&stored) {
             let key = format!("{}::vars.{}", mint.scope.unwrap_or("scenario"), name);
@@ -199,8 +200,6 @@ fn resolve_var_token(name: &str, tail: &str, scope: &mut ValueScope) -> Option<S
         } else {
             resolve_if_value(stored, scope)
         }
-    } else {
-        return None;
     };
     let final_value = if tail.is_empty() {
         root_resolved
