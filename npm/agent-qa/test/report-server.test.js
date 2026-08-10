@@ -131,6 +131,88 @@ test('resolveScenariosRoot honors --root, env, then default', () => {
   );
 });
 
+test('workbench run options default headless and replay args pin the CLI mode', () => {
+  assert.deepEqual(srv._test.runOptsFromBody({}), { headed: false });
+  assert.deepEqual(srv._test.runOptsFromBody({ headed: 'true' }), { headed: false });
+  assert.deepEqual(srv._test.runOptsFromBody({ headed: true, profile: 'viewer' }), {
+    headed: true,
+    profile: 'viewer',
+  });
+  assert.deepEqual(srv._test.replayArgs('s-demo', 'replay-s-demo', {}), [
+    'replay',
+    's-demo',
+    '--session',
+    'replay-s-demo',
+    '--headless',
+  ]);
+  assert.deepEqual(srv._test.replayArgs('s-demo', null, { headed: true, params: { baseUrl: 'https://example.com' } }), [
+    'replay',
+    's-demo',
+    '--headed',
+    '--param',
+    'baseUrl=https://example.com',
+  ]);
+});
+
+test('browser mode preparer preserves warm sessions and blocks in-flight mode flips', async () => {
+  const closed = [];
+  const prepare = srv._test.makeBrowserModePreparer({
+    closeSession: async (session) => closed.push(session),
+    activeSessions: () => ['warm-session'],
+  });
+
+  // Unknown warm daemon: recycle once because its launch mode cannot be known.
+  const releaseHeadless = await prepare('warm-session', false);
+  // An opposite-mode request cannot close a session still in use.
+  await assert.rejects(() => prepare('warm-session', true), /busy in headless mode/);
+  assert.deepEqual(closed, ['warm-session']);
+  releaseHeadless();
+
+  // Known same mode: preserve the warm session. A later flip recycles once.
+  const releaseHeadlessAgain = await prepare('warm-session', false);
+  releaseHeadlessAgain();
+  const releaseHeaded = await prepare('warm-session', true);
+  releaseHeaded();
+
+  // A new/cold session needs no close.
+  const releaseCold = await prepare('cold-session', false);
+  releaseCold();
+
+  assert.deepEqual(closed, ['warm-session', 'warm-session']);
+});
+
+test('detached replay holds its browser-mode lease until the child finishes', async () => {
+  const closed = [];
+  const prepareBrowserSession = srv._test.makeBrowserModePreparer({
+    closeSession: async (session) => closed.push(session),
+    activeSessions: () => [],
+  });
+  let finishReplay;
+  const done = new Promise((resolve) => { finishReplay = resolve; });
+  const calls = [];
+  const deps = {
+    prepareBrowserSession,
+    replay: async (_sid, _session, opts) => {
+      calls.push(opts.headed);
+      return { ok: true, done };
+    },
+  };
+
+  await srv._test.launchReplay(deps, 's-one', 'shared-session', { headed: false });
+  await assert.rejects(
+    () => srv._test.launchReplay(deps, 's-two', 'shared-session', { headed: true }),
+    /busy in headless mode/,
+  );
+  assert.deepEqual(calls, [false]);
+  assert.deepEqual(closed, []);
+
+  finishReplay();
+  await Promise.resolve();
+  await srv._test.launchReplay(deps, 's-two', 'shared-session', { headed: true });
+  assert.deepEqual(calls, [false, true]);
+  assert.deepEqual(closed, ['shared-session']);
+});
+
 // ---- endpoint integration ----
 
 test('report viewer endpoints', async (t) => {
@@ -240,12 +322,14 @@ test('report viewer endpoints', async (t) => {
   });
 });
 
-test('POST /replay spawns a replay via deps.replay', async (t) => {
+test('POST /replay threads headed mode through session preparation and deps.replay', async (t) => {
   const fx = makeFixture();
   const calls = [];
+  const prepared = [];
   const deps = {
-    replay: async (sid, session) => {
-      calls.push([sid, session]);
+    prepareBrowserSession: async (session, headed) => prepared.push({ session, headed }),
+    replay: async (sid, session, opts) => {
+      calls.push({ sid, session, opts });
       return { ok: true, pid: 4242 };
     },
   };
@@ -263,8 +347,24 @@ test('POST /replay spawns a replay via deps.replay', async (t) => {
   assert.equal(body.started, true);
   assert.equal(body.sid, fx.sid);
   // Replay is pinned to a deterministic per-sid session so the live
-  // screencast can attach to exactly that browser.
-  assert.deepEqual(calls, [[fx.sid, `replay-${fx.sid}`]]);
+  // screencast can attach to exactly that browser. Empty input is headless.
+  assert.deepEqual(prepared, [{ session: `replay-${fx.sid}`, headed: false }]);
+  assert.deepEqual(calls, [
+    {
+      sid: fx.sid,
+      session: `replay-${fx.sid}`,
+      opts: { headed: false, env: {} },
+    },
+  ]);
+
+  const headed = await fetch(`${base}/api/scenarios/${fx.sid}/replay`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ headed: true }),
+  });
+  assert.equal(headed.status, 202);
+  assert.deepEqual(prepared[1], { session: `replay-${fx.sid}`, headed: true });
+  assert.equal(calls[1].opts.headed, true);
 });
 
 test('GET /replay-stream subscribes the per-session screencast bridge', async (t) => {
@@ -598,7 +698,9 @@ test('test-plan CRUD + scope resolution (union of sets and cases, deduped)', asy
 test('POST /api/plans/:id/run replays each member scenario via deps.replay', async (t) => {
   const fx = makeFixture();
   const calls = [];
+  const prepared = [];
   const deps = {
+    prepareBrowserSession: async (session, headed) => prepared.push({ session, headed }),
     replay: async (sid, session, opts) => {
       calls.push({ sid, session, opts });
       return { ok: true };
@@ -624,6 +726,7 @@ test('POST /api/plans/:id/run replays each member scenario via deps.replay', asy
   const res = await j('POST', '/api/plans/p1/run', {
     profile: 'qa-admin',
     params: { baseUrl: 'https://staging.example.com' },
+    headed: true,
   });
   assert.equal(res.status, 202);
   const out = await res.json();
@@ -637,9 +740,15 @@ test('POST /api/plans/:id/run replays each member scenario via deps.replay', asy
       // (so re-runs skip the OAuth) rather than a throwaway replay-<sid>.
       session: 'qa-admin-session',
       // env is the injected plugin registry — empty here (none registered)
-      opts: { profile: 'qa-admin', params: { baseUrl: 'https://staging.example.com' }, env: {} },
+      opts: {
+        headed: true,
+        profile: 'qa-admin',
+        params: { baseUrl: 'https://staging.example.com' },
+        env: {},
+      },
     },
   ]);
+  assert.deepEqual(prepared, [{ session: 'qa-admin-session', headed: true }]);
 });
 
 test('persona + environment CRUD (run-config records)', async (t) => {
@@ -716,7 +825,9 @@ test('GET /api/plugins reports discovered auth plugins (read-only)', async (t) =
 test('POST /api/personas/:id/connect bootstraps a profile via the auth plugin', async (t) => {
   const fx = makeFixture();
   const calls = [];
+  const prepared = [];
   const deps = {
+    prepareBrowserSession: async (session, headed) => prepared.push({ session, headed }),
     runCli: async (args, extraEnv) => {
       calls.push({ args, extraEnv });
       // simulate no CLI-discoverable auth plugin (agent-qa.toml / $PATH empty)
@@ -745,7 +856,10 @@ test('POST /api/personas/:id/connect bootstraps a profile via the auth plugin', 
   const j = (m, p, b) =>
     fetch(`${booted.base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
 
-  const res = await j('POST', '/api/personas/admin/connect', { environmentId: 'staging' });
+  const res = await j('POST', '/api/personas/admin/connect', {
+    environmentId: 'staging',
+    headed: true,
+  });
   assert.equal(res.status, 200);
   const out = await res.json();
   assert.equal(out.authenticated, true);
@@ -758,6 +872,8 @@ test('POST /api/personas/:id/connect bootstraps a profile via the auth plugin', 
   // itself is discovered from the registry. Credentials reach the plugin via
   // the injected env, not profile-add flags.
   assert.deepEqual(calls[0].args, ['profile-add', 'admin-user', '--adapter', 'agent-qa-plugin-acme']);
+  assert.deepEqual(calls[1].args, ['profile-bootstrap', 'admin-user', '--headed']);
+  assert.deepEqual(prepared, [{ session: 'admin-user-session', headed: true }]);
   assert.equal(calls[1].extraEnv.AGENT_QA_ENV_BASE_URL, 'https://s.example.com');
   assert.equal(calls[1].extraEnv.AGENT_QA_ENV_TENANT, '7');
 
@@ -769,8 +885,10 @@ test('POST /api/personas/:id/connect bootstraps a profile via the auth plugin', 
 test("POST /api/chat/c/:id/connect bootstraps auth into THAT chat's own session", async (t) => {
   const fx = makeFixture();
   const calls = [];
+  const prepared = [];
   const deps = {
     chat: { hub: {} }, // chat available so a chat can be created
+    prepareBrowserSession: async (session, headed) => prepared.push({ session, headed }),
     runCli: async (args) => {
       calls.push(args);
       if (args[0] === 'profile-status') return { code: 0, stdout: 'admin-user: authenticated', stderr: '' };
@@ -788,7 +906,11 @@ test("POST /api/chat/c/:id/connect bootstraps auth into THAT chat's own session"
   const created = await (await j('POST', '/api/chat/create')).json();
   assert.match(created.session, /^chat-[0-9a-f]+$/);
 
-  const res = await j('POST', `/api/chat/c/${created.id}/connect`, { personaId: 'admin', environmentId: 'staging' });
+  const res = await j('POST', `/api/chat/c/${created.id}/connect`, {
+    personaId: 'admin',
+    environmentId: 'staging',
+    headed: true,
+  });
   assert.equal(res.status, 200);
   const out = await res.json();
   assert.equal(out.authenticated, true);
@@ -798,8 +920,15 @@ test("POST /api/chat/c/:id/connect bootstraps auth into THAT chat's own session"
   assert.equal(out.session, created.session);
   const bootCall = calls.find((a) => a[0] === 'profile-bootstrap');
   const statCall = calls.find((a) => a[0] === 'profile-status');
-  assert.deepEqual(bootCall, ['profile-bootstrap', 'admin-user', '--session', created.session]);
+  assert.deepEqual(bootCall, [
+    'profile-bootstrap',
+    'admin-user',
+    '--session',
+    created.session,
+    '--headed',
+  ]);
   assert.deepEqual(statCall, ['profile-status', 'admin-user', '--session', created.session]);
+  assert.deepEqual(prepared, [{ session: created.session, headed: true }]);
 
   // personaId is required
   assert.equal((await j('POST', `/api/chat/c/${created.id}/connect`, {})).status, 400);
@@ -808,9 +937,11 @@ test("POST /api/chat/c/:id/connect bootstraps auth into THAT chat's own session"
 test('POST /api/chat/c/:id/replay re-auths via the connected persona, in its session', async (t) => {
   const fx = makeFixture();
   const calls = [];
+  const prepared = [];
   const deps = {
     chat: { hub: {} },
     recordRoot: path.join(fx.root, 'rec'),
+    prepareBrowserSession: async (session, headed) => prepared.push({ session, headed }),
     runCli: async (args, extraEnv) => {
       calls.push({ args, env: extraEnv || {} });
       if (args[0] === 'profile-status') return { code: 0, stdout: 'admin-user: authenticated', stderr: '' };
@@ -834,13 +965,28 @@ test('POST /api/chat/c/:id/replay re-auths via the connected persona, in its ses
 
   // Connect, then replay through the workbench (which injects creds).
   await j('POST', `/api/chat/c/${created.id}/connect`, { personaId: 'admin' });
-  const res = await j('POST', `/api/chat/c/${created.id}/replay`, { sid: 's-2026' });
+  const res = await j('POST', `/api/chat/c/${created.id}/replay`, {
+    sid: 's-2026',
+    headed: true,
+  });
   assert.equal(res.status, 200);
   assert.equal((await res.json()).ok, true);
 
   const replay = calls.find((c) => c.args[0] === 'replay');
   // Runs in the chat's own (already-authed) session, under the connected profile.
-  assert.deepEqual(replay.args, ['replay', 's-2026', '--session', created.session, '--profile', 'admin-user']);
+  assert.deepEqual(replay.args, [
+    'replay',
+    's-2026',
+    '--session',
+    created.session,
+    '--headed',
+    '--profile',
+    'admin-user',
+  ]);
+  assert.deepEqual(prepared, [
+    { session: created.session, headed: false },
+    { session: created.session, headed: true },
+  ]);
   // Persona credentials are injected so the useProfile op can re-authenticate.
   assert.equal(replay.env.APP_CLIENT_ID, 'cid-literal');
   // ...and in the chat's record dir, where the connected profile is registered.

@@ -138,10 +138,18 @@ export interface ConnectResult {
   authenticated: boolean
   profile: string
   session?: string | null
+  headed?: boolean
   log: ConnectStep[]
 }
-export function connectPersona(personaId: string, environmentId: string): Promise<ConnectResult> {
-  return postJson(`/api/personas/${encodeURIComponent(personaId)}/connect`, { environmentId })
+export function connectPersona(
+  personaId: string,
+  environmentId: string,
+  headed = false
+): Promise<ConnectResult> {
+  return postJson(`/api/personas/${encodeURIComponent(personaId)}/connect`, {
+    environmentId,
+    headed,
+  })
 }
 
 // Sign a persona into a specific chat's OWN browser session, so that chat's
@@ -151,10 +159,12 @@ export function connectPersona(personaId: string, environmentId: string): Promis
 export function connectPersonaToChat(
   chatId: string,
   personaId: string,
-  environmentId?: string
+  environmentId?: string,
+  headed = false
 ): Promise<ConnectResult> {
   return postJson(`/api/chat/c/${encodeURIComponent(chatId)}/connect`, {
     personaId,
     ...(environmentId ? { environmentId } : {}),
+    headed,
   })
 }
