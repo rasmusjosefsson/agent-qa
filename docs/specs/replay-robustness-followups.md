@@ -27,26 +27,22 @@ context.
   dismissed by the inter-step keyframe capture).
 
 - **#51** `feat(cli): headless by default, --headed/--headless flag` —
-  merged to `main`, **not yet tagged/released** (latest tag is still
-  `v0.0.50`). `browser::set_headed_mode(headed)` toggles
+  released in **v0.0.51**. `browser::set_headed_mode(headed)` toggles
   `AGENT_BROWSER_HEADED` for every agent-browser child; headless explicitly
   *removes* the var so an inherited value can never silently force a visible
   window. Wired into `agent-qa start [--headed|--headless]` (record) and
   `agent-qa replay [--headed|--headless]` (replay). CLI-core only — the
   workbench does not yet pass this flag anywhere (see below).
 
+- **#52** `fix(cli): restore CI and repair manual heal flow` — fixed the Rust
+  1.97 Clippy regression, repaired `heal-apply` so recorder-native value
+  corrections survive `flush`, and aligned embedded docs with the current
+  manual-heal surface. The `v0.0.51` release workflow published the umbrella
+  and platform npm packages successfully.
+
 ## Left to do
 
-### 1. Restore green CI, then tag + release v0.0.51
-The post-merge `main` run for #51 passed all 485 tests but failed Clippy on
-Rust 1.97's newer `question_mark` lint in `cli/src/value.rs`. The canonical
-`?` rewrite is on `fix/ci-clippy-release`; merge it only after the current CI
-matrix passes. Once `main` is green, run
-`git tag v0.0.51 && git push origin v0.0.51` and let
-`.github/workflows/release.yml` publish. Without the tag, #51 is merged but
-not in the published npm package yet.
-
-### 2. Workbench headed toggle (UI)
+### 1. Workbench headed toggle (UI)
 #51 only wired the CLI flag. Still needed:
 - Parse a headed boolean in `runOptsFromBody`, thread it through
   `deps.replay`/`makeReplaySpawner` for scenario and plan runs, and append the
@@ -60,7 +56,7 @@ not in the published npm package yet.
   closed. A toggle flip needs `agent-browser close --session <name>` (or an
   equivalent recycle) before the next launch to actually take effect.
 
-### 3. Live-pane black-screen fix
+### 2. Live-pane black-screen fix
 The Runs tab's live browser view can show black even when a replay is
 actively running. Root cause: `replayStreamSession()` in
 `report-server.js` re-derives the session name from the run's `profile`
@@ -77,7 +73,7 @@ CDP screencast still can attach to it in principle since
 symptom in the reported case was the wrong-session bug above, not headed vs
 headless itself.)
 
-### 4. Inline replay auto-heal loop — the big one
+### 3. Inline replay auto-heal loop — the big one
 **Not built yet.** Current replay (`cli/src/runner.rs`) has no in-run
 healing: a locator miss just fails the step. The only "heal" mechanism that
 exists is `--heal-from-run <runId>`, which pre-loads *caller-supplied*
@@ -124,7 +120,7 @@ loop that already has the transient-popup re-fire logic from #50 —
 next to that, structurally similar (on `dispatch_do` failure, attempt
 recovery, retry once, then give up).
 
-### 5. Validation/duplicate-value collisions — mostly a non-issue
+### 4. Validation/duplicate-value collisions — mostly a non-issue
 Recordings that use `{{vars._unique}}` (via `fill-unique`) already mint a
 fresh value on every replay, so "email already taken" collisions from
 *replay reuse* shouldn't occur by design. No autonomous
@@ -133,7 +129,7 @@ surfaces, is to make sure fields that can collide are recorded with
 fill-unique, not to build fragile retry-with-a-different-value logic into
 the replay engine. If a *genuine* app-side validation rejection needs
 surfacing (not a collision, e.g. a real business-rule error), that's covered
-by the value-rejection classification in item 4 above.
+by the value-rejection classification in item 3 above.
 
 ## Quick pointers for next session
 
@@ -142,6 +138,6 @@ by the value-rejection classification in item 4 above.
 - Test the workbench against a local build with:
   `cd cli && cargo build --release`, then from the repo root run
   `AGENT_QA_BINARY_PATH="$PWD/cli/target/release/agent-qa" agent-qa web`.
-- Full CLI test suite: `cd cli && cargo test` (486 on this follow-up branch;
-  485 at #51). `cargo fmt --check` before every PR — CI enforces it.
+- Full CLI test suite: `cd cli && cargo test` (486 on current `main`).
+  `cargo fmt --check` before every PR — CI enforces it.
 - Branch protection on `main`: PR + squash merge only, no direct/force push.
