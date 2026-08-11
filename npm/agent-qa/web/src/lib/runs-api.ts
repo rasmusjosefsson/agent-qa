@@ -27,6 +27,7 @@ export function getRunDetail(sid: string, runId: string): Promise<RunDetail> {
 // Optional persona/environment for a replay. A named persona lets the server
 // resolve + inject its credentials so an auth-walled scenario re-authenticates.
 export interface ReplayOpts {
+  headed?: boolean
   profile?: string
   params?: Record<string, string>
   personaId?: string

@@ -9,6 +9,7 @@ import {
   Trash2Icon,
   UploadIcon,
 } from 'lucide-react'
+import { BrowserModeToggle } from '@/components/browser-mode-toggle'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -83,6 +84,7 @@ export function PlanDetail({ id }: { id: string }) {
   const [environments, setEnvironments] = useState<EnvironmentRecord[]>([])
   const [personaId, setPersonaId] = useState('')
   const [envId, setEnvId] = useState('')
+  const [headed, setHeaded] = useState(false)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const [live, setLive] = useState(false)
@@ -128,6 +130,7 @@ export function PlanDetail({ id }: { id: string }) {
     const params: Record<string, string> = env ? { ...env.params } : {}
     if (env?.baseUrl) params.baseUrl = env.baseUrl
     return {
+      headed,
       profile: persona?.profile || undefined,
       params: Object.keys(params).length ? params : undefined,
       personaId: personaId || undefined,
@@ -235,9 +238,10 @@ export function PlanDetail({ id }: { id: string }) {
         setErr(r.error || 'Run refused')
         return
       }
+      const skipped = r.skipped.map((item) => `${item.caseId}: ${item.reason}`).join('; ')
       setRunMsg(
         `Started ${r.started.length} ${r.started.length === 1 ? 'replay' : 'replays'}` +
-          (r.skipped.length ? ` · skipped ${r.skipped.length} (no recording)` : '')
+          (skipped ? ` · skipped ${r.skipped.length}: ${skipped}` : '')
       )
       setLive(true)
       void refreshCases()
@@ -254,7 +258,7 @@ export function PlanDetail({ id }: { id: string }) {
     setErr('')
     setRunMsg('')
     try {
-      const r = await connectPersona(personaId, envId)
+      const r = await connectPersona(personaId, envId, headed)
       setRunMsg(
         r.authenticated
           ? `Connected — ${r.profile} is authenticated.`
@@ -360,6 +364,7 @@ export function PlanDetail({ id }: { id: string }) {
           placeholder="default environment"
           options={environments.map((e) => ({ value: e.id, label: e.name }))}
         />
+        <BrowserModeToggle headed={headed} onChange={setHeaded} disabled={busy} />
         <Button
           variant="ghost"
           size="sm"

@@ -45,7 +45,7 @@ Verbs live under `cli/src/`, dispatched by `cli/src/main.rs` and grouped by life
 | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | `doctor [--fix] [--quick] [--json]`                                              | Diagnose install, env, profiles, and auth setup.                          |
 | `profile-add <id> --adapter <id> --email-var <N> --password-var <N> [--default]` | Register a new profile directory and optional default.                                    |
-| `profile-bootstrap <profile>`                                                    | Idempotently sign in the profile via the registered auth plugin and apply session policy. |
+| `profile-bootstrap <profile> [--session <name>] [--headed\|--headless]`          | Idempotently sign in the profile via the registered auth plugin. Browser mode defaults to headless and is fixed when the session daemon launches. |
 | `profile-status <profile>`                                                       | Side-effect-free status probe.                                                            |
 
 ### Inspect

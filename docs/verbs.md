@@ -57,7 +57,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | --- | --- |
 | `profile-add <id>` | Register a new profile under the profiles root |
 | `profile-status <id>` | Probe a registered profile via the `auth` plugin |
-| `profile-bootstrap <id>` | One-shot login flow for an unregistered profile |
+| `profile-bootstrap <id> [--session <name>] [--headed\|--headless]` | Sign in a registered profile through its auth plugin; defaults to headless |
 | `profile-list` | Enumerate registered profiles. `--json` for structured. |
 
 ## Diagnostics

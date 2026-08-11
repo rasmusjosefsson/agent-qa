@@ -20,6 +20,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Result};
 use serde_json::json;
 
+use crate::browser;
 use crate::plugin::host;
 use crate::profile_status as ps;
 
@@ -27,6 +28,10 @@ const LOGIN_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub fn run(args: &[String]) -> Result<u8> {
     let opts = parse_args(args)?;
+    // Auth plugins inherit this process environment and use agent-browser for
+    // login. Pin the launch mode before invoking the plugin so an ambient
+    // AGENT_BROWSER_HEADED value cannot override the headless default.
+    browser::set_headed_mode(opts.headed);
     let profile = ps::_load_profile(&opts.profile)?;
     let session = opts
         .session
@@ -58,7 +63,7 @@ pub fn run(args: &[String]) -> Result<u8> {
 
 fn print_help() {
     println!(
-        "agent-qa profile-bootstrap — drive plugin auth login for a profile\n\nUsage:\n  agent-qa profile-bootstrap <profile> [--session <name>] [--quiet]\n\nReads the registered profile from <record_root>/profiles/<profile>/profile.json,\ndiscovers the auth plugin (via the standard chain), and invokes\n'<plugin> auth login' with credentials read from the env vars registered\nvia 'profile-add --email-var / --password-var'."
+        "agent-qa profile-bootstrap — drive plugin auth login for a profile\n\nUsage:\n  agent-qa profile-bootstrap <profile> [--session <name>] [--headed|--headless] [--quiet]\n\nBrowser mode defaults to headless. --headed shows the browser window; --headless\nexplicitly keeps it hidden. The mode takes effect when agent-browser launches\nthe session.\n\nReads the registered profile from <record_root>/profiles/<profile>/profile.json,\ndiscovers the auth plugin (via the standard chain), and invokes\n'<plugin> auth login' with credentials read from the env vars registered\nvia 'profile-add --email-var / --password-var'."
     );
 }
 
@@ -66,12 +71,14 @@ fn print_help() {
 struct Opts {
     profile: String,
     session: Option<String>,
+    headed: bool,
     quiet: bool,
 }
 
 fn parse_args(args: &[String]) -> Result<Opts> {
     let mut profile: Option<String> = None;
     let mut session: Option<String> = None;
+    let mut headed = false;
     let mut quiet = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -82,6 +89,8 @@ fn parse_args(args: &[String]) -> Result<Opts> {
             }
             "--session" => session = it.next().cloned(),
             s if s.starts_with("--session=") => session = Some(s["--session=".len()..].to_string()),
+            "--headed" => headed = true,
+            "--headless" => headed = false,
             "--quiet" => quiet = true,
             other if other.starts_with("--") => bail!("unknown flag {other:?}"),
             other => {
@@ -96,6 +105,7 @@ fn parse_args(args: &[String]) -> Result<Opts> {
     Ok(Opts {
         profile,
         session,
+        headed,
         quiet,
     })
 }
@@ -163,10 +173,27 @@ mod tests {
     }
 
     #[test]
-    fn parse_args_accepts_session_and_quiet() {
-        let opts = parse_args(&["alice".into(), "--session=sx".into(), "--quiet".into()]).unwrap();
+    fn parse_args_accepts_session_mode_and_quiet() {
+        let opts = parse_args(&[
+            "alice".into(),
+            "--session=sx".into(),
+            "--headed".into(),
+            "--quiet".into(),
+        ])
+        .unwrap();
         assert_eq!(opts.profile, "alice");
         assert_eq!(opts.session.as_deref(), Some("sx"));
+        assert!(opts.headed);
         assert!(opts.quiet);
+    }
+
+    #[test]
+    fn parse_args_defaults_headless_and_last_mode_flag_wins() {
+        let default = parse_args(&["alice".into()]).unwrap();
+        assert!(!default.headed);
+
+        let overridden =
+            parse_args(&["alice".into(), "--headed".into(), "--headless".into()]).unwrap();
+        assert!(!overridden.headed);
     }
 }

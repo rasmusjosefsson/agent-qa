@@ -1,4 +1,5 @@
 // web/src/features/runs/components/CenterPane.tsx
+import { BrowserModeToggle } from '@/components/browser-mode-toggle'
 import { cn } from '@/lib/utils'
 import { Loader2Icon, PlayIcon } from 'lucide-react'
 import {
@@ -51,8 +52,10 @@ export interface RunConfig {
   environments: { id: string; name: string }[]
   personaId: string
   envId: string
+  headed: boolean
   setPersonaId: (v: string) => void
   setEnvId: (v: string) => void
+  setHeaded: (v: boolean) => void
 }
 
 export function CenterPane({
@@ -94,6 +97,13 @@ export function CenterPane({
           </div>
           {sel.sid && (
             <div className="flex shrink-0 flex-wrap items-center gap-2">
+              {runConfig && (
+                <BrowserModeToggle
+                  headed={runConfig.headed}
+                  onChange={runConfig.setHeaded}
+                  disabled={busy}
+                />
+              )}
               {runConfig && (runConfig.personas.length > 0 || runConfig.environments.length > 0) && (
                 <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <span>as</span>

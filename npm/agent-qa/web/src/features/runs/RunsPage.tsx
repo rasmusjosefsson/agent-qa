@@ -25,6 +25,7 @@ export function RunsPage() {
   const [environments, setEnvironments] = useState<EnvironmentRecord[]>([])
   const [personaId, setPersonaId] = useState('')
   const [envId, setEnvId] = useState('')
+  const [headed, setHeaded] = useState(false)
 
   useEffect(() => {
     Promise.all([getPersonas(), getEnvironments()])
@@ -77,6 +78,7 @@ export function RunsPage() {
     const params: Record<string, string> = env ? { ...env.params } : {}
     if (env?.baseUrl) params.baseUrl = env.baseUrl
     const res = await runs.replay(sid, {
+      headed,
       profile: persona?.profile || undefined,
       params: Object.keys(params).length ? params : undefined,
       personaId: personaId || undefined,
@@ -99,8 +101,10 @@ export function RunsPage() {
     environments,
     personaId,
     envId,
+    headed,
     setPersonaId,
     setEnvId,
+    setHeaded,
   }
 
   // Right pane: live screencast while the run is in flight and no step pinned,

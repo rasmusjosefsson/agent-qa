@@ -52,6 +52,7 @@ export function deletePlan(id: string): Promise<{ ok: boolean }> {
 export function runPlan(
   id: string,
   opts?: {
+    headed?: boolean
     profile?: string
     params?: Record<string, string>
     // Named persona/environment so the server can resolve + inject the

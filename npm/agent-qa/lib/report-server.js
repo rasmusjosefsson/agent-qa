@@ -784,7 +784,14 @@ async function handlePlans(req, res, root, seg, deps) {
         skipped.push({ caseId: cid, reason: 'scenario missing' });
         continue;
       }
-      const out = await deps.replay(sid, sessionForReplay(sid, runOpts.profile), runOpts);
+      const session = sessionForReplay(sid, runOpts.profile);
+      let out;
+      try {
+        out = await launchReplay(deps, sid, session, runOpts);
+      } catch (e) {
+        skipped.push({ caseId: cid, reason: String((e && e.message) || e) });
+        continue;
+      }
       if (out.ok) started.push({ caseId: cid, sid });
       else skipped.push({ caseId: cid, reason: out.error || 'replay failed to start' });
     }
@@ -810,7 +817,10 @@ async function handlePlans(req, res, root, seg, deps) {
 // + environment into `{ profile, params }` and posts that; the server just
 // passes it through to the replay spawner.
 function runOptsFromBody(body) {
-  const o = {};
+  // Headless is explicit rather than implicit: every workbench replay sends a
+  // mode flag to the CLI, so an inherited AGENT_BROWSER_HEADED value cannot
+  // make the default visible. Only a JSON boolean true opts into headed mode.
+  const o = { headed: !!(body && body.headed === true) };
   if (body && body.profile) o.profile = String(body.profile);
   // A persona/environment named by id lets the server resolve the persona's
   // credentials at run time (see resolveRunAuthEnv) — the profile string alone
@@ -1311,6 +1321,7 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
       body = {};
     }
   }
+  const headed = !!(body && body.headed === true);
   let env = null;
   const envId = body.environmentId ? String(body.environmentId) : '';
   if (envId && isSafeSegment(envId)) {
@@ -1392,26 +1403,59 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
   const addArgs = ['profile-add', profile];
   if (auth.plugin) addArgs.push('--adapter', String(auth.plugin));
   await step('profile-add', addArgs);
-  const bootArgs = ['profile-bootstrap', profile];
-  if (sessionOverride) bootArgs.push('--session', sessionOverride);
-  const boot = await step('profile-bootstrap', bootArgs);
-  const statArgs = ['profile-status', profile];
-  if (sessionOverride) statArgs.push('--session', sessionOverride);
-  const stat = await step('profile-status', statArgs);
-  const authenticated = /authenticated/i.test(stat.stdout || '');
-  if (authenticated) {
-    // Remember the profile on the chat entry (so the agent's bash gets
-    // AGENT_QA_PROFILE → a later `start` records a useProfile baseline) and
-    // bind it into any recording already in progress (so a `start` that ran
-    // BEFORE connect still replays under this profile, not fresh).
-    if (opts.entry) {
-      opts.entry.connectedProfile = profile;
-      opts.entry.connectedPersonaId = personaId;
-      opts.entry.connectedEnvironmentId = (env && env.id) || null;
-    }
-    if (opts.recordDir) await bindRecordingProfile(opts.recordDir, profile);
+  const browserSession = sessionOverride || `${profile}-session`;
+  let releaseBrowser;
+  try {
+    releaseBrowser = await prepareBrowserSession(deps, browserSession, headed);
+  } catch (e) {
+    log.push({
+      step: 'session-recycle',
+      code: 1,
+      stdout: '',
+      stderr: String((e && e.message) || e),
+      spawnError: null,
+    });
+    return sendJson(res, 200, {
+      ok: false,
+      authenticated: false,
+      profile,
+      session: sessionOverride,
+      headed,
+      log,
+    });
   }
-  return sendJson(res, 200, { ok: boot.code === 0, authenticated, profile, session: sessionOverride, log });
+  try {
+    const bootArgs = ['profile-bootstrap', profile];
+    if (sessionOverride) bootArgs.push('--session', sessionOverride);
+    bootArgs.push(headed ? '--headed' : '--headless');
+    const boot = await step('profile-bootstrap', bootArgs);
+    const statArgs = ['profile-status', profile];
+    if (sessionOverride) statArgs.push('--session', sessionOverride);
+    const stat = await step('profile-status', statArgs);
+    const authenticated = /authenticated/i.test(stat.stdout || '');
+    if (authenticated) {
+      // Remember the profile on the chat entry (so the agent's bash gets
+      // AGENT_QA_PROFILE → a later `start` records a useProfile baseline) and
+      // bind it into any recording already in progress (so a `start` that ran
+      // BEFORE connect still replays under this profile, not fresh).
+      if (opts.entry) {
+        opts.entry.connectedProfile = profile;
+        opts.entry.connectedPersonaId = personaId;
+        opts.entry.connectedEnvironmentId = (env && env.id) || null;
+      }
+      if (opts.recordDir) await bindRecordingProfile(opts.recordDir, profile);
+    }
+    return sendJson(res, 200, {
+      ok: boot.code === 0,
+      authenticated,
+      profile,
+      session: sessionOverride,
+      headed,
+      log,
+    });
+  } finally {
+    releaseBrowser();
+  }
 }
 
 // Rewrite an in-progress recording's baseline to use the connected profile, so
@@ -1673,6 +1717,100 @@ function closeBrowserSession(bin, session) {
   }
 }
 
+// Awaited counterpart used for mode changes. A warm agent-browser daemon keeps
+// the launch mode it started with, so headed ↔ headless must close the session
+// before the next CLI/plugin call launches it again. Unlike chat cleanup above,
+// a failed close is surfaced — continuing would run in the wrong mode.
+function makeBrowserSessionCloser({ bin, env, cwd }) {
+  return function closeSession(session) {
+    return new Promise((resolve, reject) => {
+      execFile(
+        bin || 'agent-browser',
+        ['close', '--session', session],
+        { env, cwd, maxBuffer: 1024 * 1024 },
+        (err, _stdout, stderr) => {
+          if (!err) return resolve();
+          const detail = String(stderr || err.message || err).trim();
+          reject(new Error(`could not recycle browser session ${session}: ${detail}`));
+        },
+      );
+    });
+  };
+}
+
+// Remember the requested mode per session while the workbench is running.
+// Reusing the same mode preserves warm authenticated sessions; flipping it
+// recycles exactly once. A daemon that predates this server has unknown mode,
+// so adopt it safely by recycling it on first use. Acquisition is serialized,
+// and an opposite-mode caller cannot recycle a session while an earlier
+// connect/replay operation still holds a lease on it.
+function makeBrowserModePreparer({ closeSession, activeSessions = listBrowserSessions }) {
+  const states = new Map(); // session -> { headed, active }
+  const pending = new Map();
+  return function acquireBrowserSession(session, headed) {
+    if (!session || !isSafeSegment(session)) {
+      return Promise.reject(new Error('unsafe browser session'));
+    }
+    const desired = headed === true;
+    const previous = pending.get(session) || Promise.resolve();
+    const task = previous
+      .catch(() => {})
+      .then(async () => {
+        const state = states.get(session);
+        if (state && state.active > 0 && state.headed !== desired) {
+          throw new Error(
+            `browser session ${session} is busy in ${state.headed ? 'headed' : 'headless'} mode`,
+          );
+        }
+        const liveUnknown = !state && (await activeSessions()).includes(session);
+        if ((state && state.headed !== desired) || liveUnknown) await closeSession(session);
+
+        const next = state || { headed: desired, active: 0 };
+        next.headed = desired;
+        next.active += 1;
+        states.set(session, next);
+
+        let released = false;
+        return () => {
+          if (released) return;
+          released = true;
+          next.active = Math.max(0, next.active - 1);
+        };
+      });
+    pending.set(session, task);
+    const clear = () => {
+      if (pending.get(session) === task) pending.delete(session);
+    };
+    task.then(clear, clear);
+    return task;
+  };
+}
+
+async function prepareBrowserSession(deps, session, headed) {
+  if (!deps || typeof deps.prepareBrowserSession !== 'function') return () => {};
+  const release = await deps.prepareBrowserSession(session, headed === true);
+  return typeof release === 'function' ? release : () => {};
+}
+
+// Acquire the session through child startup and, for the real detached spawner,
+// hold it until the child exits. Test/custom replay deps that do not expose a
+// completion promise release after startup, preserving the existing contract.
+async function launchReplay(deps, sid, session, opts) {
+  const release = await prepareBrowserSession(deps, session, opts && opts.headed);
+  try {
+    const out = await deps.replay(sid, session, opts);
+    if (out && out.ok && out.done && typeof out.done.then === 'function') {
+      out.done.then(release, release);
+    } else {
+      release();
+    }
+    return out;
+  } catch (e) {
+    release();
+    throw e;
+  }
+}
+
 // Build a getCdpUrl() that resolves a session's CDP WebSocket endpoint via
 // the Rust `cdp-url` verb. session=null → the recorder's env session.
 function cdpUrlResolver(runCli, session) {
@@ -1687,24 +1825,34 @@ function cdpUrlResolver(runCli, session) {
   };
 }
 
+function replayArgs(sid, session, opts = {}) {
+  const args = [
+    'replay',
+    sid,
+    ...(session ? ['--session', session] : []),
+    opts && opts.headed === true ? '--headed' : '--headless',
+  ];
+  if (opts && opts.profile) args.push('--profile', String(opts.profile));
+  if (opts && opts.params && typeof opts.params === 'object') {
+    for (const [k, v] of Object.entries(opts.params)) {
+      if (k) args.push('--param', `${k}=${String(v)}`);
+    }
+  }
+  return args;
+}
+
 // Spawn a replay of a recorded scenario as a detached child. Replay is
 // long-running (it drives a browser through every step), so we do NOT wait
 // for it to finish — the viewer's live poll auto-follows the new run via
 // status.json. Resolves quickly to { ok, pid } | { ok:false, error }.
 function makeReplaySpawner({ bin, env, cwd }) {
   const { spawn } = require('node:child_process');
-  // opts: { profile?, params?, env? } — a persona (forwarded as `--profile`),
-  // environment values (each `--param k=v`), and per-call env overrides (e.g.
-  // AGENT_QA_PLUGINS so a registered auth plugin applies during replay).
+  // opts: { profile?, params?, env?, headed? } — a persona (forwarded as
+  // `--profile`), environment values (each `--param k=v`), explicit browser
+  // mode, and per-call env overrides (e.g. AGENT_QA_PLUGINS).
   return function replay(sid, session, opts = {}) {
     return new Promise((resolve) => {
-      const args = ['replay', sid, ...(session ? ['--session', session] : [])];
-      if (opts && opts.profile) args.push('--profile', String(opts.profile));
-      if (opts && opts.params && typeof opts.params === 'object') {
-        for (const [k, v] of Object.entries(opts.params)) {
-          if (k) args.push('--param', `${k}=${String(v)}`);
-        }
-      }
+      const args = replayArgs(sid, session, opts);
       const childEnv = opts && opts.env ? { ...env, ...opts.env } : env;
       const child = spawn(bin, args, { env: childEnv, cwd, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
       // Capture the replay child's output so a run that fails BEFORE writing a
@@ -1716,6 +1864,8 @@ function makeReplaySpawner({ bin, env, cwd }) {
       const onOut = (b) => { tail = (tail + b.toString()).slice(-4000); };
       if (child.stdout) child.stdout.on('data', onOut);
       if (child.stderr) child.stderr.on('data', onOut);
+      let finish;
+      const done = new Promise((resolveDone) => { finish = resolveDone; });
       child.once('exit', (code) => {
         if (code && code !== 0) {
           try {
@@ -1726,17 +1876,19 @@ function makeReplaySpawner({ bin, env, cwd }) {
           } catch { /* best effort */ }
           console.error(`[replay ${sid}] exited ${code}:\n${tail.slice(-1500)}`);
         }
+        finish({ code });
       });
-      let done = false;
+      let started = false;
       child.once('spawn', () => {
-        if (done) return;
-        done = true;
+        if (started) return;
+        started = true;
         child.unref();
-        resolve({ ok: true, pid: child.pid });
+        resolve({ ok: true, pid: child.pid, done });
       });
       child.once('error', (err) => {
-        if (done) return;
-        done = true;
+        finish({ error: err });
+        if (started) return;
+        started = true;
         resolve({ ok: false, error: String((err && err.message) || err) });
       });
     });
@@ -2536,6 +2688,7 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
     }
     const sid = body.sid ? String(body.sid) : '';
     if (!sid || !isSafeSegment(sid)) return badRequest(res, 'sid is required');
+    const headed = body.headed === true;
     const personaId = entry.connectedPersonaId;
     const profile = entry.connectedProfile;
     if (!personaId || !profile) {
@@ -2555,22 +2708,40 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
     const extraEnv = { ...resolved.env };
     const rdir = entry.recordDir();
     if (rdir) extraEnv.AGENT_QA_RECORD_DIR = rdir;
-    const r = await deps.runCli(
-      ['replay', sid, '--session', entry.browser.name, '--profile', resolved.profile || profile],
-      extraEnv,
-    );
-    const tail = (s) =>
-      String(s || '')
-        .split('\n')
-        .filter(Boolean)
-        .slice(-4)
-        .join('\n');
-    return sendJson(res, 200, {
-      ok: r.code === 0,
-      code: r.code,
-      summary: tail(r.stdout),
-      error: r.code === 0 ? undefined : tail(r.stderr) || tail(r.stdout),
-    });
+    let releaseBrowser;
+    try {
+      releaseBrowser = await prepareBrowserSession(deps, entry.browser.name, headed);
+    } catch (e) {
+      return sendJson(res, 200, { ok: false, error: String((e && e.message) || e) });
+    }
+    try {
+      const r = await deps.runCli(
+        [
+          'replay',
+          sid,
+          '--session',
+          entry.browser.name,
+          headed ? '--headed' : '--headless',
+          '--profile',
+          resolved.profile || profile,
+        ],
+        extraEnv,
+      );
+      const tail = (s) =>
+        String(s || '')
+          .split('\n')
+          .filter(Boolean)
+          .slice(-4)
+          .join('\n');
+      return sendJson(res, 200, {
+        ok: r.code === 0,
+        code: r.code,
+        summary: tail(r.stdout),
+        error: r.code === 0 ? undefined : tail(r.stderr) || tail(r.stdout),
+      });
+    } finally {
+      releaseBrowser();
+    }
   }
   {
     const m = /^recording\/step\/([^/]+)\/(screenshot|snapshot)$/.exec(sub);
@@ -3029,7 +3200,13 @@ function createRequestHandler(root, deps, chat) {
         if (auth.error) return sendJson(res, 200, { ok: false, error: auth.error });
         replayOpts.env = auth.env;
         if (auth.profile) replayOpts.profile = auth.profile;
-        const out = await deps.replay(sid, sessionForReplay(sid, replayOpts.profile), replayOpts);
+        const session = sessionForReplay(sid, replayOpts.profile);
+        let out;
+        try {
+          out = await launchReplay(deps, sid, session, replayOpts);
+        } catch (e) {
+          return sendJson(res, 500, { error: String((e && e.message) || e) });
+        }
         if (!out.ok) return sendJson(res, 500, { error: out.error || 'replay failed to start' });
         return sendJson(res, 202, { ok: true, sid, started: true });
       }
@@ -3303,11 +3480,15 @@ function start(opts = {}) {
     // Editor/replay drive their own sessions (default / replay-<sid>); never
     // let an ambient or chat-bound AGENT_BROWSER_SESSION steer their CLI calls.
     delete childEnv.AGENT_BROWSER_SESSION;
+    const cwd = opts.cwd || process.cwd();
+    const agentBrowserBin = opts.agentBrowserBin || process.env.AGENT_BROWSER_BIN || 'agent-browser';
+    const closeSession = makeBrowserSessionCloser({ bin: agentBrowserBin, env: childEnv, cwd });
     deps = {
       recordRoot,
-      agentBrowserBin: opts.agentBrowserBin || process.env.AGENT_BROWSER_BIN || null,
-      runCli: makeCliRunner({ bin, env: childEnv, cwd: opts.cwd || process.cwd() }),
-      replay: makeReplaySpawner({ bin, env: childEnv, cwd: opts.cwd || process.cwd() }),
+      agentBrowserBin,
+      runCli: makeCliRunner({ bin, env: childEnv, cwd }),
+      replay: makeReplaySpawner({ bin, env: childEnv, cwd }),
+      prepareBrowserSession: makeBrowserModePreparer({ closeSession }),
     };
   }
 
@@ -3409,4 +3590,10 @@ module.exports = {
   start,
   ARTIFACT_KINDS,
   EDIT_KINDS,
+  _test: {
+    replayArgs,
+    runOptsFromBody,
+    makeBrowserModePreparer,
+    launchReplay,
+  },
 };

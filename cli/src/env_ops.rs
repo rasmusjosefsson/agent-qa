@@ -374,6 +374,14 @@ fn reset_browser_state(session: &str) -> Result<()> {
 ///
 /// Doing the probe here (rather than relying on the plugin to no-op inside
 /// `auth login`) is what actually skips the ~30s login on a warm session.
+fn current_browser_mode_flag() -> &'static str {
+    if std::env::var_os(crate::browser::HEADED_ENV).is_some() {
+        "--headed"
+    } else {
+        "--headless"
+    }
+}
+
 fn bootstrap_profile(name: &str, session: &str) -> Result<()> {
     use std::process::Command;
     let exe = std::env::current_exe().unwrap_or_else(|_| "agent-qa".into());
@@ -390,7 +398,13 @@ fn bootstrap_profile(name: &str, session: &str) -> Result<()> {
     }
 
     let status = Command::new(exe)
-        .args(["profile-bootstrap", name, "--session", session])
+        .args([
+            "profile-bootstrap",
+            name,
+            "--session",
+            session,
+            current_browser_mode_flag(),
+        ])
         .status()
         .with_context(|| format!("spawn agent-qa profile-bootstrap {name}"))?;
     if !status.success() {
@@ -409,6 +423,16 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use tempfile::TempDir;
+
+    #[test]
+    fn profile_bootstrap_mode_flag_matches_the_process_browser_mode() {
+        let _g = lock_env();
+        std::env::remove_var(ab::HEADED_ENV);
+        assert_eq!(current_browser_mode_flag(), "--headless");
+        std::env::set_var(ab::HEADED_ENV, "1");
+        assert_eq!(current_browser_mode_flag(), "--headed");
+        std::env::remove_var(ab::HEADED_ENV);
+    }
 
     fn write_exec(dir: &Path, name: &str, body: &str) -> PathBuf {
         let p = dir.join(name);
