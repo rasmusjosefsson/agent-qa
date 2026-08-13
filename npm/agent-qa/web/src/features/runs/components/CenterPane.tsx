@@ -82,8 +82,8 @@ export function CenterPane({
       : null
     return (
       <Pane>
-        <div className="flex flex-col items-start gap-2 border-b border-border px-4 py-3 @md:flex-row @md:items-center @md:justify-between @md:gap-3">
-          <div className="min-w-0 @md:flex-1">
+        <div className="flex flex-col items-stretch gap-3 border-b border-border px-4 py-3 @3xl:flex-row @3xl:items-center @3xl:justify-between">
+          <div className="min-w-0 @3xl:flex-1">
             <h2 className="truncate text-sm font-semibold">{scenarioDef.intent || scenarioDef.id || 'Scenario'}</h2>
             <div className="truncate text-xs text-muted-foreground">
               {steps.length} step{steps.length === 1 ? '' : 's'} · recorded {fmtRunTime(sel.sid)}
@@ -96,7 +96,7 @@ export function CenterPane({
             )}
           </div>
           {sel.sid && (
-            <div className="flex shrink-0 flex-wrap items-center gap-2">
+            <div className="flex w-full min-w-0 flex-wrap items-center gap-2 @3xl:w-auto @3xl:shrink-0 @3xl:justify-end">
               {runConfig && (
                 <BrowserModeToggle
                   headed={runConfig.headed}
@@ -105,13 +105,13 @@ export function CenterPane({
                 />
               )}
               {runConfig && (runConfig.personas.length > 0 || runConfig.environments.length > 0) && (
-                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 text-xs text-muted-foreground @3xl:flex-none @3xl:flex-nowrap">
                   <span>as</span>
                   <select
                     value={runConfig.personaId}
                     onChange={(e) => runConfig.setPersonaId(e.target.value)}
                     disabled={busy}
-                    className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none focus-visible:border-ring disabled:opacity-50"
+                    className="min-w-0 max-w-[10rem] rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none focus-visible:border-ring disabled:opacity-50"
                   >
                     <option value="">default login</option>
                     {runConfig.personas.map((p) => (
@@ -125,7 +125,7 @@ export function CenterPane({
                     value={runConfig.envId}
                     onChange={(e) => runConfig.setEnvId(e.target.value)}
                     disabled={busy}
-                    className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none focus-visible:border-ring disabled:opacity-50"
+                    className="min-w-0 max-w-full flex-1 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none focus-visible:border-ring disabled:opacity-50 @3xl:max-w-[18rem] @3xl:flex-none"
                   >
                     <option value="">default environment</option>
                     {runConfig.environments.map((en) => (

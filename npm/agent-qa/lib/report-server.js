@@ -1841,11 +1841,89 @@ function replayArgs(sid, session, opts = {}) {
   return args;
 }
 
+function replayRunIds(root, sid) {
+  if (!root || !isSafeSegment(sid)) return [];
+  try {
+    return fs
+      .readdirSync(path.join(root, sid, 'replays'), { withFileTypes: true })
+      .filter((e) => e.isDirectory() && isSafeSegment(e.name))
+      .map((e) => e.name);
+  } catch {
+    return [];
+  }
+}
+
+function writeJsonAtomicSync(file, value) {
+  const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n');
+    fs.renameSync(tmp, file);
+  } finally {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      /* rename succeeded or no temp was written */
+    }
+  }
+}
+
+// A replay can be terminated by a signal before Rust gets a chance to write
+// status.json or finish audit.json. Without a host-side terminal marker, the
+// Runs UI calls that dead process "in flight" forever. Only touch a run minted
+// by THIS child and only when its audit is still incomplete.
+function finalizeIncompleteReplay(root, sid, runsBefore, { code, signal } = {}) {
+  const candidates = replayRunIds(root, sid)
+    .filter((runId) => !runsBefore.has(runId))
+    .sort()
+    .reverse();
+  for (const runId of candidates) {
+    const runDir = path.join(root, sid, 'replays', runId);
+    const auditPath = path.join(runDir, 'audit.json');
+    let audit;
+    try {
+      audit = JSON.parse(fs.readFileSync(auditPath, 'utf8'));
+    } catch {
+      continue;
+    }
+    if (audit.finishedAt || audit.summary || typeof audit.exitCode === 'number') continue;
+
+    const exitReason = signal
+      ? `terminated by ${signal}`
+      : typeof code === 'number'
+        ? `exited ${code}`
+        : 'exited without a status';
+    const summary = `SUMMARY: 0/0 (FAIL — replay process ${exitReason} before finalizing)`;
+    audit.finishedAt = new Date().toISOString();
+    audit.exitCode = typeof code === 'number' && code !== 0 ? code : 1;
+    audit.summary = summary;
+    writeJsonAtomicSync(auditPath, audit);
+
+    const statusPath = path.join(runDir, 'status.json');
+    let status = null;
+    try {
+      status = JSON.parse(fs.readFileSync(statusPath, 'utf8'));
+    } catch {
+      status = null;
+    }
+    if (!status || status.state !== 'done') {
+      writeJsonAtomicSync(statusPath, {
+        state: 'done',
+        currentIdx: Number(status && status.currentIdx) || 0,
+        total: Number(status && status.total) || 0,
+        ok: false,
+      });
+    }
+    fs.writeFileSync(path.join(root, sid, 'replays', 'latest.txt'), runId + '\n');
+    return { runId, summary };
+  }
+  return null;
+}
+
 // Spawn a replay of a recorded scenario as a detached child. Replay is
 // long-running (it drives a browser through every step), so we do NOT wait
 // for it to finish — the viewer's live poll auto-follows the new run via
 // status.json. Resolves quickly to { ok, pid } | { ok:false, error }.
-function makeReplaySpawner({ bin, env, cwd }) {
+function makeReplaySpawner({ bin, env, cwd, root }) {
   const { spawn } = require('node:child_process');
   // opts: { profile?, params?, env?, headed? } — a persona (forwarded as
   // `--profile`), environment values (each `--param k=v`), explicit browser
@@ -1853,6 +1931,7 @@ function makeReplaySpawner({ bin, env, cwd }) {
   return function replay(sid, session, opts = {}) {
     return new Promise((resolve) => {
       const args = replayArgs(sid, session, opts);
+      const runsBefore = new Set(replayRunIds(root, sid));
       const childEnv = opts && opts.env ? { ...env, ...opts.env } : env;
       const child = spawn(bin, args, { env: childEnv, cwd, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
       // Capture the replay child's output so a run that fails BEFORE writing a
@@ -1866,17 +1945,24 @@ function makeReplaySpawner({ bin, env, cwd }) {
       if (child.stderr) child.stderr.on('data', onOut);
       let finish;
       const done = new Promise((resolveDone) => { finish = resolveDone; });
-      child.once('exit', (code) => {
-        if (code && code !== 0) {
+      child.once('exit', (code, signal) => {
+        let finalized = null;
+        try {
+          finalized = finalizeIncompleteReplay(root, sid, runsBefore, { code, signal });
+        } catch (e) {
+          console.error(`[replay ${sid}] could not finalize incomplete run: ${e.message || e}`);
+        }
+        if ((typeof code === 'number' && code !== 0) || signal || finalized) {
+          const reason = signal ? `signal ${signal}` : `exit ${code}`;
           try {
             require('node:fs').writeFileSync(
               require('node:path').join(require('node:os').tmpdir(), `aqa-replay-${sid}.log`),
-              tail,
+              tail || `${reason}\n${finalized ? finalized.summary : ''}\n`,
             );
           } catch { /* best effort */ }
-          console.error(`[replay ${sid}] exited ${code}:\n${tail.slice(-1500)}`);
+          console.error(`[replay ${sid}] ${reason}:\n${(tail || finalized?.summary || '').slice(-1500)}`);
         }
-        finish({ code });
+        finish({ code, signal, finalizedRunId: finalized && finalized.runId });
       });
       let started = false;
       child.once('spawn', () => {
@@ -3487,7 +3573,7 @@ function start(opts = {}) {
       recordRoot,
       agentBrowserBin,
       runCli: makeCliRunner({ bin, env: childEnv, cwd }),
-      replay: makeReplaySpawner({ bin, env: childEnv, cwd }),
+      replay: makeReplaySpawner({ bin, env: childEnv, cwd, root }),
       prepareBrowserSession: makeBrowserModePreparer({ closeSession }),
     };
   }
@@ -3595,5 +3681,6 @@ module.exports = {
     runOptsFromBody,
     makeBrowserModePreparer,
     launchReplay,
+    finalizeIncompleteReplay,
   },
 };

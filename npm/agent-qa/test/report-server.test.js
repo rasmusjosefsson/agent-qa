@@ -213,6 +213,43 @@ test('detached replay holds its browser-mode lease until the child finishes', as
   assert.deepEqual(closed, ['shared-session']);
 });
 
+test('a replay process killed before setup finishes is finalized as failed', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-replay-exit-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const sid = 's-crashed-replay';
+  const runId = '2026-08-13T14-44-34-767Z__dcdc95af__admin-user';
+  const runDir = path.join(root, sid, 'replays', runId);
+  fs.mkdirSync(runDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(runDir, 'audit.json'),
+    JSON.stringify({
+      schema: 'scenario-replay-audit/v1',
+      runId,
+      scenarioId: sid,
+      startedAt: '2026-08-13T14:44:34.767Z',
+      profile: 'admin-user',
+    }),
+  );
+
+  const out = srv._test.finalizeIncompleteReplay(root, sid, new Set(), {
+    code: null,
+    signal: 'SIGTERM',
+  });
+
+  assert.equal(out.runId, runId);
+  const audit = JSON.parse(fs.readFileSync(path.join(runDir, 'audit.json'), 'utf8'));
+  assert.equal(audit.exitCode, 1);
+  assert.match(audit.summary, /FAIL.*SIGTERM/);
+  assert.ok(audit.finishedAt);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(runDir, 'status.json'), 'utf8')), {
+    state: 'done',
+    currentIdx: 0,
+    total: 0,
+    ok: false,
+  });
+  assert.equal(fs.readFileSync(path.join(root, sid, 'replays', 'latest.txt'), 'utf8'), runId + '\n');
+});
+
 // ---- endpoint integration ----
 
 test('report viewer endpoints', async (t) => {
