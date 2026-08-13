@@ -66,6 +66,7 @@ function createLiveBridge({
   WebSocketImpl = globalThis.WebSocket,
   fetchImpl = globalThis.fetch,
   captureMs = 300,
+  reconnectMs = 500,
   logger = () => {},
 }) {
   if (typeof getCdpUrl !== 'function') throw new TypeError('getCdpUrl is required');
@@ -133,7 +134,7 @@ function createLiveBridge({
         broadcastEvent('bridge-error', { error: String((e && e.message) || e) });
         scheduleReconnect();
       });
-    }, 500);
+    }, reconnectMs);
     if (reconnectTimer.unref) reconnectTimer.unref();
   }
 
@@ -356,12 +357,20 @@ function createLiveBridge({
       } catch {
         /* client already gone */
       }
+      // The preview commonly subscribes before the agent launches its first
+      // browser. Keep retrying while that subscriber is present so the first
+      // successful `agent-browser open` appears without a tab switch/reload.
+      scheduleReconnect();
     }
   }
 
   function unsubscribe(res) {
     subscribers.delete(res);
     if (subscribers.size === 0) {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
       stopPolling();
       if (ws) {
         try {
