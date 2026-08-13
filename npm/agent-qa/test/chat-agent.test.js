@@ -309,6 +309,29 @@ test('resolvePiSdkUrl resolves an explicit file and an explicit dir', async () =
   assert.equal(fromDir, pathToFileURL(entry).href);
 });
 
+test('resolvePiSdkUrl finds a colocated SDK whose exports only define import', async (t) => {
+  const { resolvePiSdkUrl } = await chatAgent();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-sdk-tree-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const agentDir = path.join(root, 'node_modules', '@rasmusjosefsson', 'agent-qa');
+  const sdkDir = path.join(agentDir, 'node_modules', '@earendil-works', 'pi-coding-agent');
+  const entry = path.join(sdkDir, 'dist', 'index.js');
+  fs.mkdirSync(path.dirname(entry), { recursive: true });
+  fs.writeFileSync(entry, 'export const ok = true;');
+  fs.writeFileSync(
+    path.join(sdkDir, 'package.json'),
+    JSON.stringify({
+      name: '@earendil-works/pi-coding-agent',
+      type: 'module',
+      exports: { '.': { import: './dist/index.js' } },
+    }),
+  );
+
+  const moduleUrl = pathToFileURL(path.join(agentDir, 'lib', 'chat-agent.mjs')).href;
+  const resolved = resolvePiSdkUrl({ env: { PATH: '' }, moduleUrl });
+  assert.equal(resolved, pathToFileURL(entry).href);
+});
+
 test('__internal helpers: toExistingEntry + whichOnPath', async () => {
   const { __internal } = await chatAgent();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-which-'));

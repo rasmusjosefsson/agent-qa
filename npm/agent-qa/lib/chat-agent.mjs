@@ -376,6 +376,23 @@ function toExistingEntry(candidate) {
   return fsPath;
 }
 
+function findNodeModulesPackageEntry(moduleUrl, packageName) {
+  let dir;
+  try {
+    dir = dirname(fileURLToPath(moduleUrl));
+  } catch {
+    return null;
+  }
+  const packageParts = packageName.split('/').filter(Boolean);
+  for (;;) {
+    const entry = toExistingEntry(join(dir, 'node_modules', ...packageParts));
+    if (entry) return entry;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
 function whichOnPath(name, env) {
   const PATH = env.PATH || env.Path || '';
   if (!PATH) return null;
@@ -395,22 +412,30 @@ function whichOnPath(name, env) {
  * Resolve the pi SDK entry (dist/index.js) to an importable file:// URL.
  * Order (first hit wins):
  *   1. explicit sdkPath / AGENT_QA_PI_SDK (file or package dir)
- *   2. bare specifier from this module's node_modules chain (our optional dep)
- *   3. a global install next to the running node binary
- *   4. a `pi` binary on PATH → realpath → dist/cli.js → sibling dist/index.js
+ *   2. package directory from this module's node_modules chain (our optional dep)
+ *   3. bare specifier from this module's node_modules chain
+ *   4. a global install next to the running node binary
+ *   5. a `pi` binary on PATH → realpath → dist/cli.js → sibling dist/index.js
+ *
+ * The direct node_modules walk matters for SDK releases whose package exports
+ * define only an ESM `import` condition. `createRequire().resolve()` uses the
+ * CommonJS condition and skips those otherwise-valid colocated installs.
+ *
  * @returns {string} file:// URL
  */
-export function resolvePiSdkUrl({ sdkPath, env = process.env } = {}) {
+export function resolvePiSdkUrl({ sdkPath, env = process.env, moduleUrl = import.meta.url } = {}) {
   const candidates = [];
 
   const explicit = sdkPath || env.AGENT_QA_PI_SDK;
   if (explicit) candidates.push(explicit);
 
+  candidates.push(findNodeModulesPackageEntry(moduleUrl, PI_PKG));
+
   try {
-    const require = createRequire(import.meta.url);
+    const require = createRequire(moduleUrl);
     candidates.push(require.resolve(PI_PKG));
   } catch {
-    /* not installed in our chain */
+    /* package may export only the ESM import condition */
   }
 
   try {
