@@ -190,6 +190,8 @@ export function CenterPane({
     const terminal = !!a.summary || s.state === 'done'
     const stepStarted = (detail.events || []).some((e) => e.status && e.status !== 'pending')
     const signingIn = !terminal && !stepStarted
+    const setupStartedAt = Date.parse(String(a.startedAt || ''))
+    const setupSlow = signingIn && Number.isFinite(setupStartedAt) && Date.now() - setupStartedAt > 60_000
     const setupFail = (detail.events || []).find((e) => e.kind === 'setup' && e.status === 'fail')
     const setupError = setupFail && setupFail.error ? cleanSummary(setupFail.error) : null
 
@@ -226,7 +228,9 @@ export function CenterPane({
           {signingIn && (
             <div className="mt-2 flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-300">
               <Loader2Icon className="size-3.5 shrink-0 animate-spin" />
-              Signing in… authenticating the persona in a fresh browser — this can take ~30s.
+              {setupSlow
+                ? 'No replay progress for over a minute. Setup may be stuck; the host watchdog will stop it and mark it failed if this continues.'
+                : 'Signing in… authenticating the persona in a fresh browser — this can take ~30s.'}
             </div>
           )}
           {setupError && (

@@ -40,4 +40,27 @@ describe('CenterPane scenario controls', () => {
     expect(html).toContain('max-w-full flex-1')
     expect(html).not.toContain('@md:flex-row')
   })
+
+  it('warns when setup has reported no progress for over a minute', () => {
+    const runs = {
+      detail: {
+        sid: 's-stalled',
+        runId: '2026-08-13T15-00-00-000Z__feedface',
+        audit: { startedAt: '2020-01-01T00:00:00.000Z' },
+        status: null,
+        events: [],
+      },
+      scenarioDef: null,
+      sel: { sid: 's-stalled', runId: '2026-08-13T15-00-00-000Z__feedface', stepIdx: null },
+      runDefSteps: { sid: 's-stalled', steps: [] },
+      runsBySid: {},
+    } as unknown as RunsApi
+
+    const html = renderToStaticMarkup(
+      <CenterPane runs={runs} onReplay={() => {}} runConfig={runConfig} />
+    )
+
+    expect(html).toContain('No replay progress for over a minute')
+    expect(html).toContain('host watchdog')
+  })
 })
