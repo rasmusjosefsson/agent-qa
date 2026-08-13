@@ -339,4 +339,34 @@ test('a failed CDP connect surfaces a bridge-error SSE event', async () => {
   const err = frames.find((f) => f.includes('bridge-error'));
   assert.ok(err, 'subscriber told the bridge could not attach');
   assert.match(err, /no live session/);
+  bridge.stop();
+});
+
+test('a subscriber reconnects when the browser opens after the initial CDP miss', async () => {
+  FakeWS.instances = [];
+  let attempts = 0;
+  const bridge = createLiveBridge({
+    getCdpUrl: async () => {
+      attempts++;
+      if (attempts === 1) throw new Error('no live session');
+      return 'ws://127.0.0.1:1/devtools/browser/x';
+    },
+    WebSocketImpl: FakeWS,
+    fetchImpl: fakeFetch,
+    captureMs: 100000,
+    reconnectMs: 10,
+  });
+  const frames = [];
+  await bridge.subscribe({ write: (s) => frames.push(s), end() {} });
+  assert.ok(frames.some((f) => f.includes('bridge-error')), 'initial miss is surfaced');
+
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const sock = FakeWS.instances.at(-1);
+  assert.ok(sock, 'the bridge retried after the browser became available');
+  sock.fireOpen();
+  await flush();
+
+  assert.equal(attempts, 2);
+  assert.ok(sock.sentMethod('Page.captureScreenshot'), 'the retry starts frame capture');
+  bridge.stop();
 });

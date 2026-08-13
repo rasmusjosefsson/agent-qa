@@ -9,6 +9,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { EventEmitter } = require('node:events');
 
 const srv = require('../lib/report-server.js');
 
@@ -211,6 +212,105 @@ test('detached replay holds its browser-mode lease until the child finishes', as
   await srv._test.launchReplay(deps, 's-two', 'shared-session', { headed: true });
   assert.deepEqual(calls, [false, true]);
   assert.deepEqual(closed, ['shared-session']);
+});
+
+test('replay setup timeout defaults to three minutes and supports override/disable', () => {
+  assert.equal(srv._test.replaySetupTimeoutMs({}), 180000);
+  assert.equal(srv._test.replaySetupTimeoutMs({ AGENT_QA_REPLAY_SETUP_TIMEOUT_MS: '45000' }), 45000);
+  assert.equal(srv._test.replaySetupTimeoutMs({ AGENT_QA_REPLAY_SETUP_TIMEOUT_MS: '0' }), 0);
+  assert.equal(srv._test.replaySetupTimeoutMs({ AGENT_QA_REPLAY_SETUP_TIMEOUT_MS: 'bad' }), 180000);
+});
+
+test('a replay process killed before setup finishes is finalized as failed', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-replay-exit-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const sid = 's-crashed-replay';
+  const runId = '2026-08-13T14-44-34-767Z__dcdc95af__admin-user';
+  const runDir = path.join(root, sid, 'replays', runId);
+  fs.mkdirSync(runDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(runDir, 'audit.json'),
+    JSON.stringify({
+      schema: 'scenario-replay-audit/v1',
+      runId,
+      scenarioId: sid,
+      startedAt: '2026-08-13T14:44:34.767Z',
+      profile: 'admin-user',
+    }),
+  );
+
+  const out = srv._test.finalizeIncompleteReplay(root, sid, new Set(), {
+    code: null,
+    signal: 'SIGTERM',
+  });
+
+  assert.equal(out.runId, runId);
+  const audit = JSON.parse(fs.readFileSync(path.join(runDir, 'audit.json'), 'utf8'));
+  assert.equal(audit.exitCode, 1);
+  assert.match(audit.summary, /FAIL.*SIGTERM/);
+  assert.ok(audit.finishedAt);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(runDir, 'status.json'), 'utf8')), {
+    state: 'done',
+    currentIdx: 0,
+    total: 0,
+    ok: false,
+  });
+  assert.equal(fs.readFileSync(path.join(root, sid, 'replays', 'latest.txt'), 'utf8'), runId + '\n');
+});
+
+test('setup watchdog terminates a live child that never reports progress', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-replay-watchdog-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const sid = 's-watchdog-replay';
+  const runId = '2026-08-13T15-00-00-000Z__feedface__admin-user';
+  const signals = [];
+
+  const spawnImpl = () => {
+    const runDir = path.join(root, sid, 'replays', runId);
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(runDir, 'audit.json'),
+      JSON.stringify({
+        schema: 'scenario-replay-audit/v1',
+        runId,
+        scenarioId: sid,
+        startedAt: '2026-08-13T15:00:00.000Z',
+      }),
+    );
+    const child = new EventEmitter();
+    child.pid = 4242;
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.unref = () => {};
+    child.kill = (signal) => {
+      signals.push(signal);
+      setImmediate(() => child.emit('exit', null, signal));
+      return true;
+    };
+    setImmediate(() => child.emit('spawn'));
+    return child;
+  };
+
+  const replay = srv._test.makeReplaySpawner({
+    bin: '/fake/agent-qa',
+    env: {},
+    cwd: root,
+    root,
+    spawnImpl,
+    setupTimeoutMs: 10,
+  });
+  const started = await replay(sid, 'admin-user-session', { profile: 'admin-user' });
+  assert.equal(started.ok, true);
+  const exit = await started.done;
+
+  assert.deepEqual(signals, ['SIGTERM']);
+  assert.equal(exit.signal, 'SIGTERM');
+  assert.equal(exit.finalizedRunId, runId);
+  const audit = JSON.parse(
+    fs.readFileSync(path.join(root, sid, 'replays', runId, 'audit.json'), 'utf8'),
+  );
+  assert.match(audit.summary, /FAIL.*SIGTERM/);
+  assert.equal(audit.exitCode, 1);
 });
 
 // ---- endpoint integration ----
