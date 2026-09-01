@@ -40,9 +40,6 @@ export interface BrowserPaneProps {
   // briefly connecting to the shared 'default' session (which shows another
   // chat's page) until the active-session poll catches up.
   initialSession?: string
-  // Optional footer rendered under the canvas (e.g. the persona sign-in bar) —
-  // sign-in is a browser-session concern, so it lives in the browser chrome.
-  footer?: ReactNode
 }
 
 // Read-only (plus URL-bar steer) view of the agent-browser session the chat
@@ -50,7 +47,7 @@ export interface BrowserPaneProps {
 // follows this chat's own session — its active recorder session while it
 // records, else its bound browser tab — polled from
 // /api/chat/c/<id>/active-session.
-export function BrowserPane({ available, chatId, navigate, initialSession, footer }: BrowserPaneProps) {
+export function BrowserPane({ available, chatId, navigate, initialSession }: BrowserPaneProps) {
   const initialSessionKey = initialSession || 'default'
   // True when we already have a cached frame for the session this pane follows
   // first — i.e. we've shown it before and a remount can repaint immediately.
@@ -273,7 +270,6 @@ export function BrowserPane({ available, chatId, navigate, initialSession, foote
           </div>
         )}
       </div>
-      {footer}
     </div>
   )
 }

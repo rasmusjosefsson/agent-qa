@@ -152,6 +152,17 @@ export function connectPersona(
   })
 }
 
+export interface ChatConnection {
+  state: 'disconnected' | 'connecting' | 'connected' | 'failed'
+  personaId: string | null
+  environmentId: string | null
+  profile: string | null
+}
+
+export function getChatConnection(chatId: string): Promise<ChatConnection> {
+  return getJson(`/api/chat/c/${encodeURIComponent(chatId)}/connection`)
+}
+
 // Sign a persona into a specific chat's OWN browser session, so that chat's
 // agent operates an already-authenticated page (profile-bootstrap --session
 // <chat session>). environmentId is optional — the plugin is otherwise

@@ -2794,6 +2794,18 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
     });
   }
 
+  // Current persona sign-in state for this chat's browser. The frontend polls
+  // while the background default-persona connect is still running.
+  if (sub === 'connection' && req.method === 'GET') {
+    const auto = entry.autoConnect || {};
+    return sendJson(res, 200, {
+      state: entry.connectedProfile ? 'connected' : auto.state || 'disconnected',
+      personaId: entry.connectedPersonaId || auto.personaId || null,
+      environmentId: entry.connectedEnvironmentId || auto.environmentId || null,
+      profile: entry.connectedProfile || null,
+    });
+  }
+
   // Live view of THIS chat's recording: the steps recorded so far + their
   // per-step screenshot/snapshot artifacts. Cheap file reads — pollable.
   if (sub === 'recording' && req.method === 'GET') {

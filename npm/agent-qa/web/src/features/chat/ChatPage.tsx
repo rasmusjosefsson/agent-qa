@@ -37,7 +37,13 @@ import {
   type ChatMeta,
   type RecordingState,
 } from '@/lib/api'
-import { getPersonas, getEnvironments, connectPersonaToChat } from '@/lib/run-config-api'
+import {
+  getPersonas,
+  getEnvironments,
+  getChatConnection,
+  connectPersonaToChat,
+  type ChatConnection,
+} from '@/lib/run-config-api'
 import type { PersonaRecord } from '@/features/personas/types'
 import type { EnvironmentRecord } from '@/features/environments/types'
 import { prefetchChatState, dropChatState } from '@/lib/resources'
@@ -113,12 +119,21 @@ export function ChatPage() {
   const [chats, setChats] = useState<ChatMeta[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
+  const isDesktop = useMediaQuery('(min-width: 1024px)')
+  const [leftPct, setLeftPct] = useState<number>(() => {
+    const value = Number(localStorage.getItem(SPLIT_KEY))
+    return value >= 25 && value <= 80 ? value : 58
+  })
   // `/chat?ask=…` (e.g. the Runs "Ask agent" button) opens a fresh chat seeded
   // with that prompt. Consumed once on mount.
   const askRef = useRef<string | null>(
     typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('ask') : null
   )
   const [seed, setSeed] = useState<{ id: string; prompt: string } | null>(null)
+
+  useEffect(() => {
+    localStorage.setItem(SPLIT_KEY, String(Math.round(leftPct)))
+  }, [leftPct])
 
   useEffect(() => {
     let mounted = true
@@ -179,8 +194,11 @@ export function ChatPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* Chat switcher — tabs */}
-      <div className="flex items-center border-b border-border px-3">
-        <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
+      <div className="flex flex-col border-b border-border lg:flex-row">
+        <div
+          className="flex min-w-0 items-center gap-0.5 overflow-x-auto px-3"
+          style={isDesktop ? { flexBasis: `${leftPct}%`, flexGrow: 0, flexShrink: 0 } : undefined}
+        >
           {chats.map((c, i) => {
             const isActive = c.id === activeId
             return (
@@ -242,6 +260,7 @@ export function ChatPage() {
             New
           </button>
         </div>
+        {activeId ? <ConnectBar key={activeId} cid={activeId} /> : null}
       </div>
 
       {activeId ? (
@@ -264,6 +283,9 @@ export function ChatPage() {
             session={chats.find((c) => c.id === activeId)?.session ?? null}
             seedPrompt={seed && seed.id === activeId ? seed.prompt : undefined}
             onSeeded={() => setSeed(null)}
+            isDesktop={isDesktop}
+            leftPct={leftPct}
+            setLeftPct={setLeftPct}
           />
           </Suspense>
         </div>
@@ -282,11 +304,17 @@ function ChatConversation({
   session,
   seedPrompt,
   onSeeded,
+  isDesktop,
+  leftPct,
+  setLeftPct,
 }: {
   cid: string
   session: string | null
   seedPrompt?: string
   onSeeded?: () => void
+  isDesktop: boolean
+  leftPct: number
+  setLeftPct: (value: number) => void
 }) {
   const { state, root, sendPrompt, abort, setModel, setThinking, navigateBrowser } =
     useChat(cid)
@@ -297,20 +325,11 @@ function ChatConversation({
 
   // Right-pane tabs (live browser / live recording) + a resizable split.
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const isDesktop = useMediaQuery('(min-width: 1024px)')
-  const [leftPct, setLeftPct] = useState<number>(() => {
-    const v = Number(localStorage.getItem(SPLIT_KEY))
-    return v >= 25 && v <= 80 ? v : 58
-  })
   const [rec, setRec] = useState<RecordingState | null>(null)
   // Transient "Scenario saved" toast, fired when a recording flushes.
   const [savedNotice, setSavedNotice] = useState<{ sid: string; steps: number } | null>(null)
   const prevRec = useRef<RecordingState | null>(null)
   const savedTimer = useRef<number | undefined>(undefined)
-
-  useEffect(() => {
-    localStorage.setItem(SPLIT_KEY, String(Math.round(leftPct)))
-  }, [leftPct])
 
   // Poll this chat's recording (cheap file-backed route) for the tab badge and
   // the RecordingView. Resets when the active chat changes.
@@ -512,7 +531,6 @@ function ChatConversation({
       chatId={cid}
       navigate={navigateBrowser}
       initialSession={session ?? undefined}
-      footer={<ConnectBar cid={cid} />}
     />
   )
   const hasRecording = !!(rec && rec.sid)
@@ -584,10 +602,45 @@ function ConnectBar({ cid }: { cid: string }) {
   const [personaId, setPersonaId] = useState('')
   const [envId, setEnvId] = useState('')
   const [busy, setBusy] = useState(false)
-  const [msg, setMsg] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null)
+  const [msg, setMsg] = useState<{ tone: 'busy' | 'ok' | 'err'; text: string } | null>(null)
 
   useEffect(() => {
     let alive = true
+    let timer: number | undefined
+    let shownPersonaId: string | null = null
+    let shownEnvironmentId: string | null = null
+
+    const showConnection = (connection: ChatConnection) => {
+      if (
+        connection.personaId &&
+        (connection.personaId !== shownPersonaId || connection.environmentId !== shownEnvironmentId)
+      ) {
+        shownPersonaId = connection.personaId
+        shownEnvironmentId = connection.environmentId
+        setPersonaId(connection.personaId)
+        if (connection.environmentId) setEnvId(connection.environmentId)
+      }
+      if (connection.state === 'connecting') {
+        setBusy(true)
+        setMsg({ tone: 'busy', text: 'Signing in…' })
+      } else if (connection.state === 'connected') {
+        setBusy(false)
+        setMsg({ tone: 'ok', text: `Signed in as ${connection.profile}.` })
+      } else if (connection.state === 'failed') {
+        setBusy(false)
+        setMsg({ tone: 'err', text: 'Automatic sign-in failed. Press Connect to retry.' })
+      }
+    }
+
+    const refreshConnection = async () => {
+      try {
+        const connection = await getChatConnection(cid)
+        if (alive) showConnection(connection)
+      } catch {
+        /* connection status is optional */
+      }
+    }
+
     ;(async () => {
       try {
         const [pe, en] = await Promise.all([getPersonas(), getEnvironments()])
@@ -599,10 +652,13 @@ function ConnectBar({ cid }: { cid: string }) {
         /* personas optional — bar stays hidden */
       }
     })()
+    void refreshConnection()
+    timer = window.setInterval(refreshConnection, 1000)
     return () => {
       alive = false
+      window.clearInterval(timer)
     }
-  }, [])
+  }, [cid])
 
   if (personas.length === 0) return null
 
@@ -628,7 +684,7 @@ function ConnectBar({ cid }: { cid: string }) {
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border bg-background px-2 py-1.5 text-xs text-muted-foreground">
+    <div className="flex max-w-full flex-1 flex-wrap items-center gap-x-2 gap-y-1 border-t border-border bg-background px-3 py-1 text-xs text-muted-foreground lg:border-l lg:border-t-0">
       <span>Sign in as</span>
       <ChatSelect
         value={personaId}
@@ -658,7 +714,15 @@ function ConnectBar({ cid }: { cid: string }) {
         {busy ? <Loader2Icon className="size-3.5 animate-spin" /> : <PlugZapIcon className="size-3.5" />} Connect
       </Button>
       {msg && (
-        <span className={cn('text-[11px]', msg.tone === 'ok' ? 'text-emerald-400' : 'text-destructive')}>
+        <span
+          role="status"
+          className={cn(
+            'text-[11px]',
+            msg.tone === 'busy' && 'text-amber-400',
+            msg.tone === 'ok' && 'text-emerald-400',
+            msg.tone === 'err' && 'text-destructive'
+          )}
+        >
           {msg.text}
         </span>
       )}

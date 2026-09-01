@@ -726,6 +726,13 @@ test('multi-chat: list / create / per-chat routes / delete', async (t) => {
   const as1 = await (await fetch(`${base}/api/chat/c/${c1.id}/active-session`)).json();
   assert.equal(as1.session, c1.session);
   assert.equal(as1.recording, false);
+  const connection = await (await fetch(`${base}/api/chat/c/${c1.id}/connection`)).json();
+  assert.deepEqual(connection, {
+    state: 'disconnected',
+    personaId: null,
+    environmentId: null,
+    profile: null,
+  });
 
   // per-chat prompt routes through the chat's hub
   const p = await fetch(`${base}/api/chat/c/${c1.id}/prompt`, {
