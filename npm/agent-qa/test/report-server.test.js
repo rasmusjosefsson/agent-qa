@@ -1029,6 +1029,13 @@ test("POST /api/chat/c/:id/connect bootstraps auth into THAT chat's own session"
   ]);
   assert.deepEqual(statCall, ['profile-status', 'admin-user', '--session', created.session]);
   assert.deepEqual(prepared, [{ session: created.session, headed: true }]);
+  const connection = await (await j('GET', `/api/chat/c/${created.id}/connection`)).json();
+  assert.deepEqual(connection, {
+    state: 'connected',
+    personaId: 'admin',
+    environmentId: 'staging',
+    profile: 'admin-user',
+  });
 
   // personaId is required
   assert.equal((await j('POST', `/api/chat/c/${created.id}/connect`, {})).status, 400);
