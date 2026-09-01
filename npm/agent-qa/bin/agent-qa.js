@@ -209,9 +209,38 @@ function maybeRunVersion(argv) {
   return true;
 }
 
-// Package manager — `install` / `list-packages` / `remove`. Handled by the
-// launcher (like `web`) so it works without the platform binary; it wires
-// ~/.agent-qa/agent-qa.toml, which the Rust CLI + workbench then discover.
+// Package manager — `install` / `update` / `list-packages` / `remove`.
+// Handled by the launcher (like `web`) so it works without the platform binary.
+function updateSelf(force) {
+  const pkg = require('../package.json');
+  const latest = execFileSync('npm', ['view', pkg.name, 'version', '--loglevel=error'], {
+    encoding: 'utf8',
+    timeout: 20000,
+  }).trim();
+  if (!latest) throw new Error(`agent-qa update: npm returned no version for ${pkg.name}`);
+  if (!force && latest === pkg.version) {
+    console.log(`agent-qa ${pkg.version} is already up to date.`);
+    return;
+  }
+  execFileSync(
+    'npm',
+    ['install', '-g', `${pkg.name}@${latest}`, '--no-audit', '--no-fund', '--loglevel=error'],
+    { stdio: 'inherit' },
+  );
+  console.log(`Updated agent-qa from ${pkg.version} to ${latest}.`);
+}
+
+function printUpdateHelp() {
+  console.log(
+    'Usage: agent-qa update [package | --self | --packages | --all] [--force]\n\n' +
+      '  agent-qa update             Update agent-qa itself\n' +
+      '  agent-qa update --packages  Update all installed packages\n' +
+      '  agent-qa update <package>   Update one installed package\n' +
+      '  agent-qa update --all       Update agent-qa and all packages\n' +
+      '  agent-qa update --force     Reinstall agent-qa even when current',
+  );
+}
+
 function maybeRunPackages(argv) {
   const verb = argv[0];
   if (!['install', 'update', 'list-packages', 'remove'].includes(verb)) return false;
@@ -238,18 +267,39 @@ function maybeRunPackages(argv) {
     }
     return true;
   }
-  // `update` re-pulls installed packages (all, or one by name/source). Takes an
-  // optional arg, unlike install/remove which require a source.
   if (verb === 'update') {
-    const results = pkgs.update(argv[1]);
-    if (!results.length) {
-      console.log(
-        argv[1] ? `no installed package matching ${argv[1]}` : 'no packages installed to update',
-      );
+    const args = argv.slice(1);
+    if (args.includes('-h') || args.includes('--help')) {
+      printUpdateHelp();
       return true;
     }
-    for (const r of results) console.log(`updated ${r.name}\n${summarize(r)}`);
-    console.log('Re-wired ~/.agent-qa/agent-qa.toml — agent-qa and the workbench will pick them up.');
+    const flags = args.filter((arg) => arg.startsWith('-'));
+    const targets = args.filter((arg) => !arg.startsWith('-'));
+    const modes = flags.filter((arg) => arg !== '--force');
+    const validModes = new Set(['--self', '--packages', '--all']);
+    const mode = modes[0] || (targets.length ? 'package' : '--self');
+    if (
+      flags.some((arg) => arg !== '--force' && !validModes.has(arg)) ||
+      targets.length > 1 ||
+      modes.length > 1 ||
+      (targets.length && flags.length) ||
+      (args.includes('--force') && (mode === '--packages' || mode === 'package'))
+    ) {
+      console.error('usage: agent-qa update [package | --self | --packages | --all] [--force]');
+      process.exit(2);
+    }
+
+    if (mode === '--self' || mode === '--all') updateSelf(args.includes('--force'));
+    if (mode === '--packages' || mode === '--all' || mode === 'package') {
+      const target = targets[0];
+      const results = pkgs.update(target);
+      if (!results.length) {
+        console.log(target ? `no installed package matching ${target}` : 'no packages installed to update');
+        return true;
+      }
+      for (const r of results) console.log(`updated ${r.name}\n${summarize(r)}`);
+      console.log('Re-wired ~/.agent-qa/agent-qa.toml — agent-qa and the workbench will pick them up.');
+    }
     return true;
   }
 
