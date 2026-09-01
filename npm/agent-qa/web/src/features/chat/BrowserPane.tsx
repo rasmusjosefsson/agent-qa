@@ -251,7 +251,7 @@ export function BrowserPane({ available, chatId, navigate, initialSession }: Bro
           {autoRecording ? `rec · ${status.text}` : status.text}
         </span>
       </div>
-      <div className="relative flex min-h-0 flex-1 items-center justify-center bg-black">
+      <div className="relative flex min-h-0 flex-1 items-center justify-center bg-background">
         <canvas ref={canvasRef} width={1280} height={800} className="max-h-full max-w-full object-contain" />
         {phase === 'connecting' && (
           <div className="absolute inset-0 flex items-center justify-center gap-2 text-xs text-muted-foreground">

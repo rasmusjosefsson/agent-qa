@@ -189,7 +189,7 @@ export function PluginsPage() {
       </div>
 
       {appUpdate?.updateAvailable && (
-        <div className="flex items-center gap-2 border-b border-emerald-500/30 bg-emerald-500/10 px-5 py-1.5 text-xs text-emerald-300">
+        <div className="flex items-center gap-2 border-b border-emerald-500/30 bg-emerald-500/10 px-5 py-1.5 text-xs text-foreground">
           <ArrowUpCircleIcon className="size-3.5 shrink-0" />
           <span>
             agent-qa <span className="font-mono">{appUpdate.latest}</span> is available (you're on{' '}
@@ -237,12 +237,12 @@ export function PluginsPage() {
                         <div className="flex items-center gap-2">
                           <span className="font-medium text-foreground">{pkg.name}</span>
                           {u?.updateAvailable && (
-                            <span className="rounded-sm bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-400">
+                            <span className="rounded-sm bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-foreground">
                               update available{u.latest ? ` → ${u.latest}` : ''}
                             </span>
                           )}
                           {u && !u.updateAvailable && (
-                            <span className="rounded-sm bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-400">
+                            <span className="rounded-sm bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-foreground">
                               up to date
                             </span>
                           )}
@@ -362,7 +362,7 @@ export function PluginsPage() {
                           ping failed
                         </span>
                       ) : (
-                        <span className="rounded-sm bg-emerald-500/15 px-1.5 py-0.5 text-emerald-400">
+                        <span className="rounded-sm bg-emerald-500/15 px-1.5 py-0.5 text-foreground">
                           ok{p.declared ? ' · declared' : ''}
                         </span>
                       )}
