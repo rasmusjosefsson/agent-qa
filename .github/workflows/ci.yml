@@ -74,3 +74,21 @@ jobs:
           name: agent-qa-browser-contract
           path: ${{ runner.temp }}/agent-qa-browser-contract
           retention-days: 14
+
+  visual-evidence:
+    name: visual evidence
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+      - name: require evidence for web UI changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          scripts/check-pr-visual-evidence.sh
