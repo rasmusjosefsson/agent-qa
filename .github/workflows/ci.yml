@@ -41,7 +41,7 @@ jobs:
           workspaces: cli
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
       - name: build release binary
         working-directory: cli
         run: cargo build --release --locked
@@ -65,3 +65,12 @@ jobs:
           ./node_modules/.bin/agent-qa scenario validate \
             $GITHUB_WORKSPACE/examples/scenarios/smoke/scenario.json
           ./node_modules/.bin/agent-qa --version
+      - name: browser contract
+        run: AQ=/tmp/install/node_modules/.bin/agent-qa WORK="$RUNNER_TEMP/agent-qa-browser-contract" scripts/ci-browser-contract.sh
+      - name: upload browser contract
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-qa-browser-contract
+          path: ${{ runner.temp }}/agent-qa-browser-contract
+          retention-days: 14
