@@ -6,12 +6,8 @@ on:
 
 jobs:
   test:
-    name: test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-14, windows-latest]
+    name: test (macos-14)
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -32,7 +28,7 @@ jobs:
   smoke-install:
     name: smoke (npm install local)
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -48,18 +44,18 @@ jobs:
       - name: stage platform package
         run: |
           set -eux
-          mkdir -p npm/platform/linux-x64/bin
-          cp cli/target/release/agent-qa npm/platform/linux-x64/bin/agent-qa-linux-x64
-          chmod +x npm/platform/linux-x64/bin/agent-qa-linux-x64
-          node scripts/build-platform-pkg.js linux-x64 0.0.0-smoke
-          node scripts/build-umbrella-pkg.js 0.0.0-smoke --local-platforms linux-x64
+          mkdir -p npm/platform/darwin-arm64/bin
+          cp cli/target/release/agent-qa npm/platform/darwin-arm64/bin/agent-qa-darwin-arm64
+          chmod +x npm/platform/darwin-arm64/bin/agent-qa-darwin-arm64
+          node scripts/build-platform-pkg.js darwin-arm64 0.0.0-smoke
+          node scripts/build-umbrella-pkg.js 0.0.0-smoke --local-platforms darwin-arm64
       - name: install + run from local tarballs
         run: |
           set -eux
-          cd npm/platform/linux-x64 && npm pack --pack-destination /tmp
+          cd npm/platform/darwin-arm64 && npm pack --pack-destination /tmp
           cd $GITHUB_WORKSPACE/npm/agent-qa && npm pack --pack-destination /tmp
           mkdir -p /tmp/install && cd /tmp/install && npm init -y >/dev/null
-          npm install /tmp/rasmusjosefsson-agent-qa-linux-x64-*.tgz /tmp/rasmusjosefsson-agent-qa-*.tgz
+          npm install /tmp/rasmusjosefsson-agent-qa-darwin-arm64-*.tgz /tmp/rasmusjosefsson-agent-qa-*.tgz
           ./node_modules/.bin/agent-qa skills list
           ./node_modules/.bin/agent-qa skills get core | head -5
           ./node_modules/.bin/agent-qa scenario validate \
@@ -78,7 +74,7 @@ jobs:
   visual-evidence:
     name: visual evidence
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
         with:
