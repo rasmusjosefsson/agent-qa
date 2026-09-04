@@ -1,4 +1,14 @@
-# test-fixtures
+# Test fixtures
+
+The scenario corpus is empty. CI records a fresh scenario against a neutral
+local fixture. Each fixture has this shape.
+
+    test-fixtures/scenario/<name>/
+    ├── scenario.json
+    ├── snapshots/   screenshots/   network/   probes/
+    └── replays/<runId>/...
+
+See `docs/specs/scenario-sidecar-tree.md` for the on-disk contract.
 
 ## CI browser fixture
 
