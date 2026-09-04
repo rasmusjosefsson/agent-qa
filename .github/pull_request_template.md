@@ -20,4 +20,4 @@
 
 ## Evidence
 
-<!-- For UI or other user-visible behavior changes, upload screenshots or video directly into this PR description, not a follow-up comment. One final-state image is enough when it proves the claim. Delete this section only when no user-facing evidence applies. -->
+> For changes in `npm/agent-qa/web/`, add a final-state image. Use a video when an image cannot prove the interaction.

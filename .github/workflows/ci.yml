@@ -41,7 +41,7 @@ jobs:
           workspaces: cli
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
       - name: build release binary
         working-directory: cli
         run: cargo build --release --locked
@@ -65,3 +65,30 @@ jobs:
           ./node_modules/.bin/agent-qa scenario validate \
             $GITHUB_WORKSPACE/examples/scenarios/smoke/scenario.json
           ./node_modules/.bin/agent-qa --version
+      - name: browser contract
+        run: AQ=/tmp/install/node_modules/.bin/agent-qa WORK="$RUNNER_TEMP/agent-qa-browser-contract" BROWSER_HOME="$RUNNER_TEMP/agent-qa-browser-home" scripts/ci-browser-contract.sh
+      - name: upload browser contract
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-qa-browser-contract
+          path: ${{ runner.temp }}/agent-qa-browser-contract
+          retention-days: 14
+
+  visual-evidence:
+    name: visual evidence
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+      - name: require evidence for web UI changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          scripts/check-pr-visual-evidence.sh

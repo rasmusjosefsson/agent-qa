@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Browser contract fixture</title>
+  </head>
+  <body>
+    <main>
+      <h1>Browser contract fixture</h1>
+      <button id="complete" type="button">Complete</button>
+      <p id="result" role="status" aria-label="Completed" hidden>Completed</p>
+    </main>
+    <script>
+      document.querySelector('#complete').addEventListener('click', () => {
+        document.querySelector('#complete').disabled = true;
+        document.querySelector('#result').hidden = false;
+      });
+    </script>
+  </body>
+</html>
