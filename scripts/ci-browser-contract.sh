@@ -9,6 +9,7 @@ AB="$(dirname "$AQ")/agent-browser"
 FIXTURE_DIR="$ROOT/test-fixtures/ci-browser"
 SCENARIOS_DIR="$WORK/scenarios"
 RECORD_DIR="$WORK/record"
+BROWSER_HOME="${BROWSER_HOME:-$WORK/browser-home}"
 SERVER_LOG="$WORK/fixture-server.log"
 RECORD_SESSION="ci-browser-contract-record"
 REPLAY_ONE_SESSION="ci-browser-contract-replay-one"
@@ -41,8 +42,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-rm -rf "$WORK"
-mkdir -p "$WORK"
+rm -rf "$WORK" "$BROWSER_HOME"
+mkdir -p "$WORK" "$BROWSER_HOME"
 
 if [[ ! -x "$AQ" ]]; then
   printf 'AQ is not executable: %s\n' "$AQ" >&2
@@ -59,6 +60,7 @@ fi
 
 export AGENT_QA_SCENARIOS_DIR="$SCENARIOS_DIR"
 export AGENT_QA_RECORD_DIR="$RECORD_DIR"
+export AGENT_BROWSER_HOME="$BROWSER_HOME"
 
 "$AB" --session "$RECORD_SESSION" close >/dev/null 2>&1 || true
 "$AB" --session "$REPLAY_ONE_SESSION" close >/dev/null 2>&1 || true

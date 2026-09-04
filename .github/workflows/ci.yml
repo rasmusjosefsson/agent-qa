@@ -66,7 +66,7 @@ jobs:
             $GITHUB_WORKSPACE/examples/scenarios/smoke/scenario.json
           ./node_modules/.bin/agent-qa --version
       - name: browser contract
-        run: AQ=/tmp/install/node_modules/.bin/agent-qa WORK="$RUNNER_TEMP/agent-qa-browser-contract" scripts/ci-browser-contract.sh
+        run: AQ=/tmp/install/node_modules/.bin/agent-qa WORK="$RUNNER_TEMP/agent-qa-browser-contract" BROWSER_HOME="$RUNNER_TEMP/agent-qa-browser-home" scripts/ci-browser-contract.sh
       - name: upload browser contract
         if: always()
         uses: actions/upload-artifact@v4
