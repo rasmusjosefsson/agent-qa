@@ -131,8 +131,12 @@ export async function browserNavigate(payload: unknown): Promise<Response> {
 export interface RecordingStep {
   stepIndex: number;
   stepId: string;
-  kind: 'navigation' | 'action' | 'wait' | 'assert' | string;
-  payload: Record<string, unknown>;
+  kind: 'do' | 'check' | string;
+  payload: {
+    verb?: string;
+    on?: { name?: string };
+    value?: { literal?: unknown };
+  };
   intent?: string | null;
   recordedAt?: string | null;
 }

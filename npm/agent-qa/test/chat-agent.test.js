@@ -792,18 +792,8 @@ test('multi-chat: per-chat live recording view + artifacts', async (t) => {
   const chatRecDir = path.join(recordRoot, c.session);
   fs.mkdirSync(chatRecDir, { recursive: true });
   fs.writeFileSync(
-    path.join(chatRecDir, 'scenario.env'),
-    `SID=${sid}\nINTENT='probe form'\nSESSION=${c.session}\nBASELINE=FRESH\nSTARTED=2026-01-01T00:00:00.000Z\n`
-  );
-  fs.writeFileSync(
-    path.join(chatRecDir, 'scenario.steps.jsonl'),
-    JSON.stringify({
-      stepIndex: 0,
-      stepId: 's0',
-      kind: 'navigation',
-      payload: { route: 'https://example.com/' },
-      recordedAt: '2026-01-01T00:00:01.000Z',
-    }) + '\n'
+    path.join(chatRecDir, 'recorder-state.json'),
+    JSON.stringify({ sid, intent: 'probe form', session: c.session, baseline: 'fresh', startedAt: '2026-01-01T00:00:00.000Z', steps: [{ id: 's0', intent: 'open page', kind: 'do', verb: 'goto', value: { from: 'literal', literal: 'https://example.com/' } }] })
   );
   const shotDir = path.join(scenariosRoot, sid, 'recording', 'screenshots');
   fs.mkdirSync(shotDir, { recursive: true });
@@ -816,7 +806,7 @@ test('multi-chat: per-chat live recording view + artifacts', async (t) => {
   assert.equal(rec.session, c.session);
   assert.equal(rec.flushed, false);
   assert.equal(rec.steps.length, 1);
-  assert.equal(rec.steps[0].kind, 'navigation');
+  assert.equal(rec.steps[0].kind, 'do');
 
   // screenshot artifact serves as image/png
   const shot = await fetch(`${base}/api/chat/c/${c.id}/recording/step/s0/screenshot`);
@@ -836,9 +826,8 @@ test('multi-chat: per-chat live recording view + artifacts', async (t) => {
   assert.equal(rec.flushed, true);
   assert.equal(rec.recording, false);
 
-  // recording finished: the CLI truncates scenario.env and writes scenario.last.
-  // The panel must keep showing the saved scenario (hydrated from scenario.json).
-  fs.writeFileSync(path.join(chatRecDir, 'scenario.env'), '');
+  // The panel keeps showing the saved scenario after the active state is removed.
+  fs.unlinkSync(path.join(chatRecDir, 'recorder-state.json'));
   fs.writeFileSync(path.join(chatRecDir, 'scenario.last'), sid + '\n');
   fs.writeFileSync(
     path.join(scenariosRoot, sid, 'scenario.json'),
@@ -862,7 +851,7 @@ test('multi-chat: per-chat live recording view + artifacts', async (t) => {
   assert.equal(rec.recording, false);
   assert.equal(rec.intent, 'probe form');
   assert.equal(rec.steps.length, 1);
-  assert.equal(rec.steps[0].kind, 'navigation'); // verb 'goto' normalized
+  assert.equal(rec.steps[0].kind, 'do');
   // the keyframe still serves via the scenario.last fallback
   const shot2 = await fetch(`${base}/api/chat/c/${c.id}/recording/step/s0/screenshot`);
   assert.equal(shot2.status, 200);

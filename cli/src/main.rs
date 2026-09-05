@@ -37,8 +37,10 @@ mod profile_add;
 mod profile_bootstrap;
 mod profile_list;
 mod profile_status;
+mod record_setup;
 mod record_step;
-mod recorder_shape;
+mod recorder_contract;
+mod recorder_state;
 mod run_step;
 mod runner;
 mod scenario;
@@ -79,7 +81,9 @@ fn main() -> ExitCode {
     let verb = &args[0];
     let rest = &args[1..];
 
-    let result = match verb.as_str() {
+    let result = browser::BrowserConnection::resolve().and_then(|connection| {
+        browser::set_connection(&connection);
+        match verb.as_str() {
         "skills" => skills::run(rest),
         "plugins" => plugin::cli::run(rest),
         "scenario" => scenario_cli::run(rest),
@@ -92,6 +96,7 @@ fn main() -> ExitCode {
         "audit" => audit::run(rest),
         "start" => start::run(rest),
         "record-step" => record_step::run(rest),
+        "record-setup" => record_setup::run(rest),
         "run-step" => run_step::run(rest),
         "aria-snapshot" => aria_snapshot::run(rest),
         "cdp-url" => cdp_url::run(rest),
@@ -113,12 +118,13 @@ fn main() -> ExitCode {
         "heal-list" => heal_list::run(rest),
         _ => {
             eprintln!(
-                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, audit, start, record-step, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list."
+                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, audit, start, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list."
             );
             eprintln!("Run `agent-qa --help` for usage.");
-            return ExitCode::from(2);
+            Ok(2)
         }
-    };
+    }
+    });
 
     match result {
         Ok(code) => ExitCode::from(code),
@@ -197,10 +203,11 @@ Verbs:
   diff                          (alias of `compare`)
   start \"<intent>\"             Begin a new recording session
   record-step <do|check> <json> Append a step to the in-flight buffer
-  run-step <kind> <payload-json>   Dispatch ONE step against the live session
+  record-setup <env-op-json>       Append one generic env.open operation
+  run-step <do|check> <draft-json> Dispatch one direct step against the live session
   aria-snapshot [--json]        Dump the live ARIA tree (element picker data)
   cdp-url [--json]              Print the live session's CDP WebSocket endpoint
-  buffer list|delete|move|clear Inspect / reorder / delete the in-flight buffer
+  buffer list|delete|move|clear|discard Inspect or discard the active recording
   flush                         Assemble scenario.json from the buffer
   verify                        Sanity-check the in-flight buffer
   truncate <N> [--archive-tag <slug>]   Drop steps ≥ N + archive sidecars

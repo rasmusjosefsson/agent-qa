@@ -1,60 +1,35 @@
-## Bundled Verbs
+# Verbs
 
-Verbs live under `cli/src/`, dispatched by `cli/src/main.rs` and grouped by lifecycle stage. Invoke them via `agent-qa <verb> [args]`. Do NOT rebuild them as ad-hoc bash.
+## Recording
 
-### Recording
+| Command | Purpose |
+| --- | --- |
+| `start "<intent>" [--session <name>] [--profile <name> | --keep-session] [--source-ref <opaque-reference>]` | Starts a recording. Writes typed local recorder state. |
+| `record-setup '<env-op-json>'` | Appends one schema-valid generic `env.open` operation. |
+| `record-step do '<draft-json>'` | Appends a `scenario/2` do draft without `id` or `kind`. |
+| `record-step check '<draft-json>'` | Appends a `scenario/2` check draft without `id` or `kind`. |
+| `smart-click "<accessible-name>"` | Clicks a target and appends a direct do draft. |
+| `fill-unique <label> --template <template>` | Fills a unique value and appends a direct type draft. |
+| `flush` | Validates and writes `<sid>/scenario.json`. |
+| `verify` | Checks the active recording buffer. |
 
-| Script                                                                                           | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `start "<instruction>"`                                                                          | Picks a sortable SID, writes `<record_root>/scenario.env`, prints the dashboard URL, defaults to `--profile default-user`. Setup/teardown live under `env.open` / `env.close` in `scenario.json` — see [`prep.md`](./prep.md). |
-| `smart-click "<accessible-name>" [--role <role>] [--session <name>] [--no-record]`                    | Click by accessible name using native DOM activation, then role/name, text/chunk, and fresh-snapshot-ref fallbacks. **Auto-records** the successful gesture; pass `--no-record` to opt out. It does not verify that app state changed after dispatch. |
-| `fill-unique <Label> --template <literal-with-{{vars._unique}}> [--save-as <name>]`              | Fill a uniqueness-constrained field and record a scenario/v1 template. Use `--save-as` whenever a downstream assert needs the replay-time minted value. The old binding flag is not supported.                                                                                                                                                                                                                                         |
-| `record-step <navigation\|action\|wait\|assert> <triggerJson> [--session <name>\|--profile <p>]` | Records one step from the recording CLI shape. `flush` maps it into `scenarioSchema: 'scenario/v1'` with stable `stepId` and v1 discriminators (`goto`, `click`, `type`, `wait`, `assertUrl`, etc.). Writes `probes/`, `network/`, `snapshots/`, and `screenshots/` sidecars unless skipped by env.                                                                                                                        |
-| `truncate <toStepIndex> [--archive-tag <slug>]`                                                  | Drop on-disk steps ≥ N from `<record_root>/scenario.steps.jsonl` and store their sidecars under `<sid>/failed/truncate-<isoTs>[-<tag>]/`. Does NOT drive the live tab — drive it yourself with `agent-browser` (`open`, `click`, `back`, `reload`, `fill <sel> ""`) before truncating. See [`recovery.md`](./recovery.md) for the scenario/2 recovery flow.                                                                                     |
-| `flush`                                                                                          | Builds `<sid>/scenario.json` locally from buffered sidecars. The output root is `scenarioSchema: 'scenario/v1'`, `id`, `intent`, optional `setup` / `teardown`, and `steps[]`.                                                                                                                                                                                                                                                           |
-| `verify [<scenarioId>] [--no-strict]`                                                             | Checks `scenario.json`, one keyframe per step, keyframe status, duplicate adjacent steps, and undeclared binding references. Resolves the SID from in-flight or last-flushed state when omitted.                                                                                                                                                                                                                     |
+Only `do` and `check` drafts are accepted.
 
-### Heal and manual correction
+## Replay
 
-| Script                                                                                          | Purpose |
-| ----------------------------------------------------------------------------------------------- | ------- |
-| `heal-respond <sid> --step <id> [--run <runId>] (--value <X> [--rationale <text>] \| --reject)` | Record a manual string correction or refusal under `replays/<runId>/heal-responses/`. Core replay does not generate the request automatically. Re-run with `replay --heal-from-run <runId>` to apply a value correction transiently. |
-| `heal-apply <sid> --step <id> [--run <runId>] [--target-step <index-or-id>] [--dry-run]`          | Apply one recorded string correction to a value-bearing action in the active `<record_root>/scenario.steps.jsonl` buffer, then mark the response `.applied.json`. Never touches the live tab. See [`heal-apply.md`](./heal-apply.md). |
-| `heal-promote <sid> [--run <runId>] [--steps <ids>] [--apply]`                                  | Consume externally supplied locator patch files from `replays/<runId>/diffs/`. Core replay does not currently generate them. Dry-run by default; `--apply` atomically updates `scenario.json`, with an optional content-hash rebase guard. |
-| `heal-list <sid> [--run <runId>] [--mode <mode>] [--applied \| --unapplied] [--json]`            | List value-correction and rejection response files plus their applied state. |
+`replay <sid-or-path> [--session <name>] [--profile <name>]` replays a sealed
+`scenario/2` document. It writes its audit and sidecars below `replays/`.
 
-### Replay
+## Connection settings
 
-| Script                                                                                                         | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `replay [<scenarioId>\|<path-to-scenario.json>] [--profile <p>] [--session <name>] [--param <name>=<value> ...]` | Active replay CLI. Replays a scenario document deterministically and writes the current replay sidecars/manifest under `<scenarioDir>/replays/<replayId>`. Single-profile only; use `compare --profiles ...` for multi-profile analysis. `--param` (alias `-p`) overrides a scenario-declared parameter (repeatable; last-write-wins on duplicates; sensitive values redacted in `replay.json` + stderr). See [`replay.md`](./replay.md) for the override contract. The internal v1 evidence helpers are stepId-keyed, but this CLI help does not promise that layout until replay is wired to it. |
-| `compare [<sid>] [<replayId>] [--include json,snapshot,screenshot] [--pixel-threshold 0..1]`                   | Unified per-pair diff. 1:1 mode compares latest or pinned replay against the recording. Output lands under `<sid>/compare/<TS>__<labels>/`.                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `diff ...`                                                                                                     | Permanent alias of `compare`; same flags, same output, same engine.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+Use the same resolved external CDP connection for direct browser commands and
+agent-qa commands.
 
-### Compare
+```bash
+export AGENT_BROWSER_CDP=9223
+export AGENT_BROWSER_PIN_TAB=1
+```
 
-| Script                                                                            | Purpose                                                                                     |
-| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `compare <sid> --profiles <p1,p2,...>\|all [--baseline <p>] [--force] [--serial]` | Cross-profile N-way mode. Profiles are run serially/reused when possible, then star-diffed. |
-| `compare <sid> --replays <id1,id2,...> [--baseline <id>]`                         | Cross-replay N-way mode. Diffs existing replay folders only.                                |
-| `compare <sid> --list-replays`                                                    | Lists replay ids with profile/status metadata and a copy-paste CSV for `--replays`.         |
-
-### Profiles
-
-| Script                                                                           | Purpose                                                                                   |
-| -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `doctor [--fix] [--quick] [--json]`                                              | Diagnose install, env, profiles, and auth setup.                          |
-| `profile-add <id> --adapter <id> --email-var <N> --password-var <N> [--default]` | Register a new profile directory and optional default.                                    |
-| `profile-bootstrap <profile> [--session <name>] [--headed\|--headless]`          | Idempotently sign in the profile via the registered auth plugin. Browser mode defaults to headless and is fixed when the session daemon launches. |
-| `profile-status <profile>`                                                       | Side-effect-free status probe.                                                            |
-
-### Inspect
-
-| Script                                                                                                    | Purpose                                                                                                                                                                                                                                                       |
-| --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list [<scenarioId>]`                                                                                      | Prints step, keyframe, replay, and comparison summary; writes `<sid>/summary.md`.                                                                                                                                                                             |
-| `perf-snapshot [--sid <sid>] [--profile <p>] [--record-renders <ms>] [--cpu-profile <ms>] [--trace <ms>]` | Optional performance sidecar under `<sid>/perf/`.                                                                                                                                                                                                             |
-| `probe-step <stepIndex>`                                                                                  | Per-step DOM signals; auto-invoked by `record-step` and runnable standalone.                                                                                                                                                                                  |
-| `parse-probe <probePath>`                                                                                 | Parse and pretty-print an existing probe sidecar.                                                                                                                                                                                                             |
-
-If a script is missing or fails, fix the script. Do NOT inline its work in tool calls.
+You can also set `cdp` and `pin_tab` in `[browser]` in `agent-qa.toml`.
+`start` freezes the resolved values in local recorder state. They do not enter
+the scenario file.

@@ -389,6 +389,12 @@ impl Step {
             Step::Do { intent, .. } | Step::Check { intent, .. } => intent,
         }
     }
+
+    pub(crate) fn set_id(&mut self, id: String) {
+        match self {
+            Step::Do { id: current, .. } | Step::Check { id: current, .. } => *current = id,
+        }
+    }
 }
 
 // ---------- Env ----------

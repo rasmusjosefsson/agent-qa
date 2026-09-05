@@ -85,19 +85,16 @@ agent-browser --session inspect-<page>-<tc> eval '(() => [...document.querySelec
 4. Runner flow:
 
 ```text
-start -> open page -> record navigation -> drive action -> record action/check -> flush -> verify -> replay
+start -> record setup -> open page -> record do -> drive action -> record do/check -> flush -> scenario check -> replay
 ```
 
 5. Prefer stable selectors: `data-testid`, then `id`, then visible text.
 
-6. Prefer `record-step wait` for replayable state checks:
+6. Prefer `record-step check` for replayable state checks. Use an element claim
+with a role and accessible name when possible. Use a raw locator only when the
+page has no stable semantic target.
 
-- `selector` for stable DOM node presence.
-- `selectorText` for scoped text checks.
-- `selectorAbsent` for absence checks.
-- `text` only when page documentation cannot create false positives.
-
-7. Do not hand-edit generated `scenario.json` or `scenario.steps.jsonl`.
+7. Do not hand-edit generated `scenario.json or recorder-state.json`.
 
 8. After a pass, update this doc and add a package script if useful.
 

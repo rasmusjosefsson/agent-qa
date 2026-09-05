@@ -36,8 +36,7 @@
 - **`truncate` is disk bookkeeping only.** `agent-qa truncate <N>` removes
   buffered rows with index `>= N` and archives their sidecars. Re-position the
   live tab yourself before re-recording. The active buffer lives at
-  `<record_root>/scenario.steps.jsonl` (normally
-  `tmp/agent-qa-record/scenario.steps.jsonl`).
+  `<record_root>/recorder-state.json`.
 
 - **Manual value correction is explicit.** `heal-respond` records a string
   correction. Feed it to `replay --heal-from-run` for a transient replay

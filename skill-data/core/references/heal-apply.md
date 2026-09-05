@@ -34,17 +34,15 @@ The response must exist at:
 <sid>/replays/<runId>/heal-responses/<stepId>.json
 ```
 
-The active `<record_root>/scenario.steps.jsonl` buffer must also exist
-(normally `tmp/agent-qa-record/scenario.steps.jsonl`). `heal-apply` does not
-require or consume a `heal-requests/` file.
+An active `<record_root>/recorder-state.json` file must exist. `heal-apply`
+does not require or consume a `heal-requests/` file.
 
 ## What changes
 
 On a non-dry run, `heal-apply`:
 
-1. finds the target row by exact `stepId` or numeric index;
-2. replaces the value argument used by recorder-native actions such as fill,
-   select, upload, press, and navigate (with a legacy canonical-value fallback);
+1. finds the target direct step by exact `stepId` or numeric index;
+2. replaces its literal string value;
 3. renames the response to `<stepId>.applied.json` so replay override loading
    skips it;
 4. appends a `caller-driven-resolved` row to

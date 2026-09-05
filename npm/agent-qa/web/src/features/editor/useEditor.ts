@@ -187,7 +187,7 @@ export function useEditor() {
       // on a real page at replay time.
       if (open && open !== 'about:blank') {
         setLiveUrl(open)
-        await api.recordStep('navigation', { route: open })
+        await api.recordStep('do', { intent: 'open page', verb: 'goto', value: { from: 'literal', literal: open } })
       }
       await refreshBuffer()
       connectLive()

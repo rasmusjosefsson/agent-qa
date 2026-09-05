@@ -24,7 +24,7 @@ agent-qa perf-snapshot [--sid <sid>] [--profile <p>] \
 
 Defaults:
 
-- `--sid` defaults to the active recording's SID (from `<record_root>/scenario.env`); pass explicitly to attach to a specific recording.
+- `--sid` defaults to the active recording SID when available; pass it explicitly to attach to a specific recording.
 - `--profile default-user` — same convention as the recording verbs.
 - All time-windowed flags are opt-in. With NO flags, only `vitals.json` + `suspense.json` are written (point-in-time signals, ~5s wall).
 

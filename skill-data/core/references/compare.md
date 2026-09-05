@@ -30,7 +30,7 @@ layers automatically.
 ## Shapes
 
 ```bash
-# 1) 1:1 — latest replay vs the recording. SID from scenario.env if omitted.
+# 1) 1:1 — latest replay vs the recording. SID from the active recorder state if omitted.
 agent-qa compare
 agent-qa compare <sid>
 agent-qa compare <sid> <replayId>

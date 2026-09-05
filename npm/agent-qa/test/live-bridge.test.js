@@ -198,7 +198,7 @@ test('pick hit-tests a point and resolves the accessible role + name', async () 
   assert.ok(el.box, 'a normalized bounding box is returned');
 });
 
-test('auto-record: a click with record:true emits a clickRole recordable event', async () => {
+test('auto-record: a click with record:true emits a direct do recordable event', async () => {
   const bridge = makeBridge();
   const events = [];
   const res = { write: (s) => events.push(s), end() {} };
@@ -214,7 +214,7 @@ test('auto-record: a click with record:true emits a clickRole recordable event',
   sock.recv({ id: loc.id, result: { backendNodeId: 7 } });
   await flush();
   const ax = sock.sent.find((m) => m.method === 'Accessibility.getPartialAXTree');
-  sock.recv({ id: ax.id, result: { nodes: [{ role: { value: 'link' }, name: { value: 'Pricing' } }] } });
+  sock.recv({ id: ax.id, result: { nodes: [{ role: { value: 'link' }, name: { value: 'Details' } }] } });
   await flush();
   const box = sock.sent.find((m) => m.method === 'DOM.getBoxModel');
   if (box) sock.recv({ id: box.id, result: { model: { content: [0, 0, 10, 0, 10, 10, 0, 10] } } });
@@ -222,10 +222,10 @@ test('auto-record: a click with record:true emits a clickRole recordable event',
 
   // The click is dispatched after the hit-test...
   assert.ok(sock.sent.some((m) => m.method === 'Input.dispatchMouseEvent'), 'click dispatched');
-  // ...and a clickRole step is recorded.
+  // ...and a direct click step is recorded.
   const rec = events.find((e) => e.includes('event: recordable'));
   assert.ok(rec, 'a recordable event was broadcast');
-  assert.ok(rec.includes('clickRole') && rec.includes('Pricing'));
+  assert.ok(rec.includes('"kind":"do"') && rec.includes('"verb":"click"') && rec.includes('Details'));
 });
 
 test('auto-record ignores clicks on non-interactive elements (e.g. a heading)', async () => {
@@ -280,7 +280,7 @@ test('with a server recorder, a click records ONCE (no per-tab recordable)', asy
   // Recorded exactly once, server-side; tabs get a buffer-changed refresh,
   // and no per-tab 'recordable' event is emitted (which is what duplicated).
   assert.equal(recorded.length, 1);
-  assert.deepEqual(recorded[0], { kind: 'action', payload: { method: 'clickRole', args: ['button', 'Save'] } });
+  assert.deepEqual(recorded[0], { kind: 'do', payload: { intent: 'click Save', verb: 'click', on: { role: 'button', name: 'Save' } } });
   assert.ok(events.some((e) => e.includes('event: buffer-changed')), 'tabs told to refresh');
   assert.ok(!events.some((e) => e.includes('event: recordable')), 'no client-side record path');
 });

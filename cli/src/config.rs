@@ -39,6 +39,8 @@ struct Report {
     config_file: Option<String>,
     scenarios_root: String,
     record_root: String,
+    browser_cdp: Option<String>,
+    browser_pin_tab: Option<bool>,
     plugins: Vec<PluginRow>,
 }
 
@@ -68,10 +70,13 @@ fn show(args: &[String]) -> Result<u8> {
         })
         .collect::<Vec<_>>();
 
+    let browser = crate::browser::BrowserConnection::resolve()?;
     let report = Report {
         config_file: paths::locate_config_file().map(|p| p.display().to_string()),
         scenarios_root: paths::scenarios_root().display().to_string(),
         record_root: paths::record_root().display().to_string(),
+        browser_cdp: browser.cdp,
+        browser_pin_tab: browser.pin_tab,
         plugins,
     };
 
@@ -91,6 +96,17 @@ fn render_text(r: &Report) {
     );
     println!("scenarios_root: {}", r.scenarios_root);
     println!("record_root:   {}", r.record_root);
+    println!(
+        "browser_cdp:  {}",
+        r.browser_cdp.as_deref().unwrap_or("(unbound)")
+    );
+    println!(
+        "browser_pin_tab: {}",
+        r.browser_pin_tab
+            .map(|value| value.to_string())
+            .as_deref()
+            .unwrap_or("(default)")
+    );
     println!();
     if r.plugins.is_empty() {
         println!("plugins: (none discovered)");
@@ -146,12 +162,16 @@ mod tests {
             config_file: Some("/x/agent-qa.toml".into()),
             scenarios_root: "/abs/scenarios".into(),
             record_root: "/abs/record".into(),
+            browser_cdp: Some("9223".into()),
+            browser_pin_tab: Some(true),
             plugins: vec![],
         };
         let body = serde_json::to_string(&report).unwrap();
         assert!(body.contains("\"configFile\":\"/x/agent-qa.toml\""));
         assert!(body.contains("\"scenariosRoot\":\"/abs/scenarios\""));
         assert!(body.contains("\"recordRoot\":\"/abs/record\""));
+        assert!(body.contains("\"browserCdp\":\"9223\""));
+        assert!(body.contains("\"browserPinTab\":true"));
         teardown();
     }
 

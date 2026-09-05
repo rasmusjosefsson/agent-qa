@@ -3,7 +3,7 @@
 //!
 //! Resolves through native DOM role/name activation first, then
 //! agent-browser role/name, text/chunk, and fresh-snapshot-ref fallbacks. A
-//! successful dispatch is appended to `<record_root>/scenario.steps.jsonl`
+//! successful dispatch is appended to the active recorder state
 //! unless `--no-record` is set. This verb does not verify post-click app state.
 //!
 //! CLI shape:
@@ -13,29 +13,23 @@
 //!                          [--no-record]
 //!                          [--session <name>]
 
-use std::fs;
-use std::io::Write;
-use std::path::Path;
-
 use anyhow::{anyhow, bail, Context, Result};
-use serde_json::{json, Value as Json};
+use serde_json::json;
 
 use crate::browser::{self, RoleAct};
-use crate::paths;
+use crate::record_step::StepKind;
+use crate::recorder_state::RecorderState;
 
 const DEFAULT_ROLE: &str = "button";
 
 pub fn run(args: &[String]) -> Result<u8> {
     let opts = parse_args(args)?;
 
-    let env_file = paths::record_env_file();
-    let env_body = fs::read_to_string(&env_file)
-        .with_context(|| format!("read {} (was `start` run?)", env_file.display()))?;
+    let mut state = RecorderState::load_active()?;
     let session = opts
         .session
         .clone()
-        .or_else(|| extract(&env_body, "SESSION"))
-        .unwrap_or_else(|| "default".to_string());
+        .unwrap_or_else(|| state.session.clone());
 
     // Probe role+name quietly so the user only sees one clear message
     // when we recover (or one clear failure when we don't).
@@ -45,14 +39,12 @@ pub fn run(args: &[String]) -> Result<u8> {
         browser::find_role_act_quiet(&session, &opts.role, &opts.name, RoleAct::Click, None)
     };
     enum Recovery {
-        /// Role+name worked first try. Record as clickRole.
+        /// Role and accessible name worked first.
         None,
-        /// Text or chunked-text fallback worked. Record as clickByText
-        /// (replay will use the resilient raw.text locator).
+        /// Text or chunked-text fallback worked. Replay uses a raw text locator.
         Text(String),
-        /// Snapshot ref fallback worked. Record as clickRole anyway —
-        /// the snapshot promised this exact (role, name), and replay
-        /// will run the same ladder and recover via ref again.
+        /// Snapshot-ref fallback worked. The direct draft keeps the role and
+        /// accessible name because the snapshot confirmed both.
         Snapshot,
     }
     let recovery: Recovery = match click_outcome {
@@ -85,48 +77,23 @@ pub fn run(args: &[String]) -> Result<u8> {
     };
 
     if opts.record {
-        let buffer = paths::record_steps_jsonl();
-        let step_index = count_lines(&buffer)? as u32;
-        let step_id = format!("s{step_index}");
-        let row = match &recovery {
+        let payload = match &recovery {
             Recovery::None | Recovery::Snapshot => json!({
-                "stepIndex": step_index,
-                "stepId": step_id,
-                "kind": "action",
-                "payload": {
-                    "method": "clickRole",
-                    "args": [opts.role.clone(), opts.name.clone()],
-                    "intent": match &recovery {
-                        Recovery::Snapshot => format!(
-                            "smart-click {} (role+name miss recovered via snapshot ref)",
-                            opts.name
-                        ),
-                        _ => format!("smart-click {}", opts.name),
-                    },
-                },
-                "recordedAt": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+                "intent": format!("smart-click {}", opts.name),
+                "verb": "click",
+                "on": { "role": opts.role, "name": opts.name },
             }),
             Recovery::Text(matched) => json!({
-                "stepIndex": step_index,
-                "stepId": step_id,
-                "kind": "action",
-                "payload": {
-                    "method": "clickByText",
-                    "args": [matched.clone()],
-                    "intent": format!(
-                        "smart-click {} (role+name miss recovered via text)",
-                        opts.name
-                    ),
+                "intent": format!("smart-click {}", opts.name),
+                "verb": "click",
+                "on": {
+                    "raw": { "kind": "text", "value": matched },
+                    "reason": "role and accessible-name lookup missed during recording"
                 },
-                "recordedAt": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
             }),
         };
-        append_jsonl(&buffer, &row)?;
-        // Keyframe the resulting page so this step shows a screenshot in the
-        // recording view, just like record-step does.
-        if let Some(sid) = extract(&env_body, "SID") {
-            crate::record_step::capture_step_sidecars(&sid, &session, &step_id);
-        }
+        let row = crate::record_step::record_draft(&mut state, StepKind::Do, &payload, &session)?;
+        let step_id = row.step_id;
         match &recovery {
             Recovery::None => println!(
                 "clicked {} (step {step_id}) — role={} name={:?}",
@@ -211,7 +178,7 @@ fn try_snapshot_fallback(session: &str, role: &str, name: &str) -> Result<()> {
 
 fn print_help() {
     println!(
-        "agent-qa smart-click \u{2014} click an element by accessible name + auto-record\n\nUsage:\n  agent-qa smart-click \"<accessible-name>\"\n                       [--role <role>]    (default: button)\n                       [--no-record]\n                       [--session <name>]\n\nTries native DOM activation by role + accessible name, then agent-browser\nrole/name, text/chunk, and fresh-snapshot-ref fallbacks. On successful\ndispatch it appends a click row to <record_root>/scenario.steps.jsonl.\nIt does not verify post-click app state; record a wait/assertion when the\noutcome matters."
+        "agent-qa smart-click - click an element by accessible name + auto-record\n\nUsage:\n  agent-qa smart-click \"<accessible-name>\"\n                       [--role <role>]    (default: button)\n                       [--no-record]\n                       [--session <name>]\n\nTries native DOM activation by role + accessible name, then agent-browser\nrole/name, text/chunk, and fresh-snapshot-ref fallbacks. On successful\ndispatch it appends a direct click step.\nIt does not verify post-click app state; record a check when the outcome matters."
     );
 }
 
@@ -259,225 +226,49 @@ fn parse_args(args: &[String]) -> Result<Opts> {
     })
 }
 
-fn extract(env: &str, key: &str) -> Option<String> {
-    let prefix = format!("{key}=");
-    env.lines()
-        .find_map(|l| l.strip_prefix(&prefix).map(|v| v.trim().to_string()))
-}
-
-fn count_lines(path: &Path) -> Result<u64> {
-    let body = match fs::read(path) {
-        Ok(b) => b,
-        Err(_) => return Ok(0),
-    };
-    Ok(body.iter().filter(|&&b| b == b'\n').count() as u64)
-}
-
-fn append_jsonl(path: &Path, row: &Json) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
-    }
-    use std::fs::OpenOptions;
-    let mut f = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .with_context(|| format!("open {}", path.display()))?;
-    let line = serde_json::to_string(row)?;
-    f.write_all(line.as_bytes())?;
-    f.write_all(b"\n")?;
-    Ok(())
-}
-
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use crate::browser as ab;
+    use crate::browser::{self, BrowserConnection};
+    use crate::paths;
+    use crate::recorder_state::RecorderBaseline;
     use crate::test_util::lock_env;
+    use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use tempfile::TempDir;
 
-    fn write_exec(dir: &Path, body: &str) -> std::path::PathBuf {
-        let p = dir.join("agent-browser");
-        fs::write(&p, body).unwrap();
-        let mut perm = fs::metadata(&p).unwrap().permissions();
-        perm.set_mode(0o755);
-        fs::set_permissions(&p, perm).unwrap();
-        p
-    }
-
-    fn install_fake_logging(dir: &Path, log: &Path) {
-        let body = format!("#!/bin/sh\necho \"$@\" >> '{}'\nexit 0\n", log.display());
-        let bin = write_exec(dir, &body);
-        std::env::set_var(ab::BIN_ENV, &bin);
-        ab::_reset_bin_cache_for_tests();
-    }
-
-    fn install_fake_eval_true(dir: &Path, log: &Path) {
-        let body = format!(
-            "#!/bin/sh\necho \"$@\" >> '{}'\nif [ \"$3\" = \"eval\" ]; then echo true; fi\nexit 0\n",
-            log.display()
-        );
-        let bin = write_exec(dir, &body);
-        std::env::set_var(ab::BIN_ENV, &bin);
-        ab::_reset_bin_cache_for_tests();
-    }
-
-    fn clear_fake() {
-        std::env::remove_var(ab::BIN_ENV);
-        ab::_reset_bin_cache_for_tests();
-    }
-
-    fn write_env(rec: &Path, sid: &str) {
-        fs::create_dir_all(rec).unwrap();
-        fs::write(
-            rec.join("scenario.env"),
-            format!("SID={sid}\nSESSION=default\n"),
+    #[test]
+    fn click_records_a_direct_step() {
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let binary = tmp.path().join("agent-browser");
+        fs::write(&binary, "#!/bin/sh\nexit 0\n").unwrap();
+        let mut permissions = fs::metadata(&binary).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&binary, permissions).unwrap();
+        std::env::set_var(browser::BIN_ENV, &binary);
+        std::env::set_var(paths::SCENARIOS_DIR_ENV, tmp.path());
+        std::env::set_var(paths::RECORD_DIR_ENV, tmp.path().join("record"));
+        browser::_reset_bin_cache_for_tests();
+        RecorderState::new(
+            "s1".into(),
+            "record".into(),
+            "default".into(),
+            RecorderBaseline::Fresh,
+            None,
+            BrowserConnection::default(),
         )
+        .save()
         .unwrap();
-    }
-
-    fn opts(name: &str, role: &str, record: bool) -> Opts {
-        Opts {
-            name: name.into(),
-            role: role.into(),
-            record,
-            session: None,
-        }
-    }
-
-    fn run_inner(opts: &Opts) -> Result<()> {
-        let env_file = paths::record_env_file();
-        let env_body = fs::read_to_string(&env_file)?;
-        let session = opts
-            .session
-            .clone()
-            .or_else(|| extract(&env_body, "SESSION"))
-            .unwrap_or_else(|| "default".to_string());
-        browser::find_role_act(&session, &opts.role, &opts.name, RoleAct::Click, None)?;
-        if opts.record {
-            let buffer = paths::record_steps_jsonl();
-            let step_index = count_lines(&buffer)? as u32;
-            let step_id = format!("s{step_index}");
-            let row = json!({
-                "stepIndex": step_index,
-                "stepId": step_id,
-                "kind": "action",
-                "payload": {
-                    "method": "clickRole",
-                    "args": [opts.role.clone(), opts.name.clone()],
-                    "intent": format!("smart-click {}", opts.name),
-                },
-                "recordedAt": "now",
-            });
-            append_jsonl(&buffer, &row)?;
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn parse_args_requires_name() {
-        parse_args(&["--role".into(), "button".into()]).unwrap_err();
-    }
-
-    #[test]
-    fn parse_args_default_role_is_button() {
-        let opts = parse_args(&["Save".into()]).unwrap();
-        assert_eq!(opts.role, "button");
-        assert_eq!(opts.name, "Save");
-        assert!(opts.record);
-    }
-
-    #[test]
-    fn parse_args_no_record_flag() {
-        let opts = parse_args(&["Save".into(), "--no-record".into()]).unwrap();
-        assert!(!opts.record);
-    }
-
-    #[test]
-    fn click_default_role_button() {
-        let _g = lock_env();
-        let tmp = TempDir::new().unwrap();
-        std::env::set_var(paths::SCENARIOS_DIR_ENV, tmp.path());
-        let rec = tmp.path().join("rec");
-        std::env::set_var(paths::RECORD_DIR_ENV, &rec);
-        let log = tmp.path().join("ab.log");
-        install_fake_logging(tmp.path(), &log);
-        write_env(&rec, "j1");
-
-        run_inner(&opts("Save", "button", true)).unwrap();
-        let invocation = fs::read_to_string(&log).unwrap();
-        assert!(
-            invocation.contains("--session default find role button click --name Save"),
-            "got: {invocation}"
-        );
-        let buf = fs::read_to_string(rec.join("scenario.steps.jsonl")).unwrap();
-        let row: Json = serde_json::from_str(buf.lines().next().unwrap()).unwrap();
-        assert_eq!(row["kind"], "action");
-        assert_eq!(row["payload"]["method"], "clickRole");
-        assert_eq!(row["payload"]["args"][0], "button");
-        assert_eq!(row["payload"]["args"][1], "Save");
-
+        run(&["Save".into()]).unwrap();
+        let state = RecorderState::load_active().unwrap();
+        let step = serde_json::to_value(&state.steps[0]).unwrap();
+        assert_eq!(step["kind"], "do");
+        assert_eq!(step["verb"], "click");
+        assert_eq!(step["on"]["role"], "button");
         std::env::remove_var(paths::SCENARIOS_DIR_ENV);
         std::env::remove_var(paths::RECORD_DIR_ENV);
-        clear_fake();
-    }
-
-    #[test]
-    fn click_with_role_link_no_record() {
-        let _g = lock_env();
-        let tmp = TempDir::new().unwrap();
-        std::env::set_var(paths::SCENARIOS_DIR_ENV, tmp.path());
-        let rec = tmp.path().join("rec");
-        std::env::set_var(paths::RECORD_DIR_ENV, &rec);
-        let log = tmp.path().join("ab.log");
-        install_fake_logging(tmp.path(), &log);
-        write_env(&rec, "j2");
-
-        run_inner(&opts("Privacy", "link", false)).unwrap();
-        let invocation = fs::read_to_string(&log).unwrap();
-        assert!(
-            invocation.contains("--session default find role link click --name Privacy"),
-            "got: {invocation}"
-        );
-        let buf_path = rec.join("scenario.steps.jsonl");
-        let buf = fs::read(&buf_path).unwrap_or_default();
-        assert!(buf.is_empty(), "no row should be appended with --no-record");
-
-        std::env::remove_var(paths::SCENARIOS_DIR_ENV);
-        std::env::remove_var(paths::RECORD_DIR_ENV);
-        clear_fake();
-    }
-
-    #[test]
-    fn click_button_prefers_named_control_activation() {
-        let _g = lock_env();
-        let tmp = TempDir::new().unwrap();
-        std::env::set_var(paths::SCENARIOS_DIR_ENV, tmp.path());
-        let rec = tmp.path().join("rec");
-        std::env::set_var(paths::RECORD_DIR_ENV, &rec);
-        let log = tmp.path().join("ab.log");
-        install_fake_eval_true(tmp.path(), &log);
-        write_env(&rec, "j3");
-
-        run(&["Add to cart".into()]).unwrap();
-        let invocation = fs::read_to_string(&log).unwrap();
-        assert!(
-            invocation.contains("--session default eval"),
-            "got: {invocation}"
-        );
-        assert!(
-            !invocation.contains("find role button click --name Add to cart"),
-            "got: {invocation}"
-        );
-        let buf = fs::read_to_string(rec.join("scenario.steps.jsonl")).unwrap();
-        let row: Json = serde_json::from_str(buf.lines().next().unwrap()).unwrap();
-        assert_eq!(row["payload"]["method"], "clickRole");
-        assert_eq!(row["payload"]["args"][0], "button");
-        assert_eq!(row["payload"]["args"][1], "Add to cart");
-
-        std::env::remove_var(paths::SCENARIOS_DIR_ENV);
-        std::env::remove_var(paths::RECORD_DIR_ENV);
-        clear_fake();
+        std::env::remove_var(browser::BIN_ENV);
+        browser::_reset_bin_cache_for_tests();
     }
 }

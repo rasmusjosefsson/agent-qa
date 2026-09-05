@@ -48,7 +48,7 @@ agent-qa compare <sid> --profiles all   # every registered profile
 ```
 
 1. Bootstraps each profile (probe-then-auth; near-no-op if already authenticated).
-2. Runs/reuses one replay per profile. Current scenario/v1 profile execution is serial; `--serial` is accepted for explicitness.
+2. Runs/reuses one replay per profile. Current scenario/2 profile execution is serial; `--serial` is accepted for explicitness.
 3. Reuse rule: per profile, if a recent replay exists with `meta.scenarioContentHash` equal to the current `scenario.steps[]` hash AND `status === 'ok'`, reuse it. `--force` always re-replays. Cosmetic edits to `scenario.json` (instruction text, comments, anything outside `steps[]`) do NOT invalidate replays.
 4. Diffs the N most-recent per-profile replays via the engine.
 
