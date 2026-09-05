@@ -12,17 +12,15 @@
 //! Without `--json` it prints the raw `ws://…` URL on one line. With
 //! `--json` it emits `{ "session": "…", "url": "ws://…" }`.
 
-use std::fs;
-
 use anyhow::{bail, Result};
 use serde_json::json;
 
 use crate::browser;
-use crate::paths;
+use crate::recorder_state::RecorderState;
 
 pub fn run(args: &[String]) -> Result<u8> {
     let opts = parse_args(args)?;
-    let session = resolve_session(opts.session.as_deref());
+    let session = resolve_session(opts.session.as_deref())?;
     let url = browser::cdp_url(&session)?;
     if opts.json {
         println!(
@@ -78,21 +76,13 @@ fn parse_args(args: &[String]) -> Result<Opts> {
     Ok(opts)
 }
 
-fn resolve_session(explicit: Option<&str>) -> String {
-    if let Some(s) = explicit {
-        return s.to_string();
+fn resolve_session(explicit: Option<&str>) -> Result<String> {
+    if let Some(session) = explicit {
+        return Ok(session.to_string());
     }
-    if let Ok(body) = fs::read_to_string(paths::record_env_file()) {
-        if let Some(s) = body
-            .lines()
-            .find_map(|l| l.strip_prefix("SESSION=").map(|v| v.trim().to_string()))
-        {
-            if !s.is_empty() {
-                return s;
-            }
-        }
-    }
-    "default".to_string()
+    Ok(RecorderState::try_load_active()?
+        .map(|state| state.session)
+        .unwrap_or_else(|| "default".to_string()))
 }
 
 #[cfg(test)]
@@ -120,6 +110,6 @@ mod tests {
 
     #[test]
     fn explicit_session_wins_over_env() {
-        assert_eq!(resolve_session(Some("explicit")), "explicit");
+        assert_eq!(resolve_session(Some("explicit")).unwrap(), "explicit");
     }
 }

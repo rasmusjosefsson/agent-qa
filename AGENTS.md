@@ -18,10 +18,16 @@ CDP. Generic, plugin-based, vendor-neutral.
    `cli/src` + `skill-data` for vendor names (routes, product terms,
    in-house framework names) and replace them with neutral examples
    (`default-user`/`admin-user`/`viewer`, `example.com`, `/users`).
-2. **Plugins are the only extension point.** Don't bake in adapter
+2. **Keep downstream details out of tracked history.** Do not put customer,
+   product, repository, credential-provider, authentication, feature-flag,
+   route, fixture, user, environment, or upstream-change details in tracked
+   audit trails, handoffs, docs, commit messages, or PR text. Keep generic
+   evidence in this repository. Keep downstream evidence and credentials in
+   the downstream extension or local ignored artifacts.
+3. **Plugins are the only extension point.** Don't bake in adapter
    implementations — only the protocol and the host live here. See
    `docs/plugins.md`.
-3. **agent-browser is a hard dependency.** It is resolved by the Node
+4. **agent-browser is a hard dependency.** It is resolved by the Node
    launcher (`npm/agent-qa/bin/agent-qa.js`) via `require.resolve` and
    passed to the Rust binary as `AGENT_BROWSER_BIN`. The Rust binary
    never walks `node_modules`.

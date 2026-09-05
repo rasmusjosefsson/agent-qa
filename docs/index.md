@@ -71,7 +71,7 @@ Every path is computed by `cli/src/paths.rs`. Don't recompute them elsewhere.
 Recording is **serial**, by design.
 
 1. You (or an agent) drive the page.
-2. `agent-qa record-step <kind> <json>` observes the settled page and writes the step + its evidence.
+2. `agent-qa record-step <do|check> <json>` observes the settled page and writes the step + its evidence.
 3. Only after `record-step` returns do you take the next action.
 
 The order matters. If you fire the next browser action before `record-step` finishes, the keyframe captures the

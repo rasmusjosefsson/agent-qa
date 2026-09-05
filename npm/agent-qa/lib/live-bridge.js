@@ -422,7 +422,7 @@ function createLiveBridge({
     if (!info || !info.name || info.value === '') return;
     if (lastFill && lastFill.name === info.name && lastFill.value === info.value) return;
     lastFill = { name: info.name, value: info.value };
-    emitRecord('action', { method: 'fillByLabel', args: [info.name, info.value] });
+    emitRecord('do', { intent: `fill ${info.name}`, verb: 'type', on: { role: 'textbox', name: info.name }, value: { from: 'literal', literal: info.value } });
   }
 
   function bumpTyping() {
@@ -450,7 +450,7 @@ function createLiveBridge({
     dispatchClick(x, y); // now actually click
     if (el && CLICKABLE_ROLES.has(el.role)) {
       if (el.name) {
-        emitRecord('action', { method: 'clickRole', args: [el.role, el.name] });
+        emitRecord('do', { intent: `click ${el.name}`, verb: 'click', on: { role: el.role, name: el.name } });
       } else {
         broadcastEvent('record-skip', { reason: `${el.role} has no accessible name` });
       }
@@ -504,7 +504,7 @@ function createLiveBridge({
         const url = normalizeUrl(evt.url);
         if (!url) return false;
         send('Page.navigate', { url });
-        if (evt.record) emitRecord('navigation', { route: url });
+        if (evt.record) emitRecord('do', { intent: `open ${url}`, verb: 'goto', value: { from: 'literal', literal: url } });
         return true;
       }
       case 'reload': {
@@ -534,7 +534,7 @@ function createLiveBridge({
               bumpTyping();
             } else if (evt.key === 'Enter') {
               finalizeFill()
-                .then(() => emitRecord('action', { method: 'pressKey', args: ['Enter'] }))
+                .then(() => emitRecord('do', { intent: 'press Enter', verb: 'press', value: { from: 'literal', literal: 'Enter' } }))
                 .catch(() => {});
             }
           }

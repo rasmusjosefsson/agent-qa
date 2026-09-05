@@ -923,12 +923,12 @@ fn list_lint_rules(json_out: bool) -> Result<u8> {
         Rule {
             code: "goto-without-url",
             severity: "error",
-            description: "A do/goto step has no params.url.",
+            description: "A do/goto step has no value.",
         },
         Rule {
             code: "missing-locator",
             severity: "error",
-            description: "A do step that needs a locator (click, type, clear, hover, focus, blur, check, uncheck) has no params.locator.",
+            description: "A do step that needs a locator (click, type, clear, hover, focus, blur, check, uncheck) has no on locator.",
         },
         Rule {
             code: "params-on-noop",
@@ -1097,35 +1097,28 @@ fn lint(
         }
     }
 
-    // 6) goto step with no params.url
+    // 6) goto step with no value
     for step in &j.steps {
         if let Step::Do {
             id,
             verb: crate::scenario::Verb::Goto,
-            params,
+            value,
             ..
         } = step
         {
-            let has_url = params
-                .as_ref()
-                .map(|p| p.get("url").is_some())
-                .unwrap_or(false);
-            if !has_url {
+            if value.is_none() {
                 findings.push(Finding {
                     severity: "error",
                     code: "goto-without-url",
-                    message: format!("step {id:?} is verb=goto but has no params.url"),
+                    message: format!("step {id:?} is verb=goto but has no value"),
                 });
             }
         }
     }
 
-    // 7) locator-requiring verb with no params.locator
+    // 7) locator-requiring verb with no on locator
     for step in &j.steps {
-        if let Step::Do {
-            id, verb, params, ..
-        } = step
-        {
+        if let Step::Do { id, verb, on, .. } = step {
             let needs_locator = matches!(
                 verb,
                 crate::scenario::Verb::Click
@@ -1140,16 +1133,12 @@ fn lint(
             if !needs_locator {
                 continue;
             }
-            let has_locator = params
-                .as_ref()
-                .map(|p| p.get("locator").is_some())
-                .unwrap_or(false);
-            if !has_locator {
+            if on.is_none() {
                 let verb_label = format!("{verb:?}").to_ascii_lowercase();
                 findings.push(Finding {
                     severity: "error",
                     code: "missing-locator",
-                    message: format!("step {id:?} verb={verb_label} requires params.locator"),
+                    message: format!("step {id:?} verb={verb_label} requires an on locator"),
                 });
             }
         }
@@ -1730,22 +1719,18 @@ fn lint_collect(
     for step in &j.steps {
         if let Step::Do {
             verb: crate::scenario::Verb::Goto,
-            params,
+            value,
             ..
         } = step
         {
-            let has_url = params
-                .as_ref()
-                .map(|p| p.get("url").is_some())
-                .unwrap_or(false);
-            if !has_url && active("goto-without-url") {
+            if value.is_none() && active("goto-without-url") {
                 errors += 1;
             }
         }
     }
     // missing-locator
     for step in &j.steps {
-        if let Step::Do { verb, params, .. } = step {
+        if let Step::Do { verb, on, .. } = step {
             let needs_locator = matches!(
                 verb,
                 crate::scenario::Verb::Click
@@ -1757,13 +1742,7 @@ fn lint_collect(
                     | crate::scenario::Verb::Check
                     | crate::scenario::Verb::Uncheck
             );
-            if needs_locator
-                && !params
-                    .as_ref()
-                    .map(|p| p.get("locator").is_some())
-                    .unwrap_or(false)
-                && active("missing-locator")
-            {
+            if needs_locator && on.is_none() && active("missing-locator") {
                 errors += 1;
             }
         }
@@ -2654,6 +2633,28 @@ mod tests {
             .unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn lint_scenario_two_do_shape_is_clean() {
+        let tmp = TempDir::new().unwrap();
+        let p = write(
+            tmp.path(),
+            r#"{
+              "schema": "scenario/2", "id": "j", "intent": "x",
+              "steps": [
+                { "id": "s0", "intent": "go", "kind": "do", "verb": "goto",
+                  "value": { "from": "literal", "literal": "https://example.com/" } },
+                { "id": "s1", "intent": "landed", "kind": "check",
+                  "claim": { "subject": { "url": true }, "predicate": "exists" } },
+                { "id": "s2", "intent": "click", "kind": "do", "verb": "click",
+                  "on": { "role": "button", "name": "Continue" } },
+                { "id": "s3", "intent": "button is visible", "kind": "check",
+                  "claim": { "subject": { "element": { "role": "button", "name": "Continue" } }, "predicate": "isVisible" } }
+              ]
+            }"#,
+        );
+        assert_eq!(lint(&p, LintFormat::Json, false, None, None).unwrap(), 0);
     }
 
     #[test]

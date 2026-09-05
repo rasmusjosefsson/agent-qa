@@ -31,6 +31,7 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use which::which;
 
@@ -81,6 +82,62 @@ impl AgentBrowserError {
 
 pub const BIN_ENV: &str = "AGENT_BROWSER_BIN";
 pub const NO_AUTO_RECOVER_ENV: &str = "AGENT_QA_NO_AUTO_RECOVER";
+pub const CDP_ENV: &str = "AGENT_BROWSER_CDP";
+pub const PIN_TAB_ENV: &str = "AGENT_BROWSER_PIN_TAB";
+
+/// A browser attachment resolved once for a recording or replay process.
+/// The value is local runtime state. It never becomes scenario data.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BrowserConnection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) cdp: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pin_tab: Option<bool>,
+}
+
+impl BrowserConnection {
+    pub(crate) fn resolve() -> anyhow::Result<Self> {
+        let config = crate::paths::browser_config();
+        let cdp = env_value(CDP_ENV).or(config.cdp);
+        let pin_tab = match env_value(PIN_TAB_ENV) {
+            Some(value) => Some(parse_bool_env(PIN_TAB_ENV, &value)?),
+            None => config.pin_tab,
+        };
+        Ok(Self { cdp, pin_tab })
+    }
+}
+
+/// Bind a resolved connection for every child process this `agent-qa`
+/// invocation creates. Child commands inherit this environment, including
+/// recovery, preflight, and nested `agent-qa` profile commands.
+pub(crate) fn set_connection(connection: &BrowserConnection) {
+    match &connection.cdp {
+        Some(cdp) => env::set_var(CDP_ENV, cdp),
+        None => env::remove_var(CDP_ENV),
+    }
+    match connection.pin_tab {
+        Some(true) => env::set_var(PIN_TAB_ENV, "1"),
+        Some(false) | None => env::remove_var(PIN_TAB_ENV),
+    }
+}
+
+fn env_value(name: &str) -> Option<String> {
+    env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn parse_bool_env(name: &str, value: &str) -> anyhow::Result<bool> {
+    match value.to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" => Ok(true),
+        "0" | "false" | "no" => Ok(false),
+        _ => Err(anyhow::anyhow!(
+            "{name} must be one of 1, 0, true, false, yes, or no; got {value:?}"
+        )),
+    }
+}
 
 fn cached_bin() -> &'static Mutex<Option<PathBuf>> {
     static CELL: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
@@ -1092,6 +1149,50 @@ mod tests {
     }
 
     // ----- run wrapper -----
+
+    #[test]
+    fn connection_is_inherited_by_every_browser_child() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("connection.log");
+        let state = tmp.path().join("recovered");
+        let body = format!(
+            "#!/bin/sh\necho \"cdp=$AGENT_BROWSER_CDP pin=$AGENT_BROWSER_PIN_TAB args=$*\" >> '{}'\nif [ \"$1\" = '--session' ] && [ ! -f '{}' ]; then touch '{}'; echo 'Auto-launch failed: All CDP discovery methods failed' 1>&2; exit 1; fi\nexit 0\n",
+            log.display(), state.display(), state.display()
+        );
+        let bin = fake_browser(tmp.path(), &body);
+        set_bin(&bin);
+        set_connection(&BrowserConnection {
+            cdp: Some("9223".into()),
+            pin_tab: Some(true),
+        });
+
+        run(
+            "recording",
+            ["open", "https://example.com"],
+            RunOpts::new().capture(),
+        )
+        .unwrap();
+        doctor_raw().unwrap();
+        assert!(close_session("recording"));
+
+        let lines = fs::read_to_string(&log).unwrap();
+        assert!(lines.lines().count() >= 4, "got: {lines}");
+        for line in lines.lines() {
+            assert!(line.starts_with("cdp=9223 pin=1 "), "got: {line}");
+        }
+        set_connection(&BrowserConnection::default());
+        clear_bin();
+    }
+
+    #[test]
+    fn connection_rejects_invalid_pin_tab_environment_value() {
+        let _g = lock_env();
+        env::set_var(PIN_TAB_ENV, "sometimes");
+        let err = BrowserConnection::resolve().unwrap_err().to_string();
+        assert!(err.contains(PIN_TAB_ENV));
+        env::remove_var(PIN_TAB_ENV);
+    }
 
     #[test]
     fn run_success_returns_stdout() {

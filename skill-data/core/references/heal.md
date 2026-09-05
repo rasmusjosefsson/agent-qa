@@ -65,7 +65,7 @@ agent-qa heal-apply <sid> --run <runId> --step <stepId> [--target-step <index-or
 ```
 
 It updates the value argument consumed by the recorded action in
-`<record_root>/scenario.steps.jsonl`, renames the response to
+`<record_root>/recorder-state.json`, renames the response to
 `<stepId>.applied.json`, and appends an audit row. It never drives the live
 browser; re-position the tab and re-issue the corrected gesture yourself. See
 [`heal-apply.md`](./heal-apply.md) and [`recovery.md`](./recovery.md).

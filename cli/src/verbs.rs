@@ -67,6 +67,7 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                 );
             } else {
                 browser::open(ctx.session, &url)?;
+                browser::wait_for_load(ctx.session, "networkidle")?;
             }
             Ok(None)
         }
@@ -84,6 +85,7 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
         }
         Verb::Click => {
             act_on_locator(ctx.session, on.unwrap(), scope, RoleAct::Click, None)?;
+            browser::wait_for_load(ctx.session, "networkidle")?;
             Ok(None)
         }
         Verb::Check | Verb::Uncheck => {
@@ -927,6 +929,10 @@ mod tests {
         let out = run_one(&s);
         assert!(
             out.contains("--session sess open https://example.com/"),
+            "got: {out}"
+        );
+        assert!(
+            out.contains("--session sess wait --load networkidle"),
             "got: {out}"
         );
     }

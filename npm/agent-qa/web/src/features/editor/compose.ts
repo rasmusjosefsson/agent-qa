@@ -1,16 +1,8 @@
 // web/src/features/editor/compose.ts
-//
-// Pure helpers ported 1:1 from lib/public/editor.js: form → trigger payload
-// (composePayload), buffer row → human label (rowLabel), value masking, and the
-// auto-record label. Kept React-free so they're unit-testable.
 
-import type { BufferRow, ComposeForm, ComposeResult } from './types';
+import type { BufferRow, ComposeForm, ComposeResult, DirectStep } from './types'
 
-// Which fields each composer verb shows + their relabeled captions.
-export const VERB_FIELDS: Record<
-  string,
-  { value?: string; name?: string; fields: string[]; intentRequired?: boolean }
-> = {
+export const VERB_FIELDS: Record<string, { value?: string; name?: string; fields: string[]; intentRequired?: boolean }> = {
   navigation: { value: 'URL', fields: ['value'] },
   click: { fields: ['role', 'name'] },
   type: { value: 'Value', name: 'Label', fields: ['name', 'value'] },
@@ -19,127 +11,48 @@ export const VERB_FIELDS: Record<
   assertPresent: { fields: ['role', 'name', 'intent'], intentRequired: true },
   assertAbsent: { fields: ['role', 'name', 'intent'], intentRequired: true },
   assertUrl: { value: 'URL pattern', fields: ['value', 'intent'], intentRequired: true },
-};
+}
 
-export const VERB_OPTIONS: { value: string; label: string }[] = [
-  { value: 'navigation', label: 'navigate (goto URL)' },
-  { value: 'click', label: 'click (role + name)' },
-  { value: 'type', label: 'type (label + value)' },
-  { value: 'press', label: 'press key' },
-  { value: 'wait', label: 'wait (ms)' },
-  { value: 'assertPresent', label: 'assert present (role + name)' },
-  { value: 'assertAbsent', label: 'assert absent (role + name)' },
-  { value: 'assertUrl', label: 'assert URL matches' },
-];
+export const VERB_OPTIONS = [
+  { value: 'navigation', label: 'navigate (goto URL)' }, { value: 'click', label: 'click (role + name)' },
+  { value: 'type', label: 'type (label + value)' }, { value: 'press', label: 'press key' },
+  { value: 'wait', label: 'wait (ms)' }, { value: 'assertPresent', label: 'assert present (role + name)' },
+  { value: 'assertAbsent', label: 'assert absent (role + name)' }, { value: 'assertUrl', label: 'assert URL matches' },
+]
 
-// Build { kind, payload } for record-step / run-step, or { error }.
 export function composePayload(form: ComposeForm): ComposeResult {
-  const verb = form.verb;
-  const role = form.role.trim();
-  const name = form.name.trim();
-  const value = form.value.trim();
-  const intent = form.intent.trim();
-  const spec = VERB_FIELDS[verb] || { fields: [] };
-  if (spec.intentRequired && !intent) return { error: 'Intent is required for asserts.' };
-
-  switch (verb) {
-    case 'navigation':
-      if (!value) return { error: 'URL is required.' };
-      return { kind: 'navigation', payload: intent ? { route: value, intent } : { route: value } };
-    case 'click':
-      if (!role || !name) return { error: 'Role and name are required.' };
-      return {
-        kind: 'action',
-        payload: { method: 'clickRole', args: [role, name], ...(intent ? { intent } : {}) },
-      };
-    case 'type':
-      if (!name) return { error: 'Label is required.' };
-      return {
-        kind: 'action',
-        payload: { method: 'fillByLabel', args: [name, value], ...(intent ? { intent } : {}) },
-      };
-    case 'press':
-      if (!value) return { error: 'Key is required.' };
-      return { kind: 'action', payload: { method: 'pressKey', args: [value], ...(intent ? { intent } : {}) } };
-    case 'wait': {
-      const ms = parseInt(value, 10);
-      if (!Number.isInteger(ms) || ms < 0) return { error: 'Milliseconds must be a non-negative integer.' };
-      return { kind: 'wait', payload: { condition: { kind: 'duration', ms }, ...(intent ? { intent } : {}) } };
-    }
-    case 'assertPresent':
-      if (!role || !name) return { error: 'Role and name are required.' };
-      return { kind: 'assert', payload: { kind: 'present', args: [role, name], intent } };
-    case 'assertAbsent':
-      if (!role || !name) return { error: 'Role and name are required.' };
-      return { kind: 'assert', payload: { kind: 'absent', args: [role, name], intent } };
-    case 'assertUrl':
-      if (!value) return { error: 'URL pattern is required.' };
-      return { kind: 'assert', payload: { kind: 'url', args: [value], intent } };
-    default:
-      return { error: `unknown verb ${verb}` };
+  const role = form.role.trim(); const name = form.name.trim(); const value = form.value.trim(); const intent = form.intent.trim();
+  const doStep = (verb: string, extra: Record<string, unknown>) => ({ kind: 'do' as const, payload: { intent: intent || verb, verb, ...extra } })
+  switch (form.verb) {
+    case 'navigation': return value ? doStep('goto', { value: { from: 'literal', literal: value } }) : { error: 'URL is required.' }
+    case 'click': return role && name ? doStep('click', { on: { role, name } }) : { error: 'Role and name are required.' }
+    case 'type': return name ? doStep('type', { on: { role: 'textbox', name }, value: { from: 'literal', literal: value } }) : { error: 'Label is required.' }
+    case 'press': return value ? doStep('press', { value: { from: 'literal', literal: value } }) : { error: 'Key is required.' }
+    case 'wait': { const ms = Number(value); return Number.isInteger(ms) && ms >= 0 ? doStep('wait', { params: { ms } }) : { error: 'Milliseconds must be a non-negative integer.' } }
+    case 'assertPresent': return role && name && intent ? { kind: 'check', payload: { intent, claim: { subject: { element: { role, name } }, predicate: 'isVisible' } } } : { error: 'Role, name, and intent are required.' }
+    case 'assertAbsent': return role && name && intent ? { kind: 'check', payload: { intent, claim: { subject: { element: { role, name } }, predicate: 'isHidden' } } } : { error: 'Role, name, and intent are required.' }
+    case 'assertUrl': return value && intent ? { kind: 'check', payload: { intent, claim: { subject: { url: true }, predicate: 'contains', value } } } : { error: 'URL pattern and intent are required.' }
+    default: return { error: `unknown verb ${form.verb}` }
   }
 }
 
-// Hide secret-looking field values in the steps list (display only).
 export function maskValue(label: unknown, value: unknown): string {
-  const v = String(value == null ? '' : value);
-  if (/pass|secret|cvv|card|token|otp|\bpin\b/i.test(String(label || ''))) {
-    return '•'.repeat(Math.min(10, Math.max(4, v.length)));
-  }
-  return v;
+  const text = String(value == null ? '' : value)
+  return /pass|secret|cvv|card|token|otp|\bpin\b/i.test(String(label || '')) ? '•'.repeat(Math.min(10, Math.max(4, text.length))) : text
 }
 
-export interface RowLabel {
-  cls: string;
-  title: string;
-  detail: string;
-}
-
-// Map a buffer row to a category badge + action title + detail line.
+export interface RowLabel { cls: string; title: string; detail: string }
 export function rowLabel(row: BufferRow): RowLabel {
-  const p = row.payload || {};
-  switch (row.kind) {
-    case 'navigation':
-      return { cls: 'nav', title: 'Go to', detail: p.route || '' };
-    case 'action': {
-      const m = p.method || 'action';
-      const a = (p.args || []) as unknown[];
-      switch (m) {
-        case 'clickRole':
-          return { cls: 'click', title: 'Click', detail: `${a[0]} “${a[1]}”` };
-        case 'clickByText':
-        case 'clickByLabel':
-          return { cls: 'click', title: 'Click', detail: `“${a[0]}”` };
-        case 'clickSelector':
-          return { cls: 'click', title: 'Click', detail: String(a[0] || '') };
-        case 'fillByLabel':
-        case 'fillBySelector':
-          return { cls: 'fill', title: 'Fill', detail: `${a[0]} → ${maskValue(a[0], a[1])}` };
-        case 'pressKey':
-          return { cls: 'press', title: 'Press', detail: String(a[0] || '') };
-        default:
-          return { cls: 'action', title: String(m), detail: a.join('  ·  ') };
-      }
-    }
-    case 'wait': {
-      const c = p.condition || {};
-      return { cls: 'wait', title: 'Wait', detail: c.ms != null ? `${c.ms} ms` : c.kind || '' };
-    }
-    case 'assert':
-      return { cls: 'assert', title: `Assert ${p.kind || ''}`.trim(), detail: ((p.args || []) as unknown[]).join('  ·  ') };
-    default:
-      return { cls: 'action', title: row.kind || '?', detail: '' };
-  }
+  const step: DirectStep = row.step || {}
+  if (step.kind === 'check') return { cls: 'assert', title: 'Check', detail: step.intent || '' }
+  const target = step.on?.name || step.on?.raw?.value || ''
+  const literal = step.value?.literal
+  if (step.verb === 'goto') return { cls: 'nav', title: 'Go to', detail: String(literal || '') }
+  if (step.verb === 'click') return { cls: 'click', title: 'Click', detail: target }
+  if (step.verb === 'type') return { cls: 'fill', title: 'Fill', detail: `${target} → ${maskValue(target, literal)}` }
+  if (step.verb === 'press') return { cls: 'press', title: 'Press', detail: String(literal || '') }
+  if (step.verb === 'wait') return { cls: 'wait', title: 'Wait', detail: String(step.params?.ms || '') }
+  return { cls: 'action', title: step.verb || 'step', detail: step.intent || '' }
 }
 
-// Human label for an auto-recorded step payload.
-export function recordLabel(payload: BufferRow['payload']): string {
-  if (!payload) return 'step';
-  const m = payload.method;
-  const a = (payload.args || []) as unknown[];
-  if (m === 'clickRole') return `click ${a[0]} “${a[1]}”`;
-  if (m === 'fillByLabel') return `fill “${a[0]}”`;
-  if (m === 'pressKey') return `press ${a[0]}`;
-  if (payload.route) return `goto ${payload.route}`;
-  return 'step';
-}
+export function recordLabel(payload: Record<string, unknown>): string { return String(payload.intent || payload.verb || 'step') }

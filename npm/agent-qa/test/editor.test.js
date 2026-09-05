@@ -18,19 +18,6 @@ const srv = require('../lib/report-server.js');
 
 // ---- unit helpers ----
 
-test('parseEnvFile unwraps single-quoted INTENT', () => {
-  const env = srv.parseEnvFile("SID=s-abc\nINTENT='open the home page'\nSESSION=default\n");
-  assert.equal(env.SID, 's-abc');
-  assert.equal(env.INTENT, 'open the home page');
-  assert.equal(env.SESSION, 'default');
-});
-
-test('parseEnvFile reverses start.rs quote escaping', () => {
-  // start.rs writes `'it'\''s here'` for the value `it's here`.
-  const env = srv.parseEnvFile("INTENT='it'\\''s here'\n");
-  assert.equal(env.INTENT, "it's here");
-});
-
 test('lastJsonLine returns the last parseable JSON line', () => {
   assert.deepEqual(srv.lastJsonLine('noise\n{"ok":true}\n'), { ok: true });
   assert.equal(srv.lastJsonLine('not json at all'), null);
@@ -48,7 +35,7 @@ test('resolveRecordRoot honors env then default', () => {
 });
 
 test('EDIT_KINDS mirrors the recorder trigger kinds', () => {
-  assert.deepEqual(srv.EDIT_KINDS, ['navigation', 'action', 'wait', 'assert']);
+  assert.deepEqual(srv.EDIT_KINDS, ['do', 'check']);
 });
 
 // ---- integration harness ----
@@ -113,9 +100,8 @@ test('editor endpoints shell the right CLI argv', async (t) => {
     if (v === 'buffer' && args[1] === 'list') {
       return {
         code: 0,
-        stdout: JSON.stringify({
-          rows: [
-            { stepId: 's0', stepIndex: 0, kind: 'navigation', payload: { route: 'https://example.com/' } },
+        stdout: JSON.stringify({ sid: 's-xyz', intent: 'do a thing', session: 'default', rows: [
+            { stepId: 's0', stepIndex: 0, step: { id: 's0', kind: 'do', intent: 'open page', verb: 'goto', value: { from: 'literal', literal: 'https://example.com/' } } },
           ],
         }),
         stderr: '',
@@ -142,15 +128,14 @@ test('editor endpoints shell the right CLI argv', async (t) => {
   const { server, base, recordRoot, calls } = await bootEdit(handler);
   t.after(() => server.close());
 
-  await t.test('GET /api/edit/buffer reads CLI rows + env file', async () => {
-    fs.writeFileSync(path.join(recordRoot, 'scenario.env'), "SID=s-xyz\nINTENT='do a thing'\nSESSION=default\n");
+  await t.test('GET /api/edit/buffer reads CLI state', async () => {
     const res = await fetch(`${base}/api/edit/buffer`);
     assert.equal(res.status, 200);
     const body = await res.json();
     assert.equal(body.sid, 's-xyz');
     assert.equal(body.intent, 'do a thing');
     assert.equal(body.rows.length, 1);
-    assert.equal(body.rows[0].kind, 'navigation');
+    assert.equal(body.rows[0].step.kind, 'do');
     assert.deepEqual(calls.at(-1), ['buffer', 'list', '--json']);
   });
 
@@ -164,16 +149,16 @@ test('editor endpoints shell the right CLI argv', async (t) => {
   });
 
   await t.test('POST /api/edit/record passes kind + JSON payload', async () => {
-    const payload = { route: 'https://example.com/' };
-    const res = await postJson(base, '/api/edit/record', { kind: 'navigation', payload });
+    const payload = { intent: 'open page', verb: 'goto', value: { from: 'literal', literal: 'https://example.com/' } };
+    const res = await postJson(base, '/api/edit/record', { kind: 'do', payload });
     assert.equal(res.status, 200);
-    assert.deepEqual(calls.at(-1), ['record-step', 'navigation', JSON.stringify(payload)]);
+    assert.deepEqual(calls.at(-1), ['record-step', 'do', JSON.stringify(payload)]);
   });
 
   await t.test('POST /api/edit/run-step relays the structured report', async () => {
     const res = await postJson(base, '/api/edit/run-step', {
-      kind: 'action',
-      payload: { method: 'clickRole', args: ['button', 'Login'] },
+      kind: 'do',
+      payload: { intent: 'click Login', verb: 'click', on: { role: 'button', name: 'Login' } },
     });
     assert.equal(res.status, 200);
     const body = await res.json();
@@ -181,8 +166,8 @@ test('editor endpoints shell the right CLI argv', async (t) => {
     assert.equal(body.result.verb, 'click');
     assert.deepEqual(calls.at(-1), [
       'run-step',
-      'action',
-      JSON.stringify({ method: 'clickRole', args: ['button', 'Login'] }),
+      'do',
+      JSON.stringify({ intent: 'click Login', verb: 'click', on: { role: 'button', name: 'Login' } }),
     ]);
   });
 
@@ -287,8 +272,8 @@ test('CLI failures relay as 422 / 500', async (t) => {
         : { code: 0, stdout: '', stderr: '', spawnError: null },
     );
     t.after(() => server.close());
-    const res = await postJson(base, '/api/edit/record', { kind: 'navigation', payload: { route: '' } });
-    // payload {route:''} passes the Node object-shape gate; the CLI rejects it.
+    const res = await postJson(base, '/api/edit/record', { kind: 'do', payload: { intent: 'bad' } });
+    // The direct draft passes the Node object-shape gate; the CLI rejects it.
     assert.equal(res.status, 422);
     const body = await res.json();
     assert.equal(body.ok, false);

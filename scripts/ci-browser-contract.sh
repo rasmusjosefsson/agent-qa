@@ -89,10 +89,10 @@ require_nonempty "$WORK/fixture-response.html"
 
 "$AQ" start "complete the browser contract" --session "$RECORD_SESSION" 2>&1 | tee "$WORK/start.log"
 "$AB" --session "$RECORD_SESSION" open "$FIXTURE_URL" 2>&1 | tee "$WORK/record-navigation.log"
-"$AQ" record-step navigation "{\"route\":\"$FIXTURE_URL\",\"intent\":\"open the fixture\"}" 2>&1 | tee "$WORK/record-step-s0.log"
+"$AQ" record-step do "{\"intent\":\"open the page\",\"verb\":\"goto\",\"value\":{\"from\":\"literal\",\"literal\":\"$FIXTURE_URL\"}}" 2>&1 | tee "$WORK/record-step-s0.log"
 "$AB" --session "$RECORD_SESSION" find role button click --name Complete 2>&1 | tee "$WORK/record-action.log"
-"$AQ" record-step action '{"method":"clickRole","args":["button","Complete"],"intent":"complete the fixture"}' 2>&1 | tee "$WORK/record-step-s1.log"
-"$AQ" record-step assert '{"kind":"present","args":["status","Completed"],"intent":"completion status is visible"}' 2>&1 | tee "$WORK/record-step-s2.log"
+"$AQ" record-step do '{"intent":"complete the page","verb":"click","on":{"role":"button","name":"Complete"}}' 2>&1 | tee "$WORK/record-step-s1.log"
+"$AQ" record-step check '{"intent":"completion status is visible","claim":{"subject":{"element":{"role":"status","name":"Completed"}},"predicate":"isVisible"}}' 2>&1 | tee "$WORK/record-step-s2.log"
 "$AQ" flush 2>&1 | tee "$WORK/flush.log"
 
 SID=$(tr -d '[:space:]' <"$RECORD_DIR/scenario.last")

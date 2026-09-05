@@ -1,14 +1,17 @@
-# Scenario Authoring
+# Scenario authoring
 
-This reference used to describe the removed external prep authoring flow.
-Do not create separate prep files or invoke standalone prep runners.
+Record a scenario through the CLI. The recorder owns the scenario id, step ids,
+and step kinds. Do not create a separate setup file.
 
-For scenario/v1, author seeded state directly on the scenario root:
+Use `record-setup` for generic preconditions that replay must restore. It accepts
+one existing `EnvOp` value and writes it to `env.open` at flush time.
 
-- Put pre-step state in `setup`.
-- Put cleanup in `teardown`.
-- Use `setup.gql[].saveAs` for bindings consumed by later steps.
-- Keep browser/DOM work in recorded `steps`, not setup.
+```bash
+agent-qa record-setup '{"kind":"fresh"}'
+agent-qa record-setup '{"kind":"flag","name":"example-flag","enabled":true}'
+agent-qa record-setup '{"kind":"nav","url":"https://example.com/users"}'
+```
 
-Use [`prep.md`](./prep.md) as the current source of truth for setup,
-teardown, supported channels, binding scope, and profile caveats.
+Use `record-step do` for browser actions and `record-step check` for the result.
+The recorder validates drafts before it appends them. `flush` seals the
+scenario, including its setup and provenance.

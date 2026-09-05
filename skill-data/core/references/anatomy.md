@@ -1,15 +1,10 @@
-# Scenario Anatomy
+# Scenario anatomy
 
-This reference used to describe the removed external prep-file authoring system.
-Do not use it to author new scenarios.
+New recordings use `scenario/2`. The recorder writes the local recording state,
+then `flush` seals `scenario.json`.
 
-Current scenario/v1 anatomy is inline:
+Keep replay setup in `env.open` and cleanup in `env.close`. Keep browser actions
+and assertions in `steps`. Use `record-setup` to add generic setup operations
+without editing the scenario file.
 
-- Root `setup` prepares state before step 0.
-- Root `teardown` cleans up after replay.
-- Setup bindings from `gql[].saveAs` share the same template scope as recording-time bindings.
-- Recorded browser gestures remain in root `steps`.
-
-Use [`prep.md`](./prep.md) for the current setup/teardown contract and
-[`scenario-authoring.md`](./scenario-authoring.md) for the v1 authoring
-guidance.
+See `schema.md` for the contract and `scenario-authoring.md` for commands.

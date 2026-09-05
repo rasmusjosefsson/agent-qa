@@ -38,6 +38,14 @@ const CONFIG_FILES: &[&str] = &["agent-qa.toml", ".agent-qa.toml"];
 struct ConfigFile {
     #[serde(default)]
     paths: Option<PathsTable>,
+    #[serde(default)]
+    browser: Option<BrowserConfig>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct BrowserConfig {
+    pub(crate) cdp: Option<String>,
+    pub(crate) pin_tab: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -232,12 +240,20 @@ pub fn record_root() -> PathBuf {
     cwd.join(DEFAULT_RECORD_SUBDIR)
 }
 
-pub fn record_env_file() -> PathBuf {
-    record_root().join("scenario.env")
+/// Resolve local browser settings from `[browser]` in `agent-qa.toml`.
+/// Environment variables take precedence in `browser::BrowserConnection`.
+pub(crate) fn browser_config() -> BrowserConfig {
+    let cwd = match env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(_) => return BrowserConfig::default(),
+    };
+    load_config(&cwd)
+        .and_then(|(_, config)| config.browser)
+        .unwrap_or_default()
 }
 
-pub fn record_steps_jsonl() -> PathBuf {
-    record_root().join("scenario.steps.jsonl")
+pub fn record_state_file() -> PathBuf {
+    record_root().join("recorder-state.json")
 }
 
 pub fn record_last_sid_file() -> PathBuf {
@@ -403,6 +419,25 @@ mod tests {
         );
         // Absolute path passes through.
         assert_eq!(record_root(), PathBuf::from("/abs/rec"));
+
+        env::set_current_dir(prev_cwd).unwrap();
+    }
+
+    #[test]
+    fn browser_table_loads_from_agent_qa_toml() {
+        let _g = lock_env();
+        let tmp = tempfile::TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("agent-qa.toml"),
+            "[browser]\ncdp = \"9223\"\npin_tab = true\n",
+        )
+        .unwrap();
+        let prev_cwd = env::current_dir().unwrap();
+        env::set_current_dir(tmp.path()).unwrap();
+
+        let config = browser_config();
+        assert_eq!(config.cdp.as_deref(), Some("9223"));
+        assert_eq!(config.pin_tab, Some(true));
 
         env::set_current_dir(prev_cwd).unwrap();
     }

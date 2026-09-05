@@ -21,8 +21,7 @@ flow.
 4. Re-record from row `N`, one gesture at a time.
 
 `truncate` drops rows with index `>= N` from
-`<record_root>/scenario.steps.jsonl` (normally
-`tmp/agent-qa-record/scenario.steps.jsonl`) and archives their sidecars under
+the active recorder state and archives their sidecars under
 `<sid>/failed/truncate-<timestamp>/`. It never
 touches the live tab.
 
@@ -40,7 +39,7 @@ agent-qa heal-apply <sid> --run <runId> --step <stepId> \
 ```
 
 Then re-position the live tab and re-issue the corrected gesture. `heal-apply`
-changes `<record_root>/scenario.steps.jsonl`; it does not change browser
+changes `<record_root>/recorder-state.json`; it does not change browser
 state.
 
 For a replay-only correction, skip `heal-apply` and run:

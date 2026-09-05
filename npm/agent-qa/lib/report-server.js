@@ -28,10 +28,8 @@ const { createLiveBridge } = require('./live-bridge.js');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
-// Editor trigger kinds, mirrors recorder_shape::TriggerKind. The
-// Rust CLI re-validates, but we gate here too so the write surface can
-// never shell an unexpected verb shape.
-const EDIT_KINDS = ['navigation', 'action', 'wait', 'assert'];
+// Direct scenario/2 draft kinds accepted by the Rust recorder.
+const EDIT_KINDS = ['do', 'check'];
 
 // Per-step sidecar kinds that may be streamed by the artifact endpoint.
 // Mirrors the fixed extensions in scenario-sidecar-tree.md § Path conventions.
@@ -158,35 +156,13 @@ function resolveScenariosRoot(opts = {}) {
   return path.join(cwd, 'tmp', 'agent-qa-scenarios');
 }
 
-// Mirror of cli/src/paths.rs::record_root — the ephemeral recording
-// scratch dir holding scenario.env + scenario.steps.jsonl during an
-// authoring session. Override with AGENT_QA_RECORD_DIR, else
-// <cwd>/tmp/agent-qa-record.
+// Mirror of cli/src/paths.rs::record_root. The directory holds one typed
+// recorder-state.json file during an authoring session.
 function resolveRecordRoot(opts = {}) {
   const cwd = opts.cwd || process.cwd();
   const env = opts.env || process.env;
   if (env.AGENT_QA_RECORD_DIR) return resolveRelative(env.AGENT_QA_RECORD_DIR, cwd);
   return path.join(cwd, 'tmp', 'agent-qa-record');
-}
-
-// Parse the shell-ish `KEY=value` recording env file `start` writes.
-// INTENT is single-quoted with start.rs's escaping; unwrap it.
-function parseEnvFile(text) {
-  const out = {};
-  if (typeof text !== 'string') return out;
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line) continue;
-    const eq = line.indexOf('=');
-    if (eq <= 0) continue;
-    const key = line.slice(0, eq).trim();
-    let val = line.slice(eq + 1).trim();
-    if (val.startsWith("'") && val.endsWith("'") && val.length >= 2) {
-      val = val.slice(1, -1).replace(/'\\''/g, "'");
-    }
-    out[key] = val;
-  }
-  return out;
 }
 
 // -------- small fs readers (absence is meaningful, never an error) --------
@@ -1443,7 +1419,7 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
         opts.entry.connectedPersonaId = personaId;
         opts.entry.connectedEnvironmentId = (env && env.id) || null;
       }
-      if (opts.recordDir) await bindRecordingProfile(opts.recordDir, profile);
+      if (opts.recordDir) await bindRecordingProfile(deps.runCli, profile);
     }
     return sendJson(res, 200, {
       ok: boot.code === 0,
@@ -1458,26 +1434,13 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
   }
 }
 
-// Rewrite an in-progress recording's baseline to use the connected profile, so
-// `flush` emits `env.open: [{kind:"useProfile", name}]` and replay re-auths
-// instead of clearing cookies (fresh). Best-effort: no-ops if no recording is
-// in progress or the buffer was already flushed.
-async function bindRecordingProfile(recordDir, profile) {
-  const envFile = path.join(recordDir, 'scenario.env');
-  let body;
+// Add the connected profile to the active recorder through the Rust CLI.
+// The CLI owns the typed state file and rejects malformed setup operations.
+async function bindRecordingProfile(runCli, profile) {
   try {
-    body = await fsp.readFile(envFile, 'utf8');
+    await runCli(['record-setup', JSON.stringify({ kind: 'useProfile', name: profile })]);
   } catch {
-    return; // no recording in progress for this chat
-  }
-  const line = `BASELINE=PROFILE=${profile}`;
-  const next = /^BASELINE=.*$/m.test(body)
-    ? body.replace(/^BASELINE=.*$/m, line)
-    : `${body.replace(/\n*$/, '\n')}${line}\n`;
-  try {
-    await fsp.writeFile(envFile, next);
-  } catch {
-    /* best-effort — recording still works, just may need an explicit --profile */
+    /* best-effort */
   }
 }
 
@@ -2124,22 +2087,13 @@ function sendCliResult(res, r, extra = {}) {
 
 async function readBuffer(deps) {
   const r = await deps.runCli(['buffer', 'list', '--json']);
-  const parsed = lastJsonLine(r.stdout);
-  const rows = parsed && Array.isArray(parsed.rows) ? parsed.rows : [];
-  // Read the session env (sid / intent) directly — it is recording scratch,
-  // not the scenario contract.
-  let env = {};
-  try {
-    env = parseEnvFile(await fsp.readFile(path.join(deps.recordRoot, 'scenario.env'), 'utf8'));
-  } catch {
-    env = {};
-  }
+  const parsed = lastJsonLine(r.stdout) || {};
   return {
-    sid: env.SID || null,
-    intent: env.INTENT || null,
-    session: env.SESSION || null,
-    baseline: env.BASELINE || null,
-    rows,
+    sid: parsed.sid || null,
+    intent: parsed.intent || null,
+    session: parsed.session || null,
+    baseline: parsed.baseline || null,
+    rows: Array.isArray(parsed.rows) ? parsed.rows : [],
     spawnError: r.spawnError ? String(r.spawnError.message || r.spawnError) : null,
   };
 }
@@ -2230,15 +2184,9 @@ async function handleEdit(req, res, deps, seg) {
     }
     case 'cancel': {
       // Discard the in-progress recording entirely: empty the buffer (via the
-      // Rust CLI) and drop the recording-session scratch (scenario.env) so the
-      // editor returns to the start screen. The now-empty scenario dir is left
-      // on disk but stays hidden from the Scenarios list (0 steps, no runs).
-      const r = await deps.runCli(['buffer', 'clear']);
-      try {
-        await fsp.unlink(path.join(deps.recordRoot, 'scenario.env'));
-      } catch {
-        /* already gone */
-      }
+      // Rust clears the only active recorder state. The empty scenario directory
+      // remains on disk and stays hidden from the scenario list.
+      const r = await deps.runCli(['buffer', 'discard']);
       return sendCliResult(res, r, { cancelled: true });
     }
     case 'input': {
@@ -2296,135 +2244,54 @@ function chatMeta(e) {
   return { id: e.id, title: e.title, createdAt: e.createdAt, session: e.browser.name };
 }
 
-// Read THIS chat's in-progress (or most recent) recording straight off disk:
-// the per-chat record scratch (`scenario.env` + `scenario.steps.jsonl`) plus a
-// `flushed` flag derived from whether the scenario dir has a `scenario.json`
-// yet. No CLI spawn — pure file reads — so the chat UI can poll it cheaply
-// while the agent drives the browser.
-// Resolve which scenario id a chat's recording panel should show. While a
-// recording is active, scenario.env carries the live SID. On finish the CLI
-// truncates scenario.env but leaves scenario.last pointing at the saved SID, so
-// we fall back to that — the panel keeps showing the finished recording.
-async function resolveChatRecordingSid(dir) {
-  let env = {};
-  try {
-    env = parseEnvFile(await fsp.readFile(path.join(dir, 'scenario.env'), 'utf8'));
-  } catch {
-    env = {};
-  }
-  if (env.SID) return { sid: env.SID, active: true, env };
-  let last = '';
-  try {
-    last = (await fsp.readFile(path.join(dir, 'scenario.last'), 'utf8')).trim();
-  } catch {
-    last = '';
-  }
-  if (last) return { sid: last, active: false, env: {} };
-  return { sid: null, active: false, env: {} };
+// Read the chat's active recorder state, or its last sealed scenario.
+async function resolveChatRecording(dir) {
+  const state = await readJson(path.join(dir, 'recorder-state.json'));
+  if (state && state.sid) return { state, active: true };
+  const last = (await readText(path.join(dir, 'scenario.last')) || '').trim();
+  return { state: null, active: false, sid: last || null };
 }
 
-// Map a finalized scenario.json step onto the live RecordingStep shape the UI
-// renders (kind + payload + intent), so saved recordings look like live ones.
-function normalizeFinalizedStep(step, i) {
-  const verb = (step && step.verb) || '';
-  const literal = step && step.value && step.value.literal != null ? step.value.literal : undefined;
-  let kind;
-  let payload;
-  if (verb === 'goto' || verb === 'navigate') {
-    kind = 'navigation';
-    payload = { route: literal != null ? String(literal) : step.intent || '' };
-  } else if (step.kind === 'check' || verb === 'assert' || verb === 'expect') {
-    kind = 'assert';
-    payload = { kind: 'check', intent: step.intent || '' };
-  } else if (verb === 'wait' || verb === 'waitFor') {
-    kind = 'wait';
-    payload = { condition: { kind: verb }, intent: step.intent || '' };
-  } else {
-    kind = 'action';
-    payload = {
-      method: verb || step.kind || 'step',
-      args: literal != null ? [literal] : [],
-      intent: step.intent || '',
-    };
-  }
+function normalizeStep(step, index) {
   return {
-    stepIndex: i,
-    stepId: step.id || `s${i}`,
-    kind,
-    payload,
+    stepIndex: index,
+    stepId: step.id || `s${index}`,
+    kind: step.kind || 'step',
+    payload: step,
     intent: step.intent || null,
     recordedAt: step.recordedAt || null,
   };
 }
 
 async function chatRecordingState(entry, scenariosRoot) {
-  const out = {
-    recording: false,
-    sid: null,
-    intent: null,
-    session: null,
-    startedAt: null,
-    baseline: null,
-    flushed: false,
-    steps: [],
-    // Background default-persona sign-in state ({state:'connecting'|'connected'|
-    // 'failed', personaId, ...} | null) so the UI can show "signing in…".
-    autoConnect: entry.autoConnect || null,
-  };
+  const out = { recording: false, sid: null, intent: null, session: null, startedAt: null, baseline: null, flushed: false, steps: [], autoConnect: entry.autoConnect || null };
   const dir = entry.recordDir();
   if (!dir) return out;
-  const { sid, active, env } = await resolveChatRecordingSid(dir);
-  if (!sid) return out;
-  out.sid = sid;
-
-  if (active) {
-    out.intent = env.INTENT || null;
-    out.session = env.SESSION || null;
-    out.startedAt = env.STARTED || null;
-    out.baseline = env.BASELINE || null;
-    try {
-      const txt = await fsp.readFile(path.join(dir, 'scenario.steps.jsonl'), 'utf8');
-      out.steps = txt
-        .split('\n')
-        .map((l) => l.trim())
-        .filter(Boolean)
-        .map((l) => {
-          try {
-            return JSON.parse(l);
-          } catch {
-            return null;
-          }
-        })
-        .filter(Boolean);
-    } catch {
-      /* no steps recorded yet */
+  const recording = await resolveChatRecording(dir);
+  if (recording.active) {
+    const state = recording.state;
+    out.sid = state.sid;
+    out.intent = state.intent || null;
+    out.session = state.session || null;
+    out.startedAt = state.startedAt || null;
+    out.baseline = state.baseline || null;
+    out.steps = Array.isArray(state.steps) ? state.steps.map(normalizeStep) : [];
+    if (scenariosRoot && isSafeSegment(state.sid) && await readJson(path.join(scenariosRoot, state.sid, 'scenario.json'))) {
+      out.flushed = true;
+      return out;
     }
-    if (scenariosRoot && isSafeSegment(sid)) {
-      try {
-        await fsp.access(path.join(scenariosRoot, sid, 'scenario.json'));
-        out.flushed = true;
-      } catch {
-        /* not flushed → still being recorded */
-      }
-    }
-    out.recording = !out.flushed;
+    out.recording = true;
     return out;
   }
-
-  // Finished recording: hydrate from the saved scenario.json.
+  if (!recording.sid) return out;
+  out.sid = recording.sid;
   out.flushed = true;
-  out.recording = false;
   out.session = (entry.browser && entry.browser.name) || null;
-  if (scenariosRoot && isSafeSegment(sid)) {
-    try {
-      const j = JSON.parse(
-        await fsp.readFile(path.join(scenariosRoot, sid, 'scenario.json'), 'utf8')
-      );
-      out.intent = j.intent || null;
-      out.steps = Array.isArray(j.steps) ? j.steps.map((s, i) => normalizeFinalizedStep(s, i)) : [];
-    } catch {
-      out.sid = null; // saved scenario vanished → nothing to show
-    }
+  if (scenariosRoot && isSafeSegment(recording.sid)) {
+    const scenario = await readJson(path.join(scenariosRoot, recording.sid, 'scenario.json'));
+    if (!scenario) return { ...out, sid: null, flushed: false };
+    out.intent = scenario.intent || null;
+    out.steps = Array.isArray(scenario.steps) ? scenario.steps.map(normalizeStep) : [];
   }
   return out;
 }
@@ -2436,7 +2303,8 @@ async function serveRecordingArtifact(res, entry, scenariosRoot, stepId, kind) {
   const dir = entry.recordDir();
   if (!dir || !scenariosRoot) return notFound(res, 'no recording');
   if (!isSafeSegment(stepId)) return badRequest(res, 'unsafe step id');
-  const { sid } = await resolveChatRecordingSid(dir);
+  const recording = await resolveChatRecording(dir);
+  const sid = recording.active ? recording.state.sid : recording.sid;
   if (!sid || !isSafeSegment(sid)) return notFound(res, 'no recording');
   const spec =
     kind === 'snapshot'
@@ -2778,14 +2646,10 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
   // the pane badge the difference. Cheap file read — no CLI spawn.
   if (sub === 'active-session' && req.method === 'GET') {
     let recorder = null;
-    try {
-      const dir = entry.recordDir();
-      if (dir) {
-        const env = parseEnvFile(await fsp.readFile(path.join(dir, 'scenario.env'), 'utf8'));
-        if (env.SESSION) recorder = env.SESSION;
-      }
-    } catch {
-      /* no active recording */
+    const dir = entry.recordDir();
+    if (dir) {
+      const recording = await resolveChatRecording(dir);
+      if (recording.active) recorder = recording.state.session || null;
     }
     const mine = entry.browser.name;
     return sendJson(res, 200, {
@@ -3740,7 +3604,6 @@ module.exports = {
   resolveScenariosRoot,
   resolveRecordRoot,
   scenariosRootFromToml,
-  parseEnvFile,
   listScenarios,
   listRuns,
   findActiveRunId,

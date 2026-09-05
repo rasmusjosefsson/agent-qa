@@ -335,6 +335,8 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     // Set before any agent-browser child is spawned so a freshly-launched
     // session picks it up.
     crate::browser::set_headed_mode(opts.headed);
+    let connection = crate::browser::BrowserConnection::resolve()?;
+    crate::browser::set_connection(&connection);
 
     // 1. Load + validate.
     let (scenario_file, scenario_dir) = resolve_source(&opts.source)?;

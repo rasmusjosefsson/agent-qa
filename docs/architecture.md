@@ -91,10 +91,10 @@ match arm.
 
 ```mermaid
 flowchart LR
-    Start["agent-qa start<br/>'<intent>'"] --> Buffer["<record_root>/scenario.env<br/>+ steps.jsonl<br/>(empty)"]
+    Start["agent-qa start<br/>'<intent>'"] --> Buffer["<record_root>/recorder-state.json<br/>(empty steps)"]
     Buffer --> Drive["drive the page<br/>via agent-browser"]
     Drive --> Step["record-step / smart-click / fill-unique"]
-    Step --> Sidecars["row appended<br/>+ snapshot/screenshot<br/>under <sid>/recording/"]
+    Step --> Sidecars["step saved<br/>+ snapshot/screenshot<br/>under <sid>/recording/"]
     Sidecars -.next gesture.-> Drive
     Sidecars --> Truncate["truncate <N><br/>(optional fix-up)"]
     Truncate --> Drive
@@ -102,9 +102,13 @@ flowchart LR
     Flush --> Scenario[("scenario.json")]
 ```
 
-The serial gate is real. The next browser action waits for
-`record-step` to return before mutating page state; otherwise the
-keyframe captures the wrong state.
+`recorder-state.json` owns typed recording metadata, setup operations,
+source provenance, frozen local browser connection, and direct scenario steps.
+The sealed scenario never contains the local CDP endpoint or pin policy.
+
+The serial gate is real. The next browser action waits for `record-step` to
+return before mutating page state; otherwise the keyframe captures the wrong
+state.
 
 ## Replay and compare flow
 
