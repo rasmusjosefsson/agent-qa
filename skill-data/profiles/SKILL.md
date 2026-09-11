@@ -184,7 +184,7 @@ Two files, both must be edited together:
 | `Missing credentials for profile "default-user"`                         | Missing `.env` variables for that prefix                                       | Add `AGENT_QA_PROFILE_DEFAULT_EMAIL` + `AGENT_QA_PROFILE_DEFAULT_PASSWORD`                                                                                            |
 | `replay --profile a,b` exits non-zero but reports both replays completed | `error`-classified step in one of the runs                                     | Inspect `replay.json.steps[]` for the failing step; fix the runner / page / adapter; re-run                                                                         |
 | Comparison folder name has weird chars                                   | Replay id contains the profile suffix; engine hashes it for the folder name    | Cosmetic only — the `compare.json.meta` carries clean profile labels                                                                                                |
-| `Auto-launch failed: All CDP discovery methods failed for 127.0.0.1`     | Orphan agent-browser daemon (child Chrome died, daemon PID alive).             | Auto-recovered by agent-qa once per invocation; if that fails, `npx agent-browser close --session <profile>-session` then retry. See `core/references/gotchas.md`. |
+| `Auto-launch failed: All CDP discovery methods failed for 127.0.0.1`     | Orphan agent-browser daemon (child Chrome died, daemon PID alive).             | Auto-recovered by agent-qa once per invocation; if that fails, `agent-qa browser close --session <profile>-session` then retry. See `core/references/gotchas.md`. |
 
 ## Cross-references
 

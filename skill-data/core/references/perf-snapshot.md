@@ -74,7 +74,7 @@ Single-page perf check (point-in-time only):
 
 ```bash
 agent-qa start "perf check"        # mints a SID
-agent-browser --session default-user-session open 'https://app.example.com/dashboard?deployment=Staging'
+agent-qa browser --session default-user-session open 'https://app.example.com/dashboard?deployment=Staging'
 agent-qa perf-snapshot
 # → tmp/agent-qa-scenarios/<sid>/perf/{vitals.json,suspense.json}
 ```
@@ -83,7 +83,7 @@ Profile a flow's CPU + renders:
 
 ```bash
 SID=$(agent-qa start "create user perf")
-agent-browser --session default-user-session open 'https://app.example.com/users?deployment=Staging'
+agent-qa browser --session default-user-session open 'https://app.example.com/users?deployment=Staging'
 agent-qa smart-click "Add user"
 # 5-second window covering the form interaction
 agent-qa perf-snapshot --record-renders 5000 --cpu-profile 5000
@@ -97,7 +97,7 @@ Cross-page comparison:
 
 ```bash
 for path in /home /users /settings; do
-  agent-browser --session default-user-session open "https://app.example.com${path}?deployment=Staging"
+  agent-qa browser --session default-user-session open "https://app.example.com${path}?deployment=Staging"
   agent-qa perf-snapshot
   cp tmp/agent-qa-scenarios/<sid>/perf/vitals.json /tmp/vitals${path//\//-}.json
 done
