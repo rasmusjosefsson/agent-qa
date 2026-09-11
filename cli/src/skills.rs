@@ -64,10 +64,11 @@ struct Skill {
 
 pub fn run(args: &[String]) -> Result<u8> {
     let json_out = args.iter().any(|a| a == "--json");
+    let full = args.iter().any(|a| a == "--full");
     let rest: Vec<&str> = args
         .iter()
         .map(String::as_str)
-        .filter(|s| *s != "--json")
+        .filter(|s| *s != "--json" && *s != "--full")
         .collect();
     match rest.first().copied() {
         None | Some("list") => list(json_out),
@@ -75,8 +76,8 @@ pub fn run(args: &[String]) -> Result<u8> {
             let name = rest
                 .get(1)
                 .copied()
-                .ok_or_else(|| anyhow!("usage: skills get <name>"))?;
-            get(name)
+                .ok_or_else(|| anyhow!("usage: skills get <name> [--full]"))?;
+            get(name, full)
         }
         Some("path") => path(rest.get(1).copied()),
         Some("scaffold") => {
@@ -103,6 +104,8 @@ Usage:
   agent-qa skills [list]      List skill names
   agent-qa skills list --json Structured rows: [{{name, source, path}}]
   agent-qa skills get <name>  Print the skill's SKILL.md
+  agent-qa skills get <name> --full
+                              + every references/*.md and templates/* file
   agent-qa skills path [name] Print the path for a skill (or all)
   agent-qa skills scaffold <name> [--dir <path>]
                               Write a template SKILL.md for a new
@@ -155,14 +158,14 @@ fn list(json_out: bool) -> Result<u8> {
     Ok(0)
 }
 
-fn get(name: &str) -> Result<u8> {
+fn get(name: &str, full: bool) -> Result<u8> {
     let skills = discover()?;
     let skill = skills
         .iter()
         .find(|s| s.name == name)
         .ok_or_else(|| anyhow!("unknown skill {name:?}. Try `agent-qa skills list`."))?;
     use std::io::Write;
-    let bytes = match &skill.source {
+    let mut bytes = match &skill.source {
         Source::Embedded { path } => SKILL_DATA
             .get_file(path.trim_start_matches("skill-data/"))
             .expect("embedded skill present in discover()")
@@ -171,8 +174,75 @@ fn get(name: &str) -> Result<u8> {
         Source::External { skill_md } => fs::read(skill_md)
             .with_context(|| format!("read external skill {}", skill_md.display()))?,
     };
+    if full {
+        bytes.extend_from_slice(&supporting_content(&skill.source));
+    }
     std::io::stdout().write_all(&bytes)?;
     Ok(0)
+}
+
+/// `--full`: append every `references/*.md` and `templates/*` file that sits
+/// next to the skill's `SKILL.md`, each under a `\n\n---\n### <relative path>\n`
+/// header. Missing `references`/`templates` dirs are silently skipped — most
+/// skills only ship a `SKILL.md`.
+fn supporting_content(source: &Source) -> Vec<u8> {
+    let mut out = Vec::new();
+    match source {
+        Source::Embedded { path } => {
+            // `path` is `skill-data/<name>/SKILL.md`; strip the file name and
+            // the `skill-data/` prefix to get the skill's dir inside SKILL_DATA.
+            let skill_dir = path
+                .trim_start_matches("skill-data/")
+                .trim_end_matches("SKILL.md")
+                .trim_end_matches('/');
+            for sub in ["references", "templates"] {
+                let dir_path = format!("{skill_dir}/{sub}");
+                let Some(dir) = SKILL_DATA.get_dir(&dir_path) else {
+                    continue;
+                };
+                let mut files: Vec<_> = dir.files().collect();
+                files.sort_by_key(|f| f.path().to_path_buf());
+                for f in files {
+                    out.extend_from_slice(
+                        format!("\n\n---\n### {}\n\n", f.path().display()).as_bytes(),
+                    );
+                    out.extend_from_slice(f.contents());
+                }
+            }
+        }
+        Source::External { skill_md } => {
+            let Some(skill_dir) = skill_md.parent() else {
+                return out;
+            };
+            for sub in ["references", "templates"] {
+                let dir_path = skill_dir.join(sub);
+                let Ok(mut entries) = fs::read_dir(&dir_path) else {
+                    continue;
+                };
+                let mut files: Vec<PathBuf> = Vec::new();
+                while let Some(Ok(entry)) = entries.next() {
+                    let p = entry.path();
+                    if p.is_file() {
+                        files.push(p);
+                    }
+                }
+                files.sort();
+                for f in files {
+                    let label = f
+                        .strip_prefix(skill_dir)
+                        .unwrap_or(&f)
+                        .display()
+                        .to_string();
+                    let Ok(contents) = fs::read(&f) else {
+                        continue;
+                    };
+                    out.extend_from_slice(format!("\n\n---\n### {label}\n\n").as_bytes());
+                    out.extend_from_slice(&contents);
+                }
+            }
+        }
+    }
+    out
 }
 
 fn path(name: Option<&str>) -> Result<u8> {
@@ -561,8 +631,18 @@ mod tests {
 
     #[test]
     fn get_unknown_skill_errors() {
-        let err = get("does-not-exist").unwrap_err();
+        let err = get("does-not-exist", false).unwrap_err();
         assert!(err.to_string().contains("unknown skill"));
+    }
+
+    #[test]
+    fn full_flag_inlines_embedded_references() {
+        let skills = discover().unwrap();
+        let core = skills.iter().find(|s| s.name == "core").unwrap();
+        let extra = supporting_content(&core.source);
+        let text = String::from_utf8(extra).unwrap();
+        assert!(text.contains("### core/references/gotchas.md"));
+        assert!(text.contains("AGENT_BROWSER_CDP"));
     }
 
     #[test]

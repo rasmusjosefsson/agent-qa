@@ -12,9 +12,19 @@ fixtures, feature flags, and cleanup policy.
 
 ## Before recording
 
-Use one browser session for the full journey. If you attach agent-browser to an
-external CDP browser, set the connection before every direct browser command and
-every agent-qa command.
+Use one browser session for the full journey.
+
+**Default case — no external browser involved.** Do nothing here. Do not export
+`AGENT_BROWSER_CDP` or set `[browser]` in `agent-qa.toml`. `agent-browser` and
+`agent-qa start` manage the browser process themselves. Setting `AGENT_BROWSER_CDP`
+to a port nothing is listening on makes every subsequent command fail with a
+connection-refused error — if you did not deliberately start an external Chrome
+with `--remote-debugging-port`, do not set this variable. Go straight to
+[Record a replayable scenario](#record-a-replayable-scenario) below.
+
+**Only if the user explicitly asked to attach to their own already-running
+browser (BYO)**, set the connection before every direct browser command and
+every agent-qa command:
 
 ```bash
 export AGENT_BROWSER_CDP=9223
@@ -59,7 +69,7 @@ Drive one action. Then append one direct scenario draft. The recorder assigns
 sequential ids and injects `kind`. Do not provide either field.
 
 ```bash
-agent-browser --session qa-run open https://example.com/users
+agent-qa browser --session qa-run open https://example.com/users
 agent-qa record-step do '{
   "intent": "open users",
   "verb": "goto",
@@ -103,8 +113,24 @@ agent-qa heal-promote <sid>
 
 ## References
 
+Fetch any of these with `agent-qa skills get core --full` (inlines every file
+below), or one at a time via `agent-qa skills path core` + read on disk when
+running from a repo checkout.
+
+- `references/gotchas.md` — known footguns (env vars, daemon recovery,
+  smart-click limits). Read this first if a command result looks wrong.
 - `references/verbs.md` lists the recording and replay commands.
 - `references/schema.md` describes `scenario/2`.
 - `references/scenario-authoring.md` describes recorded setup.
+- `references/anatomy.md` — what a recorded `scenario.json` looks like end to end.
+- `references/asserts.md` — `record-step check` claim JSON grammar (role/name,
+  raw text locator, `isVisible`).
+- `references/prep.md` — `env.open`/`env.close` seeded setup and cleanup ops.
 - `references/replay.md` describes deterministic replay and manual healing.
 - `references/unique-tokens.md` describes unique replay values.
+- `references/heal.md`, `references/heal-apply.md`, `references/heal-opt-out.md`
+  — manual correction flow and its limits.
+- `references/recovery.md` — recording/replay recovery paths.
+- `references/inspect.md` — live-page debug mode with no `scenario.json` produced.
+- `references/perf-snapshot.md` — opt-in performance sidecar, orthogonal to recording.
+- `references/compare.md` — the diff verb (recording vs replay, cross-profile).

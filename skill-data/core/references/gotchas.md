@@ -1,5 +1,39 @@
 ## Gotchas
 
+- **`AGENT_BROWSER_CDP` is BYO-only. Do not set it by default.** If every
+  `agent-browser`/`agent-qa` command fails with `Connection refused` on the
+  same port, the cause is almost always a stale or speculative
+  `AGENT_BROWSER_CDP` export pointing at a port nothing is listening on — not
+  a stale daemon, a version mismatch, or a browser that needs to be launched
+  by hand. Unset the variable and retry with a plain `agent-qa browser
+  --session <name> open <url>`; agent-qa/agent-browser launch and own the
+  browser process themselves in the default (non-BYO) case. Only set
+  `AGENT_BROWSER_CDP` when you deliberately started an external Chrome with
+  `--remote-debugging-port` yourself.
+
+- **Drive gestures with `agent-qa browser <args>`, not a bare `agent-browser`
+  command.** Every agent-qa subcommand resolves and pins one exact
+  `agent-browser` binary (`AGENT_BROWSER_BIN`, wired by the Node launcher
+  from the installed npm sibling). A bare `agent-browser` shell command
+  instead resolves whatever is on `$PATH`, which can be a different version
+  from a separate `npm i -g agent-browser` install. Two versions driving the
+  same named session daemon trip "Daemon version mismatch, restarting" on
+  every call, and each restart wipes the tab back to blank mid-recording —
+  this looks like flaky navigation or a broken click target, but the real
+  cause is the version split. `agent-qa browser <args>` execs the exact same
+  pinned binary every other verb uses, so this can't happen.
+
+- **`agent-qa browser click <target>` takes a CSS selector or `@ref`, NOT an
+  accessible name.** `agent-browser`'s own `click` verb resolves a selector or
+  a snapshot `@ref` — `agent-qa browser click "Learn more"` fails with
+  `Element not found`, even when that's the exact visible link text. For a
+  name-based click, either use `agent-qa smart-click "<name>"` (does the
+  fallback ladder AND auto-records — prefer this), or
+  `agent-qa browser find role <role> click --name "<name>"` /
+  `agent-qa browser find text "<text>" click` if you need the raw gesture
+  without recording. Only fall back to an `@ref` from a fresh
+  `agent-qa aria-snapshot` when name-based matching itself is ambiguous.
+
 - **`smart-click` takes an accessible name, not a snapshot ref.** Supported
   flags are `--role`, `--session`, and `--no-record`. It first tries native DOM
   activation by role/name, then agent-browser role/name, text/chunk fallbacks,
@@ -29,9 +63,13 @@
   name identifies the entity under test, prefer a stable raw locator such as a
   test id.
 
-- **Recording is serial.** Wait for each browser action and its recording call
-  to finish before starting the next gesture. The keyframe captures the live
-  tab; concurrent actions can make it describe the wrong state.
+- **Recording is serial — never fire two commands against the same session at
+  once.** Wait for each browser action and its recording call to finish before
+  starting the next gesture, even the very first one. A session's daemon does
+  not exist until the first command touches it; two calls racing to start it
+  (e.g. a `browser open` and a `record-step` issued in the same batch) can
+  land as "daemon started concurrently with different configuration" — just
+  retry serially, one command at a time.
 
 - **`truncate` is disk bookkeeping only.** `agent-qa truncate <N>` removes
   buffered rows with index `>= N` and archives their sidecars. Re-position the
@@ -46,17 +84,21 @@
   [`recovery.md`](recovery.md).
 
 - **Label-based fill can miss wrapper-based form controls.** If
-  `agent-browser fill 'Label' '<value>'` cannot resolve a visible input, take a
-  fresh snapshot and use that input's current ref for the one browser action;
-  record the durable role/name or raw locator separately.
+  `agent-qa browser fill 'Label' '<value>'` cannot resolve a visible input,
+  take a fresh snapshot and use that input's current ref for the one browser
+  action; record the durable role/name or raw locator separately.
 
 - **Agent-browser daemon recovery is automatic once.** When the named daemon is
   alive but its child browser is gone, agent-qa closes that session and retries
   the original command once. Opt out with
   `AGENT_QA_AGENT_BROWSER_NO_AUTO_RECOVER=1` when debugging the daemon. If
-  recovery still fails, use `agent-browser close --session <name>`, then
-  `agent-browser close --all`, then `agent-browser doctor --fix`.
+  recovery still fails, use `agent-qa browser close --session <name>`, then
+  `agent-qa browser close --all`, then `agent-qa browser doctor --fix`.
 
-- **Run `verify` before declaring a recording complete.** It checks the sealed
-  scenario and its recording evidence. A row on disk or a successful browser
-  gesture alone is not completion evidence.
+- **`verify` only inspects the active (unsealed) recording buffer — run it
+  BEFORE `flush`, not after.** `flush` seals the buffer into `scenario.json`
+  and clears the active recorder state, so `agent-qa verify` run afterward
+  always fails with `no active recording` — that error means you flushed
+  already, not that verify or the recording is broken. Sequence: record every
+  step, `agent-qa verify`, then `agent-qa flush`, then `agent-qa scenario
+  check <path>` to validate the sealed file.
