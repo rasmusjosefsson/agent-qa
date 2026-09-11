@@ -95,6 +95,7 @@ fn main() -> ExitCode {
         "compare" | "diff" => compare::run(rest),
         "audit" => audit::run(rest),
         "start" => start::run(rest),
+        "browser" => browser::passthrough(rest),
         "record-step" => record_step::run(rest),
         "record-setup" => record_setup::run(rest),
         "run-step" => run_step::run(rest),
@@ -118,7 +119,7 @@ fn main() -> ExitCode {
         "heal-list" => heal_list::run(rest),
         _ => {
             eprintln!(
-                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, audit, start, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list."
+                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, audit, start, browser, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list."
             );
             eprintln!("Run `agent-qa --help` for usage.");
             Ok(2)
@@ -202,6 +203,10 @@ Verbs:
   compare <sid> [<runA>] [<runB>]   Diff per-step ARIA snapshots between two runs
   diff                          (alias of `compare`)
   start \"<intent>\"             Begin a new recording session
+  browser <args...>             Passthrough exec of the pinned agent-browser
+                                binary (same one every other verb uses) —
+                                use this instead of a bare `agent-browser`
+                                shell command to avoid daemon version drift
   record-step <do|check> <json> Append a step to the in-flight buffer
   record-setup <env-op-json>       Append one generic env.open operation
   run-step <do|check> <draft-json> Dispatch one direct step against the live session
