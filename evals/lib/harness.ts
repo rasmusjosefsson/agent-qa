@@ -240,14 +240,15 @@ Eval constraints:
 - Drive browser actions with exactly this shape: \`${agentBrowserBin} --session ${sessionName} <verb> ...\`.
 - Record actions with exactly this shape: \`AGENT_QA_SCENARIOS_DIR=${scenariosRoot} AGENT_QA_RECORD_DIR=${recordRoot} ${agentQaBin} record-step <kind> '<json>'\`.
 - After every manual agent-browser action, immediately run the matching record-step before any explanation or further browser command. Do not add a duplicate record-step after agent-qa helpers that already auto-record, such as smart-click or fill-unique.
-- Action method names such as clickSelector, clickRole, fillBySelector, and selectBySelector are record-step payload methods, not ${agentBrowserBin} verbs.
-- Waits are recorded with ${agentQaBin} record-step wait payloads. Do not run ${agentBrowserBin} wait-for-selector, waitForSelector, or wait commands; those are not eval browser verbs.
+- Action method names no longer exist. There is no \`record-step action\`, \`wait\`, \`navigation\`, or \`assert\` kind. Only \`record-step do\` (verb: goto, click, type, select, upload, ...) and \`record-step check\` (a claim) exist.
+- Element locators go under \`on\` (for \`do\`) or \`claim.subject.element\` (for \`check\`) as \`{"raw":{"kind":"css"|"text","value":"<selector-or-text>"},"reason":"<why>"}\`. \`clickSelector\`, \`fillBySelector\`, \`selectBySelector\`, \`uploadBySelector\`, and \`clickRole\` are not real payload shapes; do not use them.
+- Waits/assertions are \`record-step check\` claims (predicate \`isVisible\`/\`exists\`/\`contains\`/etc against an element or \`{"subject":{"url":true}}\`). Do not run \`${agentBrowserBin}\` wait-for-selector, waitForSelector, or wait commands; those are not eval browser verbs, and there is no \`record-step wait\`.
 - Do not pass \`--session\` to \`record-step\`, \`flush\`, or \`verify\`.
-- If recording succeeds, run flush, verify, and replay.
+- If recording succeeds, run verify, flush, and replay, in that order — \`verify\` only inspects the active buffer and always fails once \`flush\` has sealed and cleared it.
 - Keep the scenario minimal. Do not record duplicate checks for the same fact; one URL check plus one stable visible-state check is enough for simple navigation cases.
 - Stop at the first framework issue and report the command/output.
 - Stop after the first non-zero command. Do not try a corrected command, do not repair the buffer, and do not continue after parse/validation errors.
-- Payload JSON keys must match the examples exactly: navigation uses route, wait uses condition.kind plus selector/text/pattern fields, action uses method plus args, assert uses kind plus args plus intent.
+- Payload JSON keys must match the examples exactly: \`do\` uses \`verb\`/\`on\`/\`value\`, \`check\` uses \`claim.subject\`/\`predicate\`/\`value\`. There is no \`route\`, \`method\`, \`args\`, \`condition\`, or top-level \`kind\` other than \`do\`/\`check\`.
 - Do not inspect repository files, grep examples, or read existing scenarios before recording. The skill output and this prompt are the only instructions for the eval.
 - Do not edit generated artifacts by hand: no scenario.json edits, no scenario.steps.jsonl edits, and no replay artifact edits.
 - If replay fails, stop and report. Do not patch generated artifacts to make replay pass.
@@ -456,9 +457,9 @@ Record one replayable browser scenario. Use only these command shapes.
 Start:
 AGENT_QA_SCENARIOS_DIR=<dir> AGENT_QA_RECORD_DIR=<dir> agent-qa start "<intent>" --session <session>
 
-Browser actions:
+Browser actions (CSS selector or @ref only — never visible text for click/fill/upload):
 agent-browser --session <session> open <url>
-agent-browser --session <session> click <visible text or CSS selector>
+agent-browser --session <session> click <CSS selector or @ref>
 agent-browser --session <session> fill <CSS selector> <value>
 agent-browser --session <session> upload <CSS selector> <file>
 agent-browser --session <session> eval '<js expression>'
@@ -466,28 +467,42 @@ agent-browser --session <session> eval '<js expression>'
 Do not use agent-browser launch, snapshot, wait, wait-for-selector, clickSelector, fillBySelector, selectBySelector, uploadBySelector, or clickRole as browser verbs. Do not add --url to open or --js to eval; pass the URL/expression as the next positional argument.
 Quote CSS selectors that contain #, [, ], quotes, spaces, or shell metacharacters, for example agent-browser --session <session> fill '#search_product' jeans and agent-browser --session <session> click 'a[href="/test_cases"]'.
 
-Record immediately after each manual browser action:
-agent-qa record-step navigation '{"route":"https://example.com/path"}'
-agent-qa record-step action '{"method":"clickSelector","args":["#selector"],"intent":"click target"}'
-agent-qa record-step action '{"method":"fillBySelector","args":["#selector","value"],"intent":"fill target"}'
-agent-qa record-step action '{"method":"selectBySelector","args":["#selector","value"],"intent":"select option"}'
-agent-qa record-step action '{"method":"uploadBySelector","args":["#selector","evals/fixtures/file.txt"],"intent":"upload file"}'
+Only two step kinds exist: do and check. There is no navigation, action, wait, or assert kind.
 
-Waits/checks:
-agent-qa record-step wait '{"condition":{"kind":"selector","selector":"#selector"},"intent":"selector visible"}'
-agent-qa record-step wait '{"condition":{"kind":"selectorText","selector":"#selector","text":"Expected text"},"intent":"text visible"}'
-agent-qa record-step wait '{"condition":{"kind":"text","text":"Expected text"},"intent":"text visible"}'
-agent-qa record-step wait '{"condition":{"kind":"url","pattern":"/path"},"intent":"url reached"}'
-agent-qa record-step assert '{"kind":"url","args":["/path"],"intent":"url reached"}'
+Navigation (verb goto):
+agent-qa record-step do '{"intent":"open the page","verb":"goto","value":{"from":"literal","literal":"https://example.com/path"}}'
 
-No aliases or invented keys: navigation not nav, route not url, condition.kind not selector at top level, text not pattern for text waits. Do not add notes or timeout keys.
-CSS selectors do not go in assert present/absent args; use wait selector/selectorText for CSS checks.
+Click (verb click):
+agent-qa record-step do '{"intent":"click target","verb":"click","on":{"raw":{"kind":"css","value":"#selector"},"reason":"css selector from the page"}}'
+
+Fill (verb type):
+agent-qa record-step do '{"intent":"fill target","verb":"type","on":{"raw":{"kind":"css","value":"#selector"},"reason":"css selector from the page"},"value":{"from":"literal","literal":"value"}}'
+
+Select an option (verb select):
+agent-qa record-step do '{"intent":"select option","verb":"select","on":{"raw":{"kind":"css","value":"#selector"},"reason":"css selector from the page"},"value":{"from":"literal","literal":"value"}}'
+
+Upload a file (verb upload):
+agent-qa record-step do '{"intent":"upload file","verb":"upload","on":{"raw":{"kind":"css","value":"#selector"},"reason":"css selector from the page"},"value":{"from":"literal","literal":"evals/fixtures/file.txt"}}'
+
+Element visible by CSS (check, predicate isVisible):
+agent-qa record-step check '{"intent":"selector visible","claim":{"subject":{"element":{"raw":{"kind":"css","value":"#selector"},"reason":"css selector from the page"}},"predicate":"isVisible"}}'
+
+Element visible by exact visible text, only when no stable CSS selector exists (check, raw text locator):
+agent-qa record-step check '{"intent":"text visible","claim":{"subject":{"element":{"raw":{"kind":"text","value":"Expected text"},"reason":"no stable selector"}},"predicate":"isVisible"}}'
+
+Element's text content contains an expected string (check, attribute text):
+agent-qa record-step check '{"intent":"selector has expected text","claim":{"subject":{"element":{"raw":{"kind":"css","value":"#selector"},"reason":"css selector from the page"},"attribute":"text"},"predicate":"contains","value":"Expected text"}}'
+
+Current URL contains a path (check, url subject):
+agent-qa record-step check '{"intent":"url reached","claim":{"subject":{"url":true},"predicate":"contains","value":"/path"}}'
+
+No aliases or invented keys: kind is only "do" or "check" (never "navigation", "action", "wait", or "assert"); "verb" not "method"; "on"/"value" not "args"; "claim.subject"/"predicate" not "condition". Do not add "notes" or "timeout" keys.
 Do not record duplicate steps after smart-click/fill-unique if you use them; prefer manual browser action plus record-step in evals.
 Stop after the first non-zero command. Do not repair, retry, truncate, or continue.
 
-Finish:
-agent-qa flush
+Finish, in this exact order (verify only inspects the active buffer and always fails once flush has sealed it):
 agent-qa verify
+agent-qa flush
 agent-qa replay <sid> --session <session>-replay
 EOF
   exit 0
