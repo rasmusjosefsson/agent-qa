@@ -996,6 +996,29 @@ pub fn close_session(session: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// `agent-qa browser <args...>` — passthrough exec of the exact
+/// `AGENT_BROWSER_BIN` every other agent-qa subcommand already uses,
+/// stdio inherited, raw args forwarded untouched.
+///
+/// Driving a browser gesture (open/click/type/snapshot) is normally the
+/// caller's job, run as a bare shell `agent-browser` command per the core
+/// skill. That bare command resolves whatever `agent-browser` is on
+/// $PATH, which can silently drift from the version agent-qa itself is
+/// pinned to (`AGENT_BROWSER_BIN`, set by the Node launcher from the
+/// resolved npm sibling dependency). Two different versions driving the
+/// same named session makes the daemon see a "version mismatch" on every
+/// call and restart, which resets the tab to blank mid-recording. Route
+/// through this verb instead of bare `agent-browser` and there is only
+/// ever one resolved binary in play.
+pub fn passthrough(args: &[String]) -> anyhow::Result<u8> {
+    let bin = resolve_bin()?;
+    let status = Command::new(&bin)
+        .args(args)
+        .status()
+        .map_err(|e| AgentBrowserError::Spawn { source: e })?;
+    Ok(status.code().unwrap_or(1).clamp(0, 255) as u8)
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
