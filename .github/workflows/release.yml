@@ -7,8 +7,8 @@ on:
 # packages, then publishes the umbrella `agent-qa` package that depends on
 # them via optionalDependencies. Tag the commit (e.g. `v0.0.1`) to trigger.
 #
-# Scope: macOS only (darwin-arm64, darwin-x64). Add linux/win back to the
-# matrix + umbrella optionalDependencies if you ever need them.
+# Matrix jobs run in parallel with fail-fast: false, so a slow or failed
+# Windows build never blocks the macOS builds from finishing.
 
 jobs:
   build:
@@ -26,6 +26,10 @@ jobs:
             runner: macos-14
             target: x86_64-apple-darwin
             ext: ""
+          - platform: win32-x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            ext: ".exe"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

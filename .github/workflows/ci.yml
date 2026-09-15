@@ -25,6 +25,22 @@ jobs:
         working-directory: cli
         run: cargo fmt --check
 
+  test-windows:
+    name: test (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+      - name: build
+        working-directory: cli
+        run: cargo build --locked
+      - name: test
+        working-directory: cli
+        run: cargo test --locked
+
   smoke-install:
     name: smoke (npm install local)
     needs: test
