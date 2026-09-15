@@ -51,7 +51,7 @@ function useSidebar() {
 }
 
 function SidebarProvider({
-  defaultOpen = true,
+  defaultOpen,
   open: openProp,
   onOpenChange: setOpenProp,
   className,
@@ -68,7 +68,14 @@ function SidebarProvider({
 
   // This is the internal state of the sidebar.
   // We use openProp and setOpenProp for control from outside the component.
-  const [_open, _setOpen] = React.useState(defaultOpen)
+  // Read the persisted cookie up front so a collapsed sidebar doesn't flash
+  // expanded on every (re)load — the cookie is written on every toggle.
+  const [_open, _setOpen] = React.useState(() => {
+    if (defaultOpen !== undefined) return defaultOpen
+    if (typeof document === "undefined") return true
+    const match = document.cookie.match(/(?:^|;\s*)sidebar_state=(true|false)/)
+    return match ? match[1] === "true" : true
+  })
   const open = openProp ?? _open
   const setOpen = React.useCallback(
     (value: boolean | ((value: boolean) => boolean)) => {

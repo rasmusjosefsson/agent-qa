@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { getCases, upsertCase } from '@/lib/cases-api'
+import { navigate } from '@/router'
 import type { CaseWithScenario } from './types'
 import { StatusBadge } from './status'
 
@@ -39,7 +40,7 @@ function fmtAgo(ts: number | string | null | undefined): string {
 }
 
 const gotoCase = (id: string) => {
-  window.location.href = `/cases?id=${encodeURIComponent(id)}`
+  navigate(`/cases?id=${encodeURIComponent(id)}`)
 }
 
 export function CaseList() {
