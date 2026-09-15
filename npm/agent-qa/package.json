@@ -26,7 +26,7 @@
     "README.md"
   ],
   "dependencies": {
-    "agent-browser": "0.36.0"
+    "agent-browser": "0.37.1"
   },
   "optionalDependencies": {
     "@earendil-works/pi-coding-agent": "0.80.2",
