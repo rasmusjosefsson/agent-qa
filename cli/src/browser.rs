@@ -28,6 +28,12 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+/// `CREATE_NO_WINDOW` — suppresses the console window flash when agent-browser
+/// child processes are spawned from a GUI/web-UI parent on Windows.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -399,9 +405,12 @@ fn spawn_once(
     } else {
         cmd.stderr(Stdio::inherit());
     }
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| AgentBrowserError::Spawn { source: e })?;
+    let mut child = {
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.spawn()
+            .map_err(|e| AgentBrowserError::Spawn { source: e })?
+    };
     let started = Instant::now();
     loop {
         if child
