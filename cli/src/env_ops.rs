@@ -19,6 +19,11 @@
 //! per the schema; honour the `onFailure` axis here — `continue` lets
 //! the next op proceed; default `abort` propagates the error.
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value as Json;
 
@@ -397,14 +402,17 @@ fn bootstrap_profile(name: &str, session: &str) -> Result<()> {
         return Ok(());
     }
 
-    let status = Command::new(exe)
-        .args([
-            "profile-bootstrap",
-            name,
-            "--session",
-            session,
-            current_browser_mode_flag(),
-        ])
+    let mut cmd = Command::new(exe);
+    cmd.args([
+        "profile-bootstrap",
+        name,
+        "--session",
+        session,
+        current_browser_mode_flag(),
+    ]);
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let status = cmd
         .status()
         .with_context(|| format!("spawn agent-qa profile-bootstrap {name}"))?;
     if !status.success() {

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ComponentProps, type ComponentType, type SVGProps } from "react"
+import { useEffect, useState, type AnchorHTMLAttributes, type ComponentProps, type ComponentType, type ReactNode, type SVGProps } from "react"
 import {
   BookOpenIcon,
   ClipboardListIcon,
@@ -15,6 +15,7 @@ import {
 } from "lucide-react"
 
 import type { Tab } from "../AppShell"
+import { useSpaLink } from "../router"
 import {
   Sidebar,
   SidebarContent,
@@ -82,13 +83,38 @@ function NavRow({ item, tab }: { item: NavItem; tab: Tab }) {
   }
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton asChild isActive={item.tab === tab} tooltip={item.label}>
-        <a href={item.href}>
+      <SidebarMenuButton
+        asChild
+        isActive={item.tab === tab}
+        tooltip={item.label}
+      >
+        {/* SPA link: plain click pushes state (no document reload); modified
+            clicks keep native new-tab behaviour. */}
+        <SpaAnchor href={item.href}>
           <Icon />
           <span>{item.label}</span>
-        </a>
+        </SpaAnchor>
       </SidebarMenuButton>
     </SidebarMenuItem>
+  )
+}
+
+function SpaAnchor({
+  href,
+  children,
+  ...rest
+}: {
+  href: string
+  children: ReactNode
+} & AnchorHTMLAttributes<HTMLAnchorElement>) {
+  const onClick = useSpaLink(href)
+  // Forward everything Radix Slot merges onto us (className for the active /
+  // hover pill, data attributes, …) — dropping them leaves an unstyled anchor
+  // and Tailwind preflight stacks the icon over the label.
+  return (
+    <a href={href} {...rest} onClick={onClick}>
+      {children}
+    </a>
   )
 }
 
@@ -107,7 +133,7 @@ export function AppSidebar({ tab, ...props }: { tab: Tab } & ComponentProps<type
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton asChild size="lg" tooltip={version ? `agent-qa v${version}` : 'agent-qa'}>
-              <a href="/cases">
+              <SpaAnchor href="/cases">
                 <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
                   <TestTubeDiagonalIcon className="size-4" />
                 </div>
@@ -117,7 +143,7 @@ export function AppSidebar({ tab, ...props }: { tab: Tab } & ComponentProps<type
                     QA workbench{version ? ` · v${version}` : ''}
                   </span>
                 </div>
-              </a>
+              </SpaAnchor>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

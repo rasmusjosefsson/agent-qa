@@ -11,6 +11,7 @@ import {
   type ReplayOpts,
 } from '@/lib/runs-api'
 import { isRunLive } from './rows'
+import { useRoute } from '@/router'
 import type { RunDetail, RunSummary, ScenarioDef, ScenarioStep, ScenarioSummary, Selection } from './types'
 
 const EMPTY_SEL: Selection = { sid: null, runId: null, stepIdx: null, tab: 'step' }
@@ -233,26 +234,46 @@ export function useRuns(): RunsApi {
   }, [loadScenarios, refreshRun])
 
   // Boot + 1.5s live poll (mirrors app.js pollTick).
+  // Deep-link: `/?sid=<sid>[&run=<runId>]` (used by the plan dashboard to
+  // open a member case's live/last run). Honors the explicit sid over the
+  // generic active-run auto-follow. Reactive to the SPA route so in-app
+  // `navigate('/?sid=…')` selects without a document reload.
+  const route = useRoute()
+  const routeSearch = route.search
+
+  // Apply the ?sid=&run= deep-link whenever the SPA route changes (including
+  // first mount). Skipped when no sid is present so back-nav to `/` keeps the
+  // current selection instead of resetting it.
   useEffect(() => {
     let cancelled = false
-    // Deep-link: `/?sid=<sid>[&run=<runId>]` (used by the plan dashboard to
-    // open a member case's live/last run). Honors the explicit sid over the
-    // generic active-run auto-follow.
-    loadScenarios()
-      .then(async (list) => {
-        if (cancelled) return
-        const params = new URLSearchParams(window.location.search)
-        const wantSid = params.get('sid')
-        const sc = wantSid ? (list || []).find((s) => s.sid === wantSid) : undefined
-        if (!wantSid || !sc) return
-        autoFollow.current = false
-        setExpanded((prev) => new Set(prev).add(wantSid))
-        await loadRuns(wantSid)
-        const runId = params.get('run') || sc.activeRunId || sc.latestRunId
-        if (runId) await selectRun(wantSid, runId, false)
-        else await selectScenario(wantSid)
-      })
-      .catch(() => {})
+    const params = new URLSearchParams(routeSearch)
+    const wantSid = params.get('sid')
+    if (!wantSid) return () => {}
+    void (async () => {
+      let list: ScenarioSummary[]
+      try {
+        list = await loadScenarios()
+      } catch {
+        return
+      }
+      if (cancelled) return
+      const sc = (list || []).find((s) => s.sid === wantSid)
+      if (!sc) return
+      autoFollow.current = false
+      setExpanded((prev) => new Set(prev).add(wantSid))
+      await loadRuns(wantSid)
+      if (cancelled) return
+      const runId = params.get('run') || sc.activeRunId || sc.latestRunId
+      if (runId) await selectRun(wantSid, runId, false)
+      else await selectScenario(wantSid)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [routeSearch, loadScenarios, loadRuns, selectRun, selectScenario])
+
+  useEffect(() => {
+    void loadScenarios().catch(() => {})
     const id = setInterval(() => {
       void (async () => {
         if (!liveRef.current) return
@@ -264,10 +285,9 @@ export function useRuns(): RunsApi {
       })().catch(() => {})
     }, 1500)
     return () => {
-      cancelled = true
       clearInterval(id)
     }
-  }, [loadScenarios, refreshRun, loadRuns, selectRun, selectScenario])
+  }, [loadScenarios, refreshRun, loadRuns])
 
   return {
     root,

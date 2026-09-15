@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
+import { navigate } from '@/router'
 import {
   buildJiraImportPrompt,
   buildXrayImportPrompt,
@@ -82,7 +83,7 @@ export function KnowledgePage() {
 
   const toCopilot = (prompt: string) => {
     setBusy(true)
-    window.location.href = `/chat?ask=${encodeURIComponent(prompt)}`
+    navigate(`/chat?ask=${encodeURIComponent(prompt)}`)
   }
   const importJira = () => {
     const k = key.trim()

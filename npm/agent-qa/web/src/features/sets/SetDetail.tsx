@@ -21,11 +21,12 @@ import {
 } from '@/components/ui/dialog'
 import { getCases } from '@/lib/cases-api'
 import { deleteSet, getSet, upsertSet } from '@/lib/sets-api'
+import { navigate } from '@/router'
 import type { CaseWithScenario } from '@/features/cases/types'
 import type { SetMode, SetRecord } from './types'
 
 const back = () => {
-  window.location.href = '/sets'
+  navigate('/sets')
 }
 
 export function SetDetail({ id }: { id: string }) {

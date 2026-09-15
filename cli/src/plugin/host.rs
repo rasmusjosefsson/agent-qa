@@ -5,9 +5,14 @@
 //! actionable information when something is wrong with a third-party plugin.
 
 use std::io::Write;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 use serde_json::{json, Value};
 use thiserror::Error;
@@ -100,6 +105,8 @@ pub fn invoke(
     // open fds and the kernel refuses to exec a file open-for-write.
     // The window is microseconds; one short backoff clears it. This is
     // a pre-existing test flake that bit CI on PR #2.
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
     let mut spawn_attempt = || cmd.spawn();
     let mut child = match spawn_attempt() {
         Ok(c) => c,

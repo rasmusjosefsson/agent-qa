@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { getCase, upsertCase, deleteCase, linkCase } from '@/lib/cases-api'
 import { getScenarios, startReplay } from '@/lib/runs-api'
+import { navigate, useSpaLink } from '@/router'
 import type { ScenarioSummary } from '@/features/runs/types'
 import type { CaseRecord, InputDecl } from './types'
 import { extractTokens, reconcileInputs } from './tokens'
@@ -174,7 +175,7 @@ export function CaseDetail({ id }: { id: string }) {
     // Mark a pending run so we can adopt the resulting scenario on return.
     localStorage.setItem(runMarkerKey(id), String(Date.now()))
     const prompt = buildRunPrompt(saved, window.location.origin)
-    window.location.href = `/chat?ask=${encodeURIComponent(prompt)}`
+    navigate(`/chat?ask=${encodeURIComponent(prompt)}`)
   }
 
   const replay = async () => {
@@ -182,7 +183,7 @@ export function CaseDetail({ id }: { id: string }) {
     setErr('')
     const r = await startReplay(loaded.scenarioSid)
     if (!r.ok) setErr(`Replay did not start: ${r.error}`)
-    else window.location.href = '/'
+    else navigate('/')
   }
 
   // Link-back poller: after a "Run with agent", watch for the recorded scenario
@@ -245,13 +246,7 @@ export function CaseDetail({ id }: { id: string }) {
     <div className="flex min-h-0 flex-1 flex-col">
       {/* header */}
       <div className="flex items-center gap-3 border-b border-border px-4 py-2.5">
-        <a
-          href="/cases"
-          className="flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
-          aria-label="Back to cases"
-        >
-          <ArrowLeftIcon className="size-4" />
-        </a>
+        <BackToCases />
         <Input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
@@ -262,7 +257,7 @@ export function CaseDetail({ id }: { id: string }) {
           {flash && <span className="text-xs text-emerald-400">{flash}</span>}
           {loaded.scenarioSid && (
             <>
-              <Button size="sm" variant="ghost" onClick={() => (window.location.href = '/')}>
+              <Button size="sm" variant="ghost" onClick={() => navigate('/')}>
                 <ExternalLinkIcon /> Open in Runs
               </Button>
               <Button size="sm" variant="outline" onClick={() => void replay()}>
@@ -424,7 +419,7 @@ export function CaseDetail({ id }: { id: string }) {
                   <AlertDialogCancel>Cancel</AlertDialogCancel>
                   <AlertDialogAction
                     onClick={() => {
-                      void deleteCase(id).then(() => (window.location.href = '/cases'))
+                      void deleteCase(id).then(() => navigate('/cases'))
                     }}
                   >
                     Delete
@@ -436,6 +431,20 @@ export function CaseDetail({ id }: { id: string }) {
         </aside>
       </div>
     </div>
+  )
+}
+
+function BackToCases() {
+  const onClick = useSpaLink('/cases')
+  return (
+    <a
+      href="/cases"
+      onClick={onClick}
+      className="flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+      aria-label="Back to cases"
+    >
+      <ArrowLeftIcon className="size-4" />
+    </a>
   )
 }
 

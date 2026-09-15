@@ -34,12 +34,9 @@ const LABELS: Record<Tab, string> = {
   plugins: "Extensions",
 }
 
-// App shell: collapsible sidebar (shadcn sidebar-07) + a thin topbar, shared
-// across the MPA entries (main-cases / main-sets / main-plans / main-runs /
-// main-editor / main-chat / main-knowledge). Each entry passes its tab; the
-// sidebar highlights it and the
-// page renders as children. Collapse state persists across full-page nav via
-// the sidebar's `sidebar_state` cookie (path=/).
+// App shell: collapsible sidebar (shadcn sidebar-07) + a thin topbar, mounted
+// once for the whole SPA session. Page content swaps inside without a document
+// reload, so the sidebar / theme / scroll state survive navigation.
 export function AppShell({ tab, children }: { tab: Tab; children?: ReactNode }) {
   return (
     <TooltipProvider delayDuration={0}>
