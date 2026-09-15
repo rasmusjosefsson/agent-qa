@@ -203,7 +203,7 @@ export function ChatPage() {
       {/* Chat switcher — tabs */}
       <div className="flex flex-col border-b border-border lg:flex-row">
         <div
-          className="flex min-w-0 items-center gap-0.5 overflow-x-auto px-3"
+          className="flex min-w-0 items-center gap-0.5 overflow-x-auto overflow-y-hidden px-3"
           style={isDesktop ? { flexBasis: `${leftPct}%`, flexGrow: 0, flexShrink: 0 } : undefined}
         >
           {chats.map((c, i) => {
@@ -449,6 +449,7 @@ function ChatConversation({
       className="flex min-h-0 min-w-0 flex-1 flex-col"
       style={isDesktop ? { flexBasis: `${leftPct}%`, flexGrow: 0, flexShrink: 0 } : undefined}
     >
+          {state.hydrated && !state.available && <ChatSetupNotice reason={state.reason} />}
           <div className="flex items-center justify-end border-b border-border px-2 py-1">
             <button
               type="button"
@@ -464,13 +465,13 @@ function ChatConversation({
           <div
             ref={threadRef}
             onScroll={onScroll}
-            className="min-h-0 flex-1 space-y-6 overflow-auto px-4 py-3"
+            className="min-h-0 flex-1 space-y-6 overflow-auto px-5 py-4"
           >
             {empty ? (
-              <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
+              <div className="mx-auto flex h-full w-full max-w-xl flex-col items-center justify-center gap-5 text-center">
                 <div>
-                  <div className="text-base font-semibold">Chat with your agent-qa agent</div>
-                  <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+                  <div className="text-[15px] font-semibold tracking-tight">Chat with your agent-qa agent</div>
+                  <p className="mx-auto mt-1.5 max-w-md text-[13px] leading-relaxed text-muted-foreground">
                     Same skills, tools, and models as the terminal. Ask it to record a scenario,
                     replay a run, run a command, or explain a failure. When it opens a browser,
                     watch it live on the right.
@@ -484,7 +485,7 @@ function ChatConversation({
                       title={s.prompt}
                       disabled={!state.available}
                       onClick={() => sendSuggestion(s.prompt)}
-                      className="rounded-sm border border-border bg-transparent px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                      className="rounded-lg border border-border bg-card px-3.5 py-2 text-xs font-medium text-muted-foreground shadow-sm transition-all hover:border-ring/50 hover:text-foreground hover:shadow disabled:opacity-50"
                     >
                       {s.title}
                     </button>
@@ -544,14 +545,6 @@ function ChatConversation({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      {state.hydrated && !state.available && (
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
-          Chat unavailable{state.reason ? ` — ${state.reason}` : ''}. Install the pi SDK
-          (<code className="font-mono">@earendil-works/pi-coding-agent</code>) or set{' '}
-          <code className="font-mono">AGENT_QA_PI_SDK</code>.
-        </div>
-      )}
-
       <div ref={containerRef} className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row lg:gap-0">
         {conversationColumn}
 
@@ -733,6 +726,46 @@ function ConnectBar({ cid }: { cid: string }) {
           {msg.text}
         </span>
       )}
+    </div>
+  )
+}
+
+// Chat agent isn't set up (pi SDK missing) — a calm setup nudge with a
+// copy-paste install CTA, not an error. The server reason already names the
+// fix, so we don't repeat the install instructions in prose.
+const PI_INSTALL_CMD = 'npm i -g @earendil-works/pi-coding-agent'
+
+function ChatSetupNotice({ reason }: { reason?: string }) {
+  const [copied, setCopied] = useState(false)
+
+  const copyInstall = async () => {
+    try {
+      await navigator.clipboard.writeText(PI_INSTALL_CMD)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    } catch {
+      /* clipboard blocked — user can still read the command */
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-border bg-muted/30 px-4 py-2.5">
+      <PlugZapIcon className="size-4 shrink-0 text-muted-foreground" />
+      <div className="min-w-0 flex-1 basis-56">
+        <div className="text-[13px] font-semibold tracking-tight">Finish chat setup</div>
+        <div className="truncate text-xs text-muted-foreground" title={reason || 'The chat agent needs the pi SDK.'}>
+          {reason || 'The chat agent needs the pi SDK.'}
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={() => void copyInstall()}
+        title="Copy the install command"
+        className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 font-mono text-[11px] text-muted-foreground shadow-sm transition-colors hover:text-foreground"
+      >
+        {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
+        {copied ? 'Copied' : PI_INSTALL_CMD}
+      </button>
     </div>
   )
 }

@@ -38,7 +38,7 @@ const STATUS_TONE: Record<string, string> = {
 function VerbBadge({ verb }: { verb: unknown }) {
   const cat = verbCat(verb)
   return (
-    <span className={cn('shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium', VERB_TONE[cat])}>
+    <span className={cn('shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-semibold leading-none', VERB_TONE[cat])}>
       {verbBadge(verb)}
     </span>
   )
@@ -82,10 +82,10 @@ export function CenterPane({
       : null
     return (
       <Pane>
-        <div className="flex flex-col items-stretch gap-3 border-b border-border px-4 py-3 @3xl:flex-row @3xl:items-center @3xl:justify-between">
+        <div className="flex flex-col items-stretch gap-3 border-b border-border px-5 py-3.5 @3xl:flex-row @3xl:items-center @3xl:justify-between">
           <div className="min-w-0 @3xl:flex-1">
-            <h2 className="truncate text-sm font-semibold">{scenarioDef.intent || scenarioDef.id || 'Scenario'}</h2>
-            <div className="truncate text-xs text-muted-foreground">
+            <h2 className="truncate text-[15px] font-semibold tracking-tight">{scenarioDef.intent || scenarioDef.id || 'Scenario'}</h2>
+            <div className="tnum mt-0.5 truncate text-xs text-muted-foreground">
               {steps.length} step{steps.length === 1 ? '' : 's'} · recorded {fmtRunTime(sel.sid)}
               {lastRun
                 ? ` · last run ${relRunTime(lastRun.runId)}${lastRun.summary ? ' · ' + cleanSummary(lastRun.summary) : ''}`
@@ -141,7 +141,7 @@ export function CenterPane({
                 onClick={() => onReplay(sel.sid!)}
                 disabled={busy}
                 title={busy ? 'A replay is already running for this scenario' : undefined}
-                className="flex shrink-0 items-center gap-2 rounded-md border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-card"
+                className="flex shrink-0 items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition-all hover:brightness-110 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:brightness-100"
               >
                 {busy ? (
                   <>
@@ -149,19 +149,19 @@ export function CenterPane({
                   </>
                 ) : (
                   <>
-                    <PlayIcon className="size-4 fill-emerald-400 text-emerald-400" /> Replay
+                    <PlayIcon className="size-4 fill-current" /> Replay
                   </>
                 )}
               </button>
             </div>
           )}
         </div>
-        <ol className="min-h-0 flex-1 overflow-auto p-2">
+        <ol className="min-h-0 flex-1 space-y-px overflow-auto p-2.5">
           {steps.map((st, i) => (
-            <li key={i} className="flex items-center gap-2 rounded-md px-2 py-1.5">
-              <span className="w-5 text-right text-xs text-muted-foreground">{i}</span>
+            <li key={i} className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 transition-colors hover:bg-muted/60">
+              <span className="tnum w-5 shrink-0 text-right text-xs text-muted-foreground/70">{i}</span>
               <VerbBadge verb={st.verb} />
-              <span className="truncate text-sm">{st.intent || stepText(st)}</span>
+              <span className="truncate text-[13px]">{st.intent || stepText(st)}</span>
             </li>
           ))}
           {steps.length === 0 && <li className="px-2 py-3 text-xs text-muted-foreground">This scenario has no steps.</li>}
@@ -271,10 +271,10 @@ export function CenterPane({
                   disabled={pending}
                   onClick={pending ? undefined : () => runs.selectStep(st.idx)}
                   className={cn(
-                    'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left',
-                    selected && 'bg-muted',
+                    'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
+                    selected && 'bg-accent ring-1 ring-inset ring-border',
                     isCurrent && 'ring-1 ring-amber-400/40',
-                    pending ? 'opacity-50' : 'hover:bg-muted/50'
+                    pending ? 'opacity-50' : !selected && 'hover:bg-muted/60'
                   )}
                 >
                   <span className={cn('w-4 text-center', STATUS_TONE[st.status || ''] || 'text-muted-foreground')}>
@@ -300,10 +300,23 @@ export function CenterPane({
     )
   }
 
+  // Nothing selected at all: one welcoming empty state (the sidebar carries
+  // its own). Copy depends on whether any scenario exists yet.
+  const hasAnyScenario = (runs.scenarios || []).length > 0
   return (
     <Pane>
-      <div className="flex flex-1 items-center justify-center p-8 text-sm text-muted-foreground">
-        Select a run from the left.
+      <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center">
+        <div className="grid size-10 place-items-center rounded-xl border border-border bg-muted/50 text-muted-foreground">
+          <PlayIcon className="size-4" />
+        </div>
+        <div className="text-[15px] font-semibold tracking-tight">
+          {hasAnyScenario ? 'No run selected' : 'Record your first scenario'}
+        </div>
+        <div className="max-w-xs text-[13px] leading-relaxed text-muted-foreground">
+          {hasAnyScenario
+            ? 'Pick a scenario on the left to preview its steps, then press Replay.'
+            : 'Head to Chat and ask it to record a flow — it will show up here ready to replay.'}
+        </div>
       </div>
     </Pane>
   )

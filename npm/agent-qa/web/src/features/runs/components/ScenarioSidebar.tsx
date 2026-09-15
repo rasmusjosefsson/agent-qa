@@ -33,8 +33,8 @@ export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
   const { scenarios, expanded, runsBySid, sel } = runs
   return (
     <nav className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="flex items-center justify-between border-b border-border px-3 py-2">
-        <span className="text-xs font-medium text-muted-foreground">Scenarios</span>
+      <div className="flex items-center justify-between border-b border-border px-3 py-2.5">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Scenarios</span>
         <button
           type="button"
           title="Refresh"
@@ -45,27 +45,32 @@ export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
           <RefreshCwIcon className="size-3.5" />
         </button>
       </div>
-      <ul className="min-h-0 flex-1 overflow-auto p-1.5">
+      <ul className="min-h-0 flex-1 space-y-0.5 overflow-auto p-2">
         {scenarios.length === 0 && (
-          <li className="px-2 py-3 text-xs text-muted-foreground">No scenarios under the root yet.</li>
+          <li className="flex flex-col items-center gap-1.5 px-3 py-10 text-center">
+            <div className="text-[13px] font-semibold tracking-tight">No scenarios yet</div>
+            <div className="max-w-[16rem] text-xs leading-relaxed text-muted-foreground">
+              Record your first scenario from Chat or the CLI — it will show up here.
+            </div>
+          </li>
         )}
         {scenarios.map((sc) => {
           const verdict = scenarioVerdict(sc.latestRun)
           const open = expanded.has(sc.sid)
           const list = runsBySid[sc.sid]
           return (
-            <li key={sc.sid} className="group mb-0.5">
-              <div className="flex items-center rounded-md hover:bg-muted/50">
+            <li key={sc.sid} className="group">
+              <div className="flex items-center rounded-lg transition-colors hover:bg-muted/60">
                 <button
                   type="button"
                   onClick={() => void runs.toggleScenario(sc.sid)}
-                  className="min-w-0 flex-1 px-2 py-1.5 text-left"
+                  className="min-w-0 flex-1 rounded-lg px-2.5 py-2 text-left focus-visible:outline-2 focus-visible:outline-ring"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="truncate text-sm">{sc.intent || sc.scenarioId || sc.sid}</span>
+                    <span className="truncate text-[13px] font-medium leading-tight">{sc.intent || sc.scenarioId || sc.sid}</span>
                     {verdict && <Badge tone={verdict}>{verdict}</Badge>}
                   </div>
-                  <div className="truncate text-[11px] text-muted-foreground" title={fmtRunTime(sc.sid)}>
+                  <div className="tnum mt-0.5 truncate text-[11px] text-muted-foreground/80" title={fmtRunTime(sc.sid)}>
                     {relRunTime(sc.sid)}
                   </div>
                 </button>
