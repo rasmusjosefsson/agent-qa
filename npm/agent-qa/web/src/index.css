@@ -192,7 +192,25 @@
     }
   html {
     @apply font-sans;
+    background-color: var(--background);
   }
+  #root {
+    min-height: 100svh;
+    background-color: var(--background);
+  }
+}
+
+/* SPA page swap: a soft 120ms enter so tab switches feel instant without a
+   document-reload flash. Keyed per tab+query in App.tsx. */
+@keyframes aqa-page-in {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.aqa-page-enter {
+  animation: aqa-page-in 120ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .aqa-page-enter { animation: none; }
 }
 
 /* Shimmering “Thinking…” label (CSS-only; avoids a motion/framer dependency). */

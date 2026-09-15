@@ -1,14 +1,13 @@
 import { SetList } from './SetList'
 import { SetDetail } from './SetDetail'
+import { useRoute } from '@/router'
 
-// MPA page: `/sets` = list, `/sets?id=<slug>` = detail (full reload between the
-// two — no client router, consistent with the other entries).
+// SPA page: `/sets` = list, `/sets?id=<slug>` = detail (query-reactive, no
+// document reload — the App shell swaps content client-side).
 export function SetsPage() {
-  const id =
-    typeof window !== 'undefined'
-      ? new URLSearchParams(window.location.search).get('id')
-      : null
-  return id ? <SetDetail id={id} /> : <SetList />
+  const route = useRoute()
+  const id = new URLSearchParams(route.search).get('id')
+  return id ? <SetDetail key={id} id={id} /> : <SetList />
 }
 
 export default SetsPage

@@ -35,17 +35,18 @@ import { StatusBadge, caseStatus } from '@/features/cases/status'
 import { ReplayLive } from '@/features/runs/components/ReplayLive'
 import { Lightbox } from '@/features/runs/components/Lightbox'
 import { buildXrayExportPrompt, type XrayExportItem } from '@/features/knowledge/exportPrompt'
+import { navigate } from '@/router'
 
 const back = () => {
-  window.location.href = '/plans'
+  navigate('/plans')
 }
 const gotoCase = (id: string) => {
-  window.location.href = `/cases?id=${encodeURIComponent(id)}`
+  navigate(`/cases?id=${encodeURIComponent(id)}`)
 }
 // Open the full run view (live browser stream + per-step screenshots/pass-fail)
 // for a member case's scenario.
 const gotoRun = (sid: string) => {
-  window.location.href = `/?sid=${encodeURIComponent(sid)}`
+  navigate(`/?sid=${encodeURIComponent(sid)}`)
 }
 
 // "step 3/5" while a case is mid-replay, from its scenario summary. currentIdx
@@ -274,7 +275,7 @@ export function PlanDetail({ id }: { id: string }) {
   const exportXray = () => {
     if (xrayItems.length === 0) return
     const prompt = buildXrayExportPrompt(name.trim() || id, xrayItems, window.location.origin)
-    window.location.href = `/chat?ask=${encodeURIComponent(prompt)}`
+    navigate(`/chat?ask=${encodeURIComponent(prompt)}`)
   }
 
   const remove = async () => {

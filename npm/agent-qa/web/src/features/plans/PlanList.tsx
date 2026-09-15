@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { getPlans, upsertPlan } from '@/lib/plans-api'
+import { navigate } from '@/router'
 import type { PlanWithCount } from './types'
 
 function slugify(s: string): string {
@@ -36,7 +37,7 @@ function fmtAgo(ts: number | null | undefined): string {
 }
 
 const gotoPlan = (id: string) => {
-  window.location.href = `/plans?id=${encodeURIComponent(id)}`
+  navigate(`/plans?id=${encodeURIComponent(id)}`)
 }
 
 export function PlanList() {

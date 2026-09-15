@@ -1,14 +1,13 @@
 import { CaseList } from './CaseList'
 import { CaseDetail } from './CaseDetail'
+import { useRoute } from '@/router'
 
-// MPA page: `/cases` = list, `/cases?id=<slug>` = detail (full reload between
-// the two — no client router, consistent with the other entries).
+// SPA page: `/cases` = list, `/cases?id=<slug>` = detail (query-reactive, no
+// document reload — the App shell swaps content client-side).
 export function CasesPage() {
-  const id =
-    typeof window !== 'undefined'
-      ? new URLSearchParams(window.location.search).get('id')
-      : null
-  return id ? <CaseDetail id={id} /> : <CaseList />
+  const route = useRoute()
+  const id = new URLSearchParams(route.search).get('id')
+  return id ? <CaseDetail key={id} id={id} /> : <CaseList />
 }
 
 export default CasesPage
