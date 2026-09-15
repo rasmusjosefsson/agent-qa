@@ -1,6 +1,7 @@
 import { useEffect, useState, type AnchorHTMLAttributes, type ComponentProps, type ComponentType, type ReactNode, type SVGProps } from "react"
 import {
   BookOpenIcon,
+  BotIcon,
   ClipboardListIcon,
   CirclePlayIcon,
   FolderTreeIcon,
@@ -8,7 +9,6 @@ import {
   LayersIcon,
   PlugIcon,
   Settings2Icon,
-  SparklesIcon,
   SquarePenIcon,
   TestTubeDiagonalIcon,
   UsersIcon,
@@ -43,7 +43,7 @@ type NavItem = {
 // Authoring — the two ways you create/drive a test: talk to the Copilot QA
 // agent, or hand-edit a recorded scenario. Kept at the top as the entry points.
 const AUTHORING: NavItem[] = [
-  { label: "Copilot QA", icon: SparklesIcon, tab: "chat", href: "/chat" },
+  { label: "Chat", icon: BotIcon, tab: "chat", href: "/chat" },
   { label: "Editor", icon: SquarePenIcon, tab: "editor", href: "/editor" },
 ]
 

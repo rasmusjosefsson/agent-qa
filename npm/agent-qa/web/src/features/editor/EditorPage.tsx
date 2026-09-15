@@ -8,7 +8,7 @@ import { ElementPicker } from './components/ElementPicker'
 import { composePayload } from './compose'
 import { EMPTY_FORM, type AriaNode, type ClickMode, type ComposeForm, type PickedElement, type RunResult } from './types'
 import { cn } from '@/lib/utils'
-import { RefreshCwIcon } from 'lucide-react'
+import { PlugZapIcon, RefreshCwIcon } from 'lucide-react'
 import { Panel, PanelGroup } from 'react-resizable-panels'
 import { ResizeHandle } from '@/components/ResizeHandle'
 
@@ -58,11 +58,17 @@ export function EditorPage() {
 
   if (!ed.available) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col gap-3">
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
-          Editor unavailable — the agent-qa CLI binary could not be resolved. Launch via{' '}
-          <code className="font-mono">agent-qa web</code> with the platform package installed, or set{' '}
-          <code className="font-mono">AGENT_QA_BINARY_PATH</code>.
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-muted/30 px-4 py-2.5">
+          <PlugZapIcon className="size-4 shrink-0 text-muted-foreground" />
+          <div className="min-w-0 flex-1 basis-56">
+            <div className="text-[13px] font-semibold tracking-tight">Finish editor setup</div>
+            <div className="truncate text-xs text-muted-foreground">
+              The agent-qa CLI binary wasn&apos;t found. Launch via{' '}
+              <code className="font-mono">agent-qa web</code> with the platform package installed, or set{' '}
+              <code className="font-mono">AGENT_QA_BINARY_PATH</code>.
+            </div>
+          </div>
         </div>
       </div>
     )

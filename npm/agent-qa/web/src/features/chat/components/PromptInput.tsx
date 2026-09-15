@@ -62,7 +62,8 @@ export function PromptInput(props: PromptInputProps) {
   }
 
   return (
-    <div className="border-t border-border bg-background">
+    <div className="bg-background px-3 pb-3 pt-1">
+      <div className="rounded-xl border border-border bg-card shadow-sm transition-shadow focus-within:border-ring/60 focus-within:ring-2 focus-within:ring-ring/20">
       <textarea
         ref={taRef}
         value={value}
@@ -71,9 +72,9 @@ export function PromptInput(props: PromptInputProps) {
         rows={1}
         disabled={!available}
         placeholder={available ? 'Message the agent…  (Enter to send, Shift+Enter for newline)' : 'Agent unavailable'}
-        className="w-full resize-none bg-transparent px-3.5 py-3 text-sm outline-none placeholder:text-muted-foreground disabled:opacity-60"
+        className="w-full resize-none bg-transparent px-3.5 py-3 text-[13px] leading-relaxed outline-none placeholder:text-muted-foreground/70 disabled:opacity-60"
       />
-      <div className="flex items-center justify-between gap-2 border-t border-border px-2.5 py-2">
+      <div className="flex items-center justify-between gap-2 border-t border-border/60 px-2.5 py-2">
         <div className="flex items-center gap-2">
           {models.length > 0 && (
             <Select
@@ -125,10 +126,11 @@ export function PromptInput(props: PromptInputProps) {
               Stop
             </Button>
           )}
-          <Button type="button" size="sm" onClick={onSubmit} disabled={!available || !value.trim()}>
+          <Button type="button" size="sm" className="rounded-lg font-medium" onClick={onSubmit} disabled={!available || !value.trim()}>
             Send
           </Button>
         </div>
+      </div>
       </div>
     </div>
   )

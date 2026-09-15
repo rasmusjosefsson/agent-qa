@@ -83,8 +83,8 @@
     --card-foreground: oklch(0.147 0.004 49.3);
     --popover: oklch(1 0 0);
     --popover-foreground: oklch(0.147 0.004 49.3);
-    --primary: oklch(0.527 0.154 150.069);
-    --primary-foreground: oklch(0.982 0.018 155.826);
+    --primary: oklch(0.21 0.006 285.885);
+    --primary-foreground: oklch(0.985 0 0);
     --secondary: oklch(0.967 0.001 286.375);
     --secondary-foreground: oklch(0.21 0.006 285.885);
     --muted: oklch(0.96 0.002 17.2);
@@ -103,8 +103,8 @@
     --radius: 0.45rem;
     --sidebar: oklch(0.986 0.002 67.8);
     --sidebar-foreground: oklch(0.147 0.004 49.3);
-    --sidebar-primary: oklch(0.627 0.194 149.214);
-    --sidebar-primary-foreground: oklch(0.982 0.018 155.826);
+    --sidebar-primary: oklch(0.21 0.006 285.885);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
     --sidebar-accent: oklch(0.96 0.002 17.2);
     --sidebar-accent-foreground: oklch(0.214 0.009 43.1);
     --sidebar-border: oklch(0.922 0.005 34.3);
@@ -125,8 +125,8 @@
     --card-foreground: oklch(0.986 0.002 67.8);
     --popover: oklch(0.214 0.009 43.1);
     --popover-foreground: oklch(0.986 0.002 67.8);
-    --primary: oklch(0.448 0.119 151.328);
-    --primary-foreground: oklch(0.982 0.018 155.826);
+    --primary: oklch(0.985 0 0);
+    --primary-foreground: oklch(0.21 0.006 285.885);
     --secondary: oklch(0.274 0.006 286.033);
     --secondary-foreground: oklch(0.985 0 0);
     --muted: oklch(0.268 0.011 36.5);
@@ -144,8 +144,8 @@
     --chart-5: oklch(0.448 0.119 151.328);
     --sidebar: oklch(0.214 0.009 43.1);
     --sidebar-foreground: oklch(0.986 0.002 67.8);
-    --sidebar-primary: oklch(0.723 0.219 149.579);
-    --sidebar-primary-foreground: oklch(0.982 0.018 155.826);
+    --sidebar-primary: oklch(0.985 0 0);
+    --sidebar-primary-foreground: oklch(0.21 0.006 285.885);
     --sidebar-accent: oklch(0.268 0.011 36.5);
     --sidebar-accent-foreground: oklch(0.986 0.002 67.8);
     --sidebar-border: oklch(1 0 0 / 10%);
@@ -163,8 +163,17 @@
     scrollbar-color: var(--scrollbar-thumb) transparent;
     }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "cv11", "ss01";
     }
+  ::selection {
+    background: color-mix(in oklab, var(--primary) 22%, transparent);
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
 
   /* Visible, on-theme scrollbars. The native ones were invisible on the dark
      "cool ink" surface (no color-scheme + a near-black track). `color-scheme`
@@ -200,14 +209,20 @@
   }
 }
 
-/* SPA page swap: a soft 120ms enter so tab switches feel instant without a
-   document-reload flash. Keyed per tab+query in App.tsx. */
+/* SPA page swap: a soft 160ms enter so tab switches feel instant without a
+   document-reload flash. Keyed per tab+query in App.tsx. Slightly longer +
+   eased-out vs the old 120ms linear feel, so content settles instead of pops. */
 @keyframes aqa-page-in {
-  from { opacity: 0; transform: translateY(2px); }
+  from { opacity: 0; transform: translateY(3px); }
   to { opacity: 1; transform: translateY(0); }
 }
 .aqa-page-enter {
-  animation: aqa-page-in 120ms ease-out;
+  animation: aqa-page-in 160ms cubic-bezier(0.21, 1.02, 0.73, 1);
+}
+/* Tabular numbers for run times, step counts, durations — stops the
+   Runs columns from jittering as digits change. */
+.tnum {
+  font-variant-numeric: tabular-nums;
 }
 @media (prefers-reduced-motion: reduce) {
   .aqa-page-enter { animation: none; }

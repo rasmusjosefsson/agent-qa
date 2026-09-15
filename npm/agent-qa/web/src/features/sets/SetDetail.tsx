@@ -109,6 +109,8 @@ export function SetDetail({ id }: { id: string }) {
     }
   }
 
+
+
   if (err && !set) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-destructive">
@@ -144,11 +146,15 @@ export function SetDetail({ id }: { id: string }) {
             {set.id} · {members.length} {members.length === 1 ? 'case' : 'cases'}
           </div>
         </div>
-        <Button variant="ghost" size="sm" onClick={() => setConfirmDel(true)} disabled={busy}>
-          <Trash2Icon /> Delete
-        </Button>
-        <Button size="sm" onClick={() => void save()} disabled={busy}>
-          {busy ? <Loader2Icon className="animate-spin" /> : <SaveIcon />} Save
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-7 shrink-0 text-muted-foreground/60 hover:text-destructive"
+          onClick={() => setConfirmDel(true)}
+          disabled={busy}
+          title="Delete this set"
+        >
+          <Trash2Icon className="size-4" />
         </Button>
       </div>
 
@@ -276,6 +282,12 @@ export function SetDetail({ id }: { id: string }) {
             )}
           </div>
         </div>
+      </div>
+
+      <div className="flex h-14 shrink-0 items-center justify-end border-t border-border bg-card px-5 shadow-[0_-12px_32px_-16px_rgba(0,0,0,0.35)]">
+        <Button size="sm" className="min-w-28 shadow-sm" onClick={() => void save()} disabled={busy}>
+          {busy ? <Loader2Icon className="animate-spin" /> : <SaveIcon />} Save
+        </Button>
       </div>
 
       <Dialog open={confirmDel} onOpenChange={setConfirmDel}>

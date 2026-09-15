@@ -328,22 +328,17 @@ export function PlanDetail({ id }: { id: string }) {
         <Button variant="ghost" size="sm" onClick={() => setConfirmDel(true)} disabled={busy}>
           <Trash2Icon /> Delete
         </Button>
-        <Button variant="ghost" size="sm" onClick={() => void save()} disabled={busy}>
-          {busy ? <Loader2Icon className="animate-spin" /> : <SaveIcon />} Save
-        </Button>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={exportXray}
-          disabled={busy || xrayItems.length === 0}
-          title={
-            xrayItems.length
-              ? `Push ${xrayItems.length} result${xrayItems.length === 1 ? '' : 's'} to Xray`
-              : 'No member cases are linked to Xray'
-          }
-        >
-          <UploadIcon /> Export to Xray
-        </Button>
+        {xrayItems.length > 0 && (
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={exportXray}
+            disabled={busy}
+            title={`Push ${xrayItems.length} result${xrayItems.length === 1 ? '' : 's'} to Xray`}
+          >
+            <UploadIcon /> Export to Xray
+          </Button>
+        )}
         <Button size="sm" onClick={() => void run()} disabled={busy || !runnable}>
           <PlayIcon /> Run plan
         </Button>
@@ -510,6 +505,12 @@ export function PlanDetail({ id }: { id: string }) {
             )}
           </div>
         </div>
+      </div>
+
+      <div className="flex h-14 shrink-0 items-center justify-end border-t border-border bg-card px-5 shadow-[0_-12px_32px_-16px_rgba(0,0,0,0.35)]">
+        <Button size="sm" className="min-w-28 shadow-sm" onClick={() => void save()} disabled={busy}>
+          {busy ? <Loader2Icon className="animate-spin" /> : <SaveIcon />} Save
+        </Button>
       </div>
 
       <Dialog open={confirmDel} onOpenChange={setConfirmDel}>

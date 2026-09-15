@@ -108,8 +108,11 @@ export function RunsPage() {
   }
 
   // Right pane: live screencast while the run is in flight and no step pinned,
-  // otherwise the static step detail (which renders its own empty state).
+  // otherwise the static step detail. Only mounted when a run is open — with
+  // nothing selected the third column would just be a second "nothing here"
+  // pane next to the center empty state.
   const showLive = isRunLive(runs.detail) && runs.sel.stepIdx == null && runs.sel.sid
+  const showRight = !!runs.detail
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -117,23 +120,29 @@ export function RunsPage() {
         <div className="border-b border-destructive/30 bg-destructive/10 px-4 py-1.5 text-xs text-destructive">{replayErr}</div>
       )}
 
-      {/* Resizable full-bleed columns — drag the dividers to resize. */}
+      {/* Resizable full-bleed columns — drag the dividers to resize. The right
+          column only exists once a run is open; otherwise the center empty
+          state gets the room. */}
       <PanelGroup direction="horizontal" autoSaveId="aqa-runs-cols" className="min-h-0 flex-1">
-        <Panel defaultSize={22} minSize={14} className="min-h-0">
+        <Panel defaultSize={showRight ? 22 : 26} minSize={14} className="min-h-0">
           <ScenarioSidebar runs={runs} />
         </Panel>
         <ResizeHandle />
-        <Panel defaultSize={56} minSize={30} className="min-h-0">
+        <Panel defaultSize={showRight ? 56 : 74} minSize={30} className="min-h-0">
           <CenterPane runs={runs} onReplay={(sid) => void onReplay(sid)} busy={busy} runConfig={runConfig} />
         </Panel>
-        <ResizeHandle />
-        <Panel defaultSize={22} minSize={16} className="min-h-0">
-          {showLive ? (
-            <ReplayLive sid={runs.sel.sid!} onLightbox={(url, caption) => setLightbox({ url, caption })} />
-          ) : (
-            <StepDetail runs={runs} onLightbox={(url, caption) => setLightbox({ url, caption })} />
-          )}
-        </Panel>
+        {showRight && (
+          <>
+            <ResizeHandle />
+            <Panel defaultSize={22} minSize={16} className="min-h-0">
+              {showLive ? (
+                <ReplayLive sid={runs.sel.sid!} onLightbox={(url, caption) => setLightbox({ url, caption })} />
+              ) : (
+                <StepDetail runs={runs} onLightbox={(url, caption) => setLightbox({ url, caption })} />
+              )}
+            </Panel>
+          </>
+        )}
       </PanelGroup>
 
       {/* Bottom status stripe — scenarios root + live toggle */}

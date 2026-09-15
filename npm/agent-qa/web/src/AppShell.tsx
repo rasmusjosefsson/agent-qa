@@ -5,7 +5,6 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar"
-import { Separator } from "@/components/ui/separator"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { ThemeToggle } from "@/components/theme-toggle"
 
@@ -27,7 +26,7 @@ const LABELS: Record<Tab, string> = {
   plans: "Test Plans",
   runs: "Test Runs",
   editor: "Editor",
-  chat: "Copilot QA",
+  chat: "Chat",
   personas: "Personas",
   environments: "Environments",
   knowledge: "Knowledge",
@@ -43,10 +42,11 @@ export function AppShell({ tab, children }: { tab: Tab; children?: ReactNode }) 
       <SidebarProvider className="h-svh min-h-svh overflow-hidden bg-background text-foreground">
         <AppSidebar tab={tab} />
         <SidebarInset className="flex min-h-0 min-w-0 flex-col overflow-hidden">
-        <header className="flex h-13 shrink-0 items-center gap-2 border-b border-border px-3">
+        <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-background/80 px-4 backdrop-blur">
           <SidebarTrigger className="-ml-1" />
-          <Separator orientation="vertical" className="mr-1 h-4" />
-          <span className="text-sm font-semibold tracking-tight">{LABELS[tab]}</span>
+          <span className="text-[13px] font-semibold tracking-tight text-foreground">{LABELS[tab]}</span>
+          <span className="hidden text-[13px] text-muted-foreground/50 sm:inline">/</span>
+          <span className="hidden text-[13px] text-muted-foreground sm:inline">QA workbench</span>
           <div className="ml-auto">
             <ThemeToggle />
           </div>

@@ -1500,7 +1500,12 @@ async function serveStatic(res, relName) {
   }
   if (!stat.isFile()) return notFound(res, 'not found');
   const type = STATIC_TYPES[path.extname(full)] || 'application/octet-stream';
-  res.writeHead(200, { 'content-type': type, 'content-length': stat.size });
+  // index.html is never cached (otherwise UI deploys look "stuck"); hashed
+  // /assets/* filenames already bust the cache, so they can be immutable.
+  const cacheControl = full.endsWith('.html')
+    ? 'no-cache'
+    : 'public, max-age=31536000, immutable';
+  res.writeHead(200, { 'content-type': type, 'content-length': stat.size, 'cache-control': cacheControl });
   createReadStream(full).pipe(res);
 }
 
