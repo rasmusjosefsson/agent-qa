@@ -5,13 +5,14 @@
 //! actionable information when something is wrong with a third-party plugin.
 
 use std::io::Write;
-use std::path::Path;
-use std::process::{Command, Stdio};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::time::Duration;
+
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
-use std::time::Duration;
 
 use serde_json::{json, Value};
 use thiserror::Error;

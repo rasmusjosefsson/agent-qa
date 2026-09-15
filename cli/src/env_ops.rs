@@ -19,12 +19,13 @@
 //! per the schema; honour the `onFailure` axis here — `continue` lets
 //! the next op proceed; default `abort` propagates the error.
 
-use anyhow::{anyhow, bail, Context, Result};
-use serde_json::Value as Json;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+use anyhow::{anyhow, bail, Context, Result};
+use serde_json::Value as Json;
 
 use crate::browser;
 use crate::scenario::{EnvOp, EnvOpPolicy, OnFailureContinue, Value};

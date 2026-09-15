@@ -26,16 +26,17 @@
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitStatus, Stdio};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
 /// `CREATE_NO_WINDOW` — suppresses the console window flash when agent-browser
 /// child processes are spawned from a GUI/web-UI parent on Windows.
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
-use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
