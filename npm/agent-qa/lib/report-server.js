@@ -54,28 +54,31 @@ const STATIC_TYPES = {
 };
 
 // Static files served by name (fixed allowlist; no user input reaches the
-// filesystem path).
+// filesystem path). Single-page app: every tab route serves index.html and the
+// client router picks the tab — no document reload between tabs, so the shell
+// (sidebar/theme) survives navigation. The *.html variants stay as aliases so
+// old bookmarks keep working.
 const STATIC_FILES = {
   '/': 'index.html',
   '/index.html': 'index.html',
-  '/editor': 'editor.html',
-  '/editor.html': 'editor.html',
-  '/chat': 'chat.html',
-  '/chat.html': 'chat.html',
-  '/cases': 'cases.html',
-  '/cases.html': 'cases.html',
-  '/sets': 'sets.html',
-  '/sets.html': 'sets.html',
-  '/plans': 'plans.html',
-  '/plans.html': 'plans.html',
-  '/personas': 'personas.html',
-  '/personas.html': 'personas.html',
-  '/environments': 'environments.html',
-  '/environments.html': 'environments.html',
-  '/knowledge': 'knowledge.html',
-  '/knowledge.html': 'knowledge.html',
-  '/plugins': 'plugins.html',
-  '/plugins.html': 'plugins.html',
+  '/editor': 'index.html',
+  '/editor.html': 'index.html',
+  '/chat': 'index.html',
+  '/chat.html': 'index.html',
+  '/cases': 'index.html',
+  '/cases.html': 'index.html',
+  '/sets': 'index.html',
+  '/sets.html': 'index.html',
+  '/plans': 'index.html',
+  '/plans.html': 'index.html',
+  '/personas': 'index.html',
+  '/personas.html': 'index.html',
+  '/environments': 'index.html',
+  '/environments.html': 'index.html',
+  '/knowledge': 'index.html',
+  '/knowledge.html': 'index.html',
+  '/plugins': 'index.html',
+  '/plugins.html': 'index.html',
 };
 
 // -------- path safety --------

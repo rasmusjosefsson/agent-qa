@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { getSets, upsertSet } from '@/lib/sets-api'
+import { navigate } from '@/router'
 import type { SetMode, SetWithCount } from './types'
 
 function slugify(s: string): string {
@@ -36,7 +37,7 @@ function fmtAgo(ts: number | null | undefined): string {
 }
 
 const gotoSet = (id: string) => {
-  window.location.href = `/sets?id=${encodeURIComponent(id)}`
+  navigate(`/sets?id=${encodeURIComponent(id)}`)
 }
 
 export function SetList() {

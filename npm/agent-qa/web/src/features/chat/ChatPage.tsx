@@ -47,6 +47,7 @@ import {
 import type { PersonaRecord } from '@/features/personas/types'
 import type { EnvironmentRecord } from '@/features/environments/types'
 import { prefetchChatState, dropChatState } from '@/lib/resources'
+import { replaceRoute, useRoute } from '@/router'
 
 const SPLIT_KEY = 'aqa-chat-split'
 
@@ -125,11 +126,13 @@ export function ChatPage() {
     return value >= 25 && value <= 80 ? value : 58
   })
   // `/chat?ask=…` (e.g. the Runs "Ask agent" button) opens a fresh chat seeded
-  // with that prompt. Consumed once on mount.
-  const askRef = useRef<string | null>(
-    typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('ask') : null
-  )
+  // with that prompt. Reactive to the SPA route so in-app navigations seed
+  // without a document reload; consumed once per ask value.
+  const route = useRoute()
+  const ask = new URLSearchParams(route.search).get('ask')
+  const askRef = useRef<string | null>(null)
   const [seed, setSeed] = useState<{ id: string; prompt: string } | null>(null)
+  const [chatsReady, setChatsReady] = useState(false)
 
   useEffect(() => {
     localStorage.setItem(SPLIT_KEY, String(Math.round(leftPct)))
@@ -145,29 +148,33 @@ export function ChatPage() {
         if (!mounted) return
         list = c ? [c] : []
       }
-      const ask = askRef.current
-      if (ask) {
-        askRef.current = null
-        window.history.replaceState({}, '', window.location.pathname)
-        const c = await createChat()
-        if (!mounted) return
-        if (c) {
-          prefetchChatState(c.id)
-          setSeed({ id: c.id, prompt: ask })
-          setChats([...list, c])
-          setActiveId(c.id)
-          return
-        }
-      }
       const firstId = list[0]?.id ?? null
       if (firstId) prefetchChatState(firstId)
       setChats(list)
       setActiveId((cur) => cur ?? firstId)
+      setChatsReady(true)
     })()
     return () => {
       mounted = false
     }
   }, [])
+
+  // Seed a fresh chat from ?ask= once the chat list exists. Clears the param
+  // so refresh doesn't re-seed.
+  useEffect(() => {
+    if (!ask || !chatsReady) return
+    if (askRef.current === ask) return
+    askRef.current = ask
+    replaceRoute('/chat')
+    void (async () => {
+      const c = await createChat()
+      if (!c) return
+      prefetchChatState(c.id)
+      setSeed({ id: c.id, prompt: ask })
+      setChats((prev) => [...prev, c])
+      setActiveId(c.id)
+    })()
+  }, [ask, chatsReady])
 
   const onNew = async () => {
     const c = await createChat()
