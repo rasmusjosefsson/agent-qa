@@ -1160,8 +1160,22 @@ fn capture_step_sidecars(run: &crate::sidecar::RunPaths, step_id: &str, session:
     // 3s is plenty for the common "settling after a nav/click" case.
     const SETTLE_CAP_MS: u64 = 3000;
     const SNAPSHOT_CAP_MS: u64 = 4000;
+    // The first capture of a run also pays browser cold start: measured ~9.9s
+    // on a fresh session against a trivial page, vs ~0.2s for every capture
+    // after it. Under one flat 4s cap the first sidecar of EVERY run times
+    // out, prints a failure, and then lands anyway once agent-browser catches
+    // up — noise that trains the reader to ignore real capture failures. One
+    // wider budget for the cold capture keeps the tight steady-state cap.
+    const FIRST_CAPTURE_CAP_MS: u64 = 20_000;
+    static FIRST_CAPTURE_DONE: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+    let cap_ms = if FIRST_CAPTURE_DONE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        SNAPSHOT_CAP_MS
+    } else {
+        FIRST_CAPTURE_CAP_MS
+    };
     let _ = browser::wait_for_load_capped(session, "networkidle", SETTLE_CAP_MS);
-    match browser::snapshot_full_capped(session, SNAPSHOT_CAP_MS) {
+    match browser::snapshot_full_capped(session, cap_ms) {
         Ok(text) => {
             if let Err(e) =
                 write_step_sidecar(run, SidecarKind::Snapshots, step_id, text.as_bytes())
@@ -1175,9 +1189,11 @@ fn capture_step_sidecars(run: &crate::sidecar::RunPaths, step_id: &str, session:
         let _ = dir; // keep the directory creation eager
     }
     if let Ok(path) = step_sidecar_path(run, SidecarKind::Screenshots, step_id) {
-        match browser::screenshot(session, &path, true, Some(SNAPSHOT_CAP_MS)) {
+        match browser::screenshot(session, &path, true, Some(cap_ms)) {
             Ok(true) => {}
-            Ok(false) => eprintln!("[v2-replay] screenshot {step_id} returned non-zero (lenient)"),
+            Ok(false) => eprintln!(
+                "[v2-replay] screenshot {step_id} exited non-zero within the {cap_ms}ms cap (lenient — artifact may be missing or partial)"
+            ),
             Err(e) => eprintln!("[v2-replay] screenshot {step_id} failed: {e}"),
         }
     }
