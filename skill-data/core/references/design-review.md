@@ -27,6 +27,37 @@ Same for anything else the data drives — avatar images, row counts, chart
 shapes, date values, badge colours that encode status. If the difference is
 "different content", it is not a finding.
 
+## The reference is a crop. The screenshot is a page.
+
+A Figma export is a frame: tight bounds, content starting at its top-left,
+no surrounding page. A replay screenshot is a whole viewport: the same
+content inset by page margins, with empty area around and below it.
+
+They will never line up, and that mismatch is an export artifact, not drift.
+
+**Compare the region the design covers, and ignore everything about how it is
+framed.** Not findings:
+
+- the design's tighter bounding box, or where the content sits in the image;
+- page margins, headers, footers, empty space the frame simply doesn't include;
+- overall image dimensions, aspect ratio, or zoom/DPI scale between the two.
+
+Still findings, inside that region:
+
+- spacing *between* elements, relative to each other;
+- alignment of elements against each other;
+- order, grouping, and nesting;
+- proportions within the region — a button half the width the design gives it.
+
+So: mentally crop the screenshot to what the design shows, then compare. If
+the design covers one component, judge that component; the rest of the page is
+out of scope for that step. This is **not** an `--ask` case — framing
+differences alone are never a reason to stop and ask, or two reviewers would
+reach different verdicts on identical evidence.
+
+One case does deserve `--ask`: you cannot tell *which* part of the page the
+frame corresponds to. Name the ambiguity rather than guessing at the mapping.
+
 ## Three depths — pick per ask
 
 | The user's ask | Depth |
@@ -110,6 +141,10 @@ Verdicts are **decisions, not results**:
 | `no-screenshot` | Design exists, the step produced no shot | blocks |
 | `unknown-step` | Filename matches no step id (usually a typo'd export) | blocks |
 
+A design that matches no step id is excluded from the coverage count and
+called out separately, so a typo'd export can never make coverage read "2 of
+2" while a real step sits uncovered.
+
 `accepted` is load-bearing. Without it, a known platform constraint gets
 re-flagged on every run until nobody reads the output. `--accepted` and
 `--fail` both require `--reason`: a deviation nobody justified is
@@ -131,7 +166,12 @@ Ask when:
 - the design shows a state you can't reach in this run (empty, error, loading);
 - the design is ambiguous about behaviour you can't see in a still (hover, focus, motion);
 - the build looks deliberate but different — a newer design system version, a component that got replaced;
-- the design can't be built as drawn on this platform and you'd be guessing at the intended fallback.
+- the design can't be built as drawn on this platform and you'd be guessing at the intended fallback;
+- you can't tell which part of the page the exported frame is meant to be.
+
+Do **not** ask about framing, crop bounds, image size, or text content. Those
+have definite answers above; asking about them just moves your uncertainty
+onto the user.
 
 The exit code holds the line: `ask` keeps the gate red until a human turns it
 into `ok`, `accepted`, or `fail`. That is the mechanism, rather than trusting

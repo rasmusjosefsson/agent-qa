@@ -287,14 +287,25 @@ fn review(args: &[String]) -> Result<u8> {
 fn render_markdown(sid: &str, run_id: &str, rows: &[Row], total_steps: Option<usize>) -> String {
     use std::fmt::Write;
     let mut s = String::new();
+    // Only designs that name a real step count as coverage. A file matching
+    // no step id is a typo'd export, and counting it would let the coverage
+    // line read "2 of 2" while a real step sits uncovered — inverting the
+    // one signal this line exists to give.
+    let unknown = rows.iter().filter(|r| r.status == "unknown-step").count();
+    let matched = rows.len() - unknown;
     let coverage = match total_steps {
-        Some(t) => format!("{} of {t} steps have a design", rows.len()),
-        None => format!("{} designs", rows.len()),
+        Some(t) => format!("{matched} of {t} steps have a design"),
+        None => format!("{matched} designs"),
+    };
+    let unknown_note = match unknown {
+        0 => String::new(),
+        1 => " 1 design file matches no step id and is not counted.".to_string(),
+        n => format!(" {n} design files match no step id and are not counted."),
     };
     let _ = writeln!(s, "# Design review — {sid} / {run_id}\n");
     let _ = writeln!(
         s,
-        "Coverage: {coverage}. A step without a design is uncovered, not passing.\n"
+        "Coverage: {coverage}. A step without a design is uncovered, not passing.{unknown_note}\n"
     );
     if rows.is_empty() {
         let _ = writeln!(
@@ -343,6 +354,9 @@ fn render_markdown(sid: &str, run_id: &str, rows: &[Row], total_steps: Option<us
         s,
         "Judge layout, spacing, hierarchy, component choice and state — NOT text content.\
          \nMock copy and real data differ by design; different words are never a `fail`.\
+         \nA reference exported as a frame is a crop; the screenshot is a whole viewport.\
+         \nCompare the region the design covers. Its tighter bounds, its position in the\
+         \nimage, and empty page area around it are export artifacts, never findings.\
          \nRecord each decision:\n\n```\nagent-qa design verdict <sid> --step <id> --ok\nagent-qa design verdict <sid> --step <id> --accepted --reason '<why the deviation is fine>'\nagent-qa design verdict <sid> --step <id> --fail --reason '<what drifted>'\nagent-qa design verdict <sid> --step <id> --ask --reason '<what you need the human to decide>'\n```\n"
     );
     s
@@ -573,6 +587,22 @@ mod tests {
         put(root, "replays/r1/screenshots/s1.png", b"shot");
         let md = render_markdown("sid", "r1", &rows_for(root), Some(1));
         assert!(md.contains("NOT text content"), "got: {md}");
+        assert!(md.contains("export artifacts, never findings"), "got: {md}");
         assert!(md.contains("1 of 1 steps have a design"), "got: {md}");
+    }
+
+    #[test]
+    fn a_design_matching_no_step_does_not_inflate_coverage() {
+        let tmp = scaffold(&["s1", "s2"]);
+        let root = tmp.path();
+        put(root, "designs/s1.png", b"d");
+        put(root, "replays/r1/screenshots/s1.png", b"shot");
+        put(root, "designs/s99-typo.png", b"d");
+        let md = render_markdown("sid", "r1", &rows_for(root), Some(2));
+        assert!(md.contains("1 of 2 steps have a design"), "got: {md}");
+        assert!(
+            md.contains("1 design file matches no step id and is not counted."),
+            "got: {md}"
+        );
     }
 }
