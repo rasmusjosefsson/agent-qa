@@ -943,7 +943,7 @@ fn stats_all(json_out: bool, since_ms: Option<u64>, until_ms: Option<u64>) -> Re
     Ok(0)
 }
 
-fn resolve_run_id(scenario_dir: &std::path::Path, run_ref: &str) -> Result<String> {
+pub(crate) fn resolve_run_id(scenario_dir: &std::path::Path, run_ref: &str) -> Result<String> {
     if run_ref != "latest" {
         return Ok(run_ref.to_string());
     }

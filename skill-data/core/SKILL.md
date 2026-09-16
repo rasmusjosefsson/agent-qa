@@ -134,3 +134,6 @@ running from a repo checkout.
 - `references/inspect.md` — live-page debug mode with no `scenario.json` produced.
 - `references/perf-snapshot.md` — opt-in performance sidecar, orthogonal to recording.
 - `references/compare.md` — the diff verb (recording vs replay, cross-profile).
+- `references/design-review.md` — the design-fidelity lane: reference images at
+  `<sid>/designs/<stepId>.png`, verdicts, and when to stop and ask. Separate
+  gate from behaviour; judges layout, never text content.
