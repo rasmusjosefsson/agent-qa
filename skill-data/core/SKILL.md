@@ -55,6 +55,15 @@ is useful to a future reader.
 agent-qa start "verify the users page" --session qa-run --source-ref "change:123"
 ```
 
+`start` also takes `--open <url>`, which navigates the session so you have a
+page to work against. It drives the browser only — it records nothing. Neither
+an `env.open` nav nor a `do`/`goto` step appears in `scenario.json` because you
+passed it, so a scenario started that way and flushed without an explicit first
+step replays against whatever page the session happens to be on. Record the
+navigation yourself, the same way you would without `--open`: `record-setup`
+with a `nav` op for setup, or a `do`/`goto` step when the navigation is part of
+the flow under test.
+
 Record setup before actions. `record-setup` accepts existing generic `EnvOp`
 shapes. Use it for repeatable `fresh`, `useProfile`, `nav`, `cookie`,
 `localStorage`, `gql`, and `flag` operations.
@@ -134,3 +143,6 @@ running from a repo checkout.
 - `references/inspect.md` — live-page debug mode with no `scenario.json` produced.
 - `references/perf-snapshot.md` — opt-in performance sidecar, orthogonal to recording.
 - `references/compare.md` — the diff verb (recording vs replay, cross-profile).
+- `references/design-review.md` — the design-fidelity lane: reference images at
+  `<sid>/designs/<stepId>.png`, verdicts, and when to stop and ask. Separate
+  gate from behaviour; judges layout, never text content.

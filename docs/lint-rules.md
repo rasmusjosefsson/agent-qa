@@ -1,6 +1,6 @@
 # Scenario lint rules
 
-13 rules ship out of the box. Run `agent-qa scenario lint --list-rules`
+14 rules ship out of the box. Run `agent-qa scenario lint --list-rules`
 for the live table (this doc may lag the binary).
 
 | Code | Severity | What it catches |
@@ -15,6 +15,7 @@ for the live table (this doc may lag the binary).
 | `missing-locator` | error | A do step that needs a locator (`click`, `type`, `clear`, `hover`, `focus`, `blur`, `check`, `uncheck`) has no `params.locator`. |
 | `params-on-noop` | warning | A do step whose verb ignores params (`reload`, `back`, `forward`) has a non-empty params object. |
 | `no-env-open` | warning | The scenario has no `env.open[]` entries; replay will start on a blank tab. |
+| `no-navigation` | warning | The scenario never navigates — no `env.open` nav op and no `do`/`goto` step — so replay runs against whatever page the session is already on. Usually means the recording used `start --open <url>`, which drives the browser without recording anything. |
 | `no-checks` | warning | The scenario has steps but zero check claims; replay can only fail on browser errors, not assertions. |
 | `empty-steps` | warning | The scenario has zero steps; replay will only open env then close it. |
 | `wait-without-condition` | warning | A do/wait step has neither `params.timeoutMs` nor `params.locator`; will hang the replay until the global timeout fires. |

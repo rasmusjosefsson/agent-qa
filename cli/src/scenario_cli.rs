@@ -941,6 +941,11 @@ fn list_lint_rules(json_out: bool) -> Result<u8> {
             description: "Scenario has no env.open[] entries; replay will start with no landing page.",
         },
         Rule {
+            code: "no-navigation",
+            severity: "warning",
+            description: "Scenario never navigates: no env.open nav op and no do/goto step, so replay runs against whatever page the session is already on.",
+        },
+        Rule {
             code: "no-checks",
             severity: "warning",
             description: "Scenario has no check steps; replay can only fail on browser errors, not assertions.",
@@ -968,6 +973,28 @@ fn list_lint_rules(json_out: bool) -> Result<u8> {
         println!("  [{sev}] {code}: {desc}");
     }
     Ok(0)
+}
+
+/// Does the scenario reach a page on its own? `start --open <url>` drives the
+/// recording browser without recording anything, so a scenario can flush with
+/// every check intact and no way to reach the page those checks describe.
+fn scenario_navigates(j: &Scenario) -> bool {
+    use crate::scenario::{EnvOp, Step, Verb};
+    let env_navigates = j
+        .env
+        .as_ref()
+        .and_then(|e| e.open.as_ref())
+        .is_some_and(|ops| ops.iter().any(|o| matches!(o, EnvOp::Nav { .. })));
+    env_navigates
+        || j.steps.iter().any(|s| {
+            matches!(
+                s,
+                Step::Do {
+                    verb: Verb::Goto,
+                    ..
+                }
+            )
+        })
 }
 
 fn lint(
@@ -1201,6 +1228,21 @@ fn lint(
             code: "no-checks",
             message:
                 "scenario has no check steps; replay can only fail on browser errors, not assertions"
+                    .into(),
+        });
+    }
+
+    // 10b) scenario never navigates. `start --open <url>` drives the browser
+    // without recording anything, so a scenario recorded that way flushes with
+    // a landing page that exists only in the recording session — replay lands
+    // wherever the session happens to be, and the checks pass or fail against
+    // the wrong page.
+    if !j.steps.is_empty() && !scenario_navigates(&j) {
+        findings.push(Finding {
+            severity: "warning",
+            code: "no-navigation",
+            message:
+                "scenario never navigates (no env.open nav op, no do/goto step); replay runs against whatever page the session is already on"
                     .into(),
         });
     }
@@ -1781,6 +1823,10 @@ fn lint_collect(
         .filter(|s| matches!(s, Step::Check { .. }))
         .count();
     if !j.steps.is_empty() && check_count == 0 && active("no-checks") {
+        warnings += 1;
+    }
+    // no-navigation
+    if !j.steps.is_empty() && !scenario_navigates(&j) && active("no-navigation") {
         warnings += 1;
     }
     // empty-steps
@@ -2715,6 +2761,48 @@ mod tests {
             )
             .unwrap(),
             1
+        );
+    }
+
+    #[test]
+    fn lint_scenario_that_never_navigates_warns() {
+        // `start --open <url>` drives the browser without recording anything,
+        // so this shape flushes with its checks intact and no way to reach the
+        // page they describe. Isolated to the one rule via --rule + --strict.
+        let tmp = TempDir::new().unwrap();
+        let only = vec!["no-navigation".to_string()];
+        let no_nav = write(
+            tmp.path(),
+            r#"{
+              "schema": "scenario/2", "id": "j", "intent": "x",
+              "env": { "open": [ { "kind": "fresh" } ] },
+              "steps": [
+                { "id": "s0", "intent": "heading", "kind": "check",
+                  "claim": { "subject": { "url": true }, "predicate": "exists" } }
+              ]
+            }"#,
+        );
+        assert_eq!(
+            lint(&no_nav, LintFormat::Json, true, Some(&only), None).unwrap(),
+            1
+        );
+
+        // A recorded nav op satisfies it, same as a goto step would.
+        let with_nav = write(
+            tmp.path(),
+            r#"{
+              "schema": "scenario/2", "id": "k", "intent": "x",
+              "env": { "open": [ { "kind": "fresh" },
+                                 { "kind": "nav", "url": "https://example.com/users" } ] },
+              "steps": [
+                { "id": "s0", "intent": "heading", "kind": "check",
+                  "claim": { "subject": { "url": true }, "predicate": "exists" } }
+              ]
+            }"#,
+        );
+        assert_eq!(
+            lint(&with_nav, LintFormat::Json, true, Some(&only), None).unwrap(),
+            0
         );
     }
 

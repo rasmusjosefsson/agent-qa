@@ -360,10 +360,26 @@ fn json_kind(v: &Json) -> &'static str {
 /// surfaces. Sub-failures are usually "nothing to clear" — the
 /// agent-browser CLI exits 0 in that case.
 fn reset_browser_state(session: &str) -> Result<()> {
-    let opts = crate::browser::RunOpts::new().lenient();
+    let opts = crate::browser::RunOpts::new().lenient().capture();
     let _ = crate::browser::run(session, ["cookies", "clear"], opts);
-    let _ = crate::browser::run(session, ["storage", "local", "clear"], opts);
-    let _ = crate::browser::run(session, ["storage", "session", "clear"], opts);
+    // localStorage/sessionStorage are per-origin. A session that hasn't
+    // navigated yet sits on about:blank, which has no origin, so the clear
+    // throws — an error printed for a no-op, on the first line of every fresh
+    // replay. Nothing to clear means nothing to do.
+    let url = crate::browser::current_url(session).unwrap_or_default();
+    if url.is_empty() || url.starts_with("about:") {
+        return Ok(());
+    }
+    for kind in ["local", "session"] {
+        match crate::browser::run(session, ["storage", kind, "clear"], opts) {
+            Ok(r) if r.exit_code != 0 => eprintln!(
+                "[v2-replay] fresh: {kind}Storage clear exited {} on {url} (continuing)",
+                r.exit_code
+            ),
+            Ok(_) => {}
+            Err(e) => eprintln!("[v2-replay] fresh: {kind}Storage clear failed: {e} (continuing)"),
+        }
+    }
     Ok(())
 }
 
