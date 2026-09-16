@@ -42,7 +42,10 @@ import {
   getEnvironments,
   getChatConnection,
   connectPersonaToChat,
+  remediateChatAuth,
+  type AuthRemediation,
   type ChatConnection,
+  type ConnectResult,
 } from '@/lib/run-config-api'
 import type { PersonaRecord } from '@/features/personas/types'
 import type { EnvironmentRecord } from '@/features/environments/types'
@@ -602,13 +605,26 @@ function ConnectBar({ cid }: { cid: string }) {
   const [personaId, setPersonaId] = useState('')
   const [envId, setEnvId] = useState('')
   const [busy, setBusy] = useState(false)
-  const [msg, setMsg] = useState<{ tone: 'busy' | 'ok' | 'err'; text: string } | null>(null)
+  const [msg, setMsg] = useState<{ tone: 'busy' | 'ok' | 'err'; text: string; remediation?: AuthRemediation } | null>(null)
+
+  const showConnectResult = (result: ConnectResult) => {
+    setMsg(
+      result.authenticated
+        ? { tone: 'ok', text: `Signed in as ${result.profile} — this chat's browser is authenticated.` }
+        : {
+            tone: 'err',
+            text: result.remediation ? 'Sign-in needs preparation.' : "Connect ran but the profile isn't authenticated yet.",
+            remediation: result.remediation,
+          }
+    )
+  }
 
   useEffect(() => {
     let alive = true
     let timer: number | undefined
     let shownPersonaId: string | null = null
     let shownEnvironmentId: string | null = null
+    let shownState: ChatConnection['state'] | null = null
 
     const showConnection = (connection: ChatConnection) => {
       if (
@@ -620,6 +636,8 @@ function ConnectBar({ cid }: { cid: string }) {
         setPersonaId(connection.personaId)
         if (connection.environmentId) setEnvId(connection.environmentId)
       }
+      if (connection.state === shownState) return
+      shownState = connection.state
       if (connection.state === 'connecting') {
         setBusy(true)
         setMsg({ tone: 'busy', text: 'Signing in…' })
@@ -628,7 +646,11 @@ function ConnectBar({ cid }: { cid: string }) {
         setMsg({ tone: 'ok', text: `Signed in as ${connection.profile}.` })
       } else if (connection.state === 'failed') {
         setBusy(false)
-        setMsg({ tone: 'err', text: 'Automatic sign-in failed. Press Connect to retry.' })
+        setMsg({
+          tone: 'err',
+          text: connection.remediation ? 'Sign-in needs preparation.' : 'Automatic sign-in failed. Press Connect to retry.',
+          remediation: connection.remediation,
+        })
       }
     }
 
@@ -667,15 +689,20 @@ function ConnectBar({ cid }: { cid: string }) {
     setBusy(true)
     setMsg(null)
     try {
-      const r = await connectPersonaToChat(cid, personaId, envId || undefined)
-      setMsg(
-        r.authenticated
-          ? { tone: 'ok', text: `Signed in as ${r.profile} — this chat's browser is authenticated.` }
-          : {
-              tone: 'err',
-              text: `Connect ran but ${r.profile} isn't authenticated yet (check the auth plugin / \`vault login\`).`,
-            }
-      )
+      showConnectResult(await connectPersonaToChat(cid, personaId, envId || undefined))
+    } catch (e) {
+      setMsg({ tone: 'err', text: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const remediate = async () => {
+    if (!personaId || busy) return
+    setBusy(true)
+    setMsg({ tone: 'busy', text: 'Preparing sign-in…' })
+    try {
+      showConnectResult(await remediateChatAuth(cid, personaId, envId || undefined))
     } catch (e) {
       setMsg({ tone: 'err', text: e instanceof Error ? e.message : String(e) })
     } finally {
@@ -713,6 +740,11 @@ function ConnectBar({ cid }: { cid: string }) {
       >
         {busy ? <Loader2Icon className="size-3.5 animate-spin" /> : <PlugZapIcon className="size-3.5" />} Connect
       </Button>
+      {msg?.remediation && (
+        <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => void remediate()} disabled={busy || !personaId}>
+          {msg.remediation.label}
+        </Button>
+      )}
       {msg && (
         <span
           role="status"

@@ -111,6 +111,31 @@ binary; duplicates de-duplicated by canonical path):
 The `agent-qa.toml` `[plugins]` table is the recommended shape for project
 repos; the env var and `$PATH` mechanisms are for global installs and dev.
 
+## Credential preparation
+
+An extension-provided environment may optionally declare an auth remediation
+command. This is for a credential provider that needs an interactive session
+before its credential references can resolve:
+
+```json
+{
+  "auth": {
+    "remediation": {
+      "label": "Sign in to credentials provider",
+      "argv": ["credential-login", "--browser"],
+      "automatic": true
+    }
+  }
+}
+```
+
+`argv` is executed directly, never through a shell. It is only accepted from a
+trusted installed environment record and is never returned to the browser. With
+`automatic: true`, a new chat runs it after an initial sign-in failure, then
+retries the normal auth flow. Otherwise, the chat shows the label as an explicit
+user action. Keep provider names, commands, and authentication details in the
+downstream extension—not in agent-qa.
+
 ## Surface verbs
 
 | Verb                                    | What                                            |

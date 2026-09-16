@@ -133,6 +133,9 @@ export interface ConnectStep {
   stderr: string
   spawnError: string | null
 }
+export interface AuthRemediation {
+  label: string
+}
 export interface ConnectResult {
   ok: boolean
   authenticated: boolean
@@ -140,6 +143,7 @@ export interface ConnectResult {
   session?: string | null
   headed?: boolean
   log: ConnectStep[]
+  remediation?: AuthRemediation
 }
 export function connectPersona(
   personaId: string,
@@ -157,6 +161,7 @@ export interface ChatConnection {
   personaId: string | null
   environmentId: string | null
   profile: string | null
+  remediation?: AuthRemediation
 }
 
 export function getChatConnection(chatId: string): Promise<ChatConnection> {
@@ -177,5 +182,16 @@ export function connectPersonaToChat(
     personaId,
     ...(environmentId ? { environmentId } : {}),
     headed,
+  })
+}
+
+export function remediateChatAuth(
+  chatId: string,
+  personaId: string,
+  environmentId?: string
+): Promise<ConnectResult> {
+  return postJson(`/api/chat/c/${encodeURIComponent(chatId)}/remediate`, {
+    personaId,
+    ...(environmentId ? { environmentId } : {}),
   })
 }
