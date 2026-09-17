@@ -607,13 +607,20 @@ function ConnectBar({ cid }: { cid: string }) {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<{ tone: 'busy' | 'ok' | 'err'; text: string; remediation?: AuthRemediation } | null>(null)
 
-  const showConnectResult = (result: ConnectResult) => {
+  const showConnectResult = (result: ConnectResult, afterPreparing = false) => {
     setMsg(
       result.authenticated
         ? { tone: 'ok', text: `Signed in as ${result.profile} — this chat's browser is authenticated.` }
         : {
             tone: 'err',
-            text: result.remediation ? 'Sign-in needs preparation.' : "Connect ran but the profile isn't authenticated yet.",
+            // A prepare that ran and still left us signed out must not repeat
+            // "needs preparation" — that reads as if nothing happened and
+            // invites pressing the same button forever.
+            text: !result.remediation
+              ? "Connect ran but the profile isn't authenticated yet."
+              : afterPreparing
+                ? 'Preparation ran, but sign-in still failed.'
+                : 'Sign-in needs preparation.',
             remediation: result.remediation,
           }
     )
@@ -702,7 +709,7 @@ function ConnectBar({ cid }: { cid: string }) {
     setBusy(true)
     setMsg({ tone: 'busy', text: 'Preparing sign-in…' })
     try {
-      showConnectResult(await remediateChatAuth(cid, personaId, envId || undefined))
+      showConnectResult(await remediateChatAuth(cid, personaId, envId || undefined), true)
     } catch (e) {
       setMsg({ tone: 'err', text: e instanceof Error ? e.message : String(e) })
     } finally {
