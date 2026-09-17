@@ -13,6 +13,9 @@ export interface EnvironmentAuth {
   // as bare env vars and merged UNDER a persona's own creds at run time, so the
   // persona only carries what varies (email/password).
   creds: Record<string, string>
+  // An optional trusted-extension action that prepares credentials before
+  // retrying sign-in. The workbench never sends argv back to the browser.
+  remediation?: { label: string; argv: string[]; automatic: boolean }
 }
 
 // A target to run a scenario against. `baseUrl` + `params` are forwarded to the

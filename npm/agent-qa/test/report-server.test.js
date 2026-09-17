@@ -1340,6 +1340,77 @@ test('autoConnectDefault signs in the default persona for a new chat (background
   assert.equal(boot2.args[boot2.args.indexOf('--session') + 1], 'chat-test'); // into the chat's own session
 });
 
+test('autoConnectDefault runs an extension-declared remediation before retrying sign-in', async (t) => {
+  const fx = makeFixture();
+  const commands = [];
+  let statusCalls = 0;
+  const deps = {
+    runAuthRemediation: async (argv) => {
+      commands.push(argv);
+      return { ok: true };
+    },
+    runCli: async (args) => {
+      if (args[0] === 'profile-status') {
+        statusCalls += 1;
+        return { code: 0, stdout: statusCalls === 1 ? 'signed out' : 'authenticated', stderr: '' };
+      }
+      return { code: 0, stdout: 'ok', stderr: '' };
+    },
+  };
+  const { server, base } = await boot(fx.root, deps);
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  await j('POST', '/api/environments/staging', {
+    name: 'Staging',
+    auth: {
+      plugin: 'agent-qa-plugin-acme',
+      remediation: { label: 'Sign in to credentials provider', argv: ['credential-login', '--browser'], automatic: true },
+    },
+  });
+  await j('POST', '/api/personas/admin', { name: 'Admin', profile: 'admin-user' });
+
+  const entry = { browser: { name: 'chat-test' }, recordDir: () => null };
+  await srv.autoConnectDefault(fx.root, entry, deps);
+
+  assert.deepEqual(commands, [['credential-login', '--browser']]);
+  assert.equal(entry.autoConnect.state, 'connected');
+  assert.equal(statusCalls, 2);
+});
+
+test('chat remediation runs the extension command and retries that chat connection', async (t) => {
+  const fx = makeFixture();
+  const commands = [];
+  const deps = {
+    chat: { hub: {} },
+    runAuthRemediation: async (argv) => {
+      commands.push(argv);
+      return { ok: true };
+    },
+    runCli: async (args) => {
+      if (args[0] === 'profile-status') return { code: 0, stdout: commands.length ? 'authenticated' : 'signed out', stderr: '' };
+      return { code: 0, stdout: 'ok', stderr: '' };
+    },
+  };
+  const { server, base } = await boot(fx.root, deps);
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  await j('POST', '/api/environments/staging', {
+    name: 'Staging',
+    auth: { remediation: { label: 'Prepare credentials', argv: ['credential-login'], automatic: false } },
+  });
+  await j('POST', '/api/personas/admin', { name: 'Admin', profile: 'admin-user' });
+  const chat = await (await j('POST', '/api/chat/create')).json();
+
+  const result = await (await j('POST', `/api/chat/c/${chat.id}/remediate`, { personaId: 'admin', environmentId: 'staging' })).json();
+  assert.deepEqual(commands, [['credential-login']]);
+  assert.equal(result.authenticated, true);
+  assert.equal(result.session, chat.session);
+});
+
 test('autoConnectDefault is a no-op when no persona/environment is configured', async (t) => {
   const fx = makeFixture();
   const calls = [];

@@ -975,6 +975,24 @@ async function resolveVaultRefs(map) {
   return { env: out, unresolved };
 }
 
+// A trusted extension may declare a non-shell credential-preparation command.
+// The host never accepts this from a chat request or exposes its argv to the
+// browser; it only runs the array supplied by the installed environment record.
+function normalizeAuthRemediation(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const argv = Array.isArray(value.argv) ? value.argv.map((v) => (typeof v === 'string' ? v.trim() : '')) : [];
+  if (!argv.length || argv.length > 32 || argv.some((v) => !v || v.includes('\0'))) return null;
+  return {
+    label: typeof value.label === 'string' && value.label.trim() ? value.label.trim() : 'Prepare sign-in',
+    argv,
+    automatic: value.automatic === true,
+  };
+}
+
+function publicAuthRemediation(remediation) {
+  return remediation ? { label: remediation.label } : undefined;
+}
+
 function normalizeEnvironment(id, body, existing) {
   const now = Date.now();
   const params = strMap(body.params, existing?.params);
@@ -997,6 +1015,7 @@ function normalizeEnvironment(id, body, existing) {
       // own creds at connect/run time. Put what every identity shares here (e.g.
       // the OAuth client id); keep per-identity email/password on the persona.
       creds: strMap(auth.creds, existing?.auth?.creds),
+      remediation: normalizeAuthRemediation(auth.remediation ?? existing?.auth?.remediation),
     },
     description: String(body.description ?? existing?.description ?? ''),
     createdAt: existing?.createdAt ?? now,
@@ -1311,6 +1330,7 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
   // is why a persona-only connect used to fail with "auth-failed: <cred> unset".
   if (!env) env = await pickDefaultEnvironment(root);
   const auth = (env && env.auth) || {};
+  const remediation = normalizeAuthRemediation(auth.remediation);
   // An auth plugin can come from three places: the workbench's own registry
   // (UI-imported → AGENT_QA_PLUGINS), an environment's auth.plugin adapter
   // preference, or the CLI's native discovery (agent-qa.toml [plugins] /
@@ -1361,7 +1381,7 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
       stderr: `could not resolve vault refs: ${unresolved.join(', ')}. Run \`vault login\` and set VAULT_ADDR.`,
       spawnError: null,
     });
-    return sendJson(res, 200, { ok: false, authenticated: false, profile, log });
+    return sendJson(res, 200, { ok: false, authenticated: false, profile, log, remediation: publicAuthRemediation(remediation) });
   }
   Object.assign(extraEnv, resolvedEnv);
 
@@ -1401,6 +1421,7 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
       session: sessionOverride,
       headed,
       log,
+      remediation: publicAuthRemediation(remediation),
     });
   }
   try {
@@ -1431,10 +1452,43 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
       session: sessionOverride,
       headed,
       log,
+      remediation: authenticated ? undefined : publicAuthRemediation(remediation),
     });
   } finally {
     releaseBrowser();
   }
+}
+
+// Run the extension-declared credential preparation command, then let the
+// normal connect path re-resolve credentials and authenticate the chat session.
+async function handleChatRemediation(res, root, entry, deps, body) {
+  const personaId = body.personaId ? String(body.personaId) : '';
+  if (!personaId || !isSafeSegment(personaId)) return badRequest(res, 'personaId is required');
+  const persona = await loadPersonaById(root, personaId);
+  if (!persona) return notFound(res, 'no such persona');
+  const envId = body.environmentId ? String(body.environmentId) : '';
+  let env = envId && isSafeSegment(envId) ? await loadEnvironmentById(root, envId) : null;
+  if (!env) env = await pickDefaultEnvironment(root);
+  const remediation = normalizeAuthRemediation(env && env.auth && env.auth.remediation);
+  if (!remediation || !deps || typeof deps.runAuthRemediation !== 'function') {
+    return badRequest(res, 'this environment has no credential preparation action');
+  }
+  const prepared = await deps.runAuthRemediation(remediation.argv);
+  if (!prepared || !prepared.ok) {
+    return sendJson(res, 200, {
+      ok: false,
+      authenticated: false,
+      profile: String(persona.profile || ''),
+      log: [],
+      remediation: publicAuthRemediation(remediation),
+    });
+  }
+  return handleConnect({}, res, root, personaId, deps, {
+    session: entry.browser.name,
+    recordDir: entry.recordDir(),
+    entry,
+    body: { personaId, ...(env && env.id ? { environmentId: env.id } : {}) },
+  });
 }
 
 // Add the connected profile to the active recorder through the Rust CLI.
@@ -1581,6 +1635,19 @@ function makeCliRunner({ bin, env, cwd }) {
           resolve({ code, stdout: stdout || '', stderr: stderr || '', spawnError: null });
         },
       );
+    });
+  };
+}
+
+// Runs a trusted extension's credential-preparation command without a shell.
+// Its output may contain provider details, so only success/failure leaves this
+// localhost-only boundary.
+function makeAuthRemediationRunner({ env, cwd }) {
+  return function runAuthRemediation(argv) {
+    return new Promise((resolve) => {
+      execFile(argv[0], argv.slice(1), { env, cwd, timeout: 5 * 60 * 1000, maxBuffer: 32 * 1024 }, (err) => {
+        resolve({ ok: !err });
+      });
     });
   };
 }
@@ -2373,24 +2440,32 @@ async function autoConnectDefault(root, entry, deps) {
     if (!root || !deps || typeof deps.runCli !== 'function') return;
     const [persona, env] = await Promise.all([pickDefaultPersona(root), pickDefaultEnvironment(root)]);
     if (!persona || !env) return;
+    const remediation = normalizeAuthRemediation(env.auth && env.auth.remediation);
     entry.autoConnect = { state: 'connecting', personaId: persona.id, environmentId: env.id, at: Date.now() };
-    const res = makeCaptureRes();
-    await handleConnect({}, res, root, persona.id, deps, {
-      session: entry.browser.name,
-      recordDir: entry.recordDir(),
-      entry,
-      body: { personaId: persona.id, environmentId: env.id },
-    });
-    let parsed = {};
-    try {
-      parsed = JSON.parse(res._out.body || '{}');
-    } catch {
-      /* leave empty */
+    const connect = async () => {
+      const res = makeCaptureRes();
+      await handleConnect({}, res, root, persona.id, deps, {
+        session: entry.browser.name,
+        recordDir: entry.recordDir(),
+        entry,
+        body: { personaId: persona.id, environmentId: env.id },
+      });
+      try {
+        return JSON.parse(res._out.body || '{}');
+      } catch {
+        return {};
+      }
+    };
+    let parsed = await connect();
+    if (!parsed.authenticated && remediation && remediation.automatic && typeof deps.runAuthRemediation === 'function') {
+      const prepared = await deps.runAuthRemediation(remediation.argv);
+      if (prepared && prepared.ok) parsed = await connect();
     }
     entry.autoConnect = {
       state: parsed.authenticated ? 'connected' : 'failed',
       personaId: persona.id,
       environmentId: env.id,
+      remediation: parsed.authenticated ? undefined : publicAuthRemediation(remediation),
       at: Date.now(),
     };
   } catch {
@@ -2675,6 +2750,7 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
       personaId: entry.connectedPersonaId || auto.personaId || null,
       environmentId: entry.connectedEnvironmentId || auto.environmentId || null,
       profile: entry.connectedProfile || null,
+      remediation: entry.connectedProfile ? undefined : auto.remediation,
     });
   }
 
@@ -2684,9 +2760,21 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
     return sendJson(res, 200, await chatRecordingState(entry, scenariosRoot));
   }
 
+  // Let a trusted extension prepare credentials (for example, through an
+  // interactive provider flow), then retry connection in this chat's session.
+  if (sub === 'remediate' && req.method === 'POST') {
+    let body = {};
+    try {
+      body = await readJsonBody(req);
+    } catch (e) {
+      return badRequest(res, String((e && e.message) || e));
+    }
+    return handleChatRemediation(res, scenariosRoot, entry, deps, body);
+  }
+
   // Connect a persona's auth INTO this chat's own browser session, so the chat
   // agent operates an already-signed-in page (no credentials in the agent's
-  // hands). Reuses the persona connect flow — resolve vault creds → profile-add
+  // hands). Reuses the persona connect flow — resolve credentials → profile-add
   // → profile-bootstrap → profile-status — but targets the chat's agent-browser
   // session via --session instead of the plugin's per-profile default.
   if (sub === 'connect' && req.method === 'POST') {
@@ -3526,6 +3614,7 @@ function start(opts = {}) {
       recordRoot,
       agentBrowserBin,
       runCli: makeCliRunner({ bin, env: childEnv, cwd }),
+      runAuthRemediation: makeAuthRemediationRunner({ env: childEnv, cwd }),
       replay: makeReplaySpawner({ bin, env: childEnv, cwd, root }),
       prepareBrowserSession: makeBrowserModePreparer({ closeSession }),
     };
@@ -3618,6 +3707,7 @@ module.exports = {
   runDetail,
   scenarioSummary,
   makeCliRunner,
+  makeAuthRemediationRunner,
   lastJsonLine,
   createLiveBridge,
   createChatManager,
