@@ -1,0 +1,27 @@
+name: visual-evidence
+# Its own workflow, not a job in ci.yml, because this gate reads the PR body
+# from the webhook payload and so must re-run on `edited`. Attaching evidence
+# to an open PR is an edit, and a re-run of the old run replays the stale
+# payload. Keeping it separate means a description tweak doesn't re-run the
+# Rust matrix or the release-build smoke.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  visual-evidence:
+    name: visual evidence
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+      - name: require evidence for web UI changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          scripts/check-pr-visual-evidence.sh
