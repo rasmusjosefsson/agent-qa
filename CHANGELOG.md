@@ -16,6 +16,10 @@ shapes are usable for daily work but may change before `1.0.0`.
 - **Replay** — `replay` with profile/session binding, parameter overrides,
   and heal-from-run; per-step ARIA snapshot + screenshot evidence.
 - **Compare** — per-step ARIA snapshot diff + screenshot pixel diff.
+- **Design review** — `design review`, `design verdict`: a design-fidelity lane
+  with its own exit code, separate from the behavioural pass/fail. Reference
+  images live at `<sid>/designs/<stepId>.png`; verdicts (`ok`, `accepted`,
+  `fail`, `ask`) are committed and expire when the design file changes.
 - **Heal** — `heal-respond`, `heal-promote`, `heal-apply`.
 - **Profiles** — `profile-add`, `profile-status`, `profile-bootstrap`,
   `profile-list`.
