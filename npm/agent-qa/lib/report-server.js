@@ -1670,12 +1670,17 @@ function sessionForReplay(sid, profile) {
   return profile ? `${profile}-session` : replaySessionFor(sid);
 }
 
-// Resolve the session a scenario's latest run drove (for the live screencast),
-// from that run's recorded profile. Falls back to the fresh per-sid session.
+// Resolve the session a scenario's latest run drove (for the live screencast).
+// The runner records the actual session in audit.sessionName — deriving it
+// from audit.profile instead can point the bridge at a browser nobody is
+// using (black pane). Fall back to the profile-derived name, then per-sid.
 async function replayStreamSession(root, sid) {
   const latest = await latestRunId(path.join(root, sid));
   if (latest) {
     const audit = await readJson(path.join(root, sid, 'replays', latest, 'audit.json'));
+    if (audit && typeof audit.sessionName === 'string' && isSafeSegment(audit.sessionName)) {
+      return audit.sessionName;
+    }
     if (audit && audit.profile) return sessionForReplay(sid, audit.profile);
   }
   return replaySessionFor(sid);
