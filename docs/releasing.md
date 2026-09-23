@@ -60,8 +60,8 @@ and toolchain setup, then add corresponding entries to the umbrella's
 
 ## Local smoke test
 
-The `smoke-install` job in `ci.yml` builds for the current Linux runner,
-stages a local platform package, generates the umbrella with a `file:` ref,
+The `smoke-install` job in `ci.yml` builds on each matrix runner (macOS and
+Linux), stages a local platform package, generates the umbrella with a `file:` ref,
 `npm pack`s both, installs into a temp dir, and runs `agent-qa skills list`
 + `agent-qa skills get core`. Use the same `scripts/build-platform-pkg.js`
 + `scripts/build-umbrella-pkg.js --local-platforms <plat>` flow for local

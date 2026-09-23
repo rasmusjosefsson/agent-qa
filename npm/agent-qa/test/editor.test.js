@@ -325,7 +325,7 @@ test('static editor.html (React editor entry) is served', async (t) => {
   assert.equal(html.status, 200);
   assert.match(html.headers.get('content-type'), /text\/html/);
   const body = await html.text();
-  assert.match(body, /editor/i);
+  assert.match(body, /<title>agent-qa<\/title>/);
 
   // the entry references a hashed JS asset under /assets which resolves as JS.
   const m = body.match(/\/assets\/[A-Za-z0-9._-]+\.js/);

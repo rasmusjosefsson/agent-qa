@@ -32,6 +32,7 @@
     "@earendil-works/pi-coding-agent": "0.80.2",
     "@rasmusjosefsson/agent-qa-darwin-arm64": "0.0.0",
     "@rasmusjosefsson/agent-qa-darwin-x64": "0.0.0",
+    "@rasmusjosefsson/agent-qa-linux-x64": "0.0.0",
     "@rasmusjosefsson/agent-qa-win32-x64": "0.0.0"
   },
   "engines": {
