@@ -139,7 +139,7 @@ on stdin, reads a JSON response on stdout. Discovery looks at the
 ```bash
 cd cli
 cargo build
-cargo test       # 422 tests, zero warnings
+cargo test       # 435 tests, zero warnings
 ```
 
 Single Rust crate in `cli/`. Cross-compile + npm packaging in
@@ -155,6 +155,6 @@ Single Rust crate in `cli/`. Cross-compile + npm packaging in
 | `schema/` | `scenario-schema.json` — the contract |
 | `skill-data/` | Embedded agent runbooks (markdown), served by `agent-qa skills get` |
 | `skills/` | Pi/Claude-Code discovery stubs (installed via `npx skills add`) |
-| `test-fixtures/` | Golden scenario corpus |
+| `test-fixtures/` | CI browser fixture + scenario corpus layout (corpus is empty) |
 | `docs/` | Architecture, plan, plugin author guide |
 | `examples/plugins/` | Reference plugins |

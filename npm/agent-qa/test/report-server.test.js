@@ -403,7 +403,7 @@ test('report viewer endpoints', async (t) => {
     assert.equal(res.status, 200);
     assert.match(res.headers.get('content-type'), /text\/html/);
     const html = await res.text();
-    assert.match(html, /agent-qa · runs/);
+    assert.match(html, /<title>agent-qa<\/title>/);
     assert.match(html, /\/assets\/[A-Za-z0-9._-]+\.js/);
   });
 
