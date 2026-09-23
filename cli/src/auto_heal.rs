@@ -35,9 +35,10 @@ use std::path::Path;
 use anyhow::{anyhow, Context, Result};
 use serde_json::json;
 
-use crate::browser;
+use crate::browser::{self, AgentBrowserError};
 use crate::scenario::{Locator, LocatorRole, NameMatch, Step};
 use crate::sidecar::{atomic_write_file, RunPaths};
+use crate::value::{substitute_scenario_vars, ValueScope};
 
 /// `AGENT_QA_NO_HEAL` set → auto-heal disabled entirely.
 pub fn enabled() -> bool {
@@ -81,12 +82,30 @@ fn role_name_of(step: &Step) -> Option<(LocatorRole, String)> {
     Some((loc.clone(), want))
 }
 
+/// Whether a dispatch error is a **resolution miss** — the failure the
+/// ladder may act on. Only agent-browser `find*` failures qualify: a find
+/// that exits non-zero resolved nothing, so nothing user-visible was
+/// dispatched and a corrected retry cannot double-fire an action. Errors
+/// from `eval`/`select`/post-action paths are deliberately unhealable —
+/// they may have fired partially before erroring.
+pub fn is_locator_miss(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<AgentBrowserError>(),
+            Some(AgentBrowserError::NonZero { verb, .. }) if verb.starts_with("find")
+        )
+    })
+}
+
 /// Collect live role+name candidates and run the ladder. `Ok(None)` when the
 /// step has no healable locator or no strategy produced a unique match.
-pub fn attempt(step: &Step, session: &str) -> Result<Option<Heal>> {
-    let Some((loc, want)) = role_name_of(step) else {
+pub fn attempt(step: &Step, session: &str, scope: &mut ValueScope) -> Result<Option<Heal>> {
+    let Some((loc, template)) = role_name_of(step) else {
         return Ok(None);
     };
+    // Resolve {{params}} / {{vars}} the same way dispatch does — compare the
+    // live page against what the step was actually asked to find.
+    let want = substitute_scenario_vars(&template, scope);
     let candidates =
         collect_role_names(session, &loc.role).context("collect live role+name candidates")?;
     let Some((strategy, to)) = ladder(&want, &candidates) else {
@@ -121,8 +140,24 @@ pub fn rejection_evidence(session: &str) -> Vec<String> {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
-    let t = out.trim().trim_matches('"');
-    serde_json::from_str::<Vec<String>>(t).unwrap_or_default()
+    decode_eval_json(&out)
+        .and_then(|v| v.as_array().cloned())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// eval serializes a string result JSON-encoded — unwrap one quoting layer
+/// (or accept a raw payload) before parsing, so an encoded probe can't
+/// silently yield nothing.
+fn decode_eval_json(out: &str) -> Option<serde_json::Value> {
+    let t = out.trim();
+    let unquoted =
+        serde_json::from_str::<String>(t).unwrap_or_else(|_| t.trim_matches('"').to_string());
+    serde_json::from_str(&unquoted).ok()
 }
 
 /// Persist a successful heal: the patch file `heal-promote` applies, plus a
@@ -193,9 +228,7 @@ fn collect_role_names(session: &str, role: &str) -> Result<Vec<String>> {
 }
 
 fn parse_names(out: &str) -> Vec<String> {
-    let t = out.trim().trim_matches('"');
-    serde_json::from_str::<serde_json::Value>(t)
-        .ok()
+    decode_eval_json(out)
         .and_then(|v| v.get("names").and_then(|n| n.as_array()).cloned())
         .map(|a| {
             a.iter()
@@ -567,11 +600,31 @@ mod tests {
             parse_names(r#"{"names":["Save","Cancel"]}"#),
             vec!["Save", "Cancel"]
         );
-        // agent-browser may wrap the serialized string in quotes.
-        assert_eq!(
-            parse_names(r#""{\"names\":[\"Save\"]}""#),
-            vec![] as Vec<String>
-        ); // escaped JSON — unparseable → empty
+        // eval JSON-encodes a string result — one quoting layer unwrapped.
+        assert_eq!(parse_names(r#""{\"names\":[\"Save\"]}""#), vec!["Save"]);
         assert_eq!(parse_names(""), vec![] as Vec<String>);
+    }
+
+    #[test]
+    fn locator_miss_only_for_find_failures() {
+        let find_err = anyhow::Error::new(AgentBrowserError::NonZero {
+            verb: "find".to_string(),
+            exit_code: 1,
+            stderr: "Element not found".into(),
+            hint: String::new(),
+        })
+        .context("click step");
+        assert!(is_locator_miss(&find_err));
+
+        let eval_err = anyhow::Error::new(AgentBrowserError::NonZero {
+            verb: "eval".to_string(),
+            exit_code: 1,
+            stderr: "crash".into(),
+            hint: String::new(),
+        });
+        assert!(!is_locator_miss(&eval_err));
+
+        let plain = anyhow!("not an agent-browser error");
+        assert!(!is_locator_miss(&plain));
     }
 }

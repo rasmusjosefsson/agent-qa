@@ -223,12 +223,15 @@ pub fn build_collect_role_names(role: &str) -> String {
     : (role ? ['[role="' + role + '"]'] : Object.keys(map).reduce((a, k) => a.concat(map[k]), []));
   const cands = Array.from(document.querySelectorAll(sels.join(',')));
   const root = __aqScopeRoot();
-  const first = (n) => (__aqName(n) || []).map(__aqText).filter(Boolean)[0] || '';
   const out = [];
   const seen = new Set();
+  // Every __aqName candidate counts — activation matches against all of
+  // them, so collecting only the first would miss names living in a later
+  // field (aria-label vs innerText vs labelledby).
   for (const n of __aqPrefer(cands.filter(__aqVisible), root)) {{
-    const nm = first(n);
-    if (nm && !seen.has(nm)) {{ seen.add(nm); out.push(nm); }}
+    for (const nm of (__aqName(n) || []).map(__aqText)) {{
+      if (nm && !seen.has(nm)) {{ seen.add(nm); out.push(nm); }}
+    }}
   }}
   return JSON.stringify({{ names: out }});
 }})()"#,

@@ -589,9 +589,18 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                     // role+name resolves to exactly one live candidate under
                     // a looser strategy retries once with the corrected
                     // locator — drift is corrected in-run and persisted
-                    // (heal.jsonl row + diffs/<stepId>.patch.json).
+                    // (heal.jsonl row + diffs/<stepId>.patch.json). Only
+                    // find-family failures count as a miss — anything else
+                    // may have dispatched partially, and retrying could
+                    // double-fire the action.
                     if outcome.is_err() && crate::auto_heal::enabled() {
-                        match crate::auto_heal::attempt(&patched_step, &opts.session_name) {
+                        let miss =
+                            matches!(&outcome, Err(e) if crate::auto_heal::is_locator_miss(e));
+                        match if miss {
+                            crate::auto_heal::attempt(&patched_step, &opts.session_name, &mut scope)
+                        } else {
+                            Ok(None)
+                        } {
                             Ok(Some(heal)) => {
                                 eprintln!(
                                     "[v2-replay] auto-heal: step '{id}' locator '{}' → '{}' ({}); retrying once",
