@@ -151,3 +151,13 @@ jobs:
           name: agent-qa-browser-contract-${{ matrix.platform }}
           path: ${{ runner.temp }}/agent-qa-browser-contract
           retention-days: 14
+
+  # Reports the pre-matrix check context that branch protection requires;
+  # fails when any smoke leg fails instead of skipping.
+  smoke-install-gate:
+    name: smoke (npm install local)
+    needs: [smoke-install]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.smoke-install.result }}" = "success"
