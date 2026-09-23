@@ -1000,11 +1000,13 @@ test("POST /api/chat/c/:id/connect bootstraps auth into THAT chat's own session"
   const j = (m, p, b) =>
     fetch(`${booted.base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
 
-  await j('POST', '/api/personas/admin', { name: 'Admin', profile: 'admin-user' });
-  await j('POST', '/api/environments/staging', { name: 'Staging', auth: { plugin: 'agent-qa-plugin-acme' } });
-
+  // Create the chat before any persona/environment exists so chat-create's
+  // background auto-connect is a no-op — only the explicit connect bootstraps.
   const created = await (await j('POST', '/api/chat/create')).json();
   assert.match(created.session, /^chat-[0-9a-f]+$/);
+
+  await j('POST', '/api/personas/admin', { name: 'Admin', profile: 'admin-user' });
+  await j('POST', '/api/environments/staging', { name: 'Staging', auth: { plugin: 'agent-qa-plugin-acme' } });
 
   const res = await j('POST', `/api/chat/c/${created.id}/connect`, {
     personaId: 'admin',
