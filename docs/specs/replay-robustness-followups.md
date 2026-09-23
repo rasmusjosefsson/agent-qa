@@ -40,23 +40,31 @@ context.
   manual-heal surface. The `v0.0.51` release workflow published the umbrella
   and platform npm packages successfully.
 
+- **#54** workbench headed toggle — completed the #51 flag end-to-end:
+  `runOptsFromBody` parses `headed`, replay spawners pass
+  `--headed`/`--headless` (scenario + plan runs + chat replay route), a
+  browser-mode toggle ships in the Runs and Plans UI, and a mode flip
+  recycles the warm daemon session before the next launch.
+
+- **#93** `fix(workbench): live pane attaches to the session the runner
+  recorded` — `replayStreamSession()` reads `audit.sessionName` from the
+  run's `audit.json` (with the profile-derived name as fallback), fixing the
+  Runs tab live view rendering black while a replay is actively running.
+
+- **auto-heal PR** `feat(replay): inline auto-heal loop` — `cli/src/auto_heal.rs`:
+  ordered strategy ladder (whitespace → digit-tolerant → digit-anywhere →
+  generated-suffix → name-prefix), unique-match-only with ambiguity refusal,
+  verbatim-resolution bail, retry-once-then-continue, `<run>/heal.jsonl`
+  `locator-correction` rows + `<run>/diffs/<stepId>.patch.json` producer for
+  `heal-promote`, value-rejection classification + surfacing (never retried),
+  `AGENT_QA_NO_HEAL` kill switch + `AGENT_QA_HEAL_STRICT` strict mode, and an
+  `autoHealed` field on `RunAudit`.
+
 ## Left to do
 
-### 1. Workbench headed toggle (UI)
-#51 only wired the CLI flag. Still needed:
-- Parse a headed boolean in `runOptsFromBody`, thread it through
-  `deps.replay`/`makeReplaySpawner` for scenario and plan runs, and append the
-  CLI flag directly in the chat replay route (which calls `deps.runCli`). For
-  `handleConnect`, either add a matching profile-bootstrap CLI option or set
-  the agent-browser mode env explicitly before bootstrap.
-- Add a UI control (Runs tab, and/or Environments) to choose per-run,
-  defaulting headless.
-- Remember: agent-browser fixes the mode at **daemon launch** — a warm/reused
-  session (e.g. `<profile>-session`) keeps whatever mode it launched in until
-  closed. A toggle flip needs `agent-browser close --session <name>` (or an
-  equivalent recycle) before the next launch to actually take effect.
+### 1. ~~Workbench headed toggle~~ — done in #54
 
-### 2. Live-pane black-screen fix
+### 2. ~~Live-pane black-screen fix~~ — done in #93
 The Runs tab's live browser view can show black even when a replay is
 actively running. Root cause: `replayStreamSession()` in
 `report-server.js` re-derives the session name from the run's `profile`
@@ -73,12 +81,9 @@ CDP screencast still can attach to it in principle since
 symptom in the reported case was the wrong-session bug above, not headed vs
 headless itself.)
 
-### 3. Inline replay auto-heal loop — the big one
-**Not built yet.** Current replay (`cli/src/runner.rs`) has no in-run
-healing: a locator miss just fails the step. The only "heal" mechanism that
-exists is `--heal-from-run <runId>`, which pre-loads *caller-supplied*
-corrections from a **prior** run's `heal-responses/` directory — there is no
-autonomous in-run retry today.
+### 3. ~~Inline replay auto-heal loop~~ — shipped (see Done above)
+Original design kept for reference. Implementation landed as described below,
+wired into the `runner.rs` dispatch loop next to the transient-popup logic.
 
 Design (generic ARIA-based, no reference to any other codebase in the
 implementation):

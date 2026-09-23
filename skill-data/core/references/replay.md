@@ -16,7 +16,18 @@ session. The local browser connection comes from `AGENT_BROWSER_CDP` and
 `AGENT_BROWSER_PIN_TAB`, or `[browser]` in `agent-qa.toml`. It is not scenario
 data.
 
-If replay fails because a captured value changed, use the audited correction
+When a do-step's role+name locator misses, replay auto-heals: it collects
+the live role candidates and walks an ordered strategy ladder
+(whitespace → digit-tolerant → digit-anywhere → generated-suffix →
+name-prefix), retrying once only when exactly one candidate matches —
+ambiguous drift fails the step rather than guessing. A successful heal
+appends a `locator-correction` row to `<run>/heal.jsonl` and writes
+`<run>/diffs/<stepId>.patch.json`, which `agent-qa heal-promote` can apply
+back into the contract. Set `AGENT_QA_NO_HEAL` to disable the loop entirely,
+or `AGENT_QA_HEAL_STRICT` to fail any run that needed a heal.
+
+If replay fails because a captured value changed (a value rejection, not a
+locator miss — auto-heal never retries those), use the audited correction
 flow. Do not mutate a scenario during replay.
 
 ```bash

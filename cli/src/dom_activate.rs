@@ -57,6 +57,27 @@ fn json_str(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into())
 }
 
+/// ARIA role → candidate-selector map, shared by the activation builder and
+/// the auto-heal name collector. Single source of truth so both resolve the
+/// same candidate set agent-browser's ARIA view would.
+fn role_candidate_map_js() -> &'static str {
+    r#"{
+    button: ['button','input[type=button]','input[type=submit]','input[type=reset]','[role=button]'],
+    link: ['a[href]','a','[role=link]'],
+    combobox: ['[role=combobox]','select','[aria-haspopup]','[aria-expanded]','button'],
+    listbox: ['[role=listbox]','select'],
+    option: ['[role=option]','option'],
+    menuitem: ['[role=menuitem]','[role=menuitemcheckbox]','[role=menuitemradio]'],
+    menuitemcheckbox: ['[role=menuitemcheckbox]','[role=menuitem]'],
+    menuitemradio: ['[role=menuitemradio]','[role=menuitem]'],
+    tab: ['[role=tab]'],
+    checkbox: ['[role=checkbox]','input[type=checkbox]'],
+    radio: ['[role=radio]','input[type=radio]'],
+    switch: ['[role=switch]','[role=checkbox]'],
+    treeitem: ['[role=treeitem]'],
+  }"#
+}
+
 /// Shared JS: the candidate-selector map + name/visibility helpers + the
 /// activation chain. Emitted once and reused by the role and text builders.
 /// Defines `__aqPick(el)` (activate a resolved element, returns bool) and
@@ -158,21 +179,7 @@ pub fn build_role_name_click(role: &str, name: &str) -> String {
         r#"(() => {{{prelude}
   const want = __aqText({name_lit});
   const role = {role_lit};
-  const map = {{
-    button: ['button','input[type=button]','input[type=submit]','input[type=reset]','[role=button]'],
-    link: ['a[href]','a','[role=link]'],
-    combobox: ['[role=combobox]','select','[aria-haspopup]','[aria-expanded]','button'],
-    listbox: ['[role=listbox]','select'],
-    option: ['[role=option]','option'],
-    menuitem: ['[role=menuitem]','[role=menuitemcheckbox]','[role=menuitemradio]'],
-    menuitemcheckbox: ['[role=menuitemcheckbox]','[role=menuitem]'],
-    menuitemradio: ['[role=menuitemradio]','[role=menuitem]'],
-    tab: ['[role=tab]'],
-    checkbox: ['[role=checkbox]','input[type=checkbox]'],
-    radio: ['[role=radio]','input[type=radio]'],
-    switch: ['[role=switch]','[role=checkbox]'],
-    treeitem: ['[role=treeitem]'],
-  }};
+  const map = {map};
   const sels = (role && map[role]) ? map[role]
     : (role ? ['[role="' + role + '"]'] : Object.keys(map).reduce((a, k) => a.concat(map[k]), []));
   const cands = Array.from(document.querySelectorAll(sels.join(',')));
@@ -197,7 +204,56 @@ pub fn build_role_name_click(role: &str, name: &str) -> String {
         prelude = activation_prelude(),
         name_lit = json_str(name),
         role_lit = json_str(role),
+        map = role_candidate_map_js(),
     )
+}
+
+/// JS collecting the page's live accessible-name candidates for a role —
+/// the input the auto-heal strategy ladder matches the recorded name
+/// against. Uses the same candidate set, visibility filter, and popup-scope
+/// preference as `build_role_name_click` so a strategy match is dispatchable
+/// by definition. Returns `JSON.stringify({names: [...]})`; the
+/// `__aqCollectNames` marker lets test doubles distinguish this probe.
+pub fn build_collect_role_names(role: &str) -> String {
+    format!(
+        r#"(() => {{ const __aqCollectNames = true;{prelude}
+  const role = {role_lit};
+  const map = {map};
+  const sels = (role && map[role]) ? map[role]
+    : (role ? ['[role="' + role + '"]'] : Object.keys(map).reduce((a, k) => a.concat(map[k]), []));
+  const cands = Array.from(document.querySelectorAll(sels.join(',')));
+  const root = __aqScopeRoot();
+  const first = (n) => (__aqName(n) || []).map(__aqText).filter(Boolean)[0] || '';
+  const out = [];
+  const seen = new Set();
+  for (const n of __aqPrefer(cands.filter(__aqVisible), root)) {{
+    const nm = first(n);
+    if (nm && !seen.has(nm)) {{ seen.add(nm); out.push(nm); }}
+  }}
+  return JSON.stringify({{ names: out }});
+}})()"#,
+        prelude = activation_prelude(),
+        role_lit = json_str(role),
+        map = role_candidate_map_js(),
+    )
+}
+
+/// JS returning up to 3 visible alert/banner/toast texts — evidence that a
+/// failed step was a value rejection (the app refused the submitted input)
+/// rather than a locator miss. `__aqRejectProbe` marker for test doubles.
+pub fn build_rejection_probe() -> String {
+    r#"(() => { const __aqRejectProbe = true;
+  const vis = (n) => { try { return n.getClientRects().length > 0; } catch (e) { return false; } };
+  const hits = Array.from(document.querySelectorAll(
+    '[role=alert],[aria-live],[role=status],[class*="error"],[class*="Error"],[class*="toast"],[class*="Toast"],[class*="banner"],[class*="Banner"]'
+  ))
+    .filter(vis)
+    .map((n) => (n.innerText || n.textContent || '').trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  return JSON.stringify(hits);
+})()"#
+        .to_string()
 }
 
 /// Build JS that resolves an element by visible text and activates it. Prefers

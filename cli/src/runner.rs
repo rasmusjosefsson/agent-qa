@@ -377,6 +377,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         scenario_content_hash: hash.clone(),
         parameters: None,
         heal_overrides_applied: None,
+        auto_healed: None,
         tag: opts.tag.clone(),
     };
     write_run_audit(&run, &audit)?;
@@ -454,6 +455,8 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         std::collections::HashMap::new()
     };
     let mut applied_overrides: Vec<String> = Vec::new();
+    // stepIds that self-healed via an inline locator correction (auto-heal).
+    let mut healed_steps: Vec<String> = Vec::new();
     let mut summary = RunSummary {
         passed: 0,
         total: 0,
@@ -582,6 +585,60 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                             outcome = dispatch_do(&patched_step, &do_ctx, &mut scope);
                         }
                     }
+                    // Inline auto-heal: a locator miss whose recorded
+                    // role+name resolves to exactly one live candidate under
+                    // a looser strategy retries once with the corrected
+                    // locator — drift is corrected in-run and persisted
+                    // (heal.jsonl row + diffs/<stepId>.patch.json).
+                    if outcome.is_err() && crate::auto_heal::enabled() {
+                        match crate::auto_heal::attempt(&patched_step, &opts.session_name) {
+                            Ok(Some(heal)) => {
+                                eprintln!(
+                                    "[v2-replay] auto-heal: step '{id}' locator '{}' → '{}' ({}); retrying once",
+                                    heal.from, heal.to, heal.strategy
+                                );
+                                let corrected =
+                                    crate::auto_heal::apply_correction(&patched_step, &heal);
+                                match dispatch_do(&corrected, &do_ctx, &mut scope) {
+                                    Ok(saved) => {
+                                        healed_steps.push(id.to_string());
+                                        if let Err(e) = crate::auto_heal::persist_correction(
+                                            &run, &hash, id, &heal,
+                                        ) {
+                                            eprintln!(
+                                                "[v2-replay] heal audit write failed (continuing): {e}"
+                                            );
+                                        }
+                                        outcome = Ok(saved);
+                                    }
+                                    Err(retry_err) => {
+                                        outcome = Err(retry_err.context(format!(
+                                            "auto-heal via {} did not fix step {id}",
+                                            heal.strategy
+                                        )));
+                                    }
+                                }
+                            }
+                            Ok(None) => {
+                                // Not a healable locator miss — check for a
+                                // value rejection and surface it in the audit
+                                // trail (classified, never retried).
+                                let ev = crate::auto_heal::rejection_evidence(&opts.session_name);
+                                if !ev.is_empty() {
+                                    eprintln!(
+                                        "[v2-replay] step '{id}' looks like a value rejection: {}",
+                                        ev.join(" | ")
+                                    );
+                                    let _ = crate::auto_heal::persist_rejection(&run, id, &ev);
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "[v2-replay] auto-heal probe failed (keeping original error): {e}"
+                                );
+                            }
+                        }
+                    }
                     match outcome {
                         Ok(saved) => {
                             if let (Some(name), Some(value)) = (save_as.as_deref(), saved) {
@@ -693,6 +750,17 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 }
             }
         }
+        // Strict mode: a run that needed any heal exits non-zero even
+        // though every step passed — drift surfaces for review instead
+        // of silently self-correcting.
+        if crate::auto_heal::strict() && !healed_steps.is_empty() {
+            summary.ok = false;
+            eprintln!(
+                "[v2-replay] auto-heal STRICT: {} step(s) self-healed ({}); failing the run so drift gets reviewed",
+                healed_steps.len(),
+                healed_steps.join(", ")
+            );
+        }
         // The step phase is finished; finalise the live status with
         // the run verdict. env.close (teardown) runs after this and is
         // intentionally not counted as a step.
@@ -735,6 +803,9 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     audit.exit_code = Some(if summary.ok { 0 } else { 1 });
     if opts.heal_from_run.is_some() {
         audit.heal_overrides_applied = Some(applied_overrides);
+    }
+    if !healed_steps.is_empty() {
+        audit.auto_healed = Some(healed_steps);
     }
     write_run_audit(&run, &audit)?;
 
@@ -1620,6 +1691,168 @@ mod tests {
         };
         let err = format!("{:#}", run(&opts).unwrap_err());
         assert!(err.contains("schema error"), "got: {err}");
+        clear_fake_browser();
+    }
+
+    /// Fake agent-browser for auto-heal tests: the recorded name "Save"
+    /// never resolves (find/eval miss), the collect probe reports the live
+    /// name "Save changes", and an eval mentioning the corrected name
+    /// activates. Mirrors the miss→probe→retry lifecycle end-to-end.
+    fn install_heal_fake_browser(dir: &Path, log: &Path) -> PathBuf {
+        let body = format!(
+            "#!/bin/sh\necho \"$@\" >> '{log}'\n\
+case \"$*\" in\n\
+  *__aqCollectNames*) echo '{{\"names\":[\"Save changes\"]}}' ;;\n\
+  *'Save changes'*) echo 'true' ;;\n\
+  *eval*) echo 'false' ;;\n\
+  *find*) exit 1 ;;\n\
+  *snapshot*) echo '' ;;\n\
+esac\nexit 0\n",
+            log = log.display()
+        );
+        let bin = write_exec(dir, "agent-browser", &body);
+        env::set_var(browser::BIN_ENV, &bin);
+        browser::_reset_bin_cache_for_tests();
+        bin
+    }
+
+    fn heal_scenario() -> &'static str {
+        r#"{
+            "schema": "scenario/2",
+            "id": "heal-smoke",
+            "intent": "click save",
+            "env": {
+                "open": [
+                    { "kind": "nav", "url": "https://example.com/", "intent": "land" }
+                ]
+            },
+            "steps": [
+                { "id": "s1", "intent": "click Save", "kind": "do",
+                  "verb": "click",
+                  "on": { "role": "button", "name": "Save" } }
+            ]
+        }"#
+    }
+
+    fn heal_opts(jfile: PathBuf) -> RunOptions {
+        RunOptions {
+            source: ScenarioSource::Path(jfile),
+            profile: None,
+            session_name: "sx".into(),
+            heal_from_run: None,
+            headed: false,
+            input_overrides: BTreeMap::new(),
+            dry_run: false,
+            no_sidecars: true,
+            quiet: false,
+            plain: false,
+            tag: None,
+            output_audit: None,
+        }
+    }
+
+    #[test]
+    fn replay_auto_heals_locator_drift() {
+        let _g = lock_env();
+        let work = TempDir::new().unwrap();
+        install_heal_fake_browser(work.path(), &work.path().join("ab.log"));
+
+        let jdir = work.path().join("sid");
+        fs::create_dir_all(&jdir).unwrap();
+        let jfile = jdir.join("scenario.json");
+        fs::write(&jfile, heal_scenario()).unwrap();
+
+        let summary = run(&heal_opts(jfile)).unwrap();
+        assert_eq!(summary.passed, 1);
+        assert!(summary.ok);
+
+        let run_id = fs::read_to_string(jdir.join("replays").join("latest.txt")).unwrap();
+        let run_id = run_id.trim();
+
+        // Suggested patch written for heal-promote.
+        let patch: serde_json::Value = serde_json::from_slice(
+            &fs::read(
+                jdir.join("replays")
+                    .join(run_id)
+                    .join("diffs")
+                    .join("s1.patch.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(patch["schema"], "heal-patch/v1");
+        assert_eq!(patch["newLocator"]["name"], "Save changes");
+        assert!(patch["scenarioContentHash"].is_string());
+
+        // Audit trail: heal.jsonl row + audit.autoHealed.
+        let rows =
+            fs::read_to_string(jdir.join("replays").join(run_id).join("heal.jsonl")).unwrap();
+        let row: serde_json::Value = serde_json::from_str(rows.trim()).unwrap();
+        assert_eq!(row["mode"], "locator-correction");
+        assert_eq!(row["stepId"], "s1");
+        assert_eq!(row["to"], "Save changes");
+
+        let audit: serde_json::Value = serde_json::from_slice(
+            &fs::read(jdir.join("replays").join(run_id).join("audit.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(audit["autoHealed"], serde_json::json!(["s1"]));
+        clear_fake_browser();
+    }
+
+    #[test]
+    fn replay_no_heal_env_fails_hard() {
+        let _g = lock_env();
+        env::set_var("AGENT_QA_NO_HEAL", "1");
+        let work = TempDir::new().unwrap();
+        install_heal_fake_browser(work.path(), &work.path().join("ab.log"));
+
+        let jdir = work.path().join("sid");
+        fs::create_dir_all(&jdir).unwrap();
+        let jfile = jdir.join("scenario.json");
+        fs::write(&jfile, heal_scenario()).unwrap();
+
+        let err = format!("{:#}", run(&heal_opts(jfile)).unwrap_err());
+        assert!(err.contains("step s1"), "got: {err}");
+
+        let run_id = fs::read_to_string(jdir.join("replays").join("latest.txt")).unwrap();
+        let run_dir = jdir.join("replays").join(run_id.trim());
+        assert!(
+            !run_dir.join("diffs").exists(),
+            "no patch may be written when heal is disabled"
+        );
+        let audit: serde_json::Value =
+            serde_json::from_slice(&fs::read(run_dir.join("audit.json")).unwrap()).unwrap();
+        assert_eq!(audit["exitCode"], 1);
+        assert!(audit.get("autoHealed").is_none());
+        env::remove_var("AGENT_QA_NO_HEAL");
+        clear_fake_browser();
+    }
+
+    #[test]
+    fn replay_heal_strict_fails_passing_run() {
+        let _g = lock_env();
+        env::set_var("AGENT_QA_HEAL_STRICT", "1");
+        let work = TempDir::new().unwrap();
+        install_heal_fake_browser(work.path(), &work.path().join("ab.log"));
+
+        let jdir = work.path().join("sid");
+        fs::create_dir_all(&jdir).unwrap();
+        let jfile = jdir.join("scenario.json");
+        fs::write(&jfile, heal_scenario()).unwrap();
+
+        let summary = run(&heal_opts(jfile)).unwrap();
+        assert!(!summary.ok, "strict mode: healed run must fail");
+        assert_eq!(summary.passed, 1, "steps still pass — drift was healed");
+
+        let run_id = fs::read_to_string(jdir.join("replays").join("latest.txt")).unwrap();
+        let audit: serde_json::Value = serde_json::from_slice(
+            &fs::read(jdir.join("replays").join(run_id.trim()).join("audit.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(audit["exitCode"], 1);
+        assert_eq!(audit["autoHealed"], serde_json::json!(["s1"]));
+        env::remove_var("AGENT_QA_HEAL_STRICT");
         clear_fake_browser();
     }
 
