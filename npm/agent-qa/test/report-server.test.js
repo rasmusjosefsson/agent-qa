@@ -500,6 +500,41 @@ test('GET /replay-stream subscribes the per-session screencast bridge', async (t
   assert.deepEqual(seen, [`replay-${fx.sid}`], 'bridge keyed by the replay session');
 });
 
+test('GET /replay-stream prefers audit.sessionName over the derived session', async (t) => {
+  const fx = makeFixture();
+  const seen = [];
+  const fakeBridge = {
+    subscribe: (res) => res.write('data: {"data":"AAAA"}\n\n'),
+    unsubscribe: () => {},
+  };
+  const { server, base } = await boot(fx.root, {
+    liveForSession: (session) => (seen.push(session), fakeBridge),
+  });
+  t.after(() => server.close());
+
+  const auditPath = path.join(fx.root, fx.sid, 'replays', fx.runId, 'audit.json');
+  // The runner recorded the session it actually drove — that wins even when a
+  // profile-derived name would point at a different browser.
+  fs.writeFileSync(
+    auditPath,
+    JSON.stringify({ schema: 'scenario-replay-audit/v1', profile: 'admin-user', sessionName: 'chat-c0ffee11' }),
+  );
+  const ac = new AbortController();
+  assert.equal((await fetch(`${base}/api/scenarios/${fx.sid}/replay-stream`, { signal: ac.signal })).status, 200);
+  ac.abort();
+
+  // No recorded session → profile-derived fallback still applies.
+  fs.writeFileSync(
+    auditPath,
+    JSON.stringify({ schema: 'scenario-replay-audit/v1', profile: 'admin-user' }),
+  );
+  const ac2 = new AbortController();
+  assert.equal((await fetch(`${base}/api/scenarios/${fx.sid}/replay-stream`, { signal: ac2.signal })).status, 200);
+  ac2.abort();
+
+  assert.deepEqual(seen, ['chat-c0ffee11', 'admin-user-session']);
+});
+
 test('GET /replay-stream without a CLI runner → 503', async (t) => {
   const fx = makeFixture();
   const { server, base } = await boot(fx.root); // no deps.liveForSession
