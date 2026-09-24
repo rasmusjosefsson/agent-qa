@@ -488,7 +488,34 @@ fn check_value(
 
 // ---------- predicates ----------
 
+/// Pages routinely emit non-ASCII whitespace (nbsp, thin space, …) and
+/// repeated space runs where a recorded claim expects plain spacing. Fold
+/// Unicode space separators to ' ' and collapse runs, so text asserts don't
+/// flap on invisible characters.
+fn normalize_ws(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut ws = false;
+    for c in s.chars() {
+        if c.is_whitespace() {
+            ws = true;
+        } else {
+            if ws && !out.is_empty() {
+                out.push(' ');
+            }
+            ws = false;
+            out.push(c);
+        }
+    }
+    if ws && !out.is_empty() {
+        out.push(' ');
+    }
+    out
+}
+
 fn compare_string(predicate: &Predicate, actual: &str, need: &str) -> Result<()> {
+    let actual_n = normalize_ws(actual);
+    let need_n = normalize_ws(need);
+    let (actual, need) = (actual_n.as_str(), need_n.as_str());
     match predicate {
         Predicate::Equals => {
             if actual != need {
@@ -551,6 +578,24 @@ mod tests {
         compare_string(&pred_from_json(json!("matches")), "abc123", r"\d{3}$").unwrap();
         compare_string(&pred_from_json(json!("startsWith")), "abc", "ab").unwrap();
         compare_string(&pred_from_json(json!("endsWith")), "abc", "bc").unwrap();
+    }
+
+    #[test]
+    fn compare_folds_unicode_whitespace() {
+        // NBSP (and friends) compare equal to a plain space.
+        compare_string(
+            &pred_from_json(json!("contains")),
+            "Men - \u{00A0}Tshirts Products",
+            "Men - Tshirts",
+        )
+        .unwrap();
+        compare_string(&pred_from_json(json!("equals")), "a\u{2009}b", "a b").unwrap();
+        compare_string(
+            &pred_from_json(json!("startsWith")),
+            "\u{00A0}lead",
+            " lead",
+        )
+        .unwrap();
     }
 
     #[test]

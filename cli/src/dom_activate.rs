@@ -127,6 +127,8 @@ fn activation_prelude() -> &'static str {
   const __aqPick = (el) => {
     if (!el) return false;
     try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
+    // A real mouse click focuses the element; synthetic events don't.
+    try { el.focus(); } catch (e) {}
     const type = (el.getAttribute && (el.getAttribute('type') || '') || '').toLowerCase();
     const isSubmit = (el.tagName === 'BUTTON' && type !== 'button' && type !== 'reset')
       || (el.tagName === 'INPUT' && type === 'submit');
@@ -335,6 +337,9 @@ mod tests {
         assert!(js.contains("mouseup"));
         assert!(js.contains("scrollIntoView"));
         assert!(js.contains("requestSubmit"));
+        // Synthetic clicks must focus like a real mouse click so keyboard
+        // input lands on the element afterwards.
+        assert!(js.contains("focus()"));
     }
 
     #[test]
