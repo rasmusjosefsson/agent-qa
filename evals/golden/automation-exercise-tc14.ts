@@ -63,7 +63,7 @@ await runAutomationExerciseGolden("tc14", "Automation Exercise TC14 place order 
     `(() => { const text = document.body.innerText; if (!text.includes('Your order has been placed successfully!') && !text.includes('Congratulations! Your order has been confirmed!')) throw new Error('order success message missing'); return true; })()`,
     "order success message is visible",
   );
-  await golden.waitText("Your order has been placed successfully!", "order success message is replay-visible");
+  await golden.waitText("Congratulations! Your order has been confirmed!", "order success message is replay-visible");
   await golden.domClickSelector('a[href="/delete_account"]', "delete account");
   await golden.waitSelectorText('h2[data-qa="account-deleted"]', "Account Deleted!", "account deleted confirmation is visible");
   await golden.domClickSelector('a[data-qa="continue-button"]', "continue after account deletion");

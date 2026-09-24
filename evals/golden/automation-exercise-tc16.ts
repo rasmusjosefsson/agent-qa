@@ -50,7 +50,7 @@ await runAutomationExerciseGolden("tc16", "Automation Exercise TC16 place order 
   await golden.fillSelector('input[data-qa="expiry-month"]', "12", "enter expiry month");
   await golden.fillSelector('input[data-qa="expiry-year"]', "2030", "enter expiry year");
   await golden.domClickSelector('button[data-qa="pay-button"]', "pay and confirm order");
-  await golden.waitText("Your order has been placed successfully!", "order success message is visible");
+  await golden.waitText("Congratulations! Your order has been confirmed!", "order success message is visible");
   await golden.domClickSelector('a[href="/delete_account"]', "delete account");
   await golden.waitSelectorText('h2[data-qa="account-deleted"]', "Account Deleted!", "account deleted confirmation is visible");
   await golden.domClickSelector('a[data-qa="continue-button"]', "continue after account deletion");

@@ -2,6 +2,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
+import { toRecordDraft } from "./record-translate";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const evalsRoot = resolve(__dirname, "..");
@@ -58,7 +59,8 @@ async function run(name: string, command: string[]): Promise<string> {
 }
 
 async function record(kind: string, payload: unknown): Promise<void> {
-  await run(`record ${kind}`, [agentQa, "record-step", kind, JSON.stringify(payload)]);
+  const [draftKind, draft] = toRecordDraft(kind, payload);
+  await run(`record ${kind}`, [agentQa, "record-step", draftKind, JSON.stringify(draft)]);
 }
 
 async function fill(selector: string, value: string, intent: string): Promise<void> {
@@ -71,6 +73,9 @@ async function clickSelector(selector: string, intent: string): Promise<void> {
   await record("action", { method: "clickSelector", args: [selector], intent });
 }
 
+async function waitSelectorText(selector: string, text: string, intent: string): Promise<void> {
+  await record("wait", { condition: { kind: "selectorText", selector, text }, intent });
+}
 async function clickText(text: string, intent: string): Promise<void> {
   await run(`click text ${text}`, [agentBrowser, "--session", session, "find", "text", text, "click"]);
   await record("action", { method: "clickByText", args: [text], intent });
@@ -86,28 +91,17 @@ async function main(): Promise<void> {
 
     await run("open forms", [agentBrowser, "--session", session, "open", "https://qaplayground.com/practice/forms"]);
     await record("navigation", { route: "https://qaplayground.com/practice/forms" });
-
+    await run("wait forms", [agentBrowser, "--session", session, "wait", '[data-testid="input-first-name"]']);
+    await record("wait", { condition: { kind: "selector", selector: '[data-testid="input-first-name"]' }, intent: "forms rendered" });
     await fill("#firstName", "John", "fill first name");
     await fill("#lastName", "Doe", "fill last name");
-    await fill("#email", "john@example.com", "fill email");
     await fill("#phone", "9876543210", "fill phone");
     await fill("#dob", "1995-06-15", "fill date of birth");
     await clickSelector("#gender-male", "select male gender");
-    await clickSelector('[data-testid="select-country"]', "open country dropdown");
-    await clickText("India", "select India");
-    await fill("#city", "Mumbai", "fill city");
-    await fill("#password", "pass123", "fill password");
-    await fill("#confirmPassword", "pass123", "fill confirm password");
-    await clickSelector('[data-testid="checkbox-terms"]', "accept terms");
-    await clickSelector('[data-testid="submit-form-btn"]', "submit form");
-    await record("assert", {
-      kind: "present",
-      args: ["alert", "Form submitted successfully"],
-      intent: "success message visible",
-    });
-
+    await clickSelector('[data-testid="btn-personal-submit"]', "submit personal form");
+    await waitSelectorText('[data-testid="result-personal"]', "Saved: John Doe", "saved name echo is visible");
+    await run("verify", [agentQa, "verify"]);
     await run("flush", [agentQa, "flush"]);
-    await run("verify", [agentQa, "verify", sid]);
     await run("replay", [agentQa, "replay", sid, "--session", `${session}-replay`]);
     pass = true;
   } catch (err) {

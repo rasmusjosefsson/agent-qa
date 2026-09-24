@@ -1,3 +1,4 @@
+import { toRecordDraft } from "./record-translate";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -94,7 +95,8 @@ async function run(ctx: GoldenContext, name: string, command: string[]): Promise
 }
 
 async function record(ctx: GoldenContext, kind: string, payload: unknown): Promise<void> {
-  await run(ctx, `record ${kind}`, [ctx.agentQa, "record-step", kind, JSON.stringify(payload)]);
+  const [draftKind, draft] = toRecordDraft(kind, payload);
+  await run(ctx, `record ${kind}`, [ctx.agentQa, "record-step", draftKind, JSON.stringify(draft)]);
 }
 
 export async function runAlertsDialogsGolden(
@@ -111,7 +113,10 @@ export async function runAlertsDialogsGolden(
     ...ctx,
     async openPage() {
       await run(ctx, "open alerts dialogs", [ctx.agentBrowser, "--session", ctx.session, "open", alertsUrl]);
+      // Practice content hydrates client-side — wait for it before driving.
+      await run(ctx, "wait practice content", [ctx.agentBrowser, "--session", ctx.session, "wait", '[data-testid="scenarios-list"]']);
       await record(ctx, "navigation", { route: alertsUrl });
+      await record(ctx, "wait", { condition: { kind: "selector", selector: '[data-testid="scenarios-list"]' }, intent: "practice scenarios rendered" });
     },
     async clickSelector(selector, stepIntent) {
       await run(ctx, `click ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "click", selector]);
@@ -144,9 +149,9 @@ export async function runAlertsDialogsGolden(
   try {
     const start = await run(ctx, "start", [ctx.agentQa, "start", intent, "--session", ctx.session]);
     sid = start.match(/started sid=(\S+)/)?.[1] || "";
-    await steps(golden);
+    await steps(golden);    await run(ctx, "verify", [ctx.agentQa, "verify"]);
+
     await run(ctx, "flush", [ctx.agentQa, "flush"]);
-    await run(ctx, "verify", [ctx.agentQa, "verify", sid]);
     await run(ctx, "replay", [ctx.agentQa, "replay", sid, "--session", `${ctx.session}-replay`]);
     pass = true;
   } catch (err) {
