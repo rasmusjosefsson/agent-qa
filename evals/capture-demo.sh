@@ -97,4 +97,10 @@ cp "$WORKDIR/capture.webm" "$OUT_DIR/demo.webm"
 ffmpeg -y -loglevel error -i "$WORKDIR/capture.webm" \
   -vf "scale=${WIDTH}:-2,fps=12,$(caption_filter)" \
   -c:v libwebp -loop 0 -quality 70 "$OUT_DIR/demo.webp"
-echo "demo: $OUT_DIR/demo.webp"
+# mp4 gets a real play button in GitHub descriptions/comments; animated webp
+# renders but does not always play.
+ffmpeg -y -loglevel error -i "$WORKDIR/capture.webm" \
+  -vf "scale=${WIDTH}:-2,fps=15,$(caption_filter)" \
+  -c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p -movflags +faststart \
+  "$OUT_DIR/demo.mp4"
+echo "demo: $OUT_DIR/demo.webp + $OUT_DIR/demo.mp4"
