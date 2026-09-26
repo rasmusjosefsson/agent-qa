@@ -75,11 +75,23 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
             value: literal(args[1]),
           });
         case "pressSelector":
-          // press has no locator arm; a click on the element is the replayable
-          // equivalent of focusing it before the key press.
-          return doStep(intent, { verb: "click", on: css(args[0]) });
+          // `press` accepts `on`: the runner focuses the locator first, then
+          // sends the key — the faithful replay of "press KEY on SELECTOR".
+          return doStep(intent, {
+            verb: "press",
+            on: css(args[0]),
+            value: literal(args[1]),
+          });
         case "pressKey":
           return doStep(intent, { verb: "press", value: literal(args[0]) });
+        case "clearBySelector":
+          return doStep(intent, { verb: "clear", on: css(args[0]) });
+        case "focusBySelector":
+          return doStep(intent, { verb: "focus", on: css(args[0]) });
+        case "blurBySelector":
+          return doStep(intent, { verb: "blur", on: css(args[0]) });
+        case "hoverBySelector":
+          return doStep(intent, { verb: "hover", on: css(args[0]) });
         case "navigate":
           return doStep(intent, { verb: "goto", value: literal(args[0]) });
         case "dialogAccept":

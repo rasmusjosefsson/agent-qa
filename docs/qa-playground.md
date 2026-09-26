@@ -31,11 +31,11 @@ Golden runners prove:
 | Dropdowns | `/practice/dropdowns` | page-load + TC01-TC10 | complete | Golden TC01-TC10 pass; keep them green. |
 | Alerts & Dialogs | `/practice/alerts-dialogs` | page-load + TC01-TC10 | complete | Golden TC01-TC10 pass. TC01-TC06 drive native alert/confirm/prompt via the bundled `evals/fixtures/dialogs.html` (the live page has none); TC07-TC09 cover DOM dialogs. |
 | File Upload | `/practice/file-upload` | page-load + Upload TC01-TC02 + Upload TC06-TC15 + Download TC01-TC14 | deep | Golden Upload TC01-TC02, TC06-TC08, TC10, TC11, TC15 pass; downloads covered by `download:tc01` on the bundled fixture (the live page ships no download widget). Gaps: TC09 (no cancel control), TC12 (viewport), TC13 (native file dialog), TC14 (inputs lack accessible names). |
-| Input Fields | `/practice/input-fields` | page-load + TC01-TC12 | cataloged | Add exact prompts and golden proofs for type, append, tab, clear, disabled, readonly. |
+| Input Fields | `/practice/input-fields` | page-load + TC01-TC12 | complete | Golden TC01-TC12 pass. The `result-s02` echo only updates on real keystrokes, so fill-replayed values must be asserted on the `value` property, not the echo. |
 | Buttons | `/practice/buttons` | page-load + TC01-TC15 | cataloged | Add exact prompts; identify double-click/right-click support gaps. |
-| Data Table | `/practice/data-table` | page-load + TC01-TC06 | cataloged | Add deterministic assertions despite dynamic table data. |
-| Radio & Checkbox | `/practice/radio-checkbox` | page-load + TC01-TC15 | cataloged | Add exact prompts and checked/disabled assertions. |
-| Date Picker | `/practice/date-picker` | page-load + TC01-TC05 | cataloged | Add exact dates and value assertions. |
+| Data Table | `/practice/data-table` | page-load + TC01-TC06 | complete | Golden TC01-TC06 pass. `row-count` text + `book-row` testids make row assertions deterministic; search filters live via `#table-search-input`. |
+| Radio & Checkbox | `/practice/radio-checkbox` | page-load + TC01-TC15 | complete | Golden TC01-TC12 + TC15 pass. Gaps: TC13 (screen-reader semantics — nothing to assert beyond `checked`), TC14 (visual state). Keyboard nav is covered via `focus` + `press` (ArrowDown moves radio selection; Space toggles checkboxes). |
+| Date Picker | `/practice/date-picker` | page-load + TC01-TC05 | complete | Golden TC01-TC05 pass. `dp-constrained-input` enforces min/max and surfaces violations in `result-s05`. |
 | Links | `/practice/links` | page-load + TC01-TC12 | cataloged | Add exact prompts; decide new-tab and broken-link support. |
 | Tabs & Windows | `/practice/tabs-windows` | page-load + TC01-TC05 | cataloged | Identify multi-tab/window replay support gaps. |
 | Multi Select | `/practice/multi-select` | page-load + TC01-TC05 | cataloged | Add exact prompts and replay-proof select/deselect flows. |
@@ -45,9 +45,9 @@ Golden runners prove:
 
 - QA Playground catalog: `163` cases.
 - File Upload catalog: `27` cases: `1` page-load + `12` upload + `14` download.
-- Complete pages: Bank App, Dynamic Waits, Dropdowns, Alerts & Dialogs, Forms.
+- Complete pages: Bank App, Dynamic Waits, Dropdowns, Alerts & Dialogs, Forms, Input Fields, Data Table, Radio & Checkbox, Date Picker.
 - Deep/partial pages: File Upload.
-- Catalog-only pages: Input Fields, Buttons, Data Table, Radio & Checkbox, Date Picker, Links, Tabs & Windows, Multi Select.
+- Catalog-only pages: Buttons, Links, Tabs & Windows, Multi Select.
 
 ## File Upload Notes
 
@@ -150,10 +150,14 @@ cargo test --locked
 - `selectorText` is safer than broad text on docs-heavy QA Playground pages because tutorial/test-case text can create false positives.
 - File Upload Upload TC01-TC02, TC06-TC08, TC10, TC11, TC15 pass with golden runners. Downloads use `do/download` + `{"file": ...}` claims on the bundled fixture — the live page exposes no download widget.
 - Forms TC01-TC15 pass with golden runners. Element `attribute` claims read live IDL properties for `value`/`checked`/`disabled`/`selected`/`readOnly`/`required`, which is what reset, radio, and retain-state assertions need — `getAttribute` would only see the stale default.
+- Input Fields TC01-TC12, Radio & Checkbox TC01-TC12 + TC15, Data Table TC01-TC06, Date Picker TC01-TC05 pass with golden runners via the shared `practice-lib.ts` harness.
+- Two replay improvements landed from the sweep: `{"element": ..., "attribute": "focused"}` reads `document.activeElement === el` (focus assertions), and the fill self-repair now emits `input`/`change` even when the value already stuck — React-style `onInput` listeners (like the date-picker's range validation echo) depend on it.
+- `pressSelector` records a real `press` step (`on` + key), replacing the old click-equivalent mapping; `focusBySelector`/`hoverBySelector`/`blurBySelector`/`clearBySelector` also translate to their verbs.
+- Radio keyboard nav (ArrowDown inside a group) and Space-toggle on a focused checkbox replay natively via `focus` + `press` — no special-casing needed.
 
 ## Near-Term Order
 
-1. Sweep the catalog-only pages (Input Fields, Buttons, Data Table, Radio & Checkbox, Date Picker, Links, Tabs & Windows, Multi Select).
+1. Sweep the remaining catalog-only pages (Buttons, Links, Tabs & Windows, Multi Select).
 
 ## Commands
 
