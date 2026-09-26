@@ -678,6 +678,7 @@ fn try_selector_native_click(session: &str, selector: &str) -> anyhow::Result<bo
     || (tag === 'INPUT' && ['submit', 'button', 'reset', 'checkbox', 'radio'].includes(type))
     || ['button', 'checkbox', 'radio', 'link'].includes(role);
   if (!isNativeControl) return false;
+  try {{ el.focus(); }} catch (e) {{}}
   el.dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true, cancelable: true, view: window }}));
   el.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true, cancelable: true, view: window }}));
   el.click();
@@ -687,6 +688,64 @@ fn try_selector_native_click(session: &str, selector: &str) -> anyhow::Result<bo
     );
     let out = browser::eval_expression(session, &expr)?;
     Ok(out.trim() == "true")
+}
+
+/// Fill (or act) through a CSS selector. `agent-browser fill` silently
+/// drops values on constrained input types (date, number, etc.), so after a
+/// fill we verify the value stuck and repair via the native setter +
+/// input/change events — the same trick `try_named_control_fill` uses.
+fn fill_or_act_via_selector(
+    session: &str,
+    css: &str,
+    act: RoleAct,
+    value: Option<&str>,
+) -> Result<()> {
+    browser::selector_act(session, css, act, value)?;
+    if !matches!(act, RoleAct::Fill) {
+        return Ok(());
+    }
+    let want = value.unwrap_or("");
+    // Poll the repair: a hydrating framework can revert the value a beat
+    // after the fill, so a single synchronous check is racy.
+    let expr = format!(
+        r#"(() => new Promise((resolve) => {{
+  const el = document.querySelector({selector_lit});
+  if (!el) return resolve('missing');
+  const want = {value_lit};
+  const apply = () => {{
+    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+    if (setter) setter.call(el, want); else el.value = want;
+    el.dispatchEvent(new InputEvent('input', {{ bubbles: true, inputType: 'insertText', data: want }}));
+    el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+  }};
+  if (el.value === want) return resolve('ok');
+  apply();
+  let n = 0;
+  const tick = () => {{
+    if (el.value === want) return resolve('repaired');
+    if (++n > 20) return resolve('failed');
+    apply();
+    setTimeout(tick, 100);
+  }};
+  setTimeout(tick, 100);
+}}))()"#,
+        selector_lit = json_str(css),
+        value_lit = json_str(want)
+    );
+    let out = browser::eval_expression(session, &expr)?;
+    // eval results are JSON-encoded: string results carry their quotes.
+    let status =
+        serde_json::from_str::<String>(out.trim()).unwrap_or_else(|_| out.trim().to_string());
+    match status.as_str() {
+        "missing" => bail!("selector fill repair: element not found: {css}"),
+        "repaired" => {
+            eprintln!("[v2-replay] selector '{css}' fill recovered via native setter");
+            Ok(())
+        }
+        "ok" => Ok(()),
+        _ => bail!("selector fill repair: value did not stick on {css}"),
+    }
 }
 
 /// Final replay-side fallback: snapshot the page, find
@@ -817,7 +876,7 @@ fn act_on_locator(
                             v
                         );
                     } else {
-                        browser::selector_act(session, &v, act, value)?;
+                        fill_or_act_via_selector(session, &v, act, value)?;
                     }
                 }
                 RawLocatorKind::Xpath => {
@@ -828,7 +887,7 @@ fn act_on_locator(
                     if matches!(act, RoleAct::Click) && try_selector_native_click(session, &css)? {
                         eprintln!("[v2-replay] testId '{}' activated via native DOM click", v);
                     } else {
-                        browser::selector_act(session, &css, act, value)?;
+                        fill_or_act_via_selector(session, &css, act, value)?;
                     }
                 }
                 RawLocatorKind::Text => {

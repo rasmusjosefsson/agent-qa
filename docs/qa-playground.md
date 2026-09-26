@@ -28,7 +28,7 @@ Golden runners prove:
 | Bank App | `/bank` | page-load + TC-LOGIN-01-TC-LOGIN-05 | complete | Keep golden login cases passing. |
 | Dynamic Waits | `/practice/dynamic-waits` | page-load + TC01-TC05 | complete | Keep golden TC01-TC05 passing. |
 | Forms | `/practice/forms` | page-load + TC01-TC15 | deep | TC01-TC05 golden pass; continue TC06-TC15. |
-| Dropdowns | `/practice/dropdowns` | page-load + TC01-TC10 | deep | Golden runners exist; run/verify all and mark complete if stable. |
+| Dropdowns | `/practice/dropdowns` | page-load + TC01-TC10 | complete | Golden TC01-TC10 pass; keep them green. |
 | Alerts & Dialogs | `/practice/alerts-dialogs` | page-load + TC01-TC10 | deep/blocked | DOM toast/modal/dialog paths pass; native alert/confirm/prompt need framework support. |
 | File Upload | `/practice/file-upload` | page-load + Upload TC01-TC02 + Upload TC06-TC15 + Download TC01-TC14 | deep | Upload TC01-TC02 replay pass; continue upload validation cases and decide download strategy. |
 | Input Fields | `/practice/input-fields` | page-load + TC01-TC12 | cataloged | Add exact prompts and golden proofs for type, append, tab, clear, disabled, readonly. |
@@ -45,8 +45,8 @@ Golden runners prove:
 
 - QA Playground catalog: `163` cases.
 - File Upload catalog: `27` cases: `1` page-load + `12` upload + `14` download.
-- Complete pages: Bank App, Dynamic Waits.
-- Deep/partial pages: Forms, Dropdowns, Alerts & Dialogs, File Upload.
+- Complete pages: Bank App, Dynamic Waits, Dropdowns.
+- Deep/partial pages: Forms, Alerts & Dialogs, File Upload.
 - Catalog-only pages: Input Fields, Buttons, Data Table, Radio & Checkbox, Date Picker, Links, Tabs & Windows, Multi Select.
 
 ## File Upload Notes
@@ -123,7 +123,10 @@ cargo test --locked
 - Bank TC-LOGIN-01 through TC-LOGIN-05 pass with golden runners.
 - Dynamic Waits TC01-TC05 pass with golden runners.
 - Forms TC01-TC05 pass with golden runners.
+- Dropdowns TC01-TC10 pass with golden runners.
 - Alerts & Dialogs TC07-TC09 cover DOM toast/modal/dialog paths; TC01-TC06 remain native dialog framework gaps.
+- The automation-exercise suite passes 26/26 golden cases. Its live DOM taught two replay lessons now covered by the framework: synthetic clicks must focus the element like a real click, and string claims need Unicode-whitespace normalization.
+- Golden drivers must poll for elements after a triggering click — single-shot selector lookups race post-click navigation and client-side mounts.
 - File upload initially crashed Chrome with `RESULT_CODE_KILLED_BAD_MESSAGE` when replay passed ambiguous relative file paths. Canonicalizing upload file paths fixed this.
 - `selectorText` is safer than broad text on docs-heavy QA Playground pages because tutorial/test-case text can create false positives.
 
@@ -131,9 +134,8 @@ cargo test --locked
 
 1. Continue File Upload upload validation cases TC06-TC15.
 2. Decide and implement download capture strategy for Download TC01-TC14.
-3. Promote Dropdowns to complete by running existing golden TC01-TC10.
-4. Continue Forms TC06-TC15.
-5. Add exact prompts and golden proofs for Input Fields and Buttons.
+3. Continue Forms TC06-TC15.
+4. Add exact prompts and golden proofs for Input Fields and Buttons.
 
 ## Commands
 

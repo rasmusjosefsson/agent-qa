@@ -2,6 +2,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
+import { toRecordDraft } from "./record-translate";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const evalsRoot = resolve(__dirname, "..");
@@ -58,7 +59,8 @@ async function run(name: string, command: string[]): Promise<string> {
 }
 
 async function record(kind: string, payload: unknown): Promise<void> {
-  await run(`record ${kind}`, [agentQa, "record-step", kind, JSON.stringify(payload)]);
+  const [draftKind, draft] = toRecordDraft(kind, payload);
+  await run(`record ${kind}`, [agentQa, "record-step", draftKind, JSON.stringify(draft)]);
 }
 
 async function fill(selector: string, value: string, intent: string): Promise<void> {
@@ -100,19 +102,10 @@ async function main(): Promise<void> {
 
     await run("open forms", [agentBrowser, "--session", session, "open", "https://qaplayground.com/practice/forms"]);
     await record("navigation", { route: "https://qaplayground.com/practice/forms" });
-
-    await fill("#firstName", "Jane", "fill first name");
-    await fill("#lastName", "Tester", "fill last name");
-    await fill("#email", "jane.tester@example.com", "fill email");
-    await fill("#phone", "5551234567", "fill phone");
-    await fill("#dob", "1990-01-02", "fill date of birth");
-    await clickSelector("#gender-female", "select female gender");
-    await clickSelector('[data-testid="select-country"]', "open country dropdown");
-    await clickText("India", "select India");
-    await fill("#city", "Mumbai", "fill city");
+    await run("wait forms", [agentBrowser, "--session", session, "wait", '[data-testid="input-first-name"]']);
+    await record("wait", { condition: { kind: "selector", selector: '[data-testid="input-first-name"]' }, intent: "forms rendered" });
     await fill("#password", "short", "fill too-short password");
     await fill("#confirmPassword", "short", "fill matching confirm password");
-    await clickSelector('[data-testid="checkbox-terms"]', "accept terms");
     await clickSelector('[data-testid="submit-form-btn"]', "submit form with too-short password");
     await assertLiveSelectorText(
       '[data-testid="error-password"]',
@@ -120,9 +113,8 @@ async function main(): Promise<void> {
       "password minimum-length validation error is visible",
     );
     await waitSelector('[data-testid="error-password"]', "password minimum-length validation error is visible");
-
+    await run("verify", [agentQa, "verify"]);
     await run("flush", [agentQa, "flush"]);
-    await run("verify", [agentQa, "verify", sid]);
     await run("replay", [agentQa, "replay", sid, "--session", `${session}-replay`]);
     pass = true;
   } catch (err) {

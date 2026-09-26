@@ -2,6 +2,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
+import { toRecordDraft } from "./record-translate";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const evalsRoot = resolve(__dirname, "..");
@@ -58,7 +59,8 @@ async function run(name: string, command: string[]): Promise<string> {
 }
 
 async function record(kind: string, payload: unknown): Promise<void> {
-  await run(`record ${kind}`, [agentQa, "record-step", kind, JSON.stringify(payload)]);
+  const [draftKind, draft] = toRecordDraft(kind, payload);
+  await run(`record ${kind}`, [agentQa, "record-step", draftKind, JSON.stringify(draft)]);
 }
 
 async function clickSelector(selector: string, intent: string): Promise<void> {
@@ -80,14 +82,14 @@ async function main(): Promise<void> {
 
     await run("open forms", [agentBrowser, "--session", session, "open", "https://qaplayground.com/practice/forms"]);
     await record("navigation", { route: "https://qaplayground.com/practice/forms" });
-
-    await clickSelector('[data-testid="submit-form-btn"]', "submit empty form");
+    await run("wait forms", [agentBrowser, "--session", session, "wait", '[data-testid="input-first-name"]']);
+    await record("wait", { condition: { kind: "selector", selector: '[data-testid="input-first-name"]' }, intent: "forms rendered" });
+    await clickSelector('[data-testid="btn-personal-submit"]', "submit empty personal form");
     await waitText("First name is required.", "first-name required error visible");
-    await waitText("Email is required.", "email required error visible");
-    await waitText("Please select a gender.", "gender required error visible");
-
+    await waitText("Phone is required.", "phone required error visible");
+    await waitText("Please select your gender.", "gender required error visible");
+    await run("verify", [agentQa, "verify"]);
     await run("flush", [agentQa, "flush"]);
-    await run("verify", [agentQa, "verify", sid]);
     await run("replay", [agentQa, "replay", sid, "--session", `${session}-replay`]);
     pass = true;
   } catch (err) {

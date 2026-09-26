@@ -1,3 +1,4 @@
+import { toRecordDraft } from "./record-translate";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -102,7 +103,8 @@ async function run(ctx: GoldenContext, name: string, command: string[]): Promise
 }
 
 async function record(ctx: GoldenContext, kind: string, payload: unknown): Promise<void> {
-  await run(ctx, `record ${kind}`, [ctx.agentQa, "record-step", kind, JSON.stringify(payload)]);
+  const [draftKind, draft] = toRecordDraft(kind, payload);
+  await run(ctx, `record ${kind}`, [ctx.agentQa, "record-step", draftKind, JSON.stringify(draft)]);
 }
 
 export async function runAutomationExerciseGolden(
@@ -130,12 +132,14 @@ export async function runAutomationExerciseGolden(
       await record(ctx, "action", { method: "clickText", args: [text], intent: stepIntent });
     },
     async domClickSelector(selector, stepIntent) {
+      // Elements can mount a beat after the triggering action — poll, don't
+      // snapshot the DOM once.
       await run(ctx, `dom click ${selector}`, [
         ctx.agentBrowser,
         "--session",
         ctx.session,
         "eval",
-        `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) throw new Error("selector not found"); el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window })); el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window })); el.click(); return true; })()`,
+        `(() => new Promise((resolve, reject) => { const started = Date.now(); const tick = () => { const el = document.querySelector(${JSON.stringify(selector)}); if (el) { el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window })); el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window })); el.click(); resolve(true); } else if (Date.now() - started > 5000) reject(new Error("selector not found")); else setTimeout(tick, 100); }; tick(); }))()`,
       ]);
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
@@ -154,7 +158,7 @@ export async function runAutomationExerciseGolden(
         "--session",
         ctx.session,
         "eval",
-        `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) throw new Error("selector not found"); el.focus(); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`,
+        `(() => new Promise((resolve, reject) => { const started = Date.now(); const tick = () => { const el = document.querySelector(${JSON.stringify(selector)}); if (el) { el.focus(); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); resolve(true); } else if (Date.now() - started > 5000) reject(new Error("selector not found")); else setTimeout(tick, 100); }; tick(); }))()`,
       ]);
       await record(ctx, "action", { method: "fillBySelector", args: [selector, value], intent: stepIntent });
     },
@@ -164,7 +168,7 @@ export async function runAutomationExerciseGolden(
         "--session",
         ctx.session,
         "eval",
-        `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) throw new Error("selector not found"); el.focus(); el.value = ${JSON.stringify(liveValue)}; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`,
+        `(() => new Promise((resolve, reject) => { const started = Date.now(); const tick = () => { const el = document.querySelector(${JSON.stringify(selector)}); if (el) { el.focus(); el.value = ${JSON.stringify(liveValue)}; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); resolve(true); } else if (Date.now() - started > 5000) reject(new Error("selector not found")); else setTimeout(tick, 100); }; tick(); }))()`,
       ]);
       await record(ctx, "action", { method: "fillBySelector", args: [selector, replayValue], intent: stepIntent });
     },
@@ -179,7 +183,7 @@ export async function runAutomationExerciseGolden(
         "--session",
         ctx.session,
         "eval",
-        `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) throw new Error("selector not found"); const value = ${JSON.stringify(value)}; const option = Array.from(el.options).find((item) => item.value === value || item.text === value); if (!option) throw new Error("option not found: " + value); el.value = option.value; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`,
+        `(() => new Promise((resolve, reject) => { const started = Date.now(); const tick = () => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) { if (Date.now() - started > 5000) reject(new Error("selector not found")); else setTimeout(tick, 100); return; } const value = ${JSON.stringify(value)}; const option = Array.from(el.options).find((item) => item.value === value || item.text === value); if (!option) { reject(new Error("option not found: " + value)); return; } el.value = option.value; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); resolve(true); }; tick(); }))()`,
       ]);
       await record(ctx, "action", { method: "selectBySelector", args: [selector, value], intent: stepIntent });
     },
@@ -203,9 +207,9 @@ export async function runAutomationExerciseGolden(
   try {
     const start = await run(ctx, "start", [ctx.agentQa, "start", intent, "--session", ctx.session]);
     sid = start.match(/started sid=(\S+)/)?.[1] || "";
-    await steps(golden);
+    await steps(golden);    await run(ctx, "verify", [ctx.agentQa, "verify"]);
+
     await run(ctx, "flush", [ctx.agentQa, "flush"]);
-    await run(ctx, "verify", [ctx.agentQa, "verify", sid]);
     await run(ctx, "replay", [ctx.agentQa, "replay", sid, "--session", `${ctx.session}-replay`]);
     pass = true;
   } catch (err) {

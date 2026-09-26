@@ -2,6 +2,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
+import { toRecordDraft } from "./record-translate";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const evalsRoot = resolve(__dirname, "..");
@@ -58,7 +59,8 @@ async function run(name: string, command: string[]): Promise<string> {
 }
 
 async function record(kind: string, payload: unknown): Promise<void> {
-  await run(`record ${kind}`, [agentQa, "record-step", kind, JSON.stringify(payload)]);
+  const [draftKind, draft] = toRecordDraft(kind, payload);
+  await run(`record ${kind}`, [agentQa, "record-step", draftKind, JSON.stringify(draft)]);
 }
 
 async function fill(selector: string, value: string, intent: string): Promise<void> {
@@ -100,29 +102,22 @@ async function main(): Promise<void> {
 
     await run("open forms", [agentBrowser, "--session", session, "open", "https://qaplayground.com/practice/forms"]);
     await record("navigation", { route: "https://qaplayground.com/practice/forms" });
-
+    await run("wait forms", [agentBrowser, "--session", session, "wait", '[data-testid="input-first-name"]']);
+    await record("wait", { condition: { kind: "selector", selector: '[data-testid="input-first-name"]' }, intent: "forms rendered" });
     await fill("#firstName", "Jane", "fill first name");
     await fill("#lastName", "Tester", "fill last name");
-    await fill("#email", "jane.tester@example.com", "fill email");
     await fill("#phone", "abc", "fill invalid phone");
     await fill("#dob", "1990-01-02", "fill date of birth");
     await clickSelector("#gender-female", "select female gender");
-    await clickSelector('[data-testid="select-country"]', "open country dropdown");
-    await clickText("India", "select India");
-    await fill("#city", "Mumbai", "fill city");
-    await fill("#password", "secret123", "fill password");
-    await fill("#confirmPassword", "secret123", "fill confirm password");
-    await clickSelector('[data-testid="checkbox-terms"]', "accept terms");
-    await clickSelector('[data-testid="submit-form-btn"]', "submit form with invalid phone");
+    await clickSelector('[data-testid="btn-personal-submit"]', "submit personal form with invalid phone");
     await assertLiveSelectorText(
       '[data-testid="error-phone"]',
-      "Enter a valid 10-digit phone number.",
+      "Phone must be exactly 10 digits.",
       "phone validation error is visible",
     );
     await waitSelector('[data-testid="error-phone"]', "phone validation error is visible");
-
+    await run("verify", [agentQa, "verify"]);
     await run("flush", [agentQa, "flush"]);
-    await run("verify", [agentQa, "verify", sid]);
     await run("replay", [agentQa, "replay", sid, "--session", `${session}-replay`]);
     pass = true;
   } catch (err) {

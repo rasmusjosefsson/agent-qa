@@ -1,3 +1,4 @@
+import { toRecordDraft } from "./record-translate";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -41,6 +42,7 @@ export interface BankGolden extends GoldenContext {
   waitUrl(pattern: string, intent: string): Promise<void>;
   assertPresent(role: string, name: string, intent: string): Promise<void>;
   assertAbsent(role: string, name: string, intent: string): Promise<void>;
+  waitLiveSelector(selector: string): Promise<void>;
   assertLiveSelectorText(selector: string, text: string, intent: string): Promise<void>;
   assertLiveSelectorAbsent(selector: string, intent: string): Promise<void>;
   assertLivePasswordType(type: "password" | "text", intent: string): Promise<void>;
@@ -102,7 +104,8 @@ async function run(ctx: GoldenContext, name: string, command: string[]): Promise
 }
 
 async function record(ctx: GoldenContext, kind: string, payload: unknown): Promise<void> {
-  await run(ctx, `record ${kind}`, [ctx.agentQa, "record-step", kind, JSON.stringify(payload)]);
+  const [draftKind, draft] = toRecordDraft(kind, payload);
+  await run(ctx, `record ${kind}`, [ctx.agentQa, "record-step", draftKind, JSON.stringify(draft)]);
 }
 
 export async function runBankGolden(
@@ -123,7 +126,10 @@ export async function runBankGolden(
     },
     async openBank() {
       await run(ctx, "open bank", [ctx.agentBrowser, "--session", ctx.session, "open", bankUrl]);
+      // The login form hydrates client-side — wait for it before driving.
+      await run(ctx, "wait login form", [ctx.agentBrowser, "--session", ctx.session, "wait", "#login-username"]);
       await record(ctx, "navigation", { route: bankUrl });
+      await record(ctx, "wait", { condition: { kind: "selector", selector: "#login-username" }, intent: "login form rendered" });
     },
     async fill(selector, value, stepIntent) {
       await run(ctx, `fill ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, value]);
@@ -156,6 +162,9 @@ export async function runBankGolden(
     async assertAbsent(role, name, stepIntent) {
       await record(ctx, "assert", { kind: "absent", args: [role, name], intent: stepIntent });
     },
+    async waitLiveSelector(selector) {
+      await run(ctx, `live wait ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "wait", selector]);
+    },
     async assertLiveSelectorText(selector, text, stepIntent) {
       await run(ctx, `live check ${selector}`, [
         ctx.agentBrowser,
@@ -180,12 +189,12 @@ export async function runBankGolden(
         "--session",
         ctx.session,
         "eval",
-        `(() => { const actual = document.querySelector("#password")?.getAttribute("type"); if (actual !== ${JSON.stringify(type)}) throw new Error(${JSON.stringify(stepIntent)} + ": " + actual); return true; })()`,
+        `(() => { const actual = document.querySelector("#login-password")?.getAttribute("type"); if (actual !== ${JSON.stringify(type)}) throw new Error(${JSON.stringify(stepIntent)} + ": " + actual); return true; })()`,
       ]);
     },
-    async finish() {
+    async finish() {      await run(ctx, "verify", [ctx.agentQa, "verify"]);
+
       await run(ctx, "flush", [ctx.agentQa, "flush"]);
-      await run(ctx, "verify", [ctx.agentQa, "verify", sid]);
       await run(ctx, "replay", [ctx.agentQa, "replay", sid, "--session", `${ctx.session}-replay`]);
       pass = true;
     },

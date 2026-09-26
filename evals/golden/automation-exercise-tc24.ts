@@ -34,7 +34,7 @@ await runAutomationExerciseGolden("tc24", "Automation Exercise TC24 download inv
   await golden.fillSelector('input[data-qa="expiry-month"]', "12", "enter expiry month");
   await golden.fillSelector('input[data-qa="expiry-year"]', "2030", "enter expiry year");
   await golden.domClickSelector('button[data-qa="pay-button"]', "pay and confirm order");
-  await golden.waitText("Your order has been placed successfully!", "order success message is visible");
+  await golden.waitText("Congratulations! Your order has been confirmed!", "order success message is visible");
   await golden.waitSelector('a[href^="/download_invoice/"]', "download invoice link is visible");
   await golden.domClickSelector('a[href^="/download_invoice/"]', "click download invoice link");
   await golden.domClickSelector('a[href="/delete_account"]', "delete account");

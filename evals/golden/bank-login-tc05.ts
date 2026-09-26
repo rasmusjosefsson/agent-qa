@@ -1,27 +1,15 @@
 #!/usr/bin/env bun
 import { runBankGolden } from "./bank-login-lib.ts";
 
-await runBankGolden("tc05", "Bank Login TC05 viewer has restricted access", async (golden) => {
+await runBankGolden("tc05", "Bank Login TC05 failed login keeps form usable then succeeds", async (golden) => {
   await golden.openBank();
-  await golden.fill("#username", "viewer", "fill viewer username");
-  await golden.fill("#password", "viewer123", "fill viewer password");
-  await golden.clickSelector('[data-testid="login-button"]', "submit viewer login");
-  await golden.waitUrl("/bank/dashboard", "viewer login redirects to dashboard");
-  await golden.assertLiveSelectorText('[data-testid="viewer-badge"]', "Read-only", "viewer badge is visible");
-  await golden.waitSelector('[data-testid="viewer-badge"]', "viewer badge is visible");
-  await golden.assertLiveSelectorText(
-    '[data-testid="role-indicator"]',
-    "Read-only Viewer",
-    "role indicator shows read-only viewer",
-  );
-  await golden.waitSelector('[data-testid="role-indicator"]', "role indicator shows read-only viewer");
-  await golden.navigate("https://qaplayground.com/bank/accounts", "navigate to accounts page as viewer");
-  await golden.assertLiveSelectorAbsent(
-    '[data-testid="add-account-button"], [data-testid="add-new-account-button"]',
-    "viewer cannot see add account button selector",
-  );
-  await golden.waitSelectorAbsent(
-    '[data-testid="add-account-button"], [data-testid="add-new-account-button"]',
-    "viewer cannot see add account button selector",
-  );
+  await golden.fill("#login-username", "wrong", "fill invalid username");
+  await golden.fill("#login-password", "wrong123", "fill invalid password");
+  await golden.clickSelector('[data-testid="login-submit-btn"]', "submit invalid login");
+  await golden.waitSelector('[data-testid="login-submit-btn"]', "login form still usable after failed login");
+  await golden.fill("#login-username", "standard_user", "fill real username after failure");
+  await golden.fill("#login-password", "bank_sauce", "fill real password after failure");
+  await golden.clickSelector('[data-testid="login-submit-btn"]', "resubmit login after failure");
+  await golden.waitUrl("/bank/dashboard", "recovery login redirects to dashboard");
+  await golden.waitSelector('[data-testid="dashboard-welcome-message"]', "dashboard welcome visible");
 });
