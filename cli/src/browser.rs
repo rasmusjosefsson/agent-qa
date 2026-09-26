@@ -769,6 +769,16 @@ pub fn press_key(session: &str, key: &str) -> Result<(), AgentBrowserError> {
     Ok(())
 }
 
+/// Resize the browser viewport (device-independent pixels).
+pub fn set_viewport(session: &str, width: u64, height: u64) -> Result<(), AgentBrowserError> {
+    run(
+        session,
+        ["set", "viewport", &width.to_string(), &height.to_string()],
+        RunOpts::new(),
+    )?;
+    Ok(())
+}
+
 /// Verb shape for [`find_role_act`]. Mirrors the agent-browser CLI:
 ///   `agent-browser --session <s> find role <role> <verb> [--name <n>] [<positional…>]`
 #[derive(Debug, Clone, Copy)]

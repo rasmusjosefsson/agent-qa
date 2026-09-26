@@ -72,6 +72,12 @@ fn rule_for(verb: &Verb) -> VerbRule {
             value_kinds: &["literal"],
             ..VerbRule::default()
         },
+        Verb::Viewport => VerbRule {
+            required: &[DoField::Params],
+            forbidden: &[DoField::On, DoField::Value],
+            params_required: &["width", "height"],
+            ..VerbRule::default()
+        },
         Verb::Press => VerbRule {
             required: &[DoField::Value],
             value_kinds: &["literal"],
@@ -363,6 +369,40 @@ mod tests {
         let s = parse(json!({
             "id": "s1", "intent": "x", "kind": "do", "verb": "dialog",
             "params": { "action": "accept", "text": "John Doe" }
+        }));
+        assert_verb_shape(&s).unwrap();
+    }
+
+    #[test]
+    fn viewport_requires_width_and_height_params() {
+        let s = parse(json!({ "id": "s1", "intent": "x", "kind": "do", "verb": "viewport" }));
+        assert!(assert_verb_shape(&s)
+            .unwrap_err()
+            .to_string()
+            .contains("requires 'params'"));
+
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "viewport",
+            "params": { "width": 375 }
+        }));
+        assert!(assert_verb_shape(&s)
+            .unwrap_err()
+            .to_string()
+            .contains("params requires 'height'"));
+
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "viewport",
+            "params": { "width": 375, "height": 812 },
+            "on": { "role": "button" }
+        }));
+        assert!(assert_verb_shape(&s)
+            .unwrap_err()
+            .to_string()
+            .contains("must not carry 'on'"));
+
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "viewport",
+            "params": { "width": 375, "height": 812 }
         }));
         assert_verb_shape(&s).unwrap();
     }

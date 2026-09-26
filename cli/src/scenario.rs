@@ -153,6 +153,8 @@ pub enum Verb {
     /// `new <url>`, `list`, `close <ref>`, or `<ref>` to switch focus.
     /// Claims afterwards evaluate against the now-active tab.
     Tab,
+    /// Resize the viewport: `params` = `{ "width": <px>, "height": <px> }`.
+    Viewport,
     #[serde(rename = "loop")]
     Loop,
     Group,

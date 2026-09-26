@@ -45,6 +45,25 @@ Use `record-step do` and `record-step check` to create steps. The recorder assig
 `fresh`, `useProfile`, `nav`, `cookie`, `localStorage`, `gql`, and `flag`.
 `record-setup` records one schema-valid `env.open` value.
 
+### Viewport resizing
+
+Resize the browser viewport mid-scenario with a `viewport` do-step:
+
+```json
+{
+  "id": "s1",
+  "intent": "switch to mobile size",
+  "kind": "do",
+  "verb": "viewport",
+  "params": { "width": 375, "height": 812 }
+}
+```
+
+Both `width` and `height` are required positive integers (CSS pixels); string
+values like `"{{mobileWidth}}"` are resolved through scenario vars. Combine with
+an element claim afterwards to assert responsive behaviour (e.g. a hamburger
+menu that only renders below a breakpoint).
+
 ### Native dialogs (alert/confirm/prompt)
 
 Resolve a pending native dialog with a `dialog` do-step:
