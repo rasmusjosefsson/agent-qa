@@ -26,6 +26,20 @@ appends a `locator-correction` row to `<run>/heal.jsonl` and writes
 back into the contract. Set `AGENT_QA_NO_HEAL` to disable the loop entirely,
 or `AGENT_QA_HEAL_STRICT` to fail any run that needed a heal.
 
+A role+name locator can carry `scope`: an array of locators resolved
+outermost-first, each narrowing to a DOM subtree. The role+name match then
+runs strictly inside the innermost scope — it never falls back to the whole
+document. Use scope to disambiguate repeated controls (the same button label
+inside several cards). Scope levels accept raw css/testId/xpath/text
+locators or role+name locators. A scope miss fails the step naming the
+level that matched nothing. Scoped locators are resolved via DOM evaluation,
+so the auto-heal ladder does not engage on them.
+
+`name` may also be `{"i18nKey": "…"}` — resolved through a flat
+`i18n.json` map (`{"key": "accessible name"}`) beside `scenario.json`.
+Store translated labels there instead of hard-coding display strings in the
+contract; a missing file or key fails the step with the available keys.
+
 If replay fails because a captured value changed (a value rejection, not a
 locator miss — auto-heal never retries those), use the audited correction
 flow. Do not mutate a scenario during replay.

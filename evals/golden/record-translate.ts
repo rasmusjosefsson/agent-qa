@@ -56,6 +56,19 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           return doStep(intent, { verb: "click", on: textLoc(args[0]) });
         case "clickRole":
           return doStep(intent, { verb: "click", on: roleLoc(args[0], args[1]) });
+        case "clickScopedRole":
+          // Scoped locator: the role+name search runs strictly inside the
+          // container the scope chain resolves to. `name` may be a string or
+          // { i18nKey: "..." } — the key resolves through i18n.json beside
+          // the scenario at replay.
+          return doStep(intent, {
+            verb: "click",
+            on: {
+              role: args[1],
+              name: args[2],
+              scope: [css(args[0])],
+            },
+          });
         case "fillBySelector":
           return doStep(intent, {
             verb: "type",
@@ -139,6 +152,18 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           return checkStep(intent, { element: css(c.selector) }, "isVisible");
         case "selectorAbsent":
           return checkStep(intent, { element: css(c.selector) }, "notExists");
+        case "scopedRole":
+          return checkStep(
+            intent,
+            {
+              element: {
+                role: c.role,
+                name: c.name,
+                scope: [css(c.selector)],
+              },
+            },
+            "isVisible",
+          );
         case "selectorText":
           return checkStep(
             intent,

@@ -53,6 +53,22 @@ export interface PracticeGolden extends GoldenContext {
   assertUrlContains(fragment: string, intent: string): Promise<void>;
   assertElementText(selector: string, expected: string, intent: string): Promise<void>;
   assertElementAbsent(selector: string, intent: string): Promise<void>;
+  // Scoped locators: the recorded step resolves role+name strictly inside
+  // `scopeSelector`; `innerSelector` is what the live browser clicks.
+  // `name` may be a string or `{ i18nKey: "key" }` (resolved via i18n.json).
+  clickScopedRole(
+    scopeSelector: string,
+    innerSelector: string,
+    role: string,
+    name: string | Record<string, unknown>,
+    intent: string,
+  ): Promise<void>;
+  waitScopedRoleVisible(
+    scopeSelector: string,
+    role: string,
+    name: string | Record<string, unknown>,
+    intent: string,
+  ): Promise<void>;
 }
 
 function createContext(suite: string, tc: string, intent: string): GoldenContext {
@@ -124,6 +140,11 @@ export async function runPracticeGolden(
   pageUrl: string,
   readySelector: string,
   steps: (golden: PracticeGolden) => Promise<void>,
+  opts?: {
+    // Runs after flush with the produced scenario dir — write sidecar
+    // files the scenario depends on (e.g. i18n.json for i18nKey names).
+    beforeReplay?: (scenarioDir: string) => Promise<void> | void;
+  },
 ): Promise<void> {
   const ctx = createContext(suite, tc, intent);
   let sid = "";
@@ -193,6 +214,21 @@ export async function runPracticeGolden(
       await run(ctx, "reload", [ctx.agentBrowser, "--session", ctx.session, "reload"]);
       await record(ctx, "action", { method: "reloadPage", args: [], intent: stepIntent });
     },
+    async clickScopedRole(scopeSelector, innerSelector, role, name, stepIntent) {
+      const sel = `${scopeSelector} ${innerSelector}`;
+      await run(ctx, `click ${sel}`, [ctx.agentBrowser, "--session", ctx.session, "click", sel]);
+      await record(ctx, "action", {
+        method: "clickScopedRole",
+        args: [scopeSelector, role, name],
+        intent: stepIntent,
+      });
+    },
+    async waitScopedRoleVisible(scopeSelector, role, name, stepIntent) {
+      await record(ctx, "wait", {
+        condition: { kind: "scopedRole", selector: scopeSelector, role, name },
+        intent: stepIntent,
+      });
+    },
     async tabAction(subcommand, stepIntent) {
       const parts = subcommand.split(/\s+/);
       await run(ctx, `tab ${subcommand}`, [ctx.agentBrowser, "--session", ctx.session, "tab", ...parts]);
@@ -232,6 +268,9 @@ export async function runPracticeGolden(
     await steps(golden);
     await run(ctx, "verify", [ctx.agentQa, "verify"]);
     await run(ctx, "flush", [ctx.agentQa, "flush"]);
+    if (opts?.beforeReplay && sid) {
+      await opts.beforeReplay(resolve(ctx.scenariosRoot, sid));
+    }
     await run(ctx, "replay", [ctx.agentQa, "replay", sid, "--session", `${ctx.session}-replay`]);
     pass = true;
   } catch (err) {
