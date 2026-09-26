@@ -537,6 +537,111 @@ pub fn set_headed_mode(headed: bool) {
     }
 }
 
+/// The env var agent-browser reads to keep `alert`/`beforeunload` dialogs
+/// pending instead of auto-accepting them (`--no-auto-dialog`). Required for
+/// scenarios with `dialog` steps — otherwise a recorded accept has nothing
+/// left to resolve.
+pub const NO_AUTO_DIALOG_ENV: &str = "AGENT_BROWSER_NO_AUTO_DIALOG";
+
+/// Set the dialog policy for every agent-browser child this process spawns.
+/// Like [`set_headed_mode`], the daemon fixes the policy at launch: an
+/// already-running session ignores the var until relaunched.
+pub fn set_no_auto_dialog(enabled: bool) {
+    if enabled {
+        std::env::set_var(NO_AUTO_DIALOG_ENV, "1");
+    } else {
+        std::env::remove_var(NO_AUTO_DIALOG_ENV);
+    }
+}
+
+/// A pending native dialog, as reported by `agent-browser dialog status`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DialogStatus {
+    /// Whether a dialog is currently open.
+    pub open: bool,
+    /// "alert" | "confirm" | "prompt" | "beforeunload" — empty when closed.
+    pub kind: String,
+    /// The message shown in the dialog.
+    pub message: String,
+    /// A prompt's default input value.
+    pub default_prompt: String,
+}
+
+/// Poll `agent-browser --json dialog status`. Returns `DialogStatus` with
+/// `open=false` when no dialog is pending.
+pub fn dialog_status(session: &str) -> Result<DialogStatus, AgentBrowserError> {
+    let r = run(
+        session,
+        ["--json", "dialog", "status"],
+        RunOpts::new().capture(),
+    )?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(r.stdout.trim()).map_err(|e| AgentBrowserError::NonZero {
+            verb: "dialog status".to_string(),
+            exit_code: 0,
+            stderr: format!("unparseable dialog status JSON: {e}: {:?}", r.stdout.trim()),
+            hint: String::new(),
+        })?;
+    let data = parsed
+        .get("data")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    Ok(DialogStatus {
+        open: data
+            .get("hasDialog")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        kind: data
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        message: data
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        default_prompt: data
+            .get("defaultPrompt")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+    })
+}
+
+/// Respond to a pending native dialog: `dialog accept [text]` or
+/// `dialog dismiss`. Errors (non-zero exit) when no dialog is open — that
+/// surfaces as the step failure the scenario author needs to see.
+pub fn dialog_respond(
+    session: &str,
+    action: &str,
+    text: Option<&str>,
+) -> Result<(), AgentBrowserError> {
+    match action {
+        "accept" | "dismiss" => {}
+        other => {
+            return Err(AgentBrowserError::NonZero {
+                verb: "dialog".to_string(),
+                exit_code: 0,
+                stderr: format!("unknown dialog action {other:?} (expected accept|dismiss)"),
+                hint: String::new(),
+            })
+        }
+    }
+    let mut args: Vec<&str> = vec!["dialog", action];
+    if let Some(t) = text {
+        args.push(t);
+    }
+    run(session, args, RunOpts::new().capture())?;
+    Ok(())
+}
+
+/// True while a native dialog is pending — used to skip sidecar capture that
+/// would fail or hang while the page is blocked.
+pub fn dialog_pending(session: &str) -> bool {
+    dialog_status(session).map(|s| s.open).unwrap_or(false)
+}
+
 pub fn open(session: &str, url: &str) -> Result<(), AgentBrowserError> {
     let mut last_err = None;
     for attempt in 1..=OPEN_MAX_ATTEMPTS {

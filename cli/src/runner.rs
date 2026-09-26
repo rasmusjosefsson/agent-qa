@@ -347,6 +347,16 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     let scenario: Scenario = serde_json::from_value(parsed.clone()).context("parse scenario")?;
     let hash = hash_scenario_bytes(&bytes);
 
+    // Native-dialog steps need `alert`/`beforeunload` kept pending instead of
+    // agent-browser's default auto-accept, or a recorded `dialog` step finds
+    // nothing to resolve. The daemon reads the flag at launch; a warm-up eval
+    // brings the daemon up before the first navigation (a launch-time `open`
+    // can lose its navigation to the launch race).
+    if scenario_uses_dialog(&scenario) && !opts.dry_run {
+        crate::browser::set_no_auto_dialog(true);
+        let _ = crate::browser::eval_expression(&opts.session_name, "1");
+    }
+
     // 2. Mint run + prepare root.
     let run_id = mint_run_id(opts.profile.as_deref());
     eprintln!("[v2-replay] {} → run {}", scenario.id, run_id);
@@ -1150,6 +1160,13 @@ fn capture_step_sidecars(run: &crate::sidecar::RunPaths, step_id: &str, session:
         eprintln!("[v2-replay] skip sidecars for unsafe stepId {step_id:?}");
         return;
     }
+    // A pending native dialog blocks the page: snapshots time out and the
+    // screenshot captures the dialog's dimmed backdrop. The next step
+    // (a `dialog` accept/dismiss) restores the page — capture after that.
+    if browser::dialog_pending(session) {
+        eprintln!("[v2-replay] skip sidecars for {step_id} — native dialog pending");
+        return;
+    }
     // Let the page settle after the step's action before capturing, so a
     // navigating click / async render is reflected in the screenshot + ARIA
     // snapshot rather than a half-loaded frame. Soft-fail: a page that is
@@ -1175,6 +1192,12 @@ fn capture_step_sidecars(run: &crate::sidecar::RunPaths, step_id: &str, session:
         FIRST_CAPTURE_CAP_MS
     };
     let _ = browser::wait_for_load_capped(session, "networkidle", SETTLE_CAP_MS);
+    // The settle wait can leave a dialog pending (e.g. a beforeunload fired
+    // during it) — check again right before snapshotting.
+    if browser::dialog_pending(session) {
+        eprintln!("[v2-replay] skip sidecars for {step_id} — native dialog pending");
+        return;
+    }
     match browser::snapshot_full_capped(session, cap_ms) {
         Ok(text) => {
             if let Err(e) =
@@ -1197,6 +1220,31 @@ fn capture_step_sidecars(run: &crate::sidecar::RunPaths, step_id: &str, session:
             Err(e) => eprintln!("[v2-replay] screenshot {step_id} failed: {e}"),
         }
     }
+}
+
+/// Whether the scenario contains a `do` step with `verb: dialog` or a
+/// `check` claim on the `dialog` subject — anywhere, including steps nested
+/// in `group`/`loop` params and `useTemplate` bodies. Implemented on the
+/// serialized JSON so it stays correct no matter how steps nest.
+fn scenario_uses_dialog(scenario: &Scenario) -> bool {
+    fn contains_dialog_marker(v: &serde_json::Value) -> bool {
+        match v {
+            serde_json::Value::Object(map) => {
+                if map.get("verb").and_then(|v| v.as_str()) == Some("dialog") {
+                    return true;
+                }
+                if map.get("dialog").and_then(|v| v.as_bool()) == Some(true) {
+                    return true;
+                }
+                map.values().any(contains_dialog_marker)
+            }
+            serde_json::Value::Array(items) => items.iter().any(contains_dialog_marker),
+            _ => false,
+        }
+    }
+    let steps = serde_json::to_value(&scenario.steps).unwrap_or(serde_json::Value::Null);
+    let templates = serde_json::to_value(&scenario.templates).unwrap_or(serde_json::Value::Null);
+    contains_dialog_marker(&steps) || contains_dialog_marker(&templates)
 }
 
 fn is_safe_step_id(s: &str) -> bool {
@@ -1795,6 +1843,43 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
     fn parse_args_with_runs_rejects_zero_and_non_int() {
         parse_args_with_runs(&["./j.json".into(), "--runs".into(), "0".into()]).unwrap_err();
         parse_args_with_runs(&["./j.json".into(), "--runs".into(), "x".into()]).unwrap_err();
+    }
+
+    #[test]
+    fn scenario_uses_dialog_detects_do_and_check_including_nested() {
+        let j = serde_json::json!({
+            "schema": "scenario/2", "id": "d", "intent": "x",
+            "steps": [
+                { "id": "s0", "intent": "open", "kind": "do", "verb": "goto",
+                  "value": { "from": "literal", "literal": "https://x" } },
+                { "id": "g1", "intent": "grp", "kind": "do", "verb": "group",
+                  "params": { "steps": [
+                      { "id": "sg", "intent": "resolve", "kind": "do", "verb": "dialog",
+                        "params": { "action": "accept" } }
+                  ]}}
+            ]
+        });
+        let s: Scenario = serde_json::from_value(j).unwrap();
+        assert!(scenario_uses_dialog(&s));
+
+        let j = serde_json::json!({
+            "schema": "scenario/2", "id": "d", "intent": "x",
+            "steps": [
+                { "id": "c1", "intent": "dialog gone", "kind": "check",
+                  "claim": { "subject": { "dialog": true }, "predicate": "notExists" } }
+            ]
+        });
+        let s: Scenario = serde_json::from_value(j).unwrap();
+        assert!(scenario_uses_dialog(&s));
+
+        let j = serde_json::json!({
+            "schema": "scenario/2", "id": "d", "intent": "x",
+            "steps": [
+                { "id": "s0", "intent": "reload", "kind": "do", "verb": "reload" }
+            ]
+        });
+        let s: Scenario = serde_json::from_value(j).unwrap();
+        assert!(!scenario_uses_dialog(&s));
     }
 
     #[test]

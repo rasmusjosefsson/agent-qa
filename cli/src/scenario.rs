@@ -139,6 +139,9 @@ pub enum Verb {
     Read,
     CallGql,
     Wait,
+    /// Resolve a pending native dialog (alert/confirm/prompt):
+    /// `params.action` = "accept" | "dismiss", `params.text` = prompt input.
+    Dialog,
     #[serde(rename = "loop")]
     Loop,
     Group,
@@ -298,6 +301,12 @@ pub enum ClaimSubject {
     },
     Flag {
         flag: String,
+    },
+    /// `{"dialog": true}` — assert on a pending native dialog
+    /// (alert/confirm/prompt): `exists`/`notExists` for presence,
+    /// text predicates match the dialog's message.
+    Dialog {
+        dialog: bool,
     },
     Var {
         kind: String, // always "var" — kept literal to disambiguate untagged

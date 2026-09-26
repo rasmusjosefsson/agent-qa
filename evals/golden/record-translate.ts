@@ -82,6 +82,16 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           return doStep(intent, { verb: "press", value: literal(args[0]) });
         case "navigate":
           return doStep(intent, { verb: "goto", value: literal(args[0]) });
+        case "dialogAccept":
+          return doStep(intent, {
+            verb: "dialog",
+            params: {
+              action: "accept",
+              ...(args[0] === undefined ? {} : { text: args[0] }),
+            },
+          });
+        case "dialogDismiss":
+          return doStep(intent, { verb: "dialog", params: { action: "dismiss" } });
         default:
           throw new Error(`record-step translate: unknown action method ${String(p.method)}`);
       }
@@ -119,6 +129,19 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           return checkStep(intent, { element: roleLoc(args[0], args[1]) }, "isVisible");
         case "absent":
           return checkStep(intent, { element: roleLoc(args[0], args[1]) }, "notExists");
+        case "elementText":
+          return checkStep(
+            intent,
+            { element: css(args[0]), attribute: "text" },
+            "equals",
+            args[1],
+          );
+        case "dialogOpen":
+          return checkStep(intent, { dialog: true }, "exists");
+        case "dialogClosed":
+          return checkStep(intent, { dialog: true }, "notExists");
+        case "dialogText":
+          return checkStep(intent, { dialog: true }, "contains", args[0]);
         default:
           throw new Error(`record-step translate: unknown assert kind ${String(p.kind)}`);
       }

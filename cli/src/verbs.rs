@@ -84,7 +84,7 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
             Ok(None)
         }
         Verb::Click => {
-            act_on_locator(ctx.session, on.unwrap(), scope, RoleAct::Click, None)?;
+            click_locator(ctx.session, on.unwrap(), scope)?;
             browser::wait_for_load(ctx.session, "networkidle")?;
             Ok(None)
         }
@@ -92,7 +92,7 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
             // Checkbox toggle: agent-browser doesn't expose set-state
             // directly, so we click. Real state-aware behaviour lands
             // when a check claim follows this in a scenario.
-            act_on_locator(ctx.session, on.unwrap(), scope, RoleAct::Click, None)?;
+            click_locator(ctx.session, on.unwrap(), scope)?;
             Ok(None)
         }
         Verb::Hover => {
@@ -131,6 +131,20 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                 act_on_locator(ctx.session, loc, scope, RoleAct::Focus, None)?;
             }
             browser::press_key(ctx.session, &key)?;
+            Ok(None)
+        }
+        Verb::Dialog => {
+            let p = params.ok_or_else(|| anyhow!("step '{id}' dialog: params required"))?;
+            let action = p
+                .get("action")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("step '{id}' dialog: params.action is required"))?;
+            let text = p
+                .get("text")
+                .and_then(|v| v.as_str())
+                .map(|t| crate::value::substitute_scenario_vars(t, scope));
+            browser::dialog_respond(ctx.session, action, text.as_deref())
+                .map_err(|e| anyhow!("step '{id}' dialog {action}: {e}"))?;
             Ok(None)
         }
         Verb::Wait => {
@@ -760,6 +774,21 @@ fn try_snapshot_fallback(session: &str, role: &str, name: &str) -> anyhow::Resul
         .ok_or_else(|| anyhow!("snapshot has no `{role} \"{name}\" [ref=...]` line"))?;
     browser::click_ref(session, &r).map_err(|e| anyhow!("click @{r}: {e}"))?;
     Ok(())
+}
+
+/// Click through `act_on_locator`, tolerating the eval timeout that happens
+/// when the click handler opens a native dialog: `Runtime.evaluate` cannot
+/// return while `alert()`/`confirm()`/`prompt()` blocks the page, but the
+/// pending dialog proves the click fired.
+fn click_locator(session: &str, loc: &Locator, scope: &mut ValueScope) -> Result<()> {
+    match act_on_locator(session, loc, scope, RoleAct::Click, None) {
+        Err(e) if dialog_blocking_error(&e) && browser::dialog_pending(session) => Ok(()),
+        other => other,
+    }
+}
+
+fn dialog_blocking_error(e: &anyhow::Error) -> bool {
+    format!("{e:#}").contains("dialog is blocking")
 }
 
 fn act_on_locator(
