@@ -41,12 +41,18 @@ export interface PracticeGolden extends GoldenContext {
   hoverSelector(selector: string, intent: string): Promise<void>;
   pressKey(key: string, intent: string): Promise<void>;
   pressOn(selector: string, key: string, intent: string): Promise<void>;
+  dblclickSelector(selector: string, intent: string): Promise<void>;
+  scrollToSelector(selector: string, intent: string): Promise<void>;
+  reloadPage(intent: string): Promise<void>;
+  tabAction(subcommand: string, intent: string): Promise<void>;
+  clickNthOption(listboxSelector: string, nth: number, intent: string): Promise<void>;
   waitSelectorText(selector: string, text: string, intent: string): Promise<void>;
   waitSelectorVisible(selector: string, intent: string): Promise<void>;
   assertElementAttribute(selector: string, attribute: string, expected: string, intent: string): Promise<void>;
   assertElementAttributeMatch(selector: string, attribute: string, predicate: string, expected: string, intent: string): Promise<void>;
   assertUrlContains(fragment: string, intent: string): Promise<void>;
   assertElementText(selector: string, expected: string, intent: string): Promise<void>;
+  assertElementAbsent(selector: string, intent: string): Promise<void>;
 }
 
 function createContext(suite: string, tc: string, intent: string): GoldenContext {
@@ -175,6 +181,28 @@ export async function runPracticeGolden(
       await run(ctx, `key ${key}`, [ctx.agentBrowser, "--session", ctx.session, "press", key]);
       await record(ctx, "action", { method: "pressSelector", args: [selector, key], intent: stepIntent });
     },
+    async dblclickSelector(selector, stepIntent) {
+      await run(ctx, `dblclick ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "dblclick", selector]);
+      await record(ctx, "action", { method: "dblclickBySelector", args: [selector], intent: stepIntent });
+    },
+    async scrollToSelector(selector, stepIntent) {
+      await run(ctx, `scroll ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "scrollintoview", selector]);
+      await record(ctx, "action", { method: "scrollToBySelector", args: [selector], intent: stepIntent });
+    },
+    async reloadPage(stepIntent) {
+      await run(ctx, "reload", [ctx.agentBrowser, "--session", ctx.session, "reload"]);
+      await record(ctx, "action", { method: "reloadPage", args: [], intent: stepIntent });
+    },
+    async tabAction(subcommand, stepIntent) {
+      const parts = subcommand.split(/\s+/);
+      await run(ctx, `tab ${subcommand}`, [ctx.agentBrowser, "--session", ctx.session, "tab", ...parts]);
+      await record(ctx, "action", { method: "tabCommand", args: [subcommand], intent: stepIntent });
+    },
+    async clickNthOption(listboxSelector, nth, stepIntent) {
+      const sel = `${listboxSelector} [role="option"]:nth-child(${nth})`;
+      await run(ctx, `click ${sel}`, [ctx.agentBrowser, "--session", ctx.session, "click", sel]);
+      await record(ctx, "action", { method: "clickNthOption", args: [listboxSelector, nth], intent: stepIntent });
+    },
     async waitSelectorText(selector, text, stepIntent) {
       await record(ctx, "wait", { condition: { kind: "selectorText", selector, text }, intent: stepIntent });
     },
@@ -192,6 +220,9 @@ export async function runPracticeGolden(
     },
     async assertElementText(selector, expected, stepIntent) {
       await record(ctx, "assert", { kind: "elementText", args: [selector, expected], intent: stepIntent });
+    },
+    async assertElementAbsent(selector, stepIntent) {
+      await record(ctx, "assert", { kind: "elementAbsent", args: [selector], intent: stepIntent });
     },
   };
 

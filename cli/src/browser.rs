@@ -1020,6 +1020,23 @@ pub fn download(session: &str, selector: &str, path: &str) -> Result<(), AgentBr
     Ok(())
 }
 
+/// Double-click an element by CSS selector.
+/// Mirrors `agent-browser --session <s> dblclick <selector>`.
+pub fn dblclick(session: &str, selector: &str) -> Result<(), AgentBrowserError> {
+    run(session, vec!["dblclick", selector], RunOpts::new())?;
+    Ok(())
+}
+
+/// Manage browser tabs. `args` is the full `tab` subcommand tail:
+/// `new <url>`, `list`, `close <ref>`, or `<ref>` to switch (stable ids like
+/// `t1`, `t2`; labels and CDP target ids work too).
+pub fn tab(session: &str, args: &[&str]) -> Result<(), AgentBrowserError> {
+    let mut cmd: Vec<&str> = vec!["tab"];
+    cmd.extend_from_slice(args);
+    run(session, cmd, RunOpts::new())?;
+    Ok(())
+}
+
 /// Run `agent-browser doctor` and return its stdout.
 pub fn doctor_raw() -> Result<String, AgentBrowserError> {
     let bin = resolve_bin()?;

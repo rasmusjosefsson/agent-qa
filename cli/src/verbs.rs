@@ -197,6 +197,24 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
             select_option(ctx.session, on.unwrap(), &value_to_string(&v), scope)?;
             Ok(None)
         }
+        Verb::DblClick => {
+            let selector = upload_selector(on.unwrap(), scope)
+                .map_err(|e| anyhow!("step '{id}' dblclick: {e}"))?;
+            browser::dblclick(ctx.session, &selector)
+                .map_err(|e| anyhow!("step '{id}' dblclick: {e}"))?;
+            Ok(None)
+        }
+        Verb::Tab => {
+            let v = resolve_literal_string(value, scope, "tab.value")?;
+            let parts: Vec<String> = v.split_whitespace().map(str::to_string).collect();
+            if parts.is_empty() {
+                bail!("step '{id}' tab: value must be a tab subcommand (e.g. 'new <url>', 'list', 'close <ref>', '<ref>')");
+            }
+            let args: Vec<&str> = parts.iter().map(String::as_str).collect();
+            browser::tab(ctx.session, &args)
+                .map_err(|e| anyhow!("step '{id}' tab '{}': {e}", parts.join(" ")))?;
+            Ok(None)
+        }
         Verb::Group => {
             bail!(
                 "step '{id}' verb=group should be flattened by the runner before dispatch_do is called"
@@ -432,8 +450,8 @@ fn read_text(session: &str, loc: &Locator, scope: &mut ValueScope) -> anyhow::Re
 /// Scroll to a given target.
 ///
 /// - No `on` → `window.scrollTo(0, 0)` (top of page).
-/// - `on` Raw css → `document.querySelector(…).scrollIntoView()`.
-/// - `on` Raw xpath → `document.evaluate(…).singleNodeValue.scrollIntoView()`.
+/// - `on` Raw css → `document.querySelector(…).scrollIntoView({block: "center"})`.
+/// - `on` Raw xpath → same, via the centred variant.
 /// - `on` Raw testId → synthesised `[data-testid=…]` CSS.
 /// - `on` Role → not yet supported (needs ARIA-aware DOM traversal).
 fn scroll_to(session: &str, on: Option<&Locator>, scope: &mut ValueScope) -> anyhow::Result<()> {
@@ -444,22 +462,22 @@ fn scroll_to(session: &str, on: Option<&Locator>, scope: &mut ValueScope) -> any
             let v = crate::value::substitute_scenario_vars(&raw.raw.value, scope);
             match raw.raw.kind {
                 RawLocatorKind::Css => format!(
-                    "(() => {{ const el = document.querySelector({}); if (el) el.scrollIntoView(); }})()",
+                    "(() => {{ const el = document.querySelector({}); if (el) el.scrollIntoView({{ block: 'center', inline: 'nearest' }}); }})()",
                     json_str(&v)
                 ),
                 RawLocatorKind::TestId => {
                     let css = format!("[data-testid=\"{}\"]", v.replace('"', "\\\""));
                     format!(
-                        "(() => {{ const el = document.querySelector({}); if (el) el.scrollIntoView(); }})()",
+                        "(() => {{ const el = document.querySelector({}); if (el) el.scrollIntoView({{ block: 'center', inline: 'nearest' }}); }})()",
                         json_str(&css)
                     )
                 }
                 RawLocatorKind::Xpath => format!(
-                    "(() => {{ const r = document.evaluate({}, document, null, 9, null); if (r && r.singleNodeValue) r.singleNodeValue.scrollIntoView(); }})()",
+                    "(() => {{ const r = document.evaluate({}, document, null, 9, null); if (r && r.singleNodeValue) r.singleNodeValue.scrollIntoView({{ block: 'center', inline: 'nearest' }}); }})()",
                     json_str(&v)
                 ),
                 RawLocatorKind::Text => format!(
-                    "(() => {{ const want = {q}; const el = [...document.querySelectorAll('*')].find(e => (e.innerText || e.textContent || '').includes(want)); if (el) el.scrollIntoView(); }})()",
+                    "(() => {{ const want = {q}; const el = [...document.querySelectorAll('*')].find(e => (e.innerText || e.textContent || '').includes(want)); if (el) el.scrollIntoView({{ block: 'center', inline: 'nearest' }}); }})()",
                     q = json_str(&v)
                 ),
             }
@@ -1703,5 +1721,131 @@ mod tests {
             regex::Regex::new(r"find role textbox fill --name Email qa-[a-f0-9]{8}@example.com")
                 .unwrap();
         assert!(re.is_match(&out), "got: {out}");
+    }
+
+    #[test]
+    fn dblclick_invokes_dblclick_on_css_locator() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "dblclick",
+            "on": { "raw": { "kind": "css", "value": "#edit" }, "reason": "" }
+        }));
+        let out = run_one(&s);
+        assert!(out.contains("--session sess dblclick #edit"), "got: {out}");
+    }
+
+    #[test]
+    fn dblclick_testid_locator_becomes_css() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "dblclick",
+            "on": { "raw": { "kind": "testId", "value": "row" }, "reason": "" }
+        }));
+        let out = run_one(&s);
+        assert!(
+            out.contains("--session sess dblclick [data-testid=\"row\"]"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn dblclick_role_locator_errors() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "dblclick",
+            "on": { "role": "button", "name": "Edit" }
+        }));
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake(tmp.path(), &tmp.path().join("ab.log"));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
+        let mut scope = ValueScope::default();
+        let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
+        clear_fake();
+        assert!(
+            err.contains("role+name locators is not supported"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn dblclick_with_value_is_shape_error() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "dblclick",
+            "on": { "raw": { "kind": "css", "value": "#edit" }, "reason": "" },
+            "value": { "from": "literal", "literal": "x" }
+        }));
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake(tmp.path(), &tmp.path().join("ab.log"));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
+        let mut scope = ValueScope::default();
+        let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
+        clear_fake();
+        assert!(err.contains("value"), "got: {err}");
+    }
+
+    #[test]
+    fn tab_invokes_tab_subcommand() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "tab",
+            "value": { "from": "literal", "literal": "new https://example.com/" }
+        }));
+        let out = run_one(&s);
+        assert!(
+            out.contains("--session sess tab new https://example.com/"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn tab_switch_by_ref() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "tab",
+            "value": { "from": "literal", "literal": "t2" }
+        }));
+        let out = run_one(&s);
+        assert!(out.contains("--session sess tab t2"), "got: {out}");
+    }
+
+    #[test]
+    fn tab_with_on_is_shape_error() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "tab",
+            "on": { "raw": { "kind": "css", "value": "#t" }, "reason": "" },
+            "value": { "from": "literal", "literal": "list" }
+        }));
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake(tmp.path(), &tmp.path().join("ab.log"));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
+        let mut scope = ValueScope::default();
+        let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
+        clear_fake();
+        assert!(err.contains("on"), "got: {err}");
+    }
+
+    #[test]
+    fn tab_missing_value_is_shape_error() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "tab"
+        }));
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake(tmp.path(), &tmp.path().join("ab.log"));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
+        let mut scope = ValueScope::default();
+        let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
+        clear_fake();
+        assert!(err.contains("value"), "got: {err}");
     }
 }

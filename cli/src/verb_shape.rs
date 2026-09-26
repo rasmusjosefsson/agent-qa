@@ -61,6 +61,17 @@ fn rule_for(verb: &Verb) -> VerbRule {
             required: &[DoField::On, DoField::Value],
             ..VerbRule::default()
         },
+        Verb::DblClick => VerbRule {
+            required: &[DoField::On],
+            forbidden: &[DoField::Value],
+            ..VerbRule::default()
+        },
+        Verb::Tab => VerbRule {
+            required: &[DoField::Value],
+            forbidden: &[DoField::On],
+            value_kinds: &["literal"],
+            ..VerbRule::default()
+        },
         Verb::Press => VerbRule {
             required: &[DoField::Value],
             value_kinds: &["literal"],
