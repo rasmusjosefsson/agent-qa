@@ -763,7 +763,10 @@ fn fill_or_act_via_selector(
     el.dispatchEvent(new InputEvent('input', {{ bubbles: true, inputType: 'insertText', data: want }}));
     el.dispatchEvent(new Event('change', {{ bubbles: true }}));
   }};
-  if (el.value === want) return resolve('ok');
+  // Even when the fill already set the value, emit input/change once:
+  // some frameworks ignore the fill's own events, so dependent UI (echo
+  // panes, validation) would otherwise stay stale.
+  if (el.value === want) {{ apply(); return resolve('ok'); }}
   apply();
   let n = 0;
   const tick = () => {{
