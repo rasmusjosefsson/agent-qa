@@ -1769,7 +1769,10 @@ mod tests {
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
         let ab = fs::read_to_string(&log).unwrap();
-        assert!(ab.contains("--session vp set viewport 375 812"), "got: {ab}");
+        assert!(
+            ab.contains("--session vp set viewport 375 812"),
+            "got: {ab}"
+        );
         clear_fake_browser();
     }
 
