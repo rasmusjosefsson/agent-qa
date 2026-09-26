@@ -27,7 +27,7 @@ Golden runners prove:
 | --- | --- | --- | --- | --- |
 | Bank App | `/bank` | page-load + TC-LOGIN-01-TC-LOGIN-05 | complete | Keep golden login cases passing. |
 | Dynamic Waits | `/practice/dynamic-waits` | page-load + TC01-TC05 | complete | Keep golden TC01-TC05 passing. |
-| Forms | `/practice/forms` | page-load + TC01-TC15 | deep | TC01-TC05 golden pass; continue TC06-TC15. |
+| Forms | `/practice/forms` | page-load + TC01-TC15 | complete | Golden TC01-TC15 pass. The page hosts 5 forms (F01 login, F02 personal, F03 address, F04 interests, F05 account setup); TC07's terms error has no testid so it's scoped via `#registrationForm` text. |
 | Dropdowns | `/practice/dropdowns` | page-load + TC01-TC10 | complete | Golden TC01-TC10 pass; keep them green. |
 | Alerts & Dialogs | `/practice/alerts-dialogs` | page-load + TC01-TC10 | complete | Golden TC01-TC10 pass. TC01-TC06 drive native alert/confirm/prompt via the bundled `evals/fixtures/dialogs.html` (the live page has none); TC07-TC09 cover DOM dialogs. |
 | File Upload | `/practice/file-upload` | page-load + Upload TC01-TC02 + Upload TC06-TC15 + Download TC01-TC14 | deep | Golden Upload TC01-TC02, TC06-TC08, TC10, TC11, TC15 pass; downloads covered by `download:tc01` on the bundled fixture (the live page ships no download widget). Gaps: TC09 (no cancel control), TC12 (viewport), TC13 (native file dialog), TC14 (inputs lack accessible names). |
@@ -45,8 +45,8 @@ Golden runners prove:
 
 - QA Playground catalog: `163` cases.
 - File Upload catalog: `27` cases: `1` page-load + `12` upload + `14` download.
-- Complete pages: Bank App, Dynamic Waits, Dropdowns, Alerts & Dialogs.
-- Deep/partial pages: Forms, File Upload.
+- Complete pages: Bank App, Dynamic Waits, Dropdowns, Alerts & Dialogs, Forms.
+- Deep/partial pages: File Upload.
 - Catalog-only pages: Input Fields, Buttons, Data Table, Radio & Checkbox, Date Picker, Links, Tabs & Windows, Multi Select.
 
 ## File Upload Notes
@@ -149,12 +149,11 @@ cargo test --locked
 - File upload initially crashed Chrome with `RESULT_CODE_KILLED_BAD_MESSAGE` when replay passed ambiguous relative file paths. Canonicalizing upload file paths fixed this.
 - `selectorText` is safer than broad text on docs-heavy QA Playground pages because tutorial/test-case text can create false positives.
 - File Upload Upload TC01-TC02, TC06-TC08, TC10, TC11, TC15 pass with golden runners. Downloads use `do/download` + `{"file": ...}` claims on the bundled fixture — the live page exposes no download widget.
+- Forms TC01-TC15 pass with golden runners. Element `attribute` claims read live IDL properties for `value`/`checked`/`disabled`/`selected`/`readOnly`/`required`, which is what reset, radio, and retain-state assertions need — `getAttribute` would only see the stale default.
 
 ## Near-Term Order
 
-1. Continue Forms TC06-TC15.
-2. Add exact prompts and golden proofs for Input Fields and Buttons.
-3. Sweep the remaining catalog-only pages (Data Table, Radio & Checkbox, Date Picker, Links, Tabs & Windows, Multi Select).
+1. Sweep the catalog-only pages (Input Fields, Buttons, Data Table, Radio & Checkbox, Date Picker, Links, Tabs & Windows, Multi Select).
 
 ## Commands
 
