@@ -1,0 +1,16 @@
+<!doctype html>
+<html>
+<head><title>Dialogs Fixture</title></head>
+<body>
+<main data-testid="dialogs-fixture">
+  <button data-testid="btn-simple-alert"
+    onclick="alert('Welcome to QA PlayGround!')">Simple Alert</button>
+  <button data-testid="btn-confirm-alert"
+    onclick="document.querySelector('[data-testid=result-confirm]').textContent = confirm('pick me') ? 'Accepted' : 'Dismissed'">Confirm Alert</button>
+  <button data-testid="btn-prompt-alert"
+    onclick="var v=prompt('your name?',''); document.querySelector('[data-testid=result-prompt]').textContent = v===null ? '' : 'Your name is - '+v">Prompt Alert</button>
+  <div data-testid="result-confirm"></div>
+  <div data-testid="result-prompt"></div>
+</main>
+</body>
+</html>

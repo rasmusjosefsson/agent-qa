@@ -764,13 +764,13 @@ Do not record an assert where the first arg is a CSS selector like [data-testid=
 
 TC01: Accept a simple browser alert and verify it closes
 
-1. Navigate to https://qaplayground.com/practice/alerts-dialogs.
+1. Navigate to the dialogs fixture page (see note below).
 2. Click the Simple Alert button using data-testid btn-simple-alert.
 3. Accept the native browser alert.
 4. Assert the alert is dismissed and the page remains interactive.
-5. Replay the scenario successfully, or report the exact native-dialog framework gap if agent-qa cannot represent/replay alert acceptance.
+5. Replay the scenario successfully.
 
-Do not write Selenium or Playwright code. Use agent-qa and agent-browser only. Do not fake success by only clicking tutorial text or by asserting static page documentation.`,
+Do not write Selenium or Playwright code. Use agent-qa and agent-browser only. Do not fake success by only clicking tutorial text or by asserting static page documentation.\n\nThe live page has no native dialogs — use the bundled fixture instead. Open the repo-local file evals/fixtures/dialogs.html via a file:// URL (resolve the repo root to an absolute path). Buttons: btn-simple-alert, btn-confirm-alert, btn-prompt-alert; result surfaces: result-confirm, result-prompt. Record a do-step with verb "dialog" and params {action: "accept"|"dismiss", text: "<prompt text>"} to resolve native dialogs, and a check with subject {"dialog": true} to assert on a pending dialog; run the browser with AGENT_BROWSER_NO_AUTO_DIALOG=1 so alerts stay pending. A click that opens a dialog finishes with a warning — that is the dialog opening, not a failure.`,
     extraConstraints: [
       "Native browser alert acceptance is a framework boundary. If replay cannot represent it, report that gap instead of replacing the test with a DOM-only assertion.",
       "The page contains Selenium/Playwright tutorial text and test-case text; do not use that static documentation as proof that the alert was handled.",
@@ -783,13 +783,13 @@ Do not write Selenium or Playwright code. Use agent-qa and agent-browser only. D
 
 TC02: Get text from a simple browser alert before accepting
 
-1. Navigate to https://qaplayground.com/practice/alerts-dialogs.
+1. Navigate to the dialogs fixture page (see note below).
 2. Click the Simple Alert button using data-testid btn-simple-alert.
 3. Read the native alert message and verify it is Welcome to QA PlayGround!.
 4. Accept the alert after reading the text.
-5. Replay the scenario successfully, or report the exact native-dialog framework gap if agent-qa cannot represent/replay alert text reads.
+5. Replay the scenario successfully.
 
-Do not write Selenium or Playwright code. Use agent-qa and agent-browser only. Do not assert static documentation text as a substitute for the browser alert message.`,
+Do not write Selenium or Playwright code. Use agent-qa and agent-browser only. Do not assert static documentation text as a substitute for the browser alert message.\n\nThe live page has no native dialogs — use the bundled fixture instead. Open the repo-local file evals/fixtures/dialogs.html via a file:// URL (resolve the repo root to an absolute path). Buttons: btn-simple-alert, btn-confirm-alert, btn-prompt-alert; result surfaces: result-confirm, result-prompt. Record a do-step with verb "dialog" and params {action: "accept"|"dismiss", text: "<prompt text>"} to resolve native dialogs, and a check with subject {"dialog": true} to assert on a pending dialog; run the browser with AGENT_BROWSER_NO_AUTO_DIALOG=1 so alerts stay pending. A click that opens a dialog finishes with a warning — that is the dialog opening, not a failure.`,
     extraConstraints: [
       "This case requires observing native alert text. If agent-qa lacks a read/assert dialog step, report the framework gap clearly.",
       "Do not record a broad text assertion for Welcome to QA PlayGround! unless it comes from the actual dialog handling path.",
@@ -802,13 +802,13 @@ Do not write Selenium or Playwright code. Use agent-qa and agent-browser only. D
 
 TC03: Accept a confirm dialog and verify accepted state
 
-1. Navigate to https://qaplayground.com/practice/alerts-dialogs.
+1. Navigate to the dialogs fixture page (see note below).
 2. Click the Confirm Alert button using data-testid btn-confirm-alert.
 3. Accept the native confirm dialog.
-4. Assert the result display shows Accepted.
-5. Replay the scenario successfully, or report the exact native-dialog framework gap if agent-qa cannot represent/replay confirm acceptance.
+4. Assert the result display (data-testid result-confirm) shows Accepted.
+5. Replay the scenario successfully.
 
-Do not write Selenium or Playwright code. Use agent-qa and agent-browser only. Do not use static test-case documentation text as the result assertion.`,
+Do not write Selenium or Playwright code. Use agent-qa and agent-browser only. Do not use static test-case documentation text as the result assertion.\n\nThe live page has no native dialogs — use the bundled fixture instead. Open the repo-local file evals/fixtures/dialogs.html via a file:// URL (resolve the repo root to an absolute path). Buttons: btn-simple-alert, btn-confirm-alert, btn-prompt-alert; result surfaces: result-confirm, result-prompt. Record a do-step with verb "dialog" and params {action: "accept"|"dismiss", text: "<prompt text>"} to resolve native dialogs, and a check with subject {"dialog": true} to assert on a pending dialog; run the browser with AGENT_BROWSER_NO_AUTO_DIALOG=1 so alerts stay pending. A click that opens a dialog finishes with a warning — that is the dialog opening, not a failure.`,
     extraConstraints: [
       "Native confirm acceptance is a framework boundary. If unsupported, report the gap instead of faking the Accepted state.",
       "Prefer selector-scoped or live DOM checks for the post-confirm result if dialog handling succeeds.",
@@ -821,13 +821,13 @@ Do not write Selenium or Playwright code. Use agent-qa and agent-browser only. D
 
 TC04: Dismiss a confirm dialog and verify dismissed state
 
-1. Navigate to https://qaplayground.com/practice/alerts-dialogs.
+1. Navigate to the dialogs fixture page (see note below).
 2. Click the Confirm Alert button using data-testid btn-confirm-alert.
 3. Dismiss the native confirm dialog.
-4. Assert the result display shows Dismissed.
-5. Replay the scenario successfully, or report the exact native-dialog framework gap if agent-qa cannot represent/replay confirm dismissal.
+4. Assert the result display (data-testid result-confirm) shows Dismissed.
+5. Replay the scenario successfully.
 
-Do not write Selenium or Playwright code. Use agent-qa and agent-browser only. Do not use static test-case documentation text as the result assertion.`,
+Do not write Selenium or Playwright code. Use agent-qa and agent-browser only. Do not use static test-case documentation text as the result assertion.\n\nThe live page has no native dialogs — use the bundled fixture instead. Open the repo-local file evals/fixtures/dialogs.html via a file:// URL (resolve the repo root to an absolute path). Buttons: btn-simple-alert, btn-confirm-alert, btn-prompt-alert; result surfaces: result-confirm, result-prompt. Record a do-step with verb "dialog" and params {action: "accept"|"dismiss", text: "<prompt text>"} to resolve native dialogs, and a check with subject {"dialog": true} to assert on a pending dialog; run the browser with AGENT_BROWSER_NO_AUTO_DIALOG=1 so alerts stay pending. A click that opens a dialog finishes with a warning — that is the dialog opening, not a failure.`,
     extraConstraints: [
       "Native confirm dismissal is a framework boundary. If unsupported, report the gap instead of faking the Dismissed state.",
       "Prefer selector-scoped or live DOM checks for the post-confirm result if dialog handling succeeds.",
@@ -840,13 +840,13 @@ Do not write Selenium or Playwright code. Use agent-qa and agent-browser only. D
 
 TC05: Enter text in a prompt dialog and accept it
 
-1. Navigate to https://qaplayground.com/practice/alerts-dialogs.
+1. Navigate to the dialogs fixture page (see note below).
 2. Click the Prompt Alert button using data-testid btn-prompt-alert.
 3. Type John Doe into the native prompt dialog and accept it.
-4. Assert the prompt result display shows Your name is - John Doe.
-5. Replay the scenario successfully, or report the exact native-dialog framework gap if agent-qa cannot represent/replay prompt input.
+4. Assert the prompt result display (data-testid result-prompt) shows Your name is - John Doe.
+5. Replay the scenario successfully.
 
-Do not write Selenium or Playwright code. Use agent-qa and agent-browser only. Do not fake the result by directly editing the DOM.`,
+Do not write Selenium or Playwright code. Use agent-qa and agent-browser only. Do not fake the result by directly editing the DOM.\n\nThe live page has no native dialogs — use the bundled fixture instead. Open the repo-local file evals/fixtures/dialogs.html via a file:// URL (resolve the repo root to an absolute path). Buttons: btn-simple-alert, btn-confirm-alert, btn-prompt-alert; result surfaces: result-confirm, result-prompt. Record a do-step with verb "dialog" and params {action: "accept"|"dismiss", text: "<prompt text>"} to resolve native dialogs, and a check with subject {"dialog": true} to assert on a pending dialog; run the browser with AGENT_BROWSER_NO_AUTO_DIALOG=1 so alerts stay pending. A click that opens a dialog finishes with a warning — that is the dialog opening, not a failure.`,
     extraConstraints: [
       "Native prompt input is a framework boundary. If unsupported, report the gap instead of replacing the prompt with a normal DOM fill.",
       "John Doe is a fixed literal for this test. Do not use fill-unique.",
@@ -859,13 +859,13 @@ Do not write Selenium or Playwright code. Use agent-qa and agent-browser only. D
 
 TC06: Dismiss a prompt dialog and verify no input is captured
 
-1. Navigate to https://qaplayground.com/practice/alerts-dialogs.
+1. Navigate to the dialogs fixture page (see note below).
 2. Click the Prompt Alert button using data-testid btn-prompt-alert.
 3. Dismiss the native prompt dialog without entering text.
-4. Assert the prompt result display is empty or not visible.
-5. Replay the scenario successfully, or report the exact native-dialog framework gap if agent-qa cannot represent/replay prompt dismissal.
+4. Assert the prompt result display (data-testid result-prompt) is empty.
+5. Replay the scenario successfully.
 
-Do not write Selenium or Playwright code. Use agent-qa and agent-browser only. Do not use static page documentation as the assertion.`,
+Do not write Selenium or Playwright code. Use agent-qa and agent-browser only. Do not use static page documentation as the assertion.\n\nThe live page has no native dialogs — use the bundled fixture instead. Open the repo-local file evals/fixtures/dialogs.html via a file:// URL (resolve the repo root to an absolute path). Buttons: btn-simple-alert, btn-confirm-alert, btn-prompt-alert; result surfaces: result-confirm, result-prompt. Record a do-step with verb "dialog" and params {action: "accept"|"dismiss", text: "<prompt text>"} to resolve native dialogs, and a check with subject {"dialog": true} to assert on a pending dialog; run the browser with AGENT_BROWSER_NO_AUTO_DIALOG=1 so alerts stay pending. A click that opens a dialog finishes with a warning — that is the dialog opening, not a failure.`,
     extraConstraints: [
       "Native prompt dismissal is a framework boundary. If unsupported, report the gap instead of faking an empty result.",
       "Prefer selector absence or scoped DOM text checks for the prompt result if dialog handling succeeds.",

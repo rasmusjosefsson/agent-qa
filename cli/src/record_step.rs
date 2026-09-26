@@ -175,6 +175,12 @@ fn capture_recording_sidecars(
         run_root: scenario_dir.join("recording"),
     };
     fs::create_dir_all(&run.run_root).ok();
+    // A pending native dialog blocks the page: skip BOTH sidecars so
+    // `verify`'s snapshot+screenshot pairing stays consistent — the dialog
+    // step that resolves it lands the next step's capture instead.
+    if browser::dialog_pending(session) {
+        return Ok(());
+    }
     match browser::snapshot_full(session) {
         Ok(text) => {
             let _ = write_step_sidecar(

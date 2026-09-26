@@ -86,6 +86,84 @@ pub fn dispatch_check(
         ClaimSubject::Flag { flag } => {
             check_flag(flag, &claim.predicate, claim.value.as_ref(), ctx)
         }
+        ClaimSubject::Dialog { dialog } => {
+            if !*dialog {
+                bail!("dialog subject requires dialog=true");
+            }
+            check_dialog(&claim.predicate, claim.value.as_ref(), ctx, scope, timeout)
+        }
+    }
+}
+
+// ---------- native dialog ----------
+
+/// Check a pending native dialog (alert/confirm/prompt/beforeunload) via
+/// `agent-browser dialog status`.
+///
+/// Predicates supported:
+///   `exists` / `isVisible`   a dialog is currently open
+///   `notExists` / `isHidden` no dialog is open
+///   text predicates (`equals`, `contains`, `matches`, `startsWith`,
+///   `endsWith`) compare against the dialog's `message` — they require a
+///   dialog to be pending.
+fn check_dialog(
+    predicate: &Predicate,
+    expected: Option<&Json>,
+    ctx: &CheckContext,
+    scope: &mut ValueScope,
+    timeout: Duration,
+) -> Result<()> {
+    match predicate {
+        Predicate::Exists | Predicate::IsVisible => {
+            poll_until(timeout, |_| match browser::dialog_status(ctx.session) {
+                Ok(s) if s.open => Ok(()),
+                Ok(_) => bail!("no dialog is currently open"),
+                Err(err) => bail!("dialog status: {err}"),
+            })
+        }
+        Predicate::NotExists | Predicate::IsHidden => {
+            let deadline = Instant::now() + timeout;
+            while Instant::now() < deadline {
+                match browser::dialog_status(ctx.session) {
+                    Ok(s) if !s.open => return Ok(()),
+                    _ => thread::sleep(POLL_INTERVAL),
+                }
+            }
+            bail!("expected no pending dialog, but one is still open");
+        }
+        Predicate::Equals
+        | Predicate::Contains
+        | Predicate::Matches
+        | Predicate::StartsWith
+        | Predicate::EndsWith => {
+            let expected = expected.ok_or_else(|| {
+                anyhow!("dialog claim with predicate '{predicate:?}' requires 'value'")
+            })?;
+            let need = substitute_scenario_vars(&value_to_string(expected), scope);
+            let deadline = Instant::now() + timeout;
+            let mut last_err: Option<anyhow::Error> = None;
+            let mut last_status = String::new();
+            while Instant::now() < deadline {
+                match browser::dialog_status(ctx.session) {
+                    Ok(s) if s.open => {
+                        last_status = format!("{} {:?}", s.kind, s.message);
+                        match compare_string(predicate, &s.message, &need) {
+                            Ok(()) => return Ok(()),
+                            Err(err) => last_err = Some(err),
+                        }
+                    }
+                    Ok(_) => {
+                        last_status = "no dialog open".to_string();
+                        last_err = Some(anyhow!("no dialog is currently open"));
+                    }
+                    Err(err) => last_err = Some(anyhow!("dialog status: {err}")),
+                }
+                thread::sleep(POLL_INTERVAL);
+            }
+            Err(last_err
+                .unwrap_or_else(|| anyhow!("dialog claim timed out; last status={last_status}")))
+        }
+        other => bail!("dialog subject does not support predicate '{other:?}'"),
     }
 }
 

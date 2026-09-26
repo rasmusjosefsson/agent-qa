@@ -252,6 +252,13 @@
         },
         {
           "type": "object",
+          "required": ["dialog"],
+          "additionalProperties": false,
+          "properties": { "dialog": { "const": true } },
+          "$comment": "native dialog subject — exists/notExists for presence, text predicates match the dialog's message."
+        },
+        {
+          "type": "object",
           "required": ["kind", "name"],
           "additionalProperties": false,
           "properties": {
@@ -352,6 +359,7 @@
             "read",
             "callGql",
             "wait",
+            "dialog",
             "loop",
             "group",
             "useTemplate"

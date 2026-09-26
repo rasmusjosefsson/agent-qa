@@ -84,6 +84,13 @@ fn rule_for(verb: &Verb) -> VerbRule {
             forbidden: &[DoField::On],
             ..VerbRule::default()
         },
+        // `dialog accept|dismiss`; `params.text` optionally carries prompt input.
+        Verb::Dialog => VerbRule {
+            required: &[DoField::Params],
+            forbidden: &[DoField::On, DoField::Value],
+            params_required: &["action"],
+            ..VerbRule::default()
+        },
         Verb::Loop => VerbRule {
             required: &[DoField::Params],
             forbidden: &[DoField::On, DoField::Value],
@@ -303,5 +310,49 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("params requires 'query'"));
+    }
+
+    #[test]
+    fn dialog_requires_params_action_and_forbids_on_value() {
+        let s = parse(json!({ "id": "s1", "intent": "x", "kind": "do", "verb": "dialog" }));
+        assert!(assert_verb_shape(&s)
+            .unwrap_err()
+            .to_string()
+            .contains("requires 'params'"));
+
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "dialog",
+            "params": {}
+        }));
+        assert!(assert_verb_shape(&s)
+            .unwrap_err()
+            .to_string()
+            .contains("params requires 'action'"));
+
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "dialog",
+            "params": { "action": "accept" },
+            "on": { "role": "button" }
+        }));
+        assert!(assert_verb_shape(&s)
+            .unwrap_err()
+            .to_string()
+            .contains("must not carry 'on'"));
+
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "dialog",
+            "params": { "action": "accept" },
+            "value": { "from": "literal", "literal": "x" }
+        }));
+        assert!(assert_verb_shape(&s)
+            .unwrap_err()
+            .to_string()
+            .contains("must not carry 'value'"));
+
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "dialog",
+            "params": { "action": "accept", "text": "John Doe" }
+        }));
+        assert_verb_shape(&s).unwrap();
     }
 }
