@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+<head><title>Downloads Fixture</title></head>
+<body data-testid="downloads-fixture">
+  <h1>Downloads fixture</h1>
+  <p>Static anchors with <code>download</code> attributes plus a JS blob download.</p>
+
+  <a id="dl-txt" data-testid="dl-txt" href="data:text/plain;charset=utf-8,hello-from-agent-qa" download="qa-note.txt">Download TXT</a>
+  <a id="dl-json" data-testid="dl-json" href='data:application/json,{"fixture":true}' download="qa-data.json">Download JSON</a>
+  <button id="dl-blob" data-testid="dl-blob">Download blob report</button>
+  <span data-testid="dl-status" id="dl-status">idle</span>
+
+  <script>
+    document.getElementById('dl-blob').addEventListener('click', () => {
+      const blob = new Blob(['agent-qa blob report\nline2\n'], { type: 'text/plain' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'qa-blob-report.txt';
+      document.body.appendChild(a);
+      a.click();
+      URL.revokeObjectURL(a.href);
+      a.remove();
+      document.getElementById('dl-status').textContent = 'blob download triggered';
+    });
+  </script>
+</body>
+</html>

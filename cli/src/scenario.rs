@@ -142,6 +142,10 @@ pub enum Verb {
     /// Resolve a pending native dialog (alert/confirm/prompt):
     /// `params.action` = "accept" | "dismiss", `params.text` = prompt input.
     Dialog,
+    /// Click an element that triggers a file download and save it.
+    /// `on` = the triggering element (css/testId), `value` = destination path
+    /// (absolute, or relative resolved against the scenario dir).
+    Download,
     #[serde(rename = "loop")]
     Loop,
     Group,
@@ -307,6 +311,13 @@ pub enum ClaimSubject {
     /// text predicates match the dialog's message.
     Dialog {
         dialog: bool,
+    },
+    /// `{"file": "<name-or-path>"}` — assert on a file in the scenario's
+    /// download output (relative paths resolve against the scenario dir).
+    /// `exists`/`notExists` check presence; `gt`/`gte`/`lt`/`lte` compare the
+    /// file size in bytes; string predicates match the file name.
+    File {
+        file: String,
     },
     Var {
         kind: String, // always "var" — kept literal to disambiguate untagged

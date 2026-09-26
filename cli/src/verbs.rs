@@ -221,6 +221,19 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
             browser::upload(ctx.session, &selector, &files)?;
             Ok(None)
         }
+        Verb::Download => {
+            let v = resolve_value(value.unwrap(), scope)?;
+            let dest = value_to_string(&v);
+            if dest.is_empty() {
+                bail!("step '{id}' download: value must be a destination path");
+            }
+            let selector = upload_selector(on.unwrap(), scope)
+                .map_err(|e| anyhow!("step '{id}' download: {e}"))?;
+            let dest = resolve_download_dest(&dest, ctx.scenario_dir)
+                .map_err(|e| anyhow!("step '{id}' download: {e}"))?;
+            browser::download(ctx.session, &selector, &dest)?;
+            Ok(None)
+        }
     }
 }
 
@@ -568,6 +581,23 @@ fn resolve_upload_file(file: &str, scenario_dir: &Path) -> Result<String> {
         }
     }
     bail!("upload file not found: {file}")
+}
+
+/// Resolve a download destination: absolute paths pass through, relative paths
+/// resolve against the scenario dir so the saved file lands next to the run's
+/// other artifacts and `{"file": ...}` claims can find it.
+fn resolve_download_dest(dest: &str, scenario_dir: &Path) -> Result<String> {
+    let path = PathBuf::from(dest);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        scenario_dir.join(&path)
+    };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| anyhow!("cannot create download dir {}: {e}", parent.display()))?;
+    }
+    Ok(path.display().to_string())
 }
 
 fn json_kind(v: &serde_json::Value) -> &'static str {

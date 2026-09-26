@@ -92,6 +92,12 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           });
         case "dialogDismiss":
           return doStep(intent, { verb: "dialog", params: { action: "dismiss" } });
+        case "downloadBySelector":
+          return doStep(intent, {
+            verb: "download",
+            on: css(args[0]),
+            value: literal(args[1]),
+          });
         default:
           throw new Error(`record-step translate: unknown action method ${String(p.method)}`);
       }
@@ -136,6 +142,21 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
             "equals",
             args[1],
           );
+        case "elementAttribute":
+          return checkStep(
+            intent,
+            { element: css(args[0]), attribute: args[1] },
+            args[2] ?? "equals",
+            args[3],
+          );
+        case "fileExists":
+          return checkStep(intent, { file: args[0] }, "exists");
+        case "fileAbsent":
+          return checkStep(intent, { file: args[0] }, "notExists");
+        case "fileSizeGt":
+          return checkStep(intent, { file: args[0] }, "gt", args[1]);
+        case "fileName":
+          return checkStep(intent, { file: args[0] }, "equals", args[1]);
         case "dialogOpen":
           return checkStep(intent, { dialog: true }, "exists");
         case "dialogClosed":

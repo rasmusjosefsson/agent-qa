@@ -33,9 +33,18 @@ interface GoldenContext {
 export interface FileUploadGolden extends GoldenContext {
   fixturePath(name: string): string;
   openPage(): Promise<void>;
+  openFixture(url: string, waitSelector: string, intent?: string): Promise<void>;
   upload(selector: string, fixtureName: string, intent: string): Promise<void>;
+  uploadAbs(selector: string, absPath: string, scenarioValue: string, intent: string): Promise<void>;
+  uploadMulti(selector: string, fixtureNames: string[], intent: string): Promise<void>;
   waitSelectorText(selector: string, text: string, intent: string): Promise<void>;
+  waitSelectorVisible(selector: string, intent: string): Promise<void>;
   assertLiveCondition(expression: string, intent: string): Promise<void>;
+  assertElementAttribute(selector: string, attribute: string, expected: string, intent: string): Promise<void>;
+  downloadBySelector(selector: string, scenarioRelPath: string, intent: string): Promise<void>;
+  assertFileExists(scenarioRelPath: string, intent: string): Promise<void>;
+  assertFileName(scenarioRelPath: string, expectedName: string, intent: string): Promise<void>;
+  assertFileSizeGt(scenarioRelPath: string, bytes: number, intent: string): Promise<void>;
 }
 
 function createContext(tc: string, intent: string): GoldenContext {
@@ -122,16 +131,59 @@ export async function runFileUploadGolden(
       await record(ctx, "navigation", { route: fileUploadUrl });
       await record(ctx, "wait", { condition: { kind: "selector", selector: '#fu-single-input' }, intent: "upload input rendered" });
     },
+    async openFixture(url, waitSelector, stepIntent = "fixture rendered") {
+      await run(ctx, "open fixture", [ctx.agentBrowser, "--session", ctx.session, "open", url]);
+      await run(ctx, "wait fixture", [ctx.agentBrowser, "--session", ctx.session, "wait", waitSelector]);
+      await record(ctx, "navigation", { route: url });
+      await record(ctx, "wait", { condition: { kind: "selector", selector: waitSelector }, intent: stepIntent });
+    },
     async upload(selector, fixtureName, stepIntent) {
       const path = this.fixturePath(fixtureName);
       await run(ctx, `upload ${fixtureName}`, [ctx.agentBrowser, "--session", ctx.session, "upload", selector, path]);
       await record(ctx, "action", { method: "uploadBySelector", args: [selector, `evals/fixtures/${fixtureName}`], intent: stepIntent });
     },
+    async uploadAbs(selector, absPath, scenarioValue, stepIntent) {
+      await run(ctx, `upload ${scenarioValue}`, [ctx.agentBrowser, "--session", ctx.session, "upload", selector, absPath]);
+      await record(ctx, "action", { method: "uploadBySelector", args: [selector, scenarioValue], intent: stepIntent });
+    },
+    async uploadMulti(selector, fixtureNames, stepIntent) {
+      const paths = fixtureNames.map((n) => this.fixturePath(n));
+      await run(ctx, `upload ${fixtureNames.join("+")}`, [ctx.agentBrowser, "--session", ctx.session, "upload", selector, ...paths]);
+      await record(ctx, "action", {
+        method: "uploadBySelector",
+        args: [selector, fixtureNames.map((n) => `evals/fixtures/${n}`)],
+        intent: stepIntent,
+      });
+    },
     async waitSelectorText(selector, text, stepIntent) {
       await record(ctx, "wait", { condition: { kind: "selectorText", selector, text }, intent: stepIntent });
     },
+    async waitSelectorVisible(selector, stepIntent) {
+      await record(ctx, "wait", { condition: { kind: "selector", selector }, intent: stepIntent });
+    },
     async assertLiveCondition(expression, stepIntent) {
       await run(ctx, `live condition ${stepIntent}`, [ctx.agentBrowser, "--session", ctx.session, "eval", expression]);
+    },
+    async assertElementAttribute(selector, attribute, expected, stepIntent) {
+      await record(ctx, "assert", { kind: "elementAttribute", args: [selector, attribute, "equals", expected], intent: stepIntent });
+    },
+    async downloadBySelector(selector, scenarioRelPath, stepIntent) {
+      // Replay resolves relative download destinations against the scenario
+      // dir, so the recorded value stays portable; the live browser saves into
+      // this run's result dir.
+      const abs = resolve(ctx.resultRoot, "live-downloads", scenarioRelPath);
+      mkdirSync(dirname(abs), { recursive: true });
+      await run(ctx, `download ${scenarioRelPath}`, [ctx.agentBrowser, "--session", ctx.session, "download", selector, abs]);
+      await record(ctx, "action", { method: "downloadBySelector", args: [selector, scenarioRelPath], intent: stepIntent });
+    },
+    async assertFileExists(scenarioRelPath, stepIntent) {
+      await record(ctx, "assert", { kind: "fileExists", args: [scenarioRelPath], intent: stepIntent });
+    },
+    async assertFileName(scenarioRelPath, expectedName, stepIntent) {
+      await record(ctx, "assert", { kind: "fileName", args: [scenarioRelPath, expectedName], intent: stepIntent });
+    },
+    async assertFileSizeGt(scenarioRelPath, bytes, stepIntent) {
+      await record(ctx, "assert", { kind: "fileSizeGt", args: [scenarioRelPath, bytes], intent: stepIntent });
     },
   };
 

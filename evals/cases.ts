@@ -312,8 +312,13 @@ Do not write Selenium or Playwright code. Use agent-qa and agent-browser only. D
     extraConstraints: [
       "This eval case should cover exactly one documented File Upload test case, not every upload and download behavior on the page.",
       "Treat Selenium sendKeys() and Playwright setInputFiles() mentions in the source TC as intent only; do not use Selenium, Playwright, Puppeteer, or their APIs.",
-      "For file selection, drive the page with agent-browser upload and record action method uploadBySelector, for example args [\"#file-upload\", \"evals/fixtures/upload-valid.txt\"]. Do not record file selection as fillBySelector.",
+      "For file selection, drive the page with agent-browser upload and record action method uploadBySelector, for example args [\"#fu-single-input\", \"evals/fixtures/upload-valid.txt\"]. Do not record file selection as fillBySelector.",
+      "The live page exposes dedicated widgets: #fu-single-input (single), #fu-multi-input (multiple), #fu-filename-input (filename display), #fu-type-input (accept=\"image/*\"), #fu-size-input (2 MB limit), plus #fu-upload-btn and result holders result-s01..s08. Prefer these data-testid or id selectors.",
       "Prefer data-testid or id selectors for the file input, upload button, download button, status messages, and file list when present.",
+      ...(group === "Download" ? [
+        "The live /practice/file-upload page ships NO download widget — every download link named on the page belongs to static tutorial content. Report the live-page gap rather than fabricating one.",
+        "Download replay semantics are already covered by golden runner golden:file-upload:download:tc01, which drives evals/fixtures/downloads.html with the do/download verb and {\"file\": ...} claims (exists, name, size). Use that fixture + contract if you exercise downloads.",
+      ] : []),
       ...extraConstraints,
     ],
   };

@@ -30,7 +30,7 @@ Golden runners prove:
 | Forms | `/practice/forms` | page-load + TC01-TC15 | deep | TC01-TC05 golden pass; continue TC06-TC15. |
 | Dropdowns | `/practice/dropdowns` | page-load + TC01-TC10 | complete | Golden TC01-TC10 pass; keep them green. |
 | Alerts & Dialogs | `/practice/alerts-dialogs` | page-load + TC01-TC10 | complete | Golden TC01-TC10 pass. TC01-TC06 drive native alert/confirm/prompt via the bundled `evals/fixtures/dialogs.html` (the live page has none); TC07-TC09 cover DOM dialogs. |
-| File Upload | `/practice/file-upload` | page-load + Upload TC01-TC02 + Upload TC06-TC15 + Download TC01-TC14 | deep | Upload TC01-TC02 replay pass; continue upload validation cases and decide download strategy. |
+| File Upload | `/practice/file-upload` | page-load + Upload TC01-TC02 + Upload TC06-TC15 + Download TC01-TC14 | deep | Golden Upload TC01-TC02, TC06-TC08, TC10, TC11, TC15 pass; downloads covered by `download:tc01` on the bundled fixture (the live page ships no download widget). Gaps: TC09 (no cancel control), TC12 (viewport), TC13 (native file dialog), TC14 (inputs lack accessible names). |
 | Input Fields | `/practice/input-fields` | page-load + TC01-TC12 | cataloged | Add exact prompts and golden proofs for type, append, tab, clear, disabled, readonly. |
 | Buttons | `/practice/buttons` | page-load + TC01-TC15 | cataloged | Add exact prompts; identify double-click/right-click support gaps. |
 | Data Table | `/practice/data-table` | page-load + TC01-TC06 | cataloged | Add deterministic assertions despite dynamic table data. |
@@ -56,11 +56,15 @@ Golden runners prove:
 - Relative upload fixture paths are canonicalized at replay using `AGENT_QA_REPO_ROOT`.
 - Fixtures live in `evals/fixtures/`.
 - Upload TC03-TC05 are intentionally not cataloged. They require an upload submit button/progress/success flow, but the live widget exposes only `#file-upload`; the visible `Download Image/PDF/Excel/Word` buttons belong to Download test cases.
+- The live page actually exposes 8 upload widgets (`fu-single-input`, `fu-multi-input`, `fu-filename-input`/`fu-filename-display`, `fu-drop-zone`, `fu-type-input`, `fu-size-input`, `fu-hidden-zone`, `fu-progress-file`+`fu-upload-btn`), each writing to a `result-sNN` holder.
+- Upload TC09 is a page gap: `#fu-upload-btn` disables after select and no cancel control exists. TC12 needs a viewport verb (framework boundary). TC13 hits the native OS file dialog (framework boundary). TC14 is a page gap: no upload input has an accessible name.
+- Download TC01-TC14 have no live widget to drive — download semantics are proven on `evals/fixtures/downloads.html` via `do/download` (click a download trigger, save the file into the scenario dir) and `{"file": "..."}` claims (`exists`, name predicates, `gt` size in bytes).
 
 Passing proof:
 
 - Upload TC01: `do/upload` + filename display replay passes.
-- Upload TC02: `bun run golden:file-upload:upload:tc02` passes.
+- Upload TC02, TC06-TC08, TC10, TC11, TC15: `bun run golden:file-upload:upload:tcNN` pass.
+- Download TC01-TC03 equivalents: `bun run golden:file-upload:download:tc01` passes (fixture-based).
 
 ## Runbook
 
@@ -144,13 +148,13 @@ cargo test --locked
 - Golden drivers must poll for elements after a triggering click — single-shot selector lookups race post-click navigation and client-side mounts.
 - File upload initially crashed Chrome with `RESULT_CODE_KILLED_BAD_MESSAGE` when replay passed ambiguous relative file paths. Canonicalizing upload file paths fixed this.
 - `selectorText` is safer than broad text on docs-heavy QA Playground pages because tutorial/test-case text can create false positives.
+- File Upload Upload TC01-TC02, TC06-TC08, TC10, TC11, TC15 pass with golden runners. Downloads use `do/download` + `{"file": ...}` claims on the bundled fixture — the live page exposes no download widget.
 
 ## Near-Term Order
 
-1. Continue File Upload upload validation cases TC06-TC15.
-2. Decide and implement download capture strategy for Download TC01-TC14.
-3. Continue Forms TC06-TC15.
-4. Add exact prompts and golden proofs for Input Fields and Buttons.
+1. Continue Forms TC06-TC15.
+2. Add exact prompts and golden proofs for Input Fields and Buttons.
+3. Sweep the remaining catalog-only pages (Data Table, Radio & Checkbox, Date Picker, Links, Tabs & Windows, Multi Select).
 
 ## Commands
 
