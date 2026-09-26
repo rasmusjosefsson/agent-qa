@@ -259,6 +259,13 @@
         },
         {
           "type": "object",
+          "required": ["file"],
+          "additionalProperties": false,
+          "properties": { "file": { "type": "string", "minLength": 1 } },
+          "$comment": "file subject — exists/notExists for presence, gt/gte/lt/lte compare size in bytes, string predicates match the file name. Relative paths resolve against the scenario dir."
+        },
+        {
+          "type": "object",
           "required": ["kind", "name"],
           "additionalProperties": false,
           "properties": {
@@ -360,6 +367,7 @@
             "callGql",
             "wait",
             "dialog",
+            "download",
             "loop",
             "group",
             "useTemplate"

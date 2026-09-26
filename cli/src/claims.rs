@@ -20,6 +20,7 @@
 //!     `matches`, `startsWith`, `endsWith`.
 //!   - `network` / `flag`: structured not-yet-implemented boundary.
 
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -38,6 +39,9 @@ const MAX_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Debug, Clone)]
 pub struct CheckContext<'a> {
     pub session: &'a str,
+    /// Scenario directory — `{"file": ...}` claim subjects resolve relative
+    /// paths against it (download steps save there by default).
+    pub scenario_dir: &'a Path,
 }
 
 pub fn dispatch_check(
@@ -69,6 +73,14 @@ pub fn dispatch_check(
         ClaimSubject::Url { url: _ } => {
             check_url(&claim.predicate, claim.value.as_ref(), ctx, scope, timeout)
         }
+        ClaimSubject::File { file } => check_file(
+            file,
+            &claim.predicate,
+            claim.value.as_ref(),
+            ctx,
+            scope,
+            timeout,
+        ),
         ClaimSubject::Data { data, path } => {
             let actual = read_saved(scope, data, path.as_deref())?;
             check_value(&actual, &claim.predicate, claim.value.as_ref(), scope)
@@ -236,6 +248,83 @@ fn check_flag(
     }
 }
 
+// ---------- file ----------
+
+/// `{"file": "<name-or-path>"}` claims: poll the filesystem so a check step
+/// right after `do/download` sees the file as soon as the browser flushes it.
+fn check_file(
+    file: &str,
+    predicate: &Predicate,
+    expected: Option<&Json>,
+    ctx: &CheckContext,
+    scope: &mut ValueScope,
+    timeout: Duration,
+) -> Result<()> {
+    let raw = substitute_scenario_vars(file, scope);
+    let path = {
+        let p = PathBuf::from(&raw);
+        if p.is_absolute() {
+            p
+        } else {
+            ctx.scenario_dir.join(&p)
+        }
+    };
+    let deadline = Instant::now() + timeout;
+    loop {
+        let meta = std::fs::metadata(&path).ok();
+        let done = match predicate {
+            Predicate::Exists | Predicate::IsVisible => meta.map(|m| m.is_file()).unwrap_or(false),
+            Predicate::NotExists | Predicate::IsHidden => meta.is_none(),
+            Predicate::Gt | Predicate::Gte | Predicate::Lt | Predicate::Lte => {
+                let need = expected
+                    .ok_or_else(|| {
+                        anyhow!("file size claim with predicate '{predicate:?}' requires 'value'")
+                    })?
+                    .as_u64()
+                    .ok_or_else(|| anyhow!("file size claim requires a numeric 'value' (bytes)"))?;
+                match meta {
+                    Some(m) => match predicate {
+                        Predicate::Gt => m.len() > need,
+                        Predicate::Gte => m.len() >= need,
+                        Predicate::Lt => m.len() < need,
+                        _ => m.len() <= need,
+                    },
+                    None => false,
+                }
+            }
+            // String predicates compare the file name once it exists.
+            other @ (Predicate::Equals
+            | Predicate::Contains
+            | Predicate::Matches
+            | Predicate::StartsWith
+            | Predicate::EndsWith) => match meta {
+                Some(m) if m.is_file() => {
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let need = expected.ok_or_else(|| {
+                        anyhow!("file name claim with predicate '{other:?}' requires 'value'")
+                    })?;
+                    let need = substitute_scenario_vars(&value_to_string(need), scope);
+                    compare_string(other, &name, &need).is_ok()
+                }
+                _ => false,
+            },
+            other => bail!("file subject does not support predicate '{other:?}'"),
+        };
+        if done {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            let exists = path.is_file();
+            let size = path.metadata().map(|m| m.len()).unwrap_or(0);
+            bail!("file claim timed out: {raw:?} (exists={exists}, bytes={size})");
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+}
+
 // ---------- element ----------
 
 fn check_element(
@@ -248,20 +337,17 @@ fn check_element(
     timeout: Duration,
 ) -> Result<()> {
     if let Some(attribute) = attribute {
-        if attribute != "text" {
-            bail!("element claim with attribute {attribute:?} is not yet supported");
-        }
         let expected = expected.ok_or_else(|| {
-            anyhow!("element text claim with predicate '{predicate:?}' requires 'value'")
+            anyhow!("element attribute claim with predicate '{predicate:?}' requires 'value'")
         })?;
         let need = substitute_scenario_vars(&value_to_string(expected), scope);
         let deadline = Instant::now() + timeout;
-        let mut last_text = String::new();
+        let mut last_actual = String::new();
         let mut last_err: Option<anyhow::Error> = None;
         while Instant::now() < deadline {
-            match read_element_text(ctx.session, loc, scope) {
+            match read_element_attribute(ctx.session, loc, attribute, scope) {
                 Ok(actual) => {
-                    last_text = actual.clone();
+                    last_actual = actual.clone();
                     match compare_string(predicate, &actual, &need) {
                         Ok(()) => return Ok(()),
                         Err(err) => last_err = Some(err),
@@ -272,7 +358,7 @@ fn check_element(
             thread::sleep(POLL_INTERVAL);
         }
         return Err(last_err.unwrap_or_else(|| {
-            anyhow!("element text claim timed out; last seen text={last_text:?}")
+            anyhow!("element {attribute} claim timed out; last seen value={last_actual:?}")
         }));
     }
 
@@ -295,23 +381,40 @@ fn check_element(
     }
 }
 
-fn read_element_text(session: &str, loc: &Locator, scope: &mut ValueScope) -> Result<String> {
+fn read_element_attribute(
+    session: &str,
+    loc: &Locator,
+    attribute: &str,
+    scope: &mut ValueScope,
+) -> Result<String> {
     match loc {
         Locator::Raw(raw) => {
             let v = substitute_scenario_vars(&raw.raw.value, scope);
             let selector = match &raw.raw.kind {
                 RawLocatorKind::Css => v,
                 RawLocatorKind::TestId => format!("[data-testid=\"{}\"]", v.replace('"', "\\\"")),
-                other => bail!("element text claims do not support raw locator kind {other:?}"),
+                other => {
+                    bail!("element attribute claims do not support raw locator kind {other:?}")
+                }
             };
-            let expr = format!(
-                "(() => {{ const el = document.querySelector({q}); if (!el) throw new Error('selector not found: ' + {q}); return (el.textContent || '').trim(); }})()",
-                q = serde_json::to_string(&selector).expect("string serializes")
-            );
+            // `text` reads textContent; any other name is a getAttribute read
+            // (missing attributes read as the empty string).
+            let expr = if attribute == "text" {
+                format!(
+                    "(() => {{ const el = document.querySelector({q}); if (!el) throw new Error('selector not found: ' + {q}); return (el.textContent || '').trim(); }})()",
+                    q = serde_json::to_string(&selector).expect("string serializes")
+                )
+            } else {
+                format!(
+                    "(() => {{ const el = document.querySelector({q}); if (!el) throw new Error('selector not found: ' + {q}); return el.getAttribute({a}) || ''; }})()",
+                    q = serde_json::to_string(&selector).expect("string serializes"),
+                    a = serde_json::to_string(attribute).expect("string serializes")
+                )
+            };
             let raw = browser::eval_expression(session, &expr)?;
             Ok(decode_json_string(raw.trim()))
         }
-        _ => bail!("element text claims currently require a raw css or testId locator"),
+        _ => bail!("element attribute claims currently require a raw css or testId locator"),
     }
 }
 
@@ -729,7 +832,10 @@ mod tests {
             "value": "hello"
         }))
         .unwrap();
-        let ctx = CheckContext { session: "s" };
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: Path::new("."),
+        };
         dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
     }
 
@@ -745,7 +851,10 @@ mod tests {
             "value": "^al"
         }))
         .unwrap();
-        let ctx = CheckContext { session: "s" };
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: Path::new("."),
+        };
         dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
     }
 
@@ -772,7 +881,10 @@ mod tests {
         }))
         .unwrap();
         let mut scope = ValueScope::default();
-        let ctx = CheckContext { session: "s" };
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: Path::new("."),
+        };
         dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
 
         std::env::remove_var(ab::BIN_ENV);
@@ -787,7 +899,10 @@ mod tests {
         }))
         .unwrap();
         let mut scope = ValueScope::default();
-        let ctx = CheckContext { session: "s" };
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: Path::new("."),
+        };
         let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
         assert!(err.to_string().contains("not yet implemented"));
     }
@@ -837,7 +952,10 @@ mod tests {
             }))
             .unwrap();
             let mut scope = ValueScope::default();
-            let ctx = CheckContext { session: "s" };
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: Path::new("."),
+            };
             dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
             clear();
         }
@@ -854,7 +972,10 @@ mod tests {
             }))
             .unwrap();
             let mut scope = ValueScope::default();
-            let ctx = CheckContext { session: "s" };
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: Path::new("."),
+            };
             let err = dispatch_check(&claim, &ctx, &mut scope, None)
                 .unwrap_err()
                 .to_string();
@@ -873,7 +994,10 @@ mod tests {
             }))
             .unwrap();
             let mut scope = ValueScope::default();
-            let ctx = CheckContext { session: "s" };
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: Path::new("."),
+            };
             dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
             clear();
         }
@@ -889,9 +1013,80 @@ mod tests {
             }))
             .unwrap();
             let mut scope = ValueScope::default();
-            let ctx = CheckContext { session: "s" };
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: Path::new("."),
+            };
             dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
             clear();
+        }
+    }
+
+    mod file_claims {
+        use super::*;
+        use tempfile::TempDir;
+
+        #[test]
+        fn exists_and_size_on_relative_path() {
+            let tmp = TempDir::new().unwrap();
+            std::fs::write(tmp.path().join("report.txt"), b"hello world").unwrap();
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: tmp.path(),
+            };
+            let mut scope = ValueScope::default();
+
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "file": "report.txt" },
+                "predicate": "exists"
+            }))
+            .unwrap();
+            dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "file": "report.txt" },
+                "predicate": "gt",
+                "value": 10
+            }))
+            .unwrap();
+            dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "file": "report.txt" },
+                "predicate": "equals",
+                "value": "report.txt"
+            }))
+            .unwrap();
+            dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+        }
+
+        #[test]
+        fn not_exists_when_absent_and_name_mismatch_times_out() {
+            let tmp = TempDir::new().unwrap();
+            std::fs::write(tmp.path().join("a.txt"), b"x").unwrap();
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: tmp.path(),
+            };
+            let mut scope = ValueScope::default();
+
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "file": "missing.bin" },
+                "predicate": "notExists"
+            }))
+            .unwrap();
+            dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "file": "a.txt" },
+                "predicate": "contains",
+                "value": "zzz"
+            }))
+            .unwrap();
+            let err = dispatch_check(&claim, &ctx, &mut scope, Some(Duration::from_millis(300)))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("file claim timed out"), "got: {err}");
         }
     }
 }

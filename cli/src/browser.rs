@@ -1012,6 +1012,14 @@ pub fn upload(session: &str, selector: &str, files: &[String]) -> Result<(), Age
     Ok(())
 }
 
+/// Click an element that triggers a download and save the file.
+/// Mirrors `agent-browser --session <s> download <selector> <path>`; agent-browser
+/// waits for the browser download to complete before returning.
+pub fn download(session: &str, selector: &str, path: &str) -> Result<(), AgentBrowserError> {
+    run(session, vec!["download", selector, path], RunOpts::new())?;
+    Ok(())
+}
+
 /// Run `agent-browser doctor` and return its stdout.
 pub fn doctor_raw() -> Result<String, AgentBrowserError> {
     let bin = resolve_bin()?;

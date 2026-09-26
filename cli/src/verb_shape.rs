@@ -57,7 +57,7 @@ fn rule_for(verb: &Verb) -> VerbRule {
             forbidden: &[DoField::Value],
             ..VerbRule::default()
         },
-        Verb::Type | Verb::Select | Verb::Upload => VerbRule {
+        Verb::Type | Verb::Select | Verb::Upload | Verb::Download => VerbRule {
             required: &[DoField::On, DoField::Value],
             ..VerbRule::default()
         },
@@ -352,6 +352,25 @@ mod tests {
         let s = parse(json!({
             "id": "s1", "intent": "x", "kind": "do", "verb": "dialog",
             "params": { "action": "accept", "text": "John Doe" }
+        }));
+        assert_verb_shape(&s).unwrap();
+    }
+
+    #[test]
+    fn download_requires_on_and_value() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "download",
+            "value": { "from": "literal", "literal": "out/report.pdf" }
+        }));
+        assert!(assert_verb_shape(&s)
+            .unwrap_err()
+            .to_string()
+            .contains("requires 'on'"));
+
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "download",
+            "on": { "raw": { "kind": "css", "value": "#dl" }, "reason": "test" },
+            "value": { "from": "literal", "literal": "out/report.pdf" }
         }));
         assert_verb_shape(&s).unwrap();
     }

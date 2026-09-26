@@ -477,6 +477,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         };
         let check_ctx = CheckContext {
             session: &opts.session_name,
+            scenario_dir: &scenario_dir,
         };
         // Flatten group/useTemplate steps inline so the iterator below
         // sees one dispatchable step per iteration. Loop is still not

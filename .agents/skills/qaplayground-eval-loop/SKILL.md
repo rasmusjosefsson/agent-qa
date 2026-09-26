@@ -101,5 +101,6 @@ bun .agents/skills/qaplayground-eval-loop/scripts/summarize-reports.ts evals/res
 - No untracked non-ignored eval artifacts are committed.
 - PRs that add a replay-visible capability include a recorded demo:
   `evals/capture-demo.sh --scenario <golden-run>/scenarios/<sid> --out /tmp/demo-<tc>
-  --line1 "<feature>" --line2 "<what to watch for>"` produces `demo.webp`
+  --line1 "<feature>" --line2 "<what to watch for>"` produces `demo.mp4`
+  (plus `demo.webp` with `--webp`)
   (two-line caption bar baked in) for embedding in the PR body or a comment.

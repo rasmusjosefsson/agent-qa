@@ -110,9 +110,15 @@ fn run_step(opts: &Opts) -> Result<Outcome> {
             &mut scope,
         )
         .map(|_| ()),
-        Step::Check { claim, .. } => {
-            dispatch_check(claim, &CheckContext { session: &session }, &mut scope, None)
-        }
+        Step::Check { claim, .. } => dispatch_check(
+            claim,
+            &CheckContext {
+                session: &session,
+                scenario_dir: &scenario_dir,
+            },
+            &mut scope,
+            None,
+        ),
     };
     let mut report = json!({ "ok": result.is_ok(), "stepId": "s0", "kind": kind, "intent": step.intent(), "session": session });
     if let Some(verb) = verb {

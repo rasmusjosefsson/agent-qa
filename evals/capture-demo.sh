@@ -5,16 +5,18 @@
 # Usage:
 #   evals/capture-demo.sh --scenario <dir-with-scenario.json> --out <dir> \
 #       --line1 "Fixture demo" [--line2 "alert accepted end-to-end"] \
-#       [--session name] [--width 1024]
+#       [--session name] [--width 1024] [--webp]
 #
-# Result: <out>/demo.webm (full capture) and <out>/demo.webp (scaled, captioned,
-# looped — embed in a PR comment/body as ![alt](path).
+# Result: <out>/demo.mp4 (scaled, captioned, h264 — embed in a PR body/comment;
+# it gets a real play button), <out>/demo.webm (full capture), and with --webp
+# an extra <out>/demo.webp (looped animation; ~25x the mp4 size, does not
+# always play in GitHub markdown).
 #
 # Recording uses ffmpeg x11grab on $DISPLAY; under CI (no DISPLAY) the whole
 # capture runs inside xvfb-run so the headed browser still renders.
 set -euo pipefail
 
-SCENARIO_DIR="" OUT_DIR="" SESSION="" WIDTH=1024
+SCENARIO_DIR="" OUT_DIR="" SESSION="" WIDTH=1024 WANT_WEBP=0
 LINE1="" LINE2=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -22,6 +24,7 @@ while [[ $# -gt 0 ]]; do
     --out)      OUT_DIR="$2";      shift 2 ;;
     --session)  SESSION="$2";      shift 2 ;;
     --width)    WIDTH="$2";        shift 2 ;;
+    --webp)     WANT_WEBP=1;        shift ;;
     --line1)    LINE1="$2";        shift 2 ;;
     --line2)    LINE2="$2";        shift 2 ;;
     -h|--help)  sed -n '2,14p' "$0"; exit 0 ;;
@@ -95,6 +98,12 @@ fi
 [[ -s "$WORKDIR/capture.webm" ]] || { echo "capture produced no video" >&2; exit 1; }
 cp "$WORKDIR/capture.webm" "$OUT_DIR/demo.webm"
 ffmpeg -y -loglevel error -i "$WORKDIR/capture.webm" \
-  -vf "scale=${WIDTH}:-2,fps=12,$(caption_filter)" \
-  -c:v libwebp -loop 0 -quality 70 "$OUT_DIR/demo.webp"
-echo "demo: $OUT_DIR/demo.webp"
+  -vf "scale=${WIDTH}:-2,fps=15,$(caption_filter)" \
+  -c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p -movflags +faststart \
+  "$OUT_DIR/demo.mp4"
+if [[ "$WANT_WEBP" == 1 ]]; then
+  ffmpeg -y -loglevel error -i "$WORKDIR/capture.webm" \
+    -vf "scale=${WIDTH}:-2,fps=12,$(caption_filter)" \
+    -c:v libwebp -loop 0 -quality 70 "$OUT_DIR/demo.webp"
+fi
+echo "demo: $OUT_DIR/demo.mp4"
