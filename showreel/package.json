@@ -1,0 +1,24 @@
+{
+  "name": "agent-qa-showreel",
+  "private": true,
+  "version": "0.0.0",
+  "description": "30-second Remotion motion-graphics showreel for agent-qa",
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts Showreel out/agent-qa-showreel.mp4",
+    "still": "remotion still src/index.ts Showreel out/still.png",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.526",
+    "@remotion/google-fonts": "4.0.526",
+    "@remotion/transitions": "4.0.526",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "remotion": "4.0.526"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.12",
+    "typescript": "5.6.3"
+  }
+}
