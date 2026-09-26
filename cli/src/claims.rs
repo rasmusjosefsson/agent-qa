@@ -397,12 +397,24 @@ fn read_element_attribute(
                     bail!("element attribute claims do not support raw locator kind {other:?}")
                 }
             };
-            // `text` reads textContent; any other name is a getAttribute read
-            // (missing attributes read as the empty string).
+            // `text` reads textContent; value/checked/disabled/selected/readOnly
+            // read the live IDL property (getAttribute would return the stale
+            // default value, and boolean states often have no attribute at all);
+            // any other name is a getAttribute read (missing attributes read as
+            // the empty string).
+            let prop_attrs = [
+                "value", "checked", "disabled", "selected", "readOnly", "required",
+            ];
             let expr = if attribute == "text" {
                 format!(
                     "(() => {{ const el = document.querySelector({q}); if (!el) throw new Error('selector not found: ' + {q}); return (el.textContent || '').trim(); }})()",
                     q = serde_json::to_string(&selector).expect("string serializes")
+                )
+            } else if prop_attrs.contains(&attribute) {
+                format!(
+                    "(() => {{ const el = document.querySelector({q}); if (!el) throw new Error('selector not found: ' + {q}); const v = el[{a}]; return v === undefined || v === null ? '' : String(v); }})()",
+                    q = serde_json::to_string(&selector).expect("string serializes"),
+                    a = serde_json::to_string(attribute).expect("string serializes")
                 )
             } else {
                 format!(
