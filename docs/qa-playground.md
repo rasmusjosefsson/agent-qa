@@ -104,7 +104,7 @@ page has no stable semantic target.
 
 9. For PRs that add or change a replay-visible capability, attach a recorded
    demo so reviewers can see the behavior. `evals/capture-demo.sh` replays a
-   produced scenario headed under screen capture and writes `demo.webp` (with a
+   produced scenario headed under screen capture and writes `demo.mp4` (with a
    two-line caption bar baked in) plus the raw `demo.webm`:
 
 ```bash
@@ -115,7 +115,7 @@ evals/capture-demo.sh \
   --line2 "<what to watch for>"
 ```
 
-Embed the webp in the PR body or a comment as `![alt](/abs/path/demo.webp)`.
+Embed the mp4 in the PR body or a comment (`gh pr comment/edit --attach` or the upload step in the PR tooling) — it gets a real play button. `--webp` also writes a looped `demo.webp` for places that prefer images.
 
 ## Pass Criteria
 
