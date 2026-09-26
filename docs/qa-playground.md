@@ -32,22 +32,22 @@ Golden runners prove:
 | Alerts & Dialogs | `/practice/alerts-dialogs` | page-load + TC01-TC10 | complete | Golden TC01-TC10 pass. TC01-TC06 drive native alert/confirm/prompt via the bundled `evals/fixtures/dialogs.html` (the live page has none); TC07-TC09 cover DOM dialogs. |
 | File Upload | `/practice/file-upload` | page-load + Upload TC01-TC02 + Upload TC06-TC15 + Download TC01-TC14 | deep | Golden Upload TC01-TC02, TC06-TC08, TC10, TC11, TC15 pass; downloads covered by `download:tc01` on the bundled fixture (the live page ships no download widget). Gaps: TC09 (no cancel control), TC12 (viewport), TC13 (native file dialog), TC14 (inputs lack accessible names). |
 | Input Fields | `/practice/input-fields` | page-load + TC01-TC12 | complete | Golden TC01-TC12 pass. The `result-s02` echo only updates on real keystrokes, so fill-replayed values must be asserted on the `value` property, not the echo. |
-| Buttons | `/practice/buttons` | page-load + TC01-TC15 | cataloged | Add exact prompts; identify double-click/right-click support gaps. |
+| Buttons | `/practice/buttons` | page-load + TC01-TC15 | complete | Golden TC01-TC04, TC06-TC07, TC09, TC12-TC13, TC15 pass. `dblclick` replays TC04's double-click; TC09 uses `focus` + `press Enter`; TC12 reloads and re-reads the echo. Gaps: TC05 (right-click — no agent-browser verb), TC08 (viewport), TC10 (screen-reader), TC11 (hover visual), TC14 (design spec). |
 | Data Table | `/practice/data-table` | page-load + TC01-TC06 | complete | Golden TC01-TC06 pass. `row-count` text + `book-row` testids make row assertions deterministic; search filters live via `#table-search-input`. |
 | Radio & Checkbox | `/practice/radio-checkbox` | page-load + TC01-TC15 | complete | Golden TC01-TC12 + TC15 pass. Gaps: TC13 (screen-reader semantics — nothing to assert beyond `checked`), TC14 (visual state). Keyboard nav is covered via `focus` + `press` (ArrowDown moves radio selection; Space toggles checkboxes). |
 | Date Picker | `/practice/date-picker` | page-load + TC01-TC05 | complete | Golden TC01-TC05 pass. `dp-constrained-input` enforces min/max and surfaces violations in `result-s05`. |
-| Links | `/practice/links` | page-load + TC01-TC12 | cataloged | Add exact prompts; decide new-tab and broken-link support. |
-| Tabs & Windows | `/practice/tabs-windows` | page-load + TC01-TC05 | cataloged | Identify multi-tab/window replay support gaps. |
-| Multi Select | `/practice/multi-select` | page-load + TC01-TC05 | cataloged | Add exact prompts and replay-proof select/deselect flows. |
+| Links | `/practice/links` | page-load + TC01-TC12 | complete | Golden TC01-TC07, TC11-TC12 pass. `tab` switches to the `_blank` tab for TC03; `focused` + `press Enter` covers TC06; broken-link TC05 asserts the `href` attribute rather than loading the external 500 page. Gaps: TC08 (accessible label), TC09 (hover visual), TC10 (right-click context menu). |
+| Tabs & Windows | `/practice/tabs-windows` | page-load + TC01-TC05 | complete | Golden TC01, TC03-TC04 pass via the `tab` verb (`t2`, `close t2`, `t1` switching; claims evaluate against the active tab). Gaps: TC02 (window titles — `tab list` output is not claimable), TC05 (Ctrl+click — no modifier-click verb). |
+| Multi Select | `/practice/multi-select` | page-load + TC01-TC05 | complete | Golden TC01-TC05 pass. Comma-separated `select` values cover the native multi-select (TC01-TC02); custom panels click `[role=option]:nth-child(n)` (TC03-TC04); tag chips remove via the nested `×` button (TC05, remove-only — the page has no add-tag input). |
 | mDocks.dev | external | none | not started | Decide whether this belongs here or in a separate external-site suite. |
 
 ## Current Counts
 
 - QA Playground catalog: `163` cases.
 - File Upload catalog: `27` cases: `1` page-load + `12` upload + `14` download.
-- Complete pages: Bank App, Dynamic Waits, Dropdowns, Alerts & Dialogs, Forms, Input Fields, Data Table, Radio & Checkbox, Date Picker.
+- Complete pages: Bank App, Dynamic Waits, Dropdowns, Alerts & Dialogs, Forms, Input Fields, Buttons, Data Table, Radio & Checkbox, Date Picker, Links, Tabs & Windows, Multi Select.
 - Deep/partial pages: File Upload.
-- Catalog-only pages: Buttons, Links, Tabs & Windows, Multi Select.
+- Catalog-only pages: none.
 
 ## File Upload Notes
 
@@ -154,10 +154,14 @@ cargo test --locked
 - Two replay improvements landed from the sweep: `{"element": ..., "attribute": "focused"}` reads `document.activeElement === el` (focus assertions), and the fill self-repair now emits `input`/`change` even when the value already stuck — React-style `onInput` listeners (like the date-picker's range validation echo) depend on it.
 - `pressSelector` records a real `press` step (`on` + key), replacing the old click-equivalent mapping; `focusBySelector`/`hoverBySelector`/`blurBySelector`/`clearBySelector` also translate to their verbs.
 - Radio keyboard nav (ArrowDown inside a group) and Space-toggle on a focused checkbox replay natively via `focus` + `press` — no special-casing needed.
+- Buttons TC01-TC04, TC06-TC07, TC09, TC12-TC13, TC15; Links TC01-TC07, TC11-TC12; Tabs & Windows TC01, TC03-TC04; Multi Select TC01-TC05 pass with golden runners — every cataloged page is now covered.
+- Three replay capabilities landed from sweep II: `dblclick` (real agent-browser dblclick), `tab` (switch/close/list browser tabs; claims evaluate against the active tab), and centred `scrollTo` (scrollIntoView `block: 'center'` — default top-alignment left elements under the sticky nav and clicks were reported as covered).
+- Native multi-selects take comma-separated `select` values; custom listbox panels are driven by `[role=option]:nth-child(n)` positions; page-side `selectAll`/`pre-select` buttons replay as plain clicks.
+- DOM-activated clicks that open `target=_blank` tabs do NOT switch agent-browser focus — scenarios need an explicit `tab t2` step before asserting on the child tab (verified: `click` → `tab t2` → url/absence claims read the child).
 
 ## Near-Term Order
 
-1. Sweep the remaining catalog-only pages (Buttons, Links, Tabs & Windows, Multi Select).
+1. Locator gaps (`locator.name.i18nKey`, nested `locator.scope`) / heal-loop v2.
 
 ## Commands
 

@@ -110,6 +110,22 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
             on: css(args[0]),
             value: literal(args[1]),
           });
+        case "dblclickBySelector":
+          return doStep(intent, { verb: "dblclick", on: css(args[0]) });
+        case "scrollToBySelector":
+          return doStep(intent, { verb: "scrollTo", on: css(args[0]) });
+        case "reloadPage":
+          return doStep(intent, { verb: "reload" });
+        case "tabCommand":
+          // args[0] is the full `tab` subcommand tail: "new <url>", "list",
+          // "close <ref>", or "<ref>" to switch.
+          return doStep(intent, { verb: "tab", value: literal(args[0]) });
+        case "clickNthOption":
+          // args[0] = scoped listbox css, args[1] = 1-based option index
+          return doStep(intent, {
+            verb: "click",
+            on: css(`${args[0]} [role="option"]:nth-child(${args[1]})`),
+          });
         default:
           throw new Error(`record-step translate: unknown action method ${String(p.method)}`);
       }
@@ -147,6 +163,8 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           return checkStep(intent, { element: roleLoc(args[0], args[1]) }, "isVisible");
         case "absent":
           return checkStep(intent, { element: roleLoc(args[0], args[1]) }, "notExists");
+        case "elementAbsent":
+          return checkStep(intent, { element: css(args[0]) }, "notExists");
         case "elementText":
           return checkStep(
             intent,

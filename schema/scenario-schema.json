@@ -368,6 +368,8 @@
             "wait",
             "dialog",
             "download",
+            "dblclick",
+            "tab",
             "loop",
             "group",
             "useTemplate"

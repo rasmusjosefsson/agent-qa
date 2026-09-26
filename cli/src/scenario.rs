@@ -146,6 +146,13 @@ pub enum Verb {
     /// `on` = the triggering element (css/testId), `value` = destination path
     /// (absolute, or relative resolved against the scenario dir).
     Download,
+    /// Double-click an element (css/testId locator via `on`).
+    #[serde(rename = "dblclick")]
+    DblClick,
+    /// Browser tab management: `value` is the `tab` subcommand tail —
+    /// `new <url>`, `list`, `close <ref>`, or `<ref>` to switch focus.
+    /// Claims afterwards evaluate against the now-active tab.
+    Tab,
     #[serde(rename = "loop")]
     Loop,
     Group,
