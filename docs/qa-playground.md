@@ -145,6 +145,7 @@ cargo test --locked
 - Dropdowns TC01-TC10 pass with golden runners.
 - Alerts & Dialogs TC01-TC10 pass with golden runners. TC01-TC06 use the `dialog` verb (accept/dismiss + prompt text) and `{"dialog": true}` claim subject against the bundled native-dialog fixture; the live page ships no `window.alert`/`confirm`/`prompt`. A click that opens a native dialog cannot return from a blocking `eval`, so click dispatch treats "error + pending dialog" as the click having fired, and step sidecars are skipped while a dialog is pending.
 - The automation-exercise suite passes 26/26 golden cases. Its live DOM taught two replay lessons now covered by the framework: synthetic clicks must focus the element like a real click, and string claims need Unicode-whitespace normalization.
+- `golden:locators:tc01` proves scoped + i18n locator replay end-to-end on Multi Select.
 - Golden drivers must poll for elements after a triggering click — single-shot selector lookups race post-click navigation and client-side mounts.
 - File upload initially crashed Chrome with `RESULT_CODE_KILLED_BAD_MESSAGE` when replay passed ambiguous relative file paths. Canonicalizing upload file paths fixed this.
 - `selectorText` is safer than broad text on docs-heavy QA Playground pages because tutorial/test-case text can create false positives.
@@ -158,10 +159,11 @@ cargo test --locked
 - Three replay capabilities landed from sweep II: `dblclick` (real agent-browser dblclick), `tab` (switch/close/list browser tabs; claims evaluate against the active tab), and centred `scrollTo` (scrollIntoView `block: 'center'` — default top-alignment left elements under the sticky nav and clicks were reported as covered).
 - Native multi-selects take comma-separated `select` values; custom listbox panels are driven by `[role=option]:nth-child(n)` positions; page-side `selectAll`/`pre-select` buttons replay as plain clicks.
 - DOM-activated clicks that open `target=_blank` tabs do NOT switch agent-browser focus — scenarios need an explicit `tab t2` step before asserting on the child tab (verified: `click` → `tab t2` → url/absence claims read the child).
+- Locator `scope` chains and `name.i18nKey` resolve at replay: `scope` narrows role+name matching strictly inside each container level (no document fallback, scope-miss errors name the level), `i18nKey` reads a flat `i18n.json` beside `scenario.json`. Golden proof: `locators-tc01` clicks Select All via `{role: button, name: {i18nKey}, scope: [card testId]}`.
 
 ## Near-Term Order
 
-1. Locator gaps (`locator.name.i18nKey`, nested `locator.scope`) / heal-loop v2.
+1. Heal-loop v2: value-rejection classification beyond DOM probes, suggested promotions after a healed run.
 
 ## Commands
 

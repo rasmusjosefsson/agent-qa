@@ -241,6 +241,143 @@ pub fn build_collect_role_names(role: &str) -> String {
     )
 }
 
+/// One entry of a resolved `locator.scope` chain, pre-baked to JS literals so
+/// the builder stays free of scenario semantics (vars/i18n are resolved by the
+/// caller).
+#[derive(Debug)]
+pub enum ScopeStep {
+    /// `container.querySelector(<css>)`
+    Css(String),
+    /// `document.evaluate(<xpath>, container, …).singleNodeValue`
+    Xpath(String),
+    /// First node inside the container whose text matches `<text>` — prefers
+    /// the nearest interactive element, mirroring `build_text_click`.
+    Text(String),
+    /// Role (+ optional resolved name) matched inside the container.
+    Role { role: String, name: String },
+}
+
+/// JS narrowing `let __aqOuter` through a locator scope chain. Emits one
+/// narrowing IIFE per entry; on a miss it `return "scope-miss:<index>"`s so the
+/// caller can name the level that failed. Requires the prelude + `__aqScopedFind`
+/// to be in scope (see [`build_scoped_role_act`]).
+pub fn build_scope_chain(scope: &[ScopeStep]) -> String {
+    let mut out = String::from("let __aqOuter = document;\n");
+    for (i, step) in scope.iter().enumerate() {
+        let inner = match step {
+            ScopeStep::Css(sel) => format!(
+                "return r.querySelector({});",
+                json_str(sel)
+            ),
+            ScopeStep::Xpath(xp) => format!(
+                "const res = document.evaluate({}, r, null, 9, null); return res && res.singleNodeValue;",
+                json_str(xp)
+            ),
+            ScopeStep::Text(t) => format!(
+                "const want = __aqText({q}); const hits = Array.from(r.querySelectorAll('*')).filter((n) => __aqVisible(n) && __aqName(n).some((c) => __aqText(c).includes(want))); const inter = hits.filter(__aqIsInteractive).sort((a, b) => (a.textContent || '').length - (b.textContent || '').length); const anc = hits.map((n) => (n.closest ? n.closest(__aqInteractiveSel) : null)).filter(Boolean); const bare = hits.slice().sort((a, b) => (a.textContent || '').length - (b.textContent || '').length); return inter[0] || anc[0] || bare[0] || null;",
+                q = json_str(t)
+            ),
+            ScopeStep::Role { role, name } => format!(
+                "return __aqScopedFind({}, {}, r);",
+                json_str(role),
+                json_str(name)
+            ),
+        };
+        out.push_str(&format!(
+            "__aqOuter = (() => {{ const r = __aqOuter; if (!r || !r.querySelectorAll) return null; {inner} }})();\nif (!__aqOuter) return \"scope-miss:{i}\";\n"
+        ));
+    }
+    out
+}
+
+/// Definition of `__aqScopedFind(roleLit, nameLit, root)` — a strict-in-root
+/// role+name matcher (an explicit scope means "only here": no document-wide
+/// fallback, no popup-surface preference). Empty `nameLit` resolves to the
+/// first visible candidate of the role.
+fn scoped_find_helper_js() -> String {
+    r#"const __aqScopedFind = (roleLit, nameLit, root) => {
+  const want = __aqText(nameLit);
+  const map = %MAP%;
+  const sels = (roleLit && map[roleLit]) ? map[roleLit]
+    : (roleLit ? ['[role="' + roleLit + '"]'] : Object.keys(map).reduce((a, k) => a.concat(map[k]), []));
+  const cands = Array.from(root.querySelectorAll(sels.join(',')));
+  if (!want) return cands.filter(__aqVisible)[0] || cands[0] || null;
+  const exact = (n) => __aqName(n).some((c) => __aqText(c) === want);
+  const partial = (n) => want.length >= 3 && __aqName(n).some((c) => __aqText(c).includes(want));
+  const wantND = __aqND(want);
+  const digitTol = wantND.replace(/#/g, '').trim().length >= 3
+    && ((n) => __aqName(n).some((c) => __aqND(__aqText(c)) === wantND));
+  const vis = cands.filter(__aqVisible);
+  return vis.filter(exact)[0] || cands.filter(exact)[0]
+    || vis.filter(partial)[0] || cands.filter(partial)[0]
+    || (digitTol && (vis.filter(digitTol)[0] || cands.filter(digitTol)[0]))
+    || null;
+};
+"#
+    .replace("%MAP%", role_candidate_map_js())
+}
+
+/// Build JS that resolves `role`+`name` strictly inside the `scope` chain and
+/// activates it. Returns `"true"` / `"false"` (no inner match) /
+/// `"scope-miss:<i>"` (a scope level matched nothing) on stdout.
+pub fn build_scoped_role_act(
+    role: &str,
+    name: &str,
+    scope: &[ScopeStep],
+    act: browser::RoleAct,
+    value: Option<&str>,
+) -> String {
+    let act_js = match act {
+        browser::RoleAct::Click => "return __aqPick(el) ? \"true\" : \"false\";".to_string(),
+        browser::RoleAct::Focus => {
+            "el.scrollIntoView({block:'center',inline:'nearest'}); el.focus(); return \"true\";"
+                .to_string()
+        }
+        browser::RoleAct::Hover => {
+            "el.scrollIntoView({block:'center',inline:'nearest'}); const o = {bubbles:true,cancelable:true,view:window}; el.dispatchEvent(new PointerEvent('pointerover', o)); el.dispatchEvent(new MouseEvent('mouseover', o)); el.dispatchEvent(new MouseEvent('mousemove', o)); return \"true\";"
+                .to_string()
+        }
+        browser::RoleAct::Fill => format!(
+            "el.scrollIntoView({{block:'center',inline:'nearest'}}); el.focus(); el.value = {}; el.dispatchEvent(new Event('input', {{ bubbles: true }})); el.dispatchEvent(new Event('change', {{ bubbles: true }})); return \"true\";",
+            json_str(value.unwrap_or(""))
+        ),
+    };
+    format!(
+        "(() => {{{prelude}\n{find}\n{chain}{act}\n}})()",
+        prelude = activation_prelude(),
+        // The helper is emitted before the chain because a Role scope step
+        // resolves through __aqScopedFind too.
+        find = scoped_find_helper_js(),
+        chain = build_scope_chain(scope),
+        act = scoped_target_js(role, name, &act_js),
+    )
+}
+
+fn scoped_target_js(role: &str, name: &str, act_js: &str) -> String {
+    format!(
+        "const el = __aqScopedFind({}, {}, __aqOuter);\nif (!el) return \"false\";\n{}",
+        json_str(role),
+        json_str(name),
+        act_js
+    )
+}
+
+/// JS returning `"true"` when `role`+`name` resolves inside `scope` — the
+/// claims presence probe. Same miss encoding as [`build_scoped_role_act`].
+pub fn build_scoped_role_probe(role: &str, name: &str, scope: &[ScopeStep]) -> String {
+    format!(
+        "(() => {{{prelude}\n{find}\n{chain}return el ? \"true\" : \"false\";\n}})()",
+        prelude = activation_prelude(),
+        find = scoped_find_helper_js(),
+        chain = build_scope_chain(scope)
+            + "const el = __aqScopedFind("
+            + &json_str(role)
+            + ", "
+            + &json_str(name)
+            + ", __aqOuter);\n",
+    )
+}
+
 /// JS returning up to 3 visible alert/banner/toast texts — evidence that a
 /// failed step was a value rejection (the app refused the submitted input)
 /// rather than a locator miss. `__aqRejectProbe` marker for test doubles.
@@ -345,6 +482,73 @@ fn activate_with_retry(session: &str, expr: &str) -> anyhow::Result<bool> {
     Ok(false)
 }
 
+/// Outcome of a scoped-locator activation. `Done` = the element inside the
+/// scope chain was acted on; `Miss` = the chain resolved but no role+name
+/// matched within it; `ScopeMiss(i)` = scope level `i` matched no element.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ScopedOutcome {
+    Done,
+    Miss,
+    ScopeMiss(usize),
+}
+
+fn parse_scoped_outcome(out: &str) -> ScopedOutcome {
+    let t = out.trim().trim_matches('"');
+    if t == "true" {
+        ScopedOutcome::Done
+    } else if let Some(idx) = t.strip_prefix("scope-miss:") {
+        ScopedOutcome::ScopeMiss(idx.parse().unwrap_or(0))
+    } else {
+        ScopedOutcome::Miss
+    }
+}
+
+/// Activate a role+name element strictly inside a `scope` chain, retrying
+/// while either level reports a miss — late-mounted panels ride out the poll
+/// without a hard-coded wait. Never falls back to document-wide matching.
+pub fn act_scoped(
+    session: &str,
+    role: &str,
+    name: &str,
+    scope: &[ScopeStep],
+    act: browser::RoleAct,
+    value: Option<&str>,
+) -> anyhow::Result<ScopedOutcome> {
+    let expr = build_scoped_role_act(role, name, scope, act, value);
+    let attempts = retry_attempts();
+    let mut last = ScopedOutcome::Miss;
+    for i in 0..attempts {
+        let out = browser::eval_expression(session, &expr)?;
+        last = parse_scoped_outcome(&out);
+        if matches!(last, ScopedOutcome::Done) || i + 1 == attempts {
+            return Ok(last);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(RETRY_GAP_MS));
+    }
+    Ok(last)
+}
+
+/// Presence probe for a scoped role locator — `true` when the role+name
+/// resolves inside the chain.
+pub fn probe_scoped(
+    session: &str,
+    role: &str,
+    name: &str,
+    scope: &[ScopeStep],
+) -> anyhow::Result<bool> {
+    let expr = build_scoped_role_probe(role, name, scope);
+    let attempts = retry_attempts();
+    for i in 0..attempts {
+        let out = browser::eval_expression(session, &expr)?;
+        match parse_scoped_outcome(&out) {
+            ScopedOutcome::Done => return Ok(true),
+            _ if i + 1 == attempts => return Ok(false),
+            _ => std::thread::sleep(std::time::Duration::from_millis(RETRY_GAP_MS)),
+        }
+    }
+    Ok(false)
+}
+
 /// Activate an element by role + name in-page. `Ok(true)` if a node matched and
 /// was activated, `Ok(false)` if nothing matched (caller falls back).
 pub fn activate_role_name(session: &str, role: &str, name: &str) -> anyhow::Result<bool> {
@@ -425,6 +629,72 @@ mod tests {
         assert!(js.contains("aria-labelledby"));
         // Backdrop wrappers (role=presentation/none) are excluded.
         assert!(js.contains("presentation"));
+    }
+
+    #[test]
+    fn scope_chain_narrows_and_marks_the_level() {
+        let js = build_scope_chain(&[
+            ScopeStep::Css("[data-testid=\"card-a\"]".into()),
+            ScopeStep::Role {
+                role: "listbox".into(),
+                name: "Options".into(),
+            },
+            ScopeStep::Xpath("//div[@id='x']".into()),
+        ]);
+        assert!(
+            js.contains("querySelector(\"[data-testid=\\\"card-a\\\"]\")"),
+            "{js}"
+        );
+        assert!(js.contains("scope-miss:0"), "{js}");
+        assert!(js.contains("scope-miss:1"), "{js}");
+        assert!(js.contains("scope-miss:2"), "{js}");
+        // Role scope steps resolve through the strict-in-root matcher; xpath
+        // evaluates against the narrowed context node.
+        assert!(
+            js.contains("__aqScopedFind(\"listbox\", \"Options\", r)"),
+            "{js}"
+        );
+        assert!(js.contains("document.evaluate"), "{js}");
+    }
+
+    #[test]
+    fn scoped_act_is_strictly_in_root() {
+        let js = build_scoped_role_act(
+            "button",
+            "Select All",
+            &[ScopeStep::Css("#card".into())],
+            browser::RoleAct::Click,
+            None,
+        );
+        // Candidates come from the resolved container, not the document.
+        assert!(js.contains("root.querySelectorAll(sels.join(','))"), "{js}");
+        assert!(js.contains("\"scope-miss:0\""), "{js}");
+        assert!(js.contains("__aqPick(el)"), "{js}");
+        assert!(js.contains("\"Select All\""), "{js}");
+    }
+
+    #[test]
+    fn scoped_fill_emits_input_and_change() {
+        let js = build_scoped_role_act(
+            "textbox",
+            "Email",
+            &[ScopeStep::Css("#form".into())],
+            browser::RoleAct::Fill,
+            Some("a@b.c"),
+        );
+        assert!(js.contains("el.value = \"a@b.c\""), "{js}");
+        assert!(js.contains("new Event('input'"), "{js}");
+        assert!(js.contains("new Event('change'"), "{js}");
+    }
+
+    #[test]
+    fn scoped_probe_returns_presence() {
+        let js = build_scoped_role_probe("link", "Docs", &[ScopeStep::Css("nav".into())]);
+        assert!(
+            js.contains("const el = __aqScopedFind(\"link\", \"Docs\", __aqOuter)"),
+            "{js}"
+        );
+        assert!(js.contains("\"scope-miss:0\""), "{js}");
     }
 
     #[test]

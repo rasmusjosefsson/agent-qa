@@ -143,6 +143,7 @@
     "golden:links:tc07": "bun golden/links-tc07.ts",
     "golden:links:tc11": "bun golden/links-tc11.ts",
     "golden:links:tc12": "bun golden/links-tc12.ts",
+    "golden:locators:tc01": "bun golden/locators-tc01.ts",
     "golden:multi-select:tc01": "bun golden/multi-select-tc01.ts",
     "golden:multi-select:tc02": "bun golden/multi-select-tc02.ts",
     "golden:multi-select:tc03": "bun golden/multi-select-tc03.ts",
