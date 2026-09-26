@@ -23,8 +23,21 @@ name-prefix), retrying once only when exactly one candidate matches —
 ambiguous drift fails the step rather than guessing. A successful heal
 appends a `locator-correction` row to `<run>/heal.jsonl` and writes
 `<run>/diffs/<stepId>.patch.json`, which `agent-qa heal-promote` can apply
-back into the contract. Set `AGENT_QA_NO_HEAL` to disable the loop entirely,
+back into the contract (replay prints the review + promote command when a
+run healed anything). Set `AGENT_QA_NO_HEAL` to disable the loop entirely,
 or `AGENT_QA_HEAL_STRICT` to fail any run that needed a heal.
+
+A failure no strategy heals gets classified as a **value rejection** when
+evidence exists on any of three channels — recorded on `heal.jsonl` with
+mode `value-rejection`, never retried:
+
+- page-level alert/banner/toast surfaces (`[role=alert]`, `aria-live`, …);
+- field-level constraint validation — the step's own element plus any
+  `[aria-invalid]`/`:invalid` field's `validationMessage` or
+  `aria-describedby` text (forms usually refuse per-field, no banner);
+- the step's error itself — a `callGql` HTTP 4xx or `errors[]` response is
+  the backend refusing the payload even when the page shows nothing
+  (HTTP 5xx is a server failure, not a rejection).
 
 A role+name locator can carry `scope`: an array of locators resolved
 outermost-first, each narrowing to a DOM subtree. The role+name match then
