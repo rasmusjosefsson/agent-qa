@@ -1,10 +1,10 @@
 // web/src/features/runs/components/StepDetail.tsx
 import { useEffect, useState } from 'react'
-import { BugIcon } from 'lucide-react'
+import { BugIcon, WrenchIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { artifactUrl, fetchArtifactText, getScenarioDef } from '@/lib/runs-api'
 import { collapseEvents, fmtMs, icon } from '../rows'
-import type { DetailTab, RunEvent, ScenarioDef, ScenarioStep } from '../types'
+import type { DetailTab, HealRow, RunEvent, ScenarioDef, ScenarioStep } from '../types'
 import type { RunsApi as Api } from '../useRuns'
 
 const TABS: { id: DetailTab; label: string }[] = [
@@ -66,6 +66,7 @@ export function StepDetail({ runs, onLightbox }: { runs: Api; onLightbox: (url: 
   const sid = sel.sid!
   const runId = sel.runId!
   const defStep = scenario?.steps?.find((s) => s.id === step.id)
+  const heal = (detail.heals || []).find((h) => h.stepId === step.id)
 
   // Open a NEW chat seeded with the failure context so the agent can triage
   // flake-vs-real. ChatPage consumes the ?ask= param on load.
@@ -130,6 +131,7 @@ export function StepDetail({ runs, onLightbox }: { runs: Api; onLightbox: (url: 
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
+        {heal && <HealCard heal={heal} />}
         {step.error && (
           <pre className="mb-3 whitespace-pre-wrap rounded-md border border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">
             {step.error}
@@ -260,6 +262,44 @@ function TabBody({
   if (loading) return <div className="text-xs text-muted-foreground">Loading…</div>
   if (text == null) return <div className="text-xs text-muted-foreground">Not captured for this step.</div>
   return <pre className="whitespace-pre-wrap break-all font-mono text-xs leading-relaxed">{text}</pre>
+}
+
+// A locator the auto-heal loop rewrote mid-run, or a failure it classified as
+// a value rejection. Corrections carry the suggested patch (diffs/*.patch.json)
+// inline so it can be promoted to scenario.json without the terminal.
+function HealCard({ heal }: { heal: HealRow }) {
+  const isRejection = heal.mode === 'value-rejection'
+  return (
+    <div
+      className={cn(
+        'mb-3 rounded-md border p-2.5 text-xs',
+        isRejection
+          ? 'border-destructive/30 bg-destructive/10 text-destructive'
+          : 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+      )}
+    >
+      <div className="flex items-center gap-1.5 font-medium">
+        <WrenchIcon className="size-3.5 shrink-0" />
+        {isRejection ? 'Value rejection — not retried' : `Locator auto-healed via ${heal.strategy || 'name ladder'}`}
+      </div>
+      {!isRejection && (heal.from || heal.to) && (
+        <div className="mt-1 break-all font-mono opacity-90">
+          {heal.from} → <span className="font-semibold">{heal.to}</span>
+        </div>
+      )}
+      {isRejection && heal.rationale && <div className="mt-1 opacity-90">{heal.rationale}</div>}
+      {heal.patch && (
+        <details className="mt-1.5">
+          <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+            Suggested patch — promote with <span className="font-mono">heal-promote</span>
+          </summary>
+          <pre className="mt-1 whitespace-pre-wrap break-all rounded border border-border bg-muted/20 p-2 font-mono leading-relaxed">
+            {JSON.stringify(heal.patch, null, 2)}
+          </pre>
+        </details>
+      )}
+    </div>
+  )
 }
 
 function Empty({ children }: { children: React.ReactNode }) {

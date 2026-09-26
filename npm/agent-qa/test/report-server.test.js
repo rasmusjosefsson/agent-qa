@@ -52,6 +52,7 @@ function makeFixture() {
       finishedAt: '2026-06-24T15:07:27.143Z',
       exitCode: 1,
       summary: 'SUMMARY: 2/3 (FAIL)',
+      autoHealed: ['navHome'],
     }),
   );
 
@@ -95,6 +96,43 @@ function makeFixture() {
 
   // A secret OUTSIDE the run dir that a path-escape attempt would target.
   fs.writeFileSync(path.join(root, 'secret.txt'), 'TOP SECRET');
+
+  // Heal trail: navHome's role+name locator drifted and auto-heal retried it;
+  // clickMissingLogin was classified a value rejection (no patch, no retry).
+  fs.mkdirSync(path.join(runDir, 'diffs'), { recursive: true });
+  fs.writeFileSync(
+    path.join(runDir, 'heal.jsonl'),
+    [
+      JSON.stringify({
+        schema: 'heal-row/v1',
+        ts: '2026-06-24T15:07:24.001Z',
+        runId,
+        stepId: 'navHome',
+        mode: 'locator-correction',
+        strategy: 'digits-tolerant',
+        from: 'Users 2',
+        to: 'Users 1',
+      }),
+      JSON.stringify({
+        schema: 'heal-row/v1',
+        ts: '2026-06-24T15:07:26.500Z',
+        runId,
+        stepId: 'clickMissingLogin',
+        mode: 'value-rejection',
+        rationale: 'field validationMessage: Value required',
+      }),
+    ].join('\n') + '\n',
+  );
+  fs.writeFileSync(
+    path.join(runDir, 'diffs', 'navHome.patch.json'),
+    JSON.stringify({
+      schema: 'heal-patch/v1',
+      stepId: 'navHome',
+      scenarioContentHash: 'abc123',
+      newLocator: { role: 'button', name: 'Users 1' },
+      rationale: 'auto-heal via digits-tolerant: "Users 2" → "Users 1"',
+    }),
+  );
 
   return { root, sid, runId };
 }
@@ -354,6 +392,27 @@ test('report viewer endpoints', async (t) => {
     const fail = body.events.find((e) => e.status === 'fail');
     assert.equal(fail.error, 'Element not found');
     assert.equal(fail.screenshot, 'screenshots/clickMissingLogin.png');
+  });
+
+  await t.test('GET /runs/:runId joins heal.jsonl rows with their patches', async () => {
+    const res = await fetch(`${base}/api/scenarios/${fx.sid}/runs/${fx.runId}`);
+    const body = await res.json();
+    assert.equal(body.heals.length, 2);
+    const [correction, rejection] = body.heals;
+    assert.equal(correction.stepId, 'navHome');
+    assert.equal(correction.mode, 'locator-correction');
+    assert.equal(correction.strategy, 'digits-tolerant');
+    assert.equal(correction.patch.schema, 'heal-patch/v1');
+    assert.equal(correction.patch.newLocator.name, 'Users 1');
+    assert.equal(rejection.stepId, 'clickMissingLogin');
+    assert.equal(rejection.mode, 'value-rejection');
+    assert.equal(rejection.patch, null);
+  });
+
+  await t.test('GET /runs surfaces the healed count from audit.autoHealed', async () => {
+    const res = await fetch(`${base}/api/scenarios/${fx.sid}/runs`);
+    const body = await res.json();
+    assert.equal(body.replays[0].healed, 1); // audit.autoHealed lists navHome
   });
 
   await t.test('GET artifact streams a captured screenshot', async () => {
