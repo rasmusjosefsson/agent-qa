@@ -261,8 +261,11 @@
           "type": "object",
           "required": ["file"],
           "additionalProperties": false,
-          "properties": { "file": { "type": "string", "minLength": 1 } },
-          "$comment": "file subject — exists/notExists for presence, gt/gte/lt/lte compare size in bytes, string predicates match the file name. Relative paths resolve against the scenario dir."
+          "properties": {
+            "file": { "type": "string", "minLength": 1 },
+            "attribute": { "enum": ["name", "content"] }
+          },
+          "$comment": "file subject — exists/notExists for presence, gt/gte/lt/lte compare size in bytes, string predicates match the file name (or the file's UTF-8 text with attribute=content). Relative paths resolve against the scenario dir."
         },
         {
           "type": "object",

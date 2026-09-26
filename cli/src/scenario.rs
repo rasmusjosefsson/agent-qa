@@ -329,9 +329,12 @@ pub enum ClaimSubject {
     /// `{"file": "<name-or-path>"}` — assert on a file in the scenario's
     /// download output (relative paths resolve against the scenario dir).
     /// `exists`/`notExists` check presence; `gt`/`gte`/`lt`/`lte` compare the
-    /// file size in bytes; string predicates match the file name.
+    /// file size in bytes; string predicates match the file name by default,
+    /// or the file's UTF-8 text when `attribute` is `"content"`.
     File {
         file: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attribute: Option<String>,
     },
     Var {
         kind: String, // always "var" — kept literal to disambiguate untagged

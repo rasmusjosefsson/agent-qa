@@ -243,6 +243,8 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           return checkStep(intent, { element: roleLoc(args[0], args[1]) }, "notExists");
         case "elementAbsent":
           return checkStep(intent, { element: css(args[0]) }, "notExists");
+        case "elementPresent":
+          return checkStep(intent, { element: css(args[0]) }, "isVisible");
         case "elementText":
           return checkStep(
             intent,
@@ -267,6 +269,19 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           return checkStep(intent, { file: args[0] }, "lt", args[1]);
         case "fileName":
           return checkStep(intent, { file: args[0] }, "equals", args[1]);
+        case "fileString":
+          // args[0] = scenario-relative path — any string predicate against
+          // the file name (equals/startsWith/endsWith/matches/...).
+          return checkStep(intent, { file: args[0] }, args[1], args[2]);
+        case "fileContent":
+          // args[0] = scenario-relative path, args[1] = needle — string
+          // predicates run against the file's UTF-8 text.
+          return checkStep(
+            intent,
+            { file: args[0], attribute: "content" },
+            "contains",
+            args[1],
+          );
         case "dialogOpen":
           return checkStep(intent, { dialog: true }, "exists");
         case "dialogClosed":
