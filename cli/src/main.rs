@@ -29,6 +29,7 @@ mod heal_apply;
 mod heal_list;
 mod heal_promote;
 mod heal_respond;
+mod i18n;
 mod info;
 mod io;
 mod list;

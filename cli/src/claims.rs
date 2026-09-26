@@ -29,7 +29,7 @@ use regex::Regex;
 use serde_json::Value as Json;
 
 use crate::browser::{self, RoleAct};
-use crate::scenario::{Claim, ClaimSubject, Locator, NameMatch, Predicate, RawLocatorKind};
+use crate::scenario::{Claim, ClaimSubject, Locator, Predicate, RawLocatorKind};
 use crate::value::{select_json_path, substitute_scenario_vars, value_to_string, ValueScope};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -363,14 +363,14 @@ fn check_element(
     }
 
     match predicate {
-        Predicate::IsVisible | Predicate::Exists => {
-            poll_until(timeout, |_| locator_resolves(ctx.session, loc, scope))
-        }
+        Predicate::IsVisible | Predicate::Exists => poll_until(timeout, |_| {
+            locator_resolves(ctx.session, loc, scope, ctx.scenario_dir)
+        }),
         Predicate::IsHidden | Predicate::NotExists => {
             // Inverse: poll until the locator no longer resolves.
             let deadline = Instant::now() + timeout;
             while Instant::now() < deadline {
-                match locator_resolves(ctx.session, loc, scope) {
+                match locator_resolves(ctx.session, loc, scope, ctx.scenario_dir) {
                     Ok(()) => thread::sleep(POLL_INTERVAL),
                     Err(_) => return Ok(()),
                 }
@@ -435,7 +435,12 @@ fn read_element_attribute(
     }
 }
 
-fn locator_resolves(session: &str, loc: &Locator, scope: &mut ValueScope) -> Result<()> {
+fn locator_resolves(
+    session: &str,
+    loc: &Locator,
+    scope: &mut ValueScope,
+    scenario_dir: &std::path::Path,
+) -> Result<()> {
     // Re-use the same locator → CLI mapping as dispatch_do uses for
     // its act calls; here we use Focus (the cheapest no-op-ish act
     // agent-browser exposes) just to confirm the element resolves.
@@ -443,17 +448,24 @@ fn locator_resolves(session: &str, loc: &Locator, scope: &mut ValueScope) -> Res
     // `query` subverb, switch to that.
     match loc {
         Locator::Role(role) => {
-            let name = match &role.name {
-                Some(NameMatch::Plain(s)) => Some(substitute_scenario_vars(s, scope)),
-                Some(NameMatch::Pattern { pattern, .. }) => {
-                    Some(substitute_scenario_vars(pattern, scope))
-                }
-                Some(NameMatch::I18n { i18n_key }) => {
-                    bail!("locator.name.i18nKey ({i18n_key:?}) is not yet supported")
-                }
-                None => None,
-            };
+            let name = crate::verbs::resolve_name_match(role.name.as_ref(), scope, scenario_dir)?;
             let name_str = name.as_deref().unwrap_or("");
+            if let Some(locs) = role.scope.as_deref() {
+                if !locs.is_empty() {
+                    let steps = crate::verbs::scope_steps(locs, scope, scenario_dir)?;
+                    return if crate::dom_activate::probe_scoped(
+                        session, &role.role, name_str, &steps,
+                    )? {
+                        Ok(())
+                    } else {
+                        bail!(
+                            "scoped locator: no role='{}' name='{}' match inside the scope chain",
+                            role.role,
+                            name_str
+                        )
+                    };
+                }
+            }
             // Probe role+name quietly so a recovering miss doesn't print a
             // misleading `✗ Element not found` line.
             match browser::find_role_act_quiet(session, &role.role, name_str, RoleAct::Focus, None)

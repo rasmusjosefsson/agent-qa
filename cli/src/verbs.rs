@@ -84,7 +84,7 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
             Ok(None)
         }
         Verb::Click => {
-            click_locator(ctx.session, on.unwrap(), scope)?;
+            click_locator(ctx.session, on.unwrap(), scope, ctx.scenario_dir)?;
             browser::wait_for_load(ctx.session, "networkidle")?;
             Ok(None)
         }
@@ -92,15 +92,29 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
             // Checkbox toggle: agent-browser doesn't expose set-state
             // directly, so we click. Real state-aware behaviour lands
             // when a check claim follows this in a scenario.
-            click_locator(ctx.session, on.unwrap(), scope)?;
+            click_locator(ctx.session, on.unwrap(), scope, ctx.scenario_dir)?;
             Ok(None)
         }
         Verb::Hover => {
-            act_on_locator(ctx.session, on.unwrap(), scope, RoleAct::Hover, None)?;
+            act_on_locator(
+                ctx.session,
+                on.unwrap(),
+                scope,
+                RoleAct::Hover,
+                None,
+                ctx.scenario_dir,
+            )?;
             Ok(None)
         }
         Verb::Focus => {
-            act_on_locator(ctx.session, on.unwrap(), scope, RoleAct::Focus, None)?;
+            act_on_locator(
+                ctx.session,
+                on.unwrap(),
+                scope,
+                RoleAct::Focus,
+                None,
+                ctx.scenario_dir,
+            )?;
             Ok(None)
         }
         Verb::Blur => {
@@ -118,17 +132,32 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                 scope,
                 RoleAct::Fill,
                 Some(&value_to_string(&v)),
+                ctx.scenario_dir,
             )?;
             Ok(None)
         }
         Verb::Clear => {
-            act_on_locator(ctx.session, on.unwrap(), scope, RoleAct::Fill, Some(""))?;
+            act_on_locator(
+                ctx.session,
+                on.unwrap(),
+                scope,
+                RoleAct::Fill,
+                Some(""),
+                ctx.scenario_dir,
+            )?;
             Ok(None)
         }
         Verb::Press => {
             let key = resolve_literal_string(value, scope, "press.value")?;
             if let Some(loc) = on {
-                act_on_locator(ctx.session, loc, scope, RoleAct::Focus, None)?;
+                act_on_locator(
+                    ctx.session,
+                    loc,
+                    scope,
+                    RoleAct::Focus,
+                    None,
+                    ctx.scenario_dir,
+                )?;
             }
             browser::press_key(ctx.session, &key)?;
             Ok(None)
@@ -194,7 +223,13 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
         }
         Verb::Select => {
             let v = resolve_value(value.unwrap(), scope)?;
-            select_option(ctx.session, on.unwrap(), &value_to_string(&v), scope)?;
+            select_option(
+                ctx.session,
+                on.unwrap(),
+                &value_to_string(&v),
+                scope,
+                ctx.scenario_dir,
+            )?;
             Ok(None)
         }
         Verb::DblClick => {
@@ -298,23 +333,20 @@ fn select_option(
     loc: &Locator,
     value: &str,
     scope: &mut ValueScope,
+    scenario_dir: &std::path::Path,
 ) -> anyhow::Result<()> {
     // Role+name combobox: open the opener, confirm a popup appeared (escalate
     // to the W3C keyboard opener contract if the click was swallowed), then
     // pick the option by name via native DOM activation. Native `<select>` and
     // raw-locator flows fall through to the DOM-mutation path below.
     if let Locator::Role(role) = loc {
-        let opener_name = match &role.name {
-            Some(NameMatch::Plain(s)) => crate::value::substitute_scenario_vars(s, scope),
-            Some(NameMatch::Pattern { pattern, .. }) => {
-                crate::value::substitute_scenario_vars(pattern, scope)
-            }
-            Some(NameMatch::I18n { i18n_key }) => {
-                bail!("select opener name.i18nKey ({i18n_key:?}) is not yet supported")
-            }
-            None => String::new(),
+        let opener_name =
+            resolve_name_match(role.name.as_ref(), scope, scenario_dir)?.unwrap_or_default();
+        let scope_steps = match role.scope.as_deref() {
+            Some(locs) if !locs.is_empty() => Some(scope_steps(locs, scope, scenario_dir)?),
+            _ => None,
         };
-        return select_via_combobox(session, &role.role, &opener_name, value);
+        return select_via_combobox(session, &role.role, &opener_name, value, scope_steps);
     }
     let value_lit = json_str(value);
     let option_lit = json_str(value);
@@ -362,12 +394,28 @@ fn select_via_combobox(
     role: &str,
     opener_name: &str,
     option: &str,
+    opener_scope: Option<Vec<crate::dom_activate::ScopeStep>>,
 ) -> anyhow::Result<()> {
     use crate::dom_activate;
     let before = dom_activate::popup_count(session);
-    // Open the opener. Empty name → first matching combobox.
+    // Open the opener. Empty name → first matching combobox. A scope chain
+    // pins the opener to inside its container (repeated cards share names);
+    // the popup itself mounts at document level, so option picking stays
+    // global.
     let opener_role = if role.is_empty() { "combobox" } else { role };
-    let opened = if opener_name.is_empty() {
+    let opened = if let Some(steps) = &opener_scope {
+        matches!(
+            dom_activate::act_scoped(
+                session,
+                opener_role,
+                opener_name,
+                steps,
+                RoleAct::Click,
+                None
+            )?,
+            dom_activate::ScopedOutcome::Done
+        )
+    } else if opener_name.is_empty() {
         dom_activate::activate_role_name(session, opener_role, "")?
     } else {
         dom_activate::activate_role_name(session, opener_role, opener_name)?
@@ -831,8 +879,13 @@ fn try_snapshot_fallback(session: &str, role: &str, name: &str) -> anyhow::Resul
 /// when the click handler opens a native dialog: `Runtime.evaluate` cannot
 /// return while `alert()`/`confirm()`/`prompt()` blocks the page, but the
 /// pending dialog proves the click fired.
-fn click_locator(session: &str, loc: &Locator, scope: &mut ValueScope) -> Result<()> {
-    match act_on_locator(session, loc, scope, RoleAct::Click, None) {
+fn click_locator(
+    session: &str,
+    loc: &Locator,
+    scope: &mut ValueScope,
+    scenario_dir: &std::path::Path,
+) -> Result<()> {
+    match act_on_locator(session, loc, scope, RoleAct::Click, None, scenario_dir) {
         Err(e) if dialog_blocking_error(&e) && browser::dialog_pending(session) => Ok(()),
         other => other,
     }
@@ -842,36 +895,109 @@ fn dialog_blocking_error(e: &anyhow::Error) -> bool {
     format!("{e:#}").contains("dialog is blocking")
 }
 
+/// Resolve a role locator's `name` to the literal accessible name. Plain and
+/// pattern strings get `{{vars}}` substitution; `i18nKey` resolves through
+/// `i18n.json` beside the scenario (then substitutes vars in the result).
+pub(crate) fn resolve_name_match(
+    name: Option<&NameMatch>,
+    scope: &mut ValueScope,
+    scenario_dir: &std::path::Path,
+) -> Result<Option<String>> {
+    match name {
+        Some(NameMatch::Plain(s)) => Ok(Some(crate::value::substitute_scenario_vars(s, scope))),
+        Some(NameMatch::Pattern { pattern, .. }) => {
+            Ok(Some(crate::value::substitute_scenario_vars(pattern, scope)))
+        }
+        Some(NameMatch::I18n { i18n_key }) => {
+            let text = crate::i18n::resolve(scenario_dir, i18n_key)?;
+            Ok(Some(crate::value::substitute_scenario_vars(&text, scope)))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Convert a `locator.scope` chain to JS narrowing steps, resolving names
+/// (incl. i18n keys) and `{{vars}}` in raw selectors.
+pub(crate) fn scope_steps(
+    locs: &[Locator],
+    scope: &mut ValueScope,
+    scenario_dir: &std::path::Path,
+) -> Result<Vec<crate::dom_activate::ScopeStep>> {
+    use crate::dom_activate::ScopeStep;
+    locs.iter()
+        .map(|l| match l {
+            Locator::Role(r) => Ok(ScopeStep::Role {
+                role: r.role.clone(),
+                name: resolve_name_match(r.name.as_ref(), scope, scenario_dir)?.unwrap_or_default(),
+            }),
+            Locator::Raw(raw) => {
+                let v = crate::value::substitute_scenario_vars(&raw.raw.value, scope);
+                Ok(match raw.raw.kind {
+                    RawLocatorKind::Css => ScopeStep::Css(v),
+                    RawLocatorKind::TestId => {
+                        ScopeStep::Css(format!("[data-testid=\"{}\"]", v.replace('"', "\\\"")))
+                    }
+                    RawLocatorKind::Xpath => ScopeStep::Xpath(v),
+                    RawLocatorKind::Text => ScopeStep::Text(v),
+                })
+            }
+        })
+        .collect()
+}
+
+/// Dispatch a role locator that carries a non-empty `scope` chain: resolve the
+/// chain strictly inside the DOM (no document fallback), then act on the
+/// role+name match within the resolved container. Runs via `eval`, so misses
+/// deliberately do not engage the auto-heal ladder (same policy as every
+/// eval-dispatched path).
+fn act_on_scoped_role(
+    session: &str,
+    role: &crate::scenario::LocatorRole,
+    scope: &mut ValueScope,
+    act: RoleAct,
+    value: Option<&str>,
+    scenario_dir: &std::path::Path,
+) -> Result<()> {
+    let steps = scope_steps(role.scope.as_deref().unwrap_or(&[]), scope, scenario_dir)?;
+    let name = resolve_name_match(role.name.as_ref(), scope, scenario_dir)?.unwrap_or_default();
+    match crate::dom_activate::act_scoped(session, &role.role, &name, &steps, act, value)? {
+        crate::dom_activate::ScopedOutcome::Done => {
+            eprintln!(
+                "[v2-replay] role='{}' name='{}' activated inside {} scope level(s)",
+                role.role,
+                name,
+                steps.len()
+            );
+            Ok(())
+        }
+        crate::dom_activate::ScopedOutcome::Miss => bail!(
+            "scoped locator: no role='{}' name='{}' match inside the scope chain",
+            role.role,
+            name
+        ),
+        crate::dom_activate::ScopedOutcome::ScopeMiss(i) => {
+            bail!("scoped locator: scope level {i} matched no element")
+        }
+    }
+}
+
 fn act_on_locator(
     session: &str,
     loc: &Locator,
     scope: &mut ValueScope,
     act: RoleAct,
     value: Option<&str>,
+    scenario_dir: &std::path::Path,
 ) -> Result<()> {
     match loc {
         Locator::Role(role) => {
-            // Top-level scope handling is deferred; recorder typically
-            // emits an empty scope. Nested `scope` arrays are dropped
-            // here with a noted limitation.
-            if let Some(inner) = &role.scope {
-                if !inner.is_empty() {
-                    eprintln!(
-                        "[v2-replay] note: locator.scope is not yet honoured (got {} nested entries)",
-                        inner.len()
-                    );
-                }
+            // A non-empty `scope` pins the search to inside the chain's
+            // resolved container — disambiguates identical controls across
+            // repeated cards/regions.
+            if role.scope.as_deref().is_some_and(|s| !s.is_empty()) {
+                return act_on_scoped_role(session, role, scope, act, value, scenario_dir);
             }
-            let name = match &role.name {
-                Some(NameMatch::Plain(s)) => Some(crate::value::substitute_scenario_vars(s, scope)),
-                Some(NameMatch::Pattern { pattern, .. }) => {
-                    Some(crate::value::substitute_scenario_vars(pattern, scope))
-                }
-                Some(NameMatch::I18n { i18n_key }) => {
-                    bail!("locator.name.i18nKey ({i18n_key:?}) is not yet supported")
-                }
-                None => None,
-            };
+            let name = resolve_name_match(role.name.as_ref(), scope, scenario_dir)?;
             let name_str = name.as_deref().unwrap_or("");
             // agent-browser's find requires --name when matching by
             // accessible name; without a name we fall back to role-only
@@ -1847,5 +1973,111 @@ mod tests {
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         clear_fake();
         assert!(err.contains("value"), "got: {err}");
+    }
+
+    #[test]
+    fn click_scoped_role_resolves_inside_container_via_eval() {
+        let _g = lock_env();
+        std::env::set_var("AGENT_QA_DOM_ACTIVATE_NO_RETRY", "1");
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake_eval_true(tmp.path(), &log);
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "click",
+            "on": { "role": "button", "name": "Select All",
+                    "scope": [{ "raw": { "kind": "testId", "value": "card-b" }, "reason": "card" }] }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+        let out = fs::read_to_string(&log).unwrap();
+        std::env::remove_var("AGENT_QA_DOM_ACTIVATE_NO_RETRY");
+        clear_fake();
+        assert!(out.contains("--session sess eval"), "got: {out}");
+        assert!(out.contains("card-b"), "scope selector in eval: {out}");
+        assert!(out.contains("Select All"), "inner name in eval: {out}");
+        // Scoped locators never hit agent-browser's document-wide find.
+        assert!(!out.contains("find role button"), "got: {out}");
+    }
+
+    #[test]
+    fn scoped_role_miss_names_the_scope_level() {
+        let _g = lock_env();
+        std::env::set_var("AGENT_QA_DOM_ACTIVATE_NO_RETRY", "1");
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        let body = format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\nif [ \"$3\" = eval ]; then printf '\"scope-miss:1\"'; fi\nexit 0\n",
+            log.display()
+        );
+        let bin = write_exec(tmp.path(), "agent-browser", &body);
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "click",
+            "on": { "role": "button", "name": "Go",
+                    "scope": [
+                        { "raw": { "kind": "css", "value": "#a" }, "reason": "r" },
+                        { "raw": { "kind": "css", "value": "#b" }, "reason": "r" }
+                    ] }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
+        let mut scope = ValueScope::default();
+        let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
+        std::env::remove_var("AGENT_QA_DOM_ACTIVATE_NO_RETRY");
+        clear_fake();
+        assert!(err.contains("scope level 1"), "got: {err}");
+    }
+
+    #[test]
+    fn i18n_key_resolves_through_i18n_json() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("i18n.json"),
+            r#"{"bulk.selectAll": "Select All"}"#,
+        )
+        .unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake_eval_true(tmp.path(), &log);
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "click",
+            "on": { "role": "button", "name": { "i18nKey": "bulk.selectAll" } }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        assert!(out.contains("Select All"), "got: {out}");
+    }
+
+    #[test]
+    fn i18n_key_without_dictionary_errors() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake(tmp.path(), &log);
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "click",
+            "on": { "role": "button", "name": { "i18nKey": "btn.save" } }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+        };
+        let mut scope = ValueScope::default();
+        let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
+        clear_fake();
+        assert!(err.contains("i18n.json"), "got: {err}");
     }
 }
