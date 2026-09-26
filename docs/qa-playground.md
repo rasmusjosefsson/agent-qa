@@ -159,11 +159,12 @@ cargo test --locked
 - Three replay capabilities landed from sweep II: `dblclick` (real agent-browser dblclick), `tab` (switch/close/list browser tabs; claims evaluate against the active tab), and centred `scrollTo` (scrollIntoView `block: 'center'` — default top-alignment left elements under the sticky nav and clicks were reported as covered).
 - Native multi-selects take comma-separated `select` values; custom listbox panels are driven by `[role=option]:nth-child(n)` positions; page-side `selectAll`/`pre-select` buttons replay as plain clicks.
 - DOM-activated clicks that open `target=_blank` tabs do NOT switch agent-browser focus — scenarios need an explicit `tab t2` step before asserting on the child tab (verified: `click` → `tab t2` → url/absence claims read the child).
+- Value rejections classify via three channels now — global alert surfaces, field-level constraint validation (`aria-invalid`/`:invalid`/`validationMessage`/`aria-describedby` on the step's own element), and error-carried signals (callGql HTTP 4xx or `errors[]`; 5xx stays a server failure). A run that self-healed prints the diffs path + `heal-promote` command.
 - Locator `scope` chains and `name.i18nKey` resolve at replay: `scope` narrows role+name matching strictly inside each container level (no document fallback, scope-miss errors name the level), `i18nKey` reads a flat `i18n.json` beside `scenario.json`. Golden proof: `locators-tc01` clicks Select All via `{role: button, name: {i18nKey}, scope: [card testId]}`.
 
 ## Near-Term Order
 
-1. Heal-loop v2: value-rejection classification beyond DOM probes, suggested promotions after a healed run.
+1. Heal-loop v2 shipped: value rejections now classify via three channels (global alert surfaces, field-level constraint validation on the step's own locator, and the step error itself for callGql 4xx/errors[]), and a healed run prints its review + `heal-promote` command. Next candidates: more practice coverage as the catalog evolves, or new capability gaps as they surface.
 
 ## Commands
 

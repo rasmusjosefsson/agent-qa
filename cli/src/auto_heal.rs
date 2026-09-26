@@ -131,23 +131,53 @@ pub fn apply_correction(step: &Step, heal: &Heal) -> Step {
     s
 }
 
-/// Live alert/banner/toast texts on the page — the evidence a failed step was
-/// a value rejection (the app refused the submitted input), surfaced in the
-/// audit trail. Empty on probe failure (a dead browser never fabricates one).
-pub fn rejection_evidence(session: &str) -> Vec<String> {
-    let out = match browser::eval_expression(session, &crate::dom_activate::build_rejection_probe())
-    {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
-    decode_eval_json(&out)
-        .and_then(|v| v.as_array().cloned())
-        .map(|a| {
-            a.iter()
-                .filter_map(|x| x.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default()
+/// Evidence a failed step was a value rejection (the app refused the
+/// submitted input) rather than a locator miss — two probe channels, merged
+/// and deduped: global alert/banner/toast surfaces, then field-level
+/// constraint validation (`:invalid`, `aria-invalid`, `validationMessage`)
+/// including the step's own element when `field_hint` resolves. Empty on
+/// probe failure (a dead browser never fabricates one).
+pub fn rejection_evidence(session: &str, field_hint: Option<&str>) -> Vec<String> {
+    let mut hits: Vec<String> = Vec::new();
+    for js in [
+        crate::dom_activate::build_rejection_probe(),
+        crate::dom_activate::build_field_rejection_probe(field_hint),
+    ] {
+        let Ok(out) = browser::eval_expression(session, &js) else {
+            continue;
+        };
+        if let Some(arr) = decode_eval_json(&out).and_then(|v| v.as_array().cloned()) {
+            for item in arr.iter().filter_map(|x| x.as_str().map(str::to_string)) {
+                if !hits.contains(&item) {
+                    hits.push(item);
+                }
+            }
+        }
+    }
+    hits
+}
+
+/// A rejection signal carried by the error itself — no DOM needed. A failed
+/// callGql whose response carried HTTP 4xx or a non-empty `errors[]` means
+/// the backend refused the submitted payload; that's a value rejection even
+/// when the page shows nothing. 5xx is a server failure, not a rejection.
+pub fn error_signal(err: &anyhow::Error) -> Option<String> {
+    for cause in err.chain() {
+        let msg = format!("{cause}");
+        if let Some(idx) = msg.find("HTTP ") {
+            if msg[idx + 5..].starts_with('4') {
+                return Some(first_line(&msg));
+            }
+        }
+        if msg.contains("errors[] in response") {
+            return Some(first_line(&msg));
+        }
+    }
+    None
+}
+
+fn first_line(s: &str) -> String {
+    s.lines().next().unwrap_or(s).chars().take(200).collect()
 }
 
 /// eval serializes a string result JSON-encoded — unwrap one quoting layer
@@ -603,6 +633,26 @@ mod tests {
         // eval JSON-encodes a string result — one quoting layer unwrapped.
         assert_eq!(parse_names(r#""{\"names\":[\"Save\"]}""#), vec!["Save"]);
         assert_eq!(parse_names(""), vec![] as Vec<String>);
+    }
+
+    #[test]
+    fn error_signal_classifies_4xx_and_graphql_errors() {
+        let http422 =
+            anyhow!("gql http://x/submit: HTTP 422 — body: {{\"error\":\"email taken\"}}");
+        assert_eq!(
+            error_signal(&http422).unwrap(),
+            "gql http://x/submit: HTTP 422 — body: {\"error\":\"email taken\"}"
+        );
+        let gql = anyhow!("gql http://x/m: errors[] in response: [{{\"message\":\"quota\"}}]");
+        assert!(error_signal(&gql).unwrap().contains("errors[]"));
+    }
+
+    #[test]
+    fn error_signal_ignores_5xx_and_plain_failures() {
+        // 5xx is a server failure — the app didn't refuse the value, it broke.
+        assert!(error_signal(&anyhow!("gql http://x: HTTP 500 — body: oops")).is_none());
+        assert!(error_signal(&anyhow!("find role button exited 1")).is_none());
+        assert!(error_signal(&anyhow!("HTTP request complete")).is_none());
     }
 
     #[test]

@@ -632,8 +632,23 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                             Ok(None) => {
                                 // Not a healable locator miss — check for a
                                 // value rejection and surface it in the audit
-                                // trail (classified, never retried).
-                                let ev = crate::auto_heal::rejection_evidence(&opts.session_name);
+                                // trail (classified, never retried). Three
+                                // channels: global alert surfaces, field-level
+                                // constraint validation around the step's own
+                                // locator, and the error itself (HTTP 4xx /
+                                // GraphQL errors[] carry the refusal when the
+                                // page shows nothing).
+                                let mut ev = crate::auto_heal::rejection_evidence(
+                                    &opts.session_name,
+                                    step_css_hint(&patched_step).as_deref(),
+                                );
+                                if let Err(e) = &outcome {
+                                    if let Some(sig) = crate::auto_heal::error_signal(e) {
+                                        if !ev.contains(&sig) {
+                                            ev.push(sig);
+                                        }
+                                    }
+                                }
                                 if !ev.is_empty() {
                                     eprintln!(
                                         "[v2-replay] step '{id}' looks like a value rejection: {}",
@@ -808,6 +823,20 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         summary.render()
     };
     eprintln!("{summary_line}");
+    // Suggested promotions: a run that self-healed locators leaves patch
+    // files under replays/<run>/diffs — point at them + the command that
+    // applies them. Skipped under strict mode (the run already failed and
+    // the operator wants the drift reviewed, not promoted).
+    if !healed_steps.is_empty() && !crate::auto_heal::strict() {
+        eprintln!(
+            "[v2-replay] auto-heal applied to {} step(s) ({}); review {} then promote with: agent-qa heal-promote {} --run {}",
+            healed_steps.len(),
+            healed_steps.join(", "),
+            run.run_root.join("diffs").display(),
+            scenario.id,
+            run.run_id,
+        );
+    }
     audit.finished_at = Some(now_iso());
     audit.summary = Some(summary_line.clone());
     audit.exit_code = Some(if summary.ok { 0 } else { 1 });
@@ -1198,6 +1227,26 @@ fn coerce_input(raw: &str, ty: InputType) -> Result<serde_json::Value> {
         InputType::Object => {
             serde_json::from_str(raw).map_err(|e| anyhow!("could not parse as object {raw:?}: {e}"))
         }
+    }
+}
+
+/// A css selector for the step's `on` locator when one exists — the field
+/// probe checks that element's own constraint-validation state first.
+/// Role/text/xpath locators have no css equivalent; return None.
+fn step_css_hint(step: &Step) -> Option<String> {
+    let Step::Do {
+        on: Some(Locator::Raw(raw)),
+        ..
+    } = step
+    else {
+        return None;
+    };
+    match &raw.raw.kind {
+        crate::scenario::RawLocatorKind::Css => Some(raw.raw.value.clone()),
+        crate::scenario::RawLocatorKind::TestId => {
+            Some(format!("[data-testid=\"{}\"]", raw.raw.value))
+        }
+        _ => None,
     }
 }
 
@@ -1863,6 +1912,109 @@ esac\nexit 0\n",
         assert_eq!(audit["exitCode"], 1);
         assert_eq!(audit["autoHealed"], serde_json::json!(["s1"]));
         env::remove_var("AGENT_QA_HEAL_STRICT");
+        clear_fake_browser();
+    }
+
+    /// A do-step failure that is no healable miss (a raw-css click that
+    /// exits non-zero) gets probed for a value rejection — here the
+    /// field-level constraint probe reports the invalid input.
+    #[test]
+    fn replay_classifies_field_rejection() {
+        let _g = lock_env();
+        let work = TempDir::new().unwrap();
+        let log = work.path().join("ab.log");
+        let body = format!(
+            "#!/bin/sh\necho \"$@\" >> '{log}'\n\
+case \"$*\" in\n\
+  *__aqCollectNames*) echo '{{\"names\":[\"Cancel\"]}}' ;;\n\
+  *__aqRejectProbe*) echo '[]' ;;\n\
+  *__aqFieldProbe*) echo '[\"email: Please fill out this field\"]' ;;\n\
+  *click*) exit 1 ;;\n\
+  *snapshot*) echo '' ;;\n\
+esac\nexit 0\n",
+            log = log.display()
+        );
+        let bin = write_exec(work.path(), "agent-browser", &body);
+        env::set_var(browser::BIN_ENV, &bin);
+        browser::_reset_bin_cache_for_tests();
+
+        let jdir = work.path().join("sid");
+        fs::create_dir_all(&jdir).unwrap();
+        let jfile = jdir.join("scenario.json");
+        fs::write(
+            &jfile,
+            r##"{
+            "schema": "scenario/2",
+            "id": "reject-smoke",
+            "intent": "submit",
+            "env": { "open": [ { "kind": "nav", "url": "https://example.com/", "intent": "land" } ] },
+            "steps": [
+                { "id": "s1", "intent": "submit", "kind": "do", "verb": "click",
+                  "on": { "raw": { "kind": "css", "value": "#submit" }, "reason": "t" } }
+            ]
+        }"##,
+        )
+        .unwrap();
+
+        run(&heal_opts(jfile)).unwrap_err();
+        let run_id = fs::read_to_string(jdir.join("replays").join("latest.txt")).unwrap();
+        let rows = fs::read_to_string(jdir.join("replays").join(run_id.trim()).join("heal.jsonl"))
+            .unwrap();
+        let row: serde_json::Value = serde_json::from_str(rows.trim()).unwrap();
+        assert_eq!(row["mode"], "value-rejection");
+        assert!(row["rationale"]
+            .as_str()
+            .unwrap()
+            .contains("email: Please fill out this field"));
+        clear_fake_browser();
+    }
+
+    /// A callGql 4xx carries the refusal in the error itself — no DOM
+    /// evidence needed; the rejection is still classified and persisted.
+    #[test]
+    fn replay_classifies_gql_client_rejection() {
+        let _g = lock_env();
+        let work = TempDir::new().unwrap();
+        let log = work.path().join("ab.log");
+        let body = format!(
+            "#!/bin/sh\necho \"$@\" >> '{log}'\n\
+case \"$*\" in\n\
+  *__aqRejectProbe*) echo '[]' ;;\n\
+  *__aqFieldProbe*) echo '[]' ;;\n\
+  *fetch*) echo '{{\"status\":422,\"body\":\"{{\\\"error\\\":\\\"email taken\\\"}}\"}}' ;;\n\
+  *snapshot*) echo '' ;;\n\
+esac\nexit 0\n",
+            log = log.display()
+        );
+        let bin = write_exec(work.path(), "agent-browser", &body);
+        env::set_var(browser::BIN_ENV, &bin);
+        browser::_reset_bin_cache_for_tests();
+
+        let jdir = work.path().join("sid");
+        fs::create_dir_all(&jdir).unwrap();
+        let jfile = jdir.join("scenario.json");
+        fs::write(
+            &jfile,
+            r#"{
+            "schema": "scenario/2",
+            "id": "gql-reject-smoke",
+            "intent": "submit mutation",
+            "env": { "open": [ { "kind": "nav", "url": "https://example.com/", "intent": "land" } ] },
+            "steps": [
+                { "id": "s1", "intent": "mutation", "kind": "do", "verb": "callGql",
+                  "params": { "url": "https://example.com/graphql", "query": "{ noop }" } }
+            ]
+        }"#,
+        )
+        .unwrap();
+
+        run(&heal_opts(jfile)).unwrap_err();
+        let run_id = fs::read_to_string(jdir.join("replays").join("latest.txt")).unwrap();
+        let rows = fs::read_to_string(jdir.join("replays").join(run_id.trim()).join("heal.jsonl"))
+            .unwrap();
+        let row: serde_json::Value = serde_json::from_str(rows.trim()).unwrap();
+        assert_eq!(row["mode"], "value-rejection");
+        assert!(row["rationale"].as_str().unwrap().contains("HTTP 422"));
         clear_fake_browser();
     }
 

@@ -378,6 +378,55 @@ pub fn build_scoped_role_probe(role: &str, name: &str, scope: &[ScopeStep]) -> S
     )
 }
 
+/// JS returning up to 4 field-level rejection evidence strings — inputs
+/// that failed constraint validation (`:invalid`, `aria-invalid="true"`)
+/// plus the step's own element when `css_hint` resolves. Complements the
+/// global alert probe: form validation usually surfaces per-field via
+/// `validationMessage`/`aria-describedby` and never raises a banner.
+/// `__aqFieldProbe` marker for test doubles.
+pub fn build_field_rejection_probe(css_hint: Option<&str>) -> String {
+    let hint_expr = css_hint
+        .map(|s| format!("document.querySelector({})", json_str(s)))
+        .unwrap_or_else(|| "null".to_string());
+    format!(
+        r#"(() => {{ const __aqFieldProbe = true;
+  const vis = (n) => {{ try {{ return n.getClientRects().length > 0; }} catch (e) {{ return false; }} }};
+  const evidence = (el) => {{
+    try {{
+      const name = el.getAttribute('aria-label') || el.getAttribute('placeholder') ||
+        el.getAttribute('name') || el.id || el.tagName.toLowerCase();
+      const desc = (el.getAttribute('aria-describedby') || '').split(/\s+/)
+        .map((i) => {{ const d = document.getElementById(i); return d ? (d.innerText || '').trim() : ''; }})
+        .filter(Boolean).join(' ');
+      const msg = el.validationMessage || desc || 'invalid';
+      return (name + ': ' + msg).slice(0, 160);
+    }} catch (e) {{ return null; }}
+  }};
+  const hits = [];
+  const seen = new Set();
+  const push = (el, prefix) => {{
+    if (!el || seen.has(el)) return;
+    seen.add(el);
+    const e = evidence(el);
+    if (e) hits.push(prefix + e);
+  }};
+  const hinted = {hint_expr};
+  if (hinted && (hinted.matches(':invalid') || hinted.getAttribute('aria-invalid') === 'true')) {{
+    push(hinted, 'field: ');
+  }}
+  const active = document.activeElement;
+  if (active && active.matches && (active.matches(':invalid') || active.getAttribute('aria-invalid') === 'true')) {{
+    push(active, 'field(active): ');
+  }}
+  for (const el of document.querySelectorAll('[aria-invalid="true"], input:invalid, select:invalid, textarea:invalid')) {{
+    if (hits.length >= 4) break;
+    if (vis(el)) push(el, 'field: ');
+  }}
+  return JSON.stringify(hits);
+}})()"#
+    )
+}
+
 /// JS returning up to 3 visible alert/banner/toast texts — evidence that a
 /// failed step was a value rejection (the app refused the submitted input)
 /// rather than a locator miss. `__aqRejectProbe` marker for test doubles.
@@ -703,5 +752,23 @@ mod tests {
         assert!(js.contains("role=listbox"));
         assert!(js.contains("role=option"));
         assert!(js.contains("aria-expanded=\\\"true\\\"") || js.contains("aria-expanded=\"true\""));
+    }
+
+    #[test]
+    fn field_probe_reads_constraint_validation_and_hint() {
+        let js = build_field_rejection_probe(Some("#email"));
+        assert!(js.contains("__aqFieldProbe"));
+        assert!(js.contains(":invalid"));
+        assert!(js.contains("aria-invalid"));
+        assert!(js.contains("validationMessage"));
+        assert!(js.contains("aria-describedby"));
+        assert!(js.contains("document.querySelector(\"#email\")"));
+        assert!(js.contains("activeElement"));
+    }
+
+    #[test]
+    fn field_probe_without_hint_skips_element_lookup() {
+        let js = build_field_rejection_probe(None);
+        assert!(js.contains("const hinted = null;"));
     }
 }
