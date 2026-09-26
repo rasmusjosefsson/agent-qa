@@ -98,6 +98,21 @@ page has no stable semantic target.
 
 8. After a pass, update this doc and add a package script if useful.
 
+9. For PRs that add or change a replay-visible capability, attach a recorded
+   demo so reviewers can see the behavior. `evals/capture-demo.sh` replays a
+   produced scenario headed under screen capture and writes `demo.webp` (with a
+   two-line caption bar baked in) plus the raw `demo.webm`:
+
+```bash
+evals/capture-demo.sh \
+  --scenario evals/results/<golden-run>/scenarios/<sid> \
+  --out /tmp/demo-<tc> --session demo-<tc> \
+  --line1 "<TC> — <feature> demo" \
+  --line2 "<what to watch for>"
+```
+
+Embed the webp in the PR body or a comment as `![alt](/abs/path/demo.webp)`.
+
 ## Pass Criteria
 
 A case is golden-passing only when all are true:
