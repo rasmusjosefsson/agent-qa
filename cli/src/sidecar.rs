@@ -129,6 +129,10 @@ pub struct RunAudit {
     /// dispatch time. Empty `None` when the flag wasn't set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heal_overrides_applied: Option<Vec<String>>,
+    /// stepIds whose locator self-healed via an inline strategy-ladder
+    /// correction this run (see `auto_heal`). `None` when no heal fired.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_healed: Option<Vec<String>>,
     /// Free-form label from `replay --tag`. Useful for grouping runs
     /// across replays (e.g. 'pre-deploy', 'nightly').
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -544,6 +548,7 @@ mod tests {
             scenario_content_hash: "deadbeef".into(),
             parameters: None,
             heal_overrides_applied: None,
+            auto_healed: None,
             tag: None,
         };
         write_run_audit(&rp, &audit).unwrap();

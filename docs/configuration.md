@@ -89,3 +89,5 @@ agent-browser and pings each plugin.
 | `AGENT_QA_RECORD_DIR`      | Override the recorder workfile root                                 |
 | `AGENT_QA_PLUGINS`         | Colon-separated list of plugin binary paths                          |
 | `AGENT_QA_NO_AUTO_RECOVER` | `1` disables agent-browser orphan-daemon auto-retry (debug only)    |
+| `AGENT_QA_NO_HEAL`         | Set disables the replay auto-heal loop entirely (CI fail-hard)      |
+| `AGENT_QA_HEAL_STRICT`     | Set fails a run that needed any heal, even though every step passed |

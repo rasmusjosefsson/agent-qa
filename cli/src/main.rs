@@ -10,6 +10,7 @@ use std::process::ExitCode;
 
 mod aria_snapshot;
 mod audit;
+mod auto_heal;
 mod browser;
 mod buffer;
 mod byo_doctor;
