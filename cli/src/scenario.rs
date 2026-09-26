@@ -155,6 +155,11 @@ pub enum Verb {
     Tab,
     /// Resize the viewport: `params` = `{ "width": <px>, "height": <px> }`.
     Viewport,
+    /// Arm native file-chooser interception and inject files: `params` =
+    /// `{ "files": [<path>, ...] }` (paths resolve like upload's). The next
+    /// click that would open the OS picker resolves with these files instead.
+    /// An empty `files` array simulates cancelling the picker.
+    FileChooser,
     #[serde(rename = "loop")]
     Loop,
     Group,

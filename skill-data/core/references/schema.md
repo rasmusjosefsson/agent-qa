@@ -92,5 +92,39 @@ navigation when the flag triggers the browser launch. `eval`, `snapshot`, and
 screenshots cannot run while a dialog is pending, so per-step sidecars are
 skipped for those steps.
 
+### Native file chooser
+
+Clicking an `<input type="file">` — directly, via `<label for>`, via
+`input.click()`/`showPicker()`, or via `window.showOpenFilePicker()` — opens
+the OS picker, which replay cannot drive and headless mode leaves hanging.
+Arm interception with a `fileChooser` do-step BEFORE the click that would
+open the picker:
+
+```json
+{
+  "id": "s1",
+  "intent": "next chooser gets these files",
+  "kind": "do",
+  "verb": "fileChooser",
+  "params": { "files": ["uploads/report.pdf", "uploads/logo.png"] }
+}
+```
+
+The next chooser that opens (whichever path triggered it) resolves with the
+given files — real `File` objects land on `input.files` (or `getFile()`
+handles for `showOpenFilePicker`) with `input`+`change` dispatched, so the
+page's own handlers run normally. Paths resolve like `upload`'s (cwd, then
+the scenario dir, then `$AGENT_QA_REPO_ROOT`). `params.files` may also be a
+single `{{var}}`-resolved string array; an empty array simulates cancelling
+the picker. The hook lives in the page — re-arm after navigations. Once
+installed it also captures an UNARMED chooser-open (input click or
+`showOpenFilePicker`) as "pending", so a click followed by a `fileChooser`
+step resolves it — but only if an earlier `fileChooser` step already ran in
+the same document.
+
+For plain visible file inputs the direct `upload` verb is simpler; use
+`fileChooser` when the input is hidden/transient (created on click), styled
+behind a button or label, or driven through `showOpenFilePicker`.
+
 Use `agent-qa scenario check <scenario.json>` before replay. It validates the
 schema and runs the scenario linter.

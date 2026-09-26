@@ -29,6 +29,7 @@ sha2 = "0.10"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 similar = "2"
 image = { version = "0.25", default-features = false, features = ["png"] }
+base64 = "0.22"
 ureq = { version = "2", default-features = false, features = ["json", "tls"] }
 tempfile = "3"
 

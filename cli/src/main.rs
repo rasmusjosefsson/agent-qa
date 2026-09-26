@@ -22,6 +22,7 @@ mod design;
 mod doctor;
 mod dom_activate;
 mod env_ops;
+mod file_chooser;
 mod fill_unique;
 mod flush;
 mod global_config;

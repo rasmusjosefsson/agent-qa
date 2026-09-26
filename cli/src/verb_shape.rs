@@ -78,6 +78,12 @@ fn rule_for(verb: &Verb) -> VerbRule {
             params_required: &["width", "height"],
             ..VerbRule::default()
         },
+        Verb::FileChooser => VerbRule {
+            required: &[DoField::Params],
+            forbidden: &[DoField::On, DoField::Value],
+            params_required: &["files"],
+            ..VerbRule::default()
+        },
         Verb::Press => VerbRule {
             required: &[DoField::Value],
             value_kinds: &["literal"],
@@ -403,6 +409,40 @@ mod tests {
         let s = parse(json!({
             "id": "s1", "intent": "x", "kind": "do", "verb": "viewport",
             "params": { "width": 375, "height": 812 }
+        }));
+        assert_verb_shape(&s).unwrap();
+    }
+
+    #[test]
+    fn file_chooser_requires_files_param() {
+        let s = parse(json!({ "id": "s1", "intent": "x", "kind": "do", "verb": "fileChooser" }));
+        assert!(assert_verb_shape(&s)
+            .unwrap_err()
+            .to_string()
+            .contains("requires 'params'"));
+
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "fileChooser",
+            "params": { "mode": "set" }
+        }));
+        assert!(assert_verb_shape(&s)
+            .unwrap_err()
+            .to_string()
+            .contains("params requires 'files'"));
+
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "fileChooser",
+            "params": { "files": ["a.png"] },
+            "on": { "role": "button" }
+        }));
+        assert!(assert_verb_shape(&s)
+            .unwrap_err()
+            .to_string()
+            .contains("must not carry 'on'"));
+
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "fileChooser",
+            "params": { "files": ["a.png"] }
         }));
         assert_verb_shape(&s).unwrap();
     }
