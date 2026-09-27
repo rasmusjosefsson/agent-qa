@@ -356,6 +356,16 @@ fn cmd_load(args: &[String]) -> Result<u8> {
         }
     }
     let sid = sid.ok_or_else(|| anyhow!("usage: buffer load <sid> [--force]"))?;
+    let steps = load_into_buffer(sid, "default", force)?;
+    println!("loaded {sid} into the buffer ({steps} step(s))");
+    Ok(0)
+}
+
+/// Seed the active recorder state with a saved scenario's steps (same sid,
+/// so `flush` writes back to it). `session` is the browser session the
+/// caller intends to keep driving — record-step captures sidecars there.
+/// Returns the number of seeded steps. Reused by `record continue`.
+pub(crate) fn load_into_buffer(sid: &str, session: &str, force: bool) -> Result<usize> {
     if let Some(existing) = RecorderState::try_load_active()? {
         if !existing.steps.is_empty() && !force {
             bail!(
@@ -375,7 +385,7 @@ fn cmd_load(args: &[String]) -> Result<u8> {
     let mut state = RecorderState::new(
         sid.to_string(),
         sc.intent.clone(),
-        "default".into(),
+        session.to_string(),
         crate::recorder_state::RecorderBaseline::KeepSession,
         Some(format!("scenario:{sid}")),
         crate::browser::BrowserConnection::default(),
@@ -392,8 +402,7 @@ fn cmd_load(args: &[String]) -> Result<u8> {
     state.original = Some(value);
     let steps = state.steps.len();
     state.save()?;
-    println!("loaded {sid} into the buffer ({steps} step(s))");
-    Ok(0)
+    Ok(steps)
 }
 
 #[cfg(test)]

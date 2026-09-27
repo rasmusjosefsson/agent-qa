@@ -10,6 +10,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `start` | Mint a new scenario directory + skeleton `scenario.json` |
 | `record-step` | Append one step to the in-flight scenario via the recorder |
 | `record pause \| resume \| status` | Freeze capture while you set up page state — record append paths (`record-step`, `smart-click`, `fill-unique`, the editor's auto-record) drop steps while paused instead of writing them. `status --json` emits `{sid, intent, session, paused, steps, startedAt}`. |
+| `record continue <sid>` | Extend an existing scenario: replay it to its end state in `--session` (default `default`), seed the buffer with its steps, keep recording — `flush` writes the extended scenario back to the same sid. `--skip-replay` when hand-driving to the end state. |
 | `run-step <do|check> <draft-json>` | Dispatch ONE trigger payload against the live session for author-time feedback, without recording. Same direct draft shapes as `record-step`; prints a `{ok,…}` JSON line. `--session`. |
 | `aria-snapshot` | Dump the live page's accessibility tree as structured picker rows (a thin adapter over `agent-browser snapshot`). Flags: `--interactive`, `--session`. |
 | `cdp-url [--session] [--json]` | Print the live session's CDP WebSocket endpoint. Powers the editor's inline live-browser pane (screencast + drive-to-record: clicks, typing, select commits, checkbox/radio toggles, and named-key presses all land as steps). Read-only. |
