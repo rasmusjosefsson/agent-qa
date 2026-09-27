@@ -4,6 +4,7 @@
 //!   scenario validate <file>      Validate against the embedded schema.
 //!   scenario summary <file>       One-line per-step summary.
 //!   scenario inputs <file>        List declared inputs (--json optional).
+//!   scenario insert <file> ...    Splice a validated step into a saved scenario.
 
 use std::fs;
 use std::path::Path;
@@ -450,6 +451,64 @@ pub fn run(args: &[String]) -> Result<u8> {
             let json_out = args.iter().any(|a| a == "--json");
             inputs(Path::new(file), json_out)
         }
+        Some("insert") => {
+            let mut file: Option<&str> = None;
+            let mut kind: Option<&str> = None;
+            let mut draft: Option<&str> = None;
+            let mut after: Option<String> = None;
+            let mut at: Option<usize> = None;
+            let mut it = args[1..].iter();
+            while let Some(a) = it.next() {
+                match a.as_str() {
+                    "--after" => {
+                        after = Some(
+                            it.next()
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--after requires a step id"))?,
+                        )
+                    }
+                    s if s.starts_with("--after=") => {
+                        after = Some(s["--after=".len()..].to_string())
+                    }
+                    "--at" => {
+                        let v = it
+                            .next()
+                            .cloned()
+                            .ok_or_else(|| anyhow!("--at requires an index"))?;
+                        at = Some(
+                            v.parse()
+                                .map_err(|_| anyhow!("--at must be a non-negative integer"))?,
+                        )
+                    }
+                    s if s.starts_with("--at=") => {
+                        at = Some(
+                            s["--at=".len()..]
+                                .parse()
+                                .map_err(|_| anyhow!("--at must be a non-negative integer"))?,
+                        )
+                    }
+                    other if other.starts_with("--") => bail!("unknown flag {other:?}"),
+                    other => {
+                        if file.is_none() {
+                            file = Some(other);
+                        } else if kind.is_none() {
+                            kind = Some(other);
+                        } else if draft.is_none() {
+                            draft = Some(other);
+                        } else {
+                            bail!("unexpected positional {other:?}");
+                        }
+                    }
+                }
+            }
+            let (file, kind, draft) = match (file, kind, draft) {
+                (Some(f), Some(k), Some(d)) => (f, k, d),
+                _ => bail!(
+                    "usage: scenario insert <file> <do|check> <draft-json> [--after <stepId> | --at <index>]"
+                ),
+            };
+            insert(Path::new(file), kind, draft, after.as_deref(), at)
+        }
         Some("new") => {
             let mut file: Option<&str> = None;
             let mut force = false;
@@ -491,14 +550,14 @@ pub fn run(args: &[String]) -> Result<u8> {
             Ok(0)
         }
         Some(other) => bail!(
-            "unknown subverb {other:?}. Try: validate <file> | summary <file> | inputs <file> [--json] | new <file>"
+            "unknown subverb {other:?}. Try: validate <file> | summary <file> | inputs <file> [--json] | new <file> | insert <file> <do|check> <draft-json>"
         ),
     }
 }
 
 fn help() {
     println!(
-        "agent-qa scenario — operations on a scenario JSON\n\nUsage:\n  agent-qa scenario validate <file> [--json | --format text|json|github]\n                                            Schema-validate the scenario (use '-' for stdin)\n  agent-qa scenario check <file> [--strict]  Schema-validate AND lint in one pass\n                                            (combined exit code: 0 iff both pass).\n                                            (use '-' for stdin)\n  agent-qa scenario check-all [--strict]     Same combo across every scenario under the\n                                            scenarios root; exit 1 iff any fail.\n  agent-qa scenario validate-all [--json | --format text|json|github]\n                                            Schema-validate every scenario under the\n                                            scenarios root; exit 1 iff any fail\n  agent-qa scenario ls [--filter <substr>] [--json]\n                                            Print every sid under the scenarios root,\n                                            one per line (lex sort).\n  agent-qa scenario latest [--filter <substr>]\n                                            Print the sid whose scenario.json was most\n                                            recently modified.\n  agent-qa scenario count [--filter <substr>] [--json]\n                                            Print the number of scenarios under the root.\n                                            --filter narrows to sids containing <substr>.\n                                            --json wraps the count + filter in a JSON object.\n  agent-qa scenario summary  <file> [--filter <substr>] [--json]\n                                            Per-step summary (id, kind, verb/claim).\n                                            (use '-' for stdin)\n                                            --filter: case-insensitive substring\n                                            matched against id/intent/verb.\n  agent-qa scenario inputs   <file> [--json] List declared inputs (type/default/sensitive)\n  agent-qa scenario new      <file>          Scaffold a minimal valid scenario.json\n                                            (--force to overwrite, --url, --intent)\n  agent-qa scenario diff <a> <b>             Unified diff between two scenario.json files\n                                            (canonicalised JSON; exit 1 on difference)\n  agent-qa scenario hash <file>              SHA-256 of scenario.json bytes (same algorithm\n                                            replay + heal-promote use for the rebase guard)\n  agent-qa scenario id <file>                Print the scenario's id field (one line)\n  agent-qa scenario intent <file>            Print the scenario's intent field (one line)\n  agent-qa scenario step-ids <file>          Print every step id, one per line\n  agent-qa scenario field <file> <name>      Print any top-level scenario field (id, intent,\n                                            schema, etc.); object/array → compact JSON.\n  agent-qa scenario coverage <file> [--json] Per-step check coverage: how many do steps are\n                                            followed by a check claim, and how many are bare.\n  agent-qa scenario lint <file> [--json] [--strict] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run common lints (use '-' for stdin)\n                                            (duplicate ids, empty intent, bare do,\n                                            undeclared/unused inputs). Exit 1 iff\n                                            any errors are reported (--strict treats\n                                            warnings as errors). --rule narrows to specific\n                                            codes; --exclude-rule subtracts (both repeatable).\n                                            --format github emits GitHub Actions annotations.\n  agent-qa scenario lint --list-rules [--json]\n                                            Enumerate the lint rules + their severities.\n  agent-qa scenario lint-all [--json] [--strict] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run lints against every scenario under the\n                                            scenarios root; exit 1 iff any errors are reported\n                                            (--strict treats warnings as errors). --rule\n                                            narrows to specific codes; --exclude-rule\n                                            subtracts (both repeatable).\n  agent-qa scenario rename <sid> <new-sid>   Rename a scenario: patches scenario.json's id\n                                            field, then moves the directory under the\n                                            scenarios root. (refuses to overwrite).\n  agent-qa scenario copy <sid> <new-sid>     Copy a scenario (scenario.json with id patched);\n                                            replays are NOT copied. Refuses to overwrite.\n  agent-qa scenario delete <sid> [--yes/-y]  Remove a scenario directory + all its replays.\n                                            Dry-run by default; --yes confirms.\n  agent-qa scenario prune-replays <sid> --keep N [--yes] [--keep-failed]\n                                            Keep the N most recent replays under\n                                            <sid>/replays/; dry-run by default.\n                                            --keep-failed preserves all non-zero-exit\n                                            runs regardless of N.\n  agent-qa scenario prune-all --keep N [--yes] [--keep-failed]\n                                            Like prune-replays but across every scenario\n                                            under the scenarios root. --keep-failed\n                                            preserves failed runs per scenario."
+        "agent-qa scenario — operations on a scenario JSON\n\nUsage:\n  agent-qa scenario validate <file> [--json | --format text|json|github]\n                                            Schema-validate the scenario (use '-' for stdin)\n  agent-qa scenario check <file> [--strict]  Schema-validate AND lint in one pass\n                                            (combined exit code: 0 iff both pass).\n                                            (use '-' for stdin)\n  agent-qa scenario check-all [--strict]     Same combo across every scenario under the\n                                            scenarios root; exit 1 iff any fail.\n  agent-qa scenario validate-all [--json | --format text|json|github]\n                                            Schema-validate every scenario under the\n                                            scenarios root; exit 1 iff any fail\n  agent-qa scenario ls [--filter <substr>] [--json]\n                                            Print every sid under the scenarios root,\n                                            one per line (lex sort).\n  agent-qa scenario latest [--filter <substr>]\n                                            Print the sid whose scenario.json was most\n                                            recently modified.\n  agent-qa scenario count [--filter <substr>] [--json]\n                                            Print the number of scenarios under the root.\n                                            --filter narrows to sids containing <substr>.\n                                            --json wraps the count + filter in a JSON object.\n  agent-qa scenario summary  <file> [--filter <substr>] [--json]\n                                            Per-step summary (id, kind, verb/claim).\n                                            (use '-' for stdin)\n                                            --filter: case-insensitive substring\n                                            matched against id/intent/verb.\n  agent-qa scenario inputs   <file> [--json] List declared inputs (type/default/sensitive)\n  agent-qa scenario new      <file>          Scaffold a minimal valid scenario.json\n                                            (--force to overwrite, --url, --intent)\n  agent-qa scenario insert <file> <do|check> <draft-json> [--after <stepId> | --at <index>]\n                                            Splice a validated step into a saved scenario.\n                                            Draft shape matches record-step (id/kind\n                                            omitted); position defaults to the end.\n  agent-qa scenario diff <a> <b>             Unified diff between two scenario.json files\n                                            (canonicalised JSON; exit 1 on difference)\n  agent-qa scenario hash <file>              SHA-256 of scenario.json bytes (same algorithm\n                                            replay + heal-promote use for the rebase guard)\n  agent-qa scenario id <file>                Print the scenario's id field (one line)\n  agent-qa scenario intent <file>            Print the scenario's intent field (one line)\n  agent-qa scenario step-ids <file>          Print every step id, one per line\n  agent-qa scenario field <file> <name>      Print any top-level scenario field (id, intent,\n                                            schema, etc.); object/array → compact JSON.\n  agent-qa scenario coverage <file> [--json] Per-step check coverage: how many do steps are\n                                            followed by a check claim, and how many are bare.\n  agent-qa scenario lint <file> [--json] [--strict] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run common lints (use '-' for stdin)\n                                            (duplicate ids, empty intent, bare do,\n                                            undeclared/unused inputs). Exit 1 iff\n                                            any errors are reported (--strict treats\n                                            warnings as errors). --rule narrows to specific\n                                            codes; --exclude-rule subtracts (both repeatable).\n                                            --format github emits GitHub Actions annotations.\n  agent-qa scenario lint --list-rules [--json]\n                                            Enumerate the lint rules + their severities.\n  agent-qa scenario lint-all [--json] [--strict] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run lints against every scenario under the\n                                            scenarios root; exit 1 iff any errors are reported\n                                            (--strict treats warnings as errors). --rule\n                                            narrows to specific codes; --exclude-rule\n                                            subtracts (both repeatable).\n  agent-qa scenario rename <sid> <new-sid>   Rename a scenario: patches scenario.json's id\n                                            field, then moves the directory under the\n                                            scenarios root. (refuses to overwrite).\n  agent-qa scenario copy <sid> <new-sid>     Copy a scenario (scenario.json with id patched);\n                                            replays are NOT copied. Refuses to overwrite.\n  agent-qa scenario delete <sid> [--yes/-y]  Remove a scenario directory + all its replays.\n                                            Dry-run by default; --yes confirms.\n  agent-qa scenario prune-replays <sid> --keep N [--yes] [--keep-failed]\n                                            Keep the N most recent replays under\n                                            <sid>/replays/; dry-run by default.\n                                            --keep-failed preserves all non-zero-exit\n                                            runs regardless of N.\n  agent-qa scenario prune-all --keep N [--yes] [--keep-failed]\n                                            Like prune-replays but across every scenario\n                                            under the scenarios root. --keep-failed\n                                            preserves failed runs per scenario."
     );
 }
 
@@ -546,6 +605,67 @@ fn new(path: &Path, force: bool, url: &str, intent: &str) -> Result<u8> {
     bytes.push(b'\n');
     fs::write(path, &bytes).with_context(|| format!("write {}", path.display()))?;
     println!("wrote {} ({} bytes)", path.display(), bytes.len());
+    Ok(0)
+}
+
+/// `scenario insert <file> <do|check> <draft-json> [--after <stepId> | --at
+/// <index>]` splices a validated step into a saved scenario. The draft uses
+/// the same shape as `record-step` (id/kind omitted — kind comes from the
+/// arg, id is minted as the first free `s<n>`). Position defaults to the
+/// end; `--after` resolves a step id to the slot right behind it, `--at`
+/// takes a raw index.
+fn insert(
+    path: &Path,
+    kind_arg: &str,
+    draft_json: &str,
+    after: Option<&str>,
+    at: Option<usize>,
+) -> Result<u8> {
+    if after.is_some() && at.is_some() {
+        bail!("pass --after or --at, not both");
+    }
+    let mut sc = load_scenario(path)?;
+    let kind = crate::record_step::StepKind::parse(kind_arg)?;
+    let pos = match (after, at) {
+        (Some(id), None) => {
+            let idx = sc
+                .steps
+                .iter()
+                .position(|s| s.id() == id)
+                .ok_or_else(|| anyhow!("no step with id {id:?}"))?;
+            idx + 1
+        }
+        (None, Some(i)) => {
+            if i > sc.steps.len() {
+                bail!("--at {i} out of range ({} steps)", sc.steps.len());
+            }
+            i
+        }
+        (None, None) => sc.steps.len(),
+        (Some(_), Some(_)) => unreachable!(),
+    };
+    let mut n = sc.steps.len();
+    let step_id = loop {
+        let candidate = format!("s{n}");
+        if sc.steps.iter().all(|s| s.id() != candidate) {
+            break candidate;
+        }
+        n += 1;
+    };
+    let payload: serde_json::Value =
+        serde_json::from_str(draft_json).context("draft must be a JSON object")?;
+    let step = crate::record_step::parse_draft(kind, &payload, &step_id)?;
+    sc.steps.insert(pos, step);
+    let body = serde_json::to_value(&sc)?;
+    schema::validate_value(&body)
+        .context("scenario with the inserted step failed schema validation")?;
+    let mut bytes = serde_json::to_string_pretty(&body)?.into_bytes();
+    bytes.push(b'\n');
+    fs::write(path, &bytes).with_context(|| format!("write {}", path.display()))?;
+    println!(
+        "inserted {kind_arg} step at {pos} (id={step_id}); {} step(s)",
+        sc.steps.len()
+    );
     Ok(0)
 }
 
@@ -2403,6 +2523,69 @@ mod tests {
         // --json must also exit 0 in both filtered and unfiltered modes.
         assert_eq!(summary(&p, None, true).unwrap(), 0);
         assert_eq!(summary(&p, Some("goto"), true).unwrap(), 0);
+    }
+
+    #[test]
+    fn insert_splices_a_validated_step_and_mints_a_free_id() {
+        let tmp = TempDir::new().unwrap();
+        let p = write(
+            tmp.path(),
+            r#"{
+              "schema": "scenario/2", "id": "demo", "intent": "smoke",
+              "steps": [
+                { "id": "s0", "intent": "go", "kind": "do", "verb": "reload" },
+                { "id": "s1", "intent": "url ok", "kind": "check",
+                  "claim": { "subject": { "url": true }, "predicate": "exists" } }
+              ]
+            }"#,
+        );
+        insert(
+            &p,
+            "check",
+            r#"{"intent":"looks right","claim":{"subject":{"url":true},"predicate":"contains","value":"/done"}}"#,
+            Some("s0"),
+            None,
+        )
+        .unwrap();
+        let sc = load_scenario(&p).unwrap();
+        assert_eq!(sc.steps.len(), 3);
+        assert_eq!(sc.steps[1].id(), "s2");
+        assert_eq!(sc.steps[1].intent(), "looks right");
+        // --at 0 prepends; default appends.
+        insert(
+            &p,
+            "do",
+            r#"{"intent":"top","verb":"reload"}"#,
+            None,
+            Some(0),
+        )
+        .unwrap();
+        insert(&p, "do", r#"{"intent":"tail","verb":"wait"}"#, None, None).unwrap();
+        let sc = load_scenario(&p).unwrap();
+        assert_eq!(sc.steps.len(), 5);
+        assert_eq!(sc.steps[0].intent(), "top");
+        assert_eq!(sc.steps[4].intent(), "tail");
+        // Unknown --after id and out-of-range --at are errors, not writes.
+        assert!(insert(
+            &p,
+            "do",
+            r#"{"intent":"x","verb":"wait"}"#,
+            Some("nope"),
+            None
+        )
+        .is_err());
+        assert!(insert(&p, "do", r#"{"intent":"x","verb":"wait"}"#, None, Some(99)).is_err());
+        // An invalid draft leaves the file untouched.
+        let before = fs::read_to_string(&p).unwrap();
+        assert!(insert(
+            &p,
+            "check",
+            r#"{"claim":{"subject":{"url":true},"predicate":"exists"}}"#,
+            None,
+            None
+        )
+        .is_err());
+        assert_eq!(fs::read_to_string(&p).unwrap(), before);
     }
 
     #[test]
