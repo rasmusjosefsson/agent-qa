@@ -126,6 +126,32 @@ For plain visible file inputs the direct `upload` verb is simpler; use
 `fileChooser` when the input is hidden/transient (created on click), styled
 behind a button or label, or driven through `showOpenFilePicker`.
 
+### Drag and drop
+
+`do/drag` drags `on` (the source locator) onto `params.to` (the drop-target
+locator — same locator shapes as `on`):
+
+```json
+{
+  "id": "s4",
+  "intent": "move Card A into Done",
+  "kind": "do",
+  "verb": "drag",
+  "on": { "role": "listitem", "name": "Card A" },
+  "params": { "to": { "role": "list", "name": "Done" } }
+}
+```
+
+One eval resolves both endpoints (scope chains included) and dispatches the
+full gesture on the nodes: `pointerdown`/`mousedown` on the source, a shared
+`DataTransfer` `dragstart → dragenter/dragover → drop → dragend` chain for
+HTML5 `draggable` dnd, plus `pointermove`/`mousemove`/`pointerup`/`mouseup`
+for pointer- and mouse-driven sortable libraries. Because the events land on
+the nodes directly (no coordinates), overlay interception can't swallow them.
+In the workbench, drag an element to its target on the live canvas while
+recording — the gesture is recorded as a `drag` step automatically (both
+endpoints must have an accessible role + name).
+
 ### Downloads and file claims
 
 `do/download` clicks a trigger (`on` locator) and saves the browser download
