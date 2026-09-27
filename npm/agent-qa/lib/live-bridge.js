@@ -104,6 +104,48 @@ function createLiveBridge({
     return { name, value };
   })()`;
 
+  // Change events the input stream can't see: a <select> commits through a
+  // native popup (no DOM click), and a checkbox/radio's meaningful action is
+  // check/uncheck, not click. Installed into every document (auto-injected for
+  // new navigations + evaluated once for the current page); idempotent.
+  const RECORD_LISTENER_JS = `(() => {
+    if (window.__aqRecInstalled) return;
+    window.__aqRecInstalled = true;
+    const aqName = (t) => {
+      const lbl = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+      const aria = lbl(t.getAttribute('aria-label'));
+      if (aria) return aria;
+      const by = t.getAttribute('aria-labelledby');
+      if (by) {
+        const txt = lbl(by.split(/\\s+/).map((id) => {
+          const e = document.getElementById(id);
+          return e ? e.textContent : '';
+        }).join(' '));
+        if (txt) return txt;
+      }
+      if (t.labels && t.labels.length) { const s = lbl(t.labels[0].textContent); if (s) return s; }
+      return lbl(t.getAttribute('placeholder') || t.getAttribute('name') || t.getAttribute('id'));
+    };
+    document.addEventListener('change', (ev) => {
+      const t = ev.target;
+      if (!(t instanceof HTMLElement)) return;
+      let rec = null;
+      if (t.tagName === 'SELECT') {
+        const labels = Array.from(t.selectedOptions || [])
+          .map((o) => (o.textContent || o.value || '').trim())
+          .filter(Boolean);
+        rec = { kind: 'select', name: aqName(t), value: labels.join(',') };
+      } else if (t.tagName === 'INPUT' && (t.type === 'checkbox' || t.type === 'radio')) {
+        rec = { kind: t.checked ? 'check' : 'uncheck', name: aqName(t), role: t.type };
+      }
+      if (rec) { try { __aqRecord(JSON.stringify(rec)); } catch (e) { /* binding absent */ } }
+    }, true);
+  })()`;
+
+  // Clicks on these roles are dispatched but NOT recorded as 'click' — the
+  // page's change listener emits the honest verb (check/uncheck) instead.
+  const CHANGE_DRIVEN_ROLES = new Set(['checkbox', 'radio']);
+
   async function findPage(cdpUrl) {
     const u = new URL(cdpUrl);
     const list = await (await fetchImpl(`http://${u.host}/json/list`)).json();
@@ -271,6 +313,12 @@ function createLiveBridge({
       broadcastEvent('loaded', {});
       return;
     }
+    // Page-side record events (select / check / uncheck) raised by the
+    // injected listener via the __aqRecord binding.
+    if (msg.method === 'Runtime.bindingCalled' && msg.params && msg.params.name === '__aqRecord') {
+      handlePageRecord(msg.params.payload);
+      return;
+    }
     if (!msg.id) return;
     if (calls.has(msg.id)) {
       const { resolve, reject } = calls.get(msg.id);
@@ -309,6 +357,13 @@ function createLiveBridge({
           send('Page.enable');
           send('DOM.enable');
           send('Accessibility.enable');
+          // Auto-record needs the page's change events (select popups and
+          // check/uncheck produce none of the input events this bridge sees).
+          // Runtime.enable is required for bindingCalled to be delivered.
+          send('Runtime.enable');
+          send('Runtime.addBinding', { name: '__aqRecord' });
+          send('Page.addScriptToEvaluateOnNewDocument', { source: RECORD_LISTENER_JS });
+          send('Runtime.evaluate', { expression: RECORD_LISTENER_JS });
           requestMetrics();
           requestFrame(); // instant first frame
           startPolling();
@@ -425,6 +480,36 @@ function createLiveBridge({
     emitRecord('do', { intent: `fill ${info.name}`, verb: 'type', on: { role: 'textbox', name: info.name }, value: { from: 'literal', literal: info.value } });
   }
 
+  // Translate a __aqRecord binding payload ({kind, name, value, role}) into a
+  // recorded step. name '' → record-skip, same UX as an unnamed click.
+  function handlePageRecord(payload) {
+    let rec;
+    try {
+      rec = JSON.parse(payload);
+    } catch {
+      return;
+    }
+    if (!rec || typeof rec !== 'object') return;
+    if (!rec.name) {
+      broadcastEvent('record-skip', { reason: `${rec.kind} target has no accessible name` });
+      return;
+    }
+    if (rec.kind === 'select') {
+      emitRecord('do', {
+        intent: `select ${rec.value} in ${rec.name}`,
+        verb: 'select',
+        on: { role: 'combobox', name: rec.name },
+        value: { from: 'literal', literal: rec.value },
+      });
+    } else if (rec.kind === 'check' || rec.kind === 'uncheck') {
+      emitRecord('do', {
+        intent: `${rec.kind} ${rec.name}`,
+        verb: rec.kind,
+        on: { role: rec.role, name: rec.name },
+      });
+    }
+  }
+
   function bumpTyping() {
     typingDirty = true;
     if (typingTimer) clearTimeout(typingTimer);
@@ -449,7 +534,10 @@ function createLiveBridge({
     }
     dispatchClick(x, y); // now actually click
     if (el && CLICKABLE_ROLES.has(el.role)) {
-      if (el.name) {
+      if (CHANGE_DRIVEN_ROLES.has(el.role)) {
+        // The injected change listener records check/uncheck — a bare click
+        // here would double-record (and hide whether it set or cleared).
+      } else if (el.name) {
         emitRecord('do', { intent: `click ${el.name}`, verb: 'click', on: { role: el.role, name: el.name } });
       } else {
         broadcastEvent('record-skip', { reason: `${el.role} has no accessible name` });
@@ -490,6 +578,8 @@ function createLiveBridge({
         return true;
       }
       case 'scroll': {
+        // Never recorded: no replay verb models a raw wheel delta (scrollTo
+        // scrolls an element into view — a different contract).
         const { x, y } = px();
         send('Input.dispatchMouseEvent', {
           type: 'mouseWheel',
@@ -535,6 +625,13 @@ function createLiveBridge({
             } else if (evt.key === 'Enter') {
               finalizeFill()
                 .then(() => emitRecord('do', { intent: 'press Enter', verb: 'press', value: { from: 'literal', literal: 'Enter' } }))
+                .catch(() => {});
+            } else {
+              // Tab/Escape/arrows/etc. — record an honest `press <key>` step
+              // (a pending fill commits first so field content lands before
+              // the focus change).
+              finalizeFill()
+                .then(() => emitRecord('do', { intent: `press ${evt.key}`, verb: 'press', value: { from: 'literal', literal: evt.key } }))
                 .catch(() => {});
             }
           }
