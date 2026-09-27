@@ -125,8 +125,33 @@ export function scenarioIds(): string[] {
 export function report(name: string, rows: { sid: string; ok: boolean; error?: string }[]): void {
   const resultsDir = resolve(selftestRoot, "results");
   mkdirSync(resultsDir, { recursive: true });
+  const stamped = { name, at: new Date().toISOString(), rows };
   writeFileSync(
-    resolve(resultsDir, `${name}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`),
-    JSON.stringify({ name, rows }, null, 2),
+    resolve(resultsDir, `${name}-${stamped.at.replace(/[:.]/g, "-")}.json`),
+    JSON.stringify(stamped, null, 2),
   );
+  // Stable path for CI: the artifact upload + PR comment read this.
+  writeFileSync(resolve(resultsDir, "latest.json"), JSON.stringify(stamped, null, 2));
+}
+
+/** shot-diff maps + run screenshots produced by a scenario's latest replay —
+ *  the before/after evidence CI uploads and the PR comment links to. */
+export function runArtifacts(sid: string): { runId: string; shots: string[]; diffs: string[] } | null {
+  const { readdirSync } = require("fs");
+  const replaysDir = resolve(scenariosRoot, sid, "replays");
+  if (!existsSync(replaysDir)) return null;
+  const runId = readdirSync(replaysDir, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name)
+    .sort()
+    .pop();
+  if (!runId) return null;
+  const runDir = resolve(replaysDir, runId);
+  const ls = (sub: string) =>
+    existsSync(resolve(runDir, sub))
+      ? readdirSync(resolve(runDir, sub))
+          .filter((f: string) => f.endsWith(".png"))
+          .map((f: string) => `${sub}/${f}`)
+      : [];
+  return { runId, shots: ls("screenshots"), diffs: ls("shots-diff") };
 }
