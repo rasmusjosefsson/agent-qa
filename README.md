@@ -142,6 +142,14 @@ cargo build
 cargo test       # 435 tests, zero warnings
 ```
 
+The workbench UI is a generated bundle — a fresh checkout needs one build
+before `agent-qa serve` has a frontend (publishing/`npm pack` rebuilds it
+automatically via `prepack`):
+
+```bash
+cd npm/agent-qa && npm run build:web   # web ci + vite build → lib/public/
+```
+
 Single Rust crate in `cli/`. Cross-compile + npm packaging in
 [`docs/releasing.md`](docs/releasing.md).
 
