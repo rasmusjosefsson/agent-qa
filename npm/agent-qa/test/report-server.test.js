@@ -127,6 +127,9 @@ function makeFixture() {
       }),
     ].join('\n') + '\n',
   );
+  fs.mkdirSync(path.join(runDir, 'shots-diff'), { recursive: true });
+  fs.writeFileSync(path.join(runDir, 'shots-diff', 'navHome.diff.png'), 'DIFFDATA-navHome');
+
   fs.writeFileSync(
     path.join(runDir, 'diffs', 'navHome.patch.json'),
     JSON.stringify({
@@ -469,6 +472,52 @@ test('report viewer endpoints', async (t) => {
     const res = await fetch(`${base}/api/scenarios/${fx.sid}/runs`);
     const body = await res.json();
     assert.equal(body.replays[0].healed, 1); // audit.autoHealed lists navHome
+  });
+
+  await t.test('GET /runs/:runId lists stepIds with a shot diff map', async () => {
+    const res = await fetch(`${base}/api/scenarios/${fx.sid}/runs/${fx.runId}`);
+    const body = await res.json();
+    assert.deepEqual(body.shotDiffs, ['navHome']);
+  });
+
+  await t.test('GET artifact streams a shot diff map as png', async () => {
+    const res = await fetch(
+      `${base}/api/scenarios/${fx.sid}/runs/${fx.runId}/artifact/shots-diff/navHome`,
+    );
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('content-type'), 'image/png');
+    assert.equal(await res.text(), 'DIFFDATA-navHome');
+  });
+
+  await t.test('POST shot-accept promotes the run screenshot to a baseline', async () => {
+    const res = await fetch(`${base}/api/scenarios/${fx.sid}/runs/${fx.runId}/shot-accept`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ stepId: 'navHome' }),
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.ok, true);
+    assert.deepEqual(body.minted, ['navHome']);
+    assert.equal(
+      fs.readFileSync(path.join(fx.root, fx.sid, 'baselines', 'navHome.png'), 'utf8'),
+      'PNGDATA-navHome',
+    );
+  });
+
+  await t.test('POST shot-accept rejects a missing stepId / absent screenshot', async () => {
+    const res1 = await fetch(`${base}/api/scenarios/${fx.sid}/runs/${fx.runId}/shot-accept`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res1.status, 400);
+    const res2 = await fetch(`${base}/api/scenarios/${fx.sid}/runs/${fx.runId}/shot-accept`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ stepId: 'nope' }),
+    });
+    assert.equal(res2.status, 404);
   });
 
   await t.test('GET artifact streams a captured screenshot', async () => {
@@ -1645,6 +1694,29 @@ test('chat remediation runs the extension command and retries that chat connecti
   assert.deepEqual(commands, [['credential-login']]);
   assert.equal(result.authenticated, true);
   assert.equal(result.session, chat.session);
+});
+
+test('POST /api/edit/load delegates to buffer load with a safe sid', async (t) => {
+  const fx = makeFixture();
+  const calls = [];
+  const deps = { runCli: async (args) => (calls.push(args), { code: 0, stdout: 'ok', stderr: '' }) };
+  const { server, base } = await boot(fx.root, deps);
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  let res = await j('POST', '/api/edit/load', { sid: 'flow' });
+  assert.equal(res.status, 200);
+  assert.deepEqual(calls.at(-1), ['buffer', 'load', 'flow']);
+
+  res = await j('POST', '/api/edit/load', { sid: 'flow', force: true });
+  assert.equal(res.status, 200);
+  assert.deepEqual(calls.at(-1), ['buffer', 'load', 'flow', '--force']);
+
+  res = await j('POST', '/api/edit/load', { sid: '../escape' });
+  assert.equal(res.status, 400);
+  res = await j('POST', '/api/edit/load', {});
+  assert.equal(res.status, 400);
 });
 
 test('autoConnectDefault is a no-op when no persona/environment is configured', async (t) => {

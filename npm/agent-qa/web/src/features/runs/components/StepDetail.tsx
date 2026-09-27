@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { BugIcon, WrenchIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { artifactUrl, fetchArtifactText, getScenarioDef } from '@/lib/runs-api'
+import { acceptShot, artifactUrl, fetchArtifactText, getScenarioDef } from '@/lib/runs-api'
 import { collapseEvents, fmtMs, icon } from '../rows'
 import type { DetailTab, HealRow, RunEvent, ScenarioDef, ScenarioStep } from '../types'
 import type { RunsApi as Api } from '../useRuns'
@@ -67,6 +67,10 @@ export function StepDetail({ runs, onLightbox }: { runs: Api; onLightbox: (url: 
   const runId = sel.runId!
   const defStep = scenario?.steps?.find((s) => s.id === step.id)
   const heal = (detail.heals || []).find((h) => h.stepId === step.id)
+  // A failing {"shot":"x"} check references the do-step whose screenshot
+  // drifted; the delta map is keyed by that referenced id.
+  const shotRef = (defStep?.claim as { subject?: { shot?: string } } | undefined)?.subject?.shot
+  const shotDiff = shotRef && (detail.shotDiffs || []).includes(shotRef) ? shotRef : null
 
   // Open a NEW chat seeded with the failure context so the agent can triage
   // flake-vs-real. ChatPage consumes the ?ask= param on load.
@@ -132,6 +136,9 @@ export function StepDetail({ runs, onLightbox }: { runs: Api; onLightbox: (url: 
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
         {heal && <HealCard heal={heal} />}
+        {shotDiff && (
+          <ShotDiffCard sid={sid} runId={runId} shotStep={shotDiff} onLightbox={onLightbox} />
+        )}
         {step.error && (
           <pre className="mb-3 whitespace-pre-wrap rounded-md border border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">
             {step.error}
@@ -298,6 +305,60 @@ function HealCard({ heal }: { heal: HealRow }) {
           </pre>
         </details>
       )}
+    </div>
+  )
+}
+
+// The delta map a {"shot"} claim wrote when it missed its baseline — red over
+// a faded baseline. Re-mint in place when the change is legitimate.
+export function ShotDiffCard({
+  sid,
+  runId,
+  shotStep,
+  onLightbox,
+}: {
+  sid: string
+  runId: string
+  shotStep: string
+  onLightbox: (url: string, caption: string) => void
+}) {
+  const url = artifactUrl(sid, runId, 'shots-diff', shotStep)
+  const caption = `Visual diff · ${shotStep}`
+  const [accept, setAccept] = useState<'idle' | 'busy' | 'done' | 'error'>('idle')
+  const remint = async () => {
+    setAccept('busy')
+    const r = await acceptShot(sid, runId, shotStep)
+    setAccept(r.ok ? 'done' : 'error')
+  }
+  return (
+    <div className="mb-3 rounded-md border border-sky-500/30 bg-sky-500/10 p-2.5 text-xs">
+      <div className="mb-1.5 flex items-center gap-1.5 font-medium text-sky-300">
+        <WrenchIcon className="size-3.5 shrink-0" />
+        Visual diff — shot “{shotStep}” changed vs baseline
+      </div>
+      <button type="button" onClick={() => onLightbox(url, caption)} className="block w-full">
+        <img src={url} alt={caption} loading="lazy" className="w-full rounded border border-border" />
+      </button>
+      <div className="mt-1.5 flex items-center gap-2 text-muted-foreground">
+        {accept === 'done' ? (
+          <span className="text-emerald-400">Baseline re-minted — re-run to confirm.</span>
+        ) : (
+          <>
+            <span>
+              Legitimate change?{' '}
+              <button
+                type="button"
+                onClick={remint}
+                disabled={accept === 'busy'}
+                className="rounded border border-sky-500/40 px-1.5 py-0.5 font-medium text-sky-300 transition-colors hover:bg-sky-500/20 disabled:opacity-50"
+              >
+                {accept === 'busy' ? 'Re-minting…' : 'Re-mint baseline'}
+              </button>
+            </span>
+            {accept === 'error' && <span className="text-destructive">re-mint failed</span>}
+          </>
+        )}
+      </div>
     </div>
   )
 }

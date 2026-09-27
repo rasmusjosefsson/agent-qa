@@ -36,6 +36,7 @@ const EDIT_KINDS = ['do', 'check'];
 const ARTIFACT_KINDS = {
   screenshots: { ext: '.png', type: 'image/png' },
   snapshots: { ext: '.txt', type: 'text/plain; charset=utf-8' },
+  'shots-diff': { ext: '.diff.png', type: 'image/png' },
   network: { ext: '.json', type: 'application/json; charset=utf-8' },
   probes: { ext: '.json', type: 'application/json; charset=utf-8' },
   perf: { ext: '.json', type: 'application/json; charset=utf-8' },
@@ -1564,6 +1565,10 @@ async function runDetail(root, sid, runId) {
       return { ...row, patch };
     })
   );
+  // StepIds with a shots-diff/<stepId>.diff.png — written when a {"shot"}
+  // claim missed its baseline. Listed here so the Runs pane can render the
+  // delta map inline on the failing check step.
+  const shotDiffs = await listShotDiffs(runDir);
   return {
     sid,
     runId,
@@ -1572,7 +1577,20 @@ async function runDetail(root, sid, runId) {
     status,
     events,
     heals,
+    shotDiffs,
   };
+}
+
+async function listShotDiffs(runDir) {
+  let names;
+  try {
+    names = await fsp.readdir(path.join(runDir, 'shots-diff'));
+  } catch {
+    return [];
+  }
+  return names
+    .filter((n) => n.endsWith('.diff.png'))
+    .map((n) => n.slice(0, -'.diff.png'.length));
 }
 
 // -------- http helpers --------
@@ -2327,6 +2345,9 @@ async function readBuffer(deps) {
     session: parsed.session || null,
     baseline: parsed.baseline || null,
     paused: !!parsed.paused,
+    // true when the buffer was seeded by `buffer load` — flush writes back
+    // to the loaded scenario instead of minting a fresh one.
+    editing: !!parsed.editing,
     rows: Array.isArray(parsed.rows) ? parsed.rows : [],
     spawnError: r.spawnError ? String(r.spawnError.message || r.spawnError) : null,
   };
@@ -2395,6 +2416,21 @@ async function handleEdit(req, res, deps, seg) {
       const r = await deps.runCli([verb, kind, JSON.stringify(body.payload)]);
       return sendCliResult(res, r);
     }
+    case 'insert': {
+      const index = Number(body.index);
+      if (!Number.isInteger(index) || index < 0) {
+        return badRequest(res, 'index (non-negative integer) is required');
+      }
+      const kind = String(body.kind || '');
+      if (!EDIT_KINDS.includes(kind)) {
+        return badRequest(res, `kind must be one of ${EDIT_KINDS.join(', ')}`);
+      }
+      if (body.payload == null || typeof body.payload !== 'object') {
+        return badRequest(res, 'payload (object) is required');
+      }
+      const r = await deps.runCli(['buffer', 'insert', String(index), kind, JSON.stringify(body.payload)]);
+      return sendCliResult(res, r);
+    }
     case 'delete': {
       const index = Number(body.index);
       if (!Number.isInteger(index) || index < 0) {
@@ -2426,6 +2462,17 @@ async function handleEdit(req, res, deps, seg) {
     case 'pause':
     case 'resume': {
       const r = await deps.runCli(['record', route]);
+      return sendCliResult(res, r);
+    }
+    case 'load': {
+      // Pull a saved scenario into the buffer for editing; flush seals it
+      // back over the same sid. The CLI refuses to clobber a non-empty
+      // buffer — the UI confirms with the user first and passes force.
+      const sid = typeof body.sid === 'string' ? body.sid : '';
+      if (!isSafeSegment(sid)) return badRequest(res, 'sid (safe segment) is required');
+      const args = ['buffer', 'load', sid];
+      if (body.force === true) args.push('--force');
+      const r = await deps.runCli(args);
       return sendCliResult(res, r);
     }
     case 'clear': {
@@ -3621,6 +3668,36 @@ function createRequestHandler(root, deps, chat) {
         return sendJson(res, 200, { ok: true, sid, runId, deleted: true });
       }
 
+      // POST /api/scenarios/:sid/runs/:runId/shot-accept {stepId} — promote
+      // this run's screenshot to the checked-in baseline (the web-side
+      // `agent-qa shot-accept`).
+      if (
+        req.method === 'POST' &&
+        segAll[0] === 'api' &&
+        segAll[1] === 'scenarios' &&
+        segAll[3] === 'runs' &&
+        segAll[5] === 'shot-accept' &&
+        segAll.length === 6
+      ) {
+        const sid = decodeURIComponent(segAll[2]);
+        const runId = decodeURIComponent(segAll[4]);
+        if (!isSafeSegment(sid) || !isSafeSegment(runId)) return badRequest(res, 'unsafe id');
+        const body = await readJsonBody(req);
+        const stepId = typeof body.stepId === 'string' ? body.stepId : '';
+        if (!isSafeSegment(stepId)) return badRequest(res, 'stepId (safe segment) is required');
+        const runDir = path.join(root, sid, 'replays', runId);
+        const shot = path.join(runDir, 'screenshots', `${stepId}.png`);
+        try {
+          await fsp.stat(shot);
+        } catch {
+          return notFound(res, 'no screenshot for this step in this run');
+        }
+        const baselineDir = path.join(root, sid, 'baselines');
+        await fsp.mkdir(baselineDir, { recursive: true });
+        await fsp.copyFile(shot, path.join(baselineDir, `${stepId}.png`));
+        return sendJson(res, 200, { ok: true, minted: [stepId] });
+      }
+
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         return sendJson(res, 405, { error: 'method not allowed' });
       }
@@ -3719,6 +3796,7 @@ function createRequestHandler(root, deps, chat) {
             const stepId = decodeURIComponent(seg[7]);
             return serveArtifact(res, root, sid, runId, kind, stepId);
           }
+
         }
       }
 

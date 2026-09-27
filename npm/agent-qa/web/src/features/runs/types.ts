@@ -103,6 +103,9 @@ export interface RunDetail {
   status: { state?: string; currentIdx?: number; total?: number; ok?: boolean; [k: string]: unknown } | null
   events: RunEvent[]
   heals?: HealRow[]
+  // StepIds whose {"shot"} claim missed the baseline this run — each has a
+  // shots-diff/<stepId>.diff.png delta map servable via artifactUrl.
+  shotDiffs?: string[]
 }
 
 export type DetailTab = 'step' | 'scenario' | 'context' | 'network' | 'html' | 'console'

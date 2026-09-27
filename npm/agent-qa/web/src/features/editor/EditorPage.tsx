@@ -82,7 +82,9 @@ export function EditorPage() {
           <div className="flex h-full min-h-0 flex-col overflow-auto">
           <SessionBox
             buffer={ed.buffer}
+            scenarios={ed.scenarioSids}
             onStart={(intent, url) => void ed.startSession(intent, url)}
+            onOpen={(sid) => void ed.loadScenario(sid)}
             onFlush={() => void ed.flushScenario()}
             onCancel={() => void ed.cancelScenario()}
             onTogglePause={() => void ed.togglePause()}
@@ -109,6 +111,7 @@ export function EditorPage() {
                 const { id: _id, kind: _k, ...draft } = row.step as Record<string, unknown>
                 void ed.runStep(row.step.kind ?? 'do', draft).then(setRunResult)
               }}
+              onAddShot={(i, stepId) => void ed.addShotCheck(i, stepId)}
             />
           </div>
           <Composer
