@@ -466,6 +466,90 @@ test('report viewer endpoints', async (t) => {
     assert.match(html, /\/assets\/[A-Za-z0-9._-]+\.js/);
   });
 
+  await t.test('POST /compare shells the CLI and returns the parsed report', async () => {
+    // The route runs `agent-qa compare <sid> <a> <b>` then reads back the
+    // newest <sid>/compare/<ts>__<a>-vs-<b>/ dir. Stub the CLI, pre-write the
+    // report dir it would have produced.
+    const cdir = path.join(fx.root, fx.sid, 'compare', '2099-01-01T00-00-00-000Z__a1-vs-b2');
+    fs.mkdirSync(path.join(cdir, 'snapshots'), { recursive: true });
+    fs.mkdirSync(path.join(cdir, 'screenshots'), { recursive: true });
+    fs.writeFileSync(
+      path.join(cdir, 'compare.md'),
+      [
+        '# compare runA1 vs runB2',
+        '',
+        '## snapshots',
+        '',
+        '| step | outcome |',
+        '|---|---|',
+        '| navHome | SAME |',
+        '| headingVisible | CHANGED |',
+        '| extraStep | ONLY-B |',
+        '',
+        '## screenshots',
+        '',
+        '| step | outcome | differing pixels |',
+        '|---|---|---|',
+        '| navHome | SAME | - |',
+        '| headingVisible | CHANGED | 0.0312 |',
+        '',
+      ].join('\n'),
+    );
+    fs.writeFileSync(
+      path.join(cdir, 'snapshots', 'headingVisible.diff'),
+      '--- a\n+++ b\n@@ -1 +1 @@\n- old\n+ new\n',
+    );
+    fs.writeFileSync(path.join(cdir, 'screenshots', 'headingVisible.diff.png'), 'PNGX');
+    let failNext = false;
+    const calls = [];
+    const { server: cserver, base: cbase } = await boot(fx.root, {
+      runCli: async (args) => {
+        calls.push(args);
+        return failNext ? { code: 1, stdout: '', stderr: 'boom' } : { code: 0, stdout: '', stderr: '' };
+      },
+    });
+    try {
+      const res = await fetch(`${cbase}/api/scenarios/${fx.sid}/compare`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ runA: 'runA1', runB: 'runB2' }),
+      });
+      assert.equal(res.status, 200);
+      const j = await res.json();
+      assert.deepEqual(calls, [['compare', fx.sid, 'runA1', 'runB2']]);
+      assert.equal(j.runA, 'runA1');
+      assert.equal(j.runB, 'runB2');
+      assert.equal(j.snapshots.length, 3);
+      assert.equal(j.snapshots[0].outcome, 'SAME');
+      assert.equal(j.snapshots[0].diff, undefined);
+      assert.equal(j.snapshots[1].outcome, 'CHANGED');
+      assert.match(j.snapshots[1].diff, /\+ new/);
+      assert.equal(j.snapshots[2].outcome, 'ONLY-B');
+      assert.equal(j.screenshots.length, 2);
+      assert.equal(j.screenshots[1].outcome, 'CHANGED');
+      assert.equal(j.screenshots[1].differingPixels, 0.0312);
+      assert.equal(j.screenshots[1].hasDiffPng, true);
+      // The pixel-diff png is served back via the shots route.
+      const shot = await fetch(`${cbase}/api/scenarios/${fx.sid}/compare/${j.folder}/shots/headingVisible`);
+      assert.equal(shot.status, 200);
+      assert.equal(shot.headers.get('content-type'), 'image/png');
+      assert.equal(await shot.text(), 'PNGX');
+      const miss = await fetch(`${cbase}/api/scenarios/${fx.sid}/compare/${j.folder}/shots/nope`);
+      assert.equal(miss.status, 404);
+      // A nonzero CLI exit surfaces as 422 with the stderr text.
+      failNext = true;
+      const bad = await fetch(`${cbase}/api/scenarios/${fx.sid}/compare`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      assert.equal(bad.status, 422);
+      assert.match((await bad.json()).error, /boom/);
+    } finally {
+      cserver.close();
+    }
+  });
+
   await t.test('GET /scenario returns the recorded definition', async () => {
     const res = await fetch(`${base}/api/scenarios/${fx.sid}/scenario`);
     assert.equal(res.status, 200);
