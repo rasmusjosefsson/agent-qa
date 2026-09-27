@@ -115,6 +115,9 @@ export function CaseList() {
               <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
                 <th className="px-5 py-2 font-medium">Title</th>
                 <th className="px-3 py-2 font-medium">Steps</th>
+                <th className="px-3 py-2 font-medium" title="Share of do steps followed by a check">
+                  Coverage
+                </th>
                 <th className="px-3 py-2 font-medium">Status</th>
                 <th className="px-3 py-2 font-medium">Last run</th>
                 <th className="px-3 py-2 font-medium">Source</th>
@@ -142,6 +145,24 @@ export function CaseList() {
                     </div>
                   </td>
                   <td className="px-3 py-2.5 text-muted-foreground">{c.steps.length}</td>
+                  <td className="px-3 py-2.5">
+                    {c.scenario?.coverage ? (
+                      <span
+                        className={
+                          c.scenario.coverage.ratio >= 1
+                            ? 'text-emerald-600 dark:text-emerald-400'
+                            : c.scenario.coverage.ratio >= 0.5
+                              ? 'text-amber-600 dark:text-amber-400'
+                              : 'text-red-600 dark:text-red-400'
+                        }
+                        title={`${c.scenario.coverage.checked}/${c.scenario.coverage.doSteps} do steps checked · ${c.scenario.coverage.bare} bare`}
+                      >
+                        {Math.round(c.scenario.coverage.ratio * 100)}%
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </td>
                   <td className="px-3 py-2.5">
                     <StatusBadge scenario={c.scenario} />
                   </td>
