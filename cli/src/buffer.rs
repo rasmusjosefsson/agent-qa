@@ -62,7 +62,7 @@ fn parse_index(value: &str, label: &str) -> Result<usize> {
         .map_err(|_| anyhow!("{label} must be a non-negative integer; got {value:?}"))
 }
 
-fn normalize_ids(steps: &mut [Step]) {
+pub(crate) fn normalize_ids(steps: &mut [Step]) -> HashMap<String, String> {
     // Rewire `{"from":"step","stepId":…}` values and `opensFromStepId`
     // before renumbering so references keep pointing at the same step.
     // References to a step that no longer exists keep their old id.
@@ -80,6 +80,7 @@ fn normalize_ids(steps: &mut [Step]) {
     for (index, step) in steps.iter_mut().enumerate() {
         step.set_id(format!("s{index}"));
     }
+    renames
 }
 
 fn rewrite_step_refs(step: &mut Step, renames: &HashMap<String, String>) {
