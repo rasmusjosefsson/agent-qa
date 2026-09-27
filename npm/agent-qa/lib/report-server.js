@@ -1658,6 +1658,103 @@ async function serveArtifact(res, root, sid, runId, kind, stepId) {
   createReadStream(full).pipe(res);
 }
 
+// -------- run compare (agent-qa compare <sid> <a> <b>) --------
+
+// Parse the `## <name>` markdown table the compare CLI writes into compare.md:
+// `| step | outcome |` (snapshots) / `| step | outcome | differing pixels |`.
+function parseCompareTable(md, name) {
+  const re = new RegExp(`## ${name}\\s*\\n+\\|[^\\n]+\\|\\s*\\n\\|[-\\s|]+\\|\\s*\\n((?:\\|[^\\n]+\\|\\s*\\n?)*)`);
+  const m = md.match(re);
+  if (!m) return [];
+  return m[1]
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith('|'))
+    .map((l) => l.split('|').slice(1, -1).map((c) => c.trim()));
+}
+
+async function handleCompare(req, res, deps, root, sid) {
+  if (!deps || typeof deps.runCli !== 'function') {
+    return sendJson(res, 503, { error: 'compare unavailable: agent-qa CLI not resolved' });
+  }
+  const body = await readJsonBody(req);
+  const args = ['compare', sid];
+  for (const k of ['runA', 'runB']) {
+    const v = body && typeof body[k] === 'string' ? body[k].trim() : '';
+    if (v) {
+      if (!isSafeSegment(v)) return badRequest(res, `unsafe ${k}`);
+      args.push(v);
+    }
+  }
+  const r = await deps.runCli(args, {});
+  if (r.spawnError) return sendJson(res, 500, { error: 'compare failed to start' });
+  if (r.code !== 0) {
+    return sendJson(res, 422, { error: (r.stderr || r.stdout || 'compare failed').trim().slice(0, 2000) });
+  }
+  // The run wrote <sid>/compare/<ts>__<a>-vs-<b>/ — read the newest folder.
+  const cdir = path.join(root, sid, 'compare');
+  let folder;
+  try {
+    const entries = await fsp.readdir(cdir, { withFileTypes: true });
+    folder = entries
+      .filter((e) => e.isDirectory() && isSafeSegment(e.name))
+      .map((e) => e.name)
+      .sort()
+      .pop();
+  } catch {
+    folder = null;
+  }
+  if (!folder) return sendJson(res, 500, { error: 'compare ran but produced no report dir' });
+  const md = (await readText(path.join(cdir, folder, 'compare.md'))) || '';
+  const head = /^# compare (\S+) vs (\S+)/m.exec(md);
+  const snapshots = [];
+  for (const row of parseCompareTable(md, 'snapshots')) {
+    const entry = { stepId: row[0], outcome: row[1] };
+    if (row[1] === 'CHANGED') {
+      entry.diff = await readText(path.join(cdir, folder, 'snapshots', `${row[0]}.diff`));
+    }
+    snapshots.push(entry);
+  }
+  const screenshots = parseCompareTable(md, 'screenshots').map((row) => ({
+    stepId: row[0],
+    outcome: row[1],
+    differingPixels: row[2] && row[2] !== '-' ? Number(row[2]) : null,
+    hasDiffPng: row[1] === 'CHANGED',
+  }));
+  return sendJson(res, 200, {
+    sid,
+    folder,
+    runA: head ? head[1] : null,
+    runB: head ? head[2] : null,
+    snapshots,
+    screenshots,
+  });
+}
+
+async function serveCompareShot(res, root, sid, folder, stepId) {
+  if (![sid, folder, stepId].every(isSafeSegment)) {
+    return badRequest(res, 'unsafe path segment');
+  }
+  const cdir = path.resolve(root, sid, 'compare', folder, 'screenshots');
+  const full = path.resolve(cdir, `${stepId}.diff.png`);
+  if (full !== cdir && !full.startsWith(cdir + path.sep)) {
+    return badRequest(res, 'path escapes compare dir');
+  }
+  let stat;
+  try {
+    stat = await fsp.stat(full);
+  } catch {
+    return notFound(res, 'not captured');
+  }
+  if (!stat.isFile()) return notFound(res, 'not captured');
+  res.writeHead(200, {
+    'content-type': 'image/png',
+    'content-length': stat.size,
+    'cache-control': 'no-store',
+  });
+  createReadStream(full).pipe(res);
+}
+
 // -------- editor — write surface via the Rust CLI --------
 //
 // The authoring editor needs a *write* path (start a recording session,
@@ -2230,6 +2327,9 @@ async function readBuffer(deps) {
     session: parsed.session || null,
     baseline: parsed.baseline || null,
     paused: !!parsed.paused,
+    // true when the buffer was seeded by `buffer load` — flush writes back
+    // to the loaded scenario instead of minting a fresh one.
+    editing: !!parsed.editing,
     rows: Array.isArray(parsed.rows) ? parsed.rows : [],
     spawnError: r.spawnError ? String(r.spawnError.message || r.spawnError) : null,
   };
@@ -2329,6 +2429,17 @@ async function handleEdit(req, res, deps, seg) {
     case 'pause':
     case 'resume': {
       const r = await deps.runCli(['record', route]);
+      return sendCliResult(res, r);
+    }
+    case 'load': {
+      // Pull a saved scenario into the buffer for editing; flush seals it
+      // back over the same sid. The CLI refuses to clobber a non-empty
+      // buffer — the UI confirms with the user first and passes force.
+      const sid = typeof body.sid === 'string' ? body.sid : '';
+      if (!isSafeSegment(sid)) return badRequest(res, 'sid (safe segment) is required');
+      const args = ['buffer', 'load', sid];
+      if (body.force === true) args.push('--force');
+      const r = await deps.runCli(args);
       return sendCliResult(res, r);
     }
     case 'clear': {
@@ -3488,6 +3599,21 @@ function createRequestHandler(root, deps, chat) {
         return sendCliResult(res, r);
       }
 
+      // Compare two replay runs (POST): runs `agent-qa compare <sid> <a> <b>`
+      // and returns the newest compare report parsed to JSON. Requires
+      // deps.runCli.
+      if (
+        req.method === 'POST' &&
+        segAll[0] === 'api' &&
+        segAll[1] === 'scenarios' &&
+        segAll[3] === 'compare' &&
+        segAll.length === 4
+      ) {
+        const sid = decodeURIComponent(segAll[2]);
+        if (!isSafeSegment(sid)) return badRequest(res, 'unsafe sid');
+        return handleCompare(req, res, deps, root, sid);
+      }
+
       // Delete a recorded scenario (POST): remove its dir + all replays via the
       // Rust CLI `scenario delete <sid> --yes`. Requires deps.runCli.
       if (
@@ -3571,6 +3697,22 @@ function createRequestHandler(root, deps, chat) {
         });
       }
 
+      // /api/health → per-scenario silent-degradation rollup from the CLI's
+      // `audit health` (flaky + slow + heal-chronic step ids). One CLI call
+      // for the whole suite; empty when nothing flags or the CLI is absent.
+      if (p === '/api/health') {
+        if (!deps || typeof deps.runCli !== 'function') {
+          return sendJson(res, 200, { health: [] });
+        }
+        try {
+          const r = await deps.runCli(['audit', 'health', '--json']);
+          const parsed = lastJsonLine(r.stdout);
+          return sendJson(res, 200, { health: Array.isArray(parsed) ? parsed : [] });
+        } catch {
+          return sendJson(res, 200, { health: [] });
+        }
+      }
+
       // /api/scenarios/:sid/runs[/:runId[/artifact/:kind/:stepId]]
       const seg = segAll; // e.g. ['api','scenarios',sid,'runs',...]
       if (seg[0] === 'api' && seg[1] === 'scenarios' && seg.length >= 4) {
@@ -3599,6 +3741,17 @@ function createRequestHandler(root, deps, chat) {
           bridge.subscribe(res);
           req.on('close', () => bridge.unsubscribe(res));
           return undefined;
+        }
+        // GET /api/scenarios/:sid/compare/<folder>/shots/<stepId> → that
+        // step's pixel-diff png written by a `compare` run (the POST compare
+        // route lives with the other POST dispatches, earlier in this handler).
+        if (seg[3] === 'compare') {
+          if (seg.length === 7 && seg[5] === 'shots' && req.method === 'GET') {
+            const folder = decodeURIComponent(seg[4]);
+            const stepId = decodeURIComponent(seg[6]);
+            return serveCompareShot(res, root, sid, folder, stepId);
+          }
+          return notFound(res, 'not found');
         }
         if (seg[3] === 'runs') {
           if (seg.length === 4) {

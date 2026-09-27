@@ -4,6 +4,13 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -17,19 +24,24 @@ import type { BufferState } from '../types'
 
 export function SessionBox({
   buffer,
+  scenarios,
   onStart,
+  onOpen,
   onFlush,
   onCancel,
   onTogglePause,
 }: {
   buffer: BufferState
+  scenarios: string[]
   onStart: (intent: string, url: string) => void
+  onOpen: (sid: string) => void
   onFlush: () => void
   onCancel: () => void
   onTogglePause: () => void
 }) {
   const [intent, setIntent] = useState('')
   const [url, setUrl] = useState('')
+  const [sid, setSid] = useState('')
   const [confirmOpen, setConfirmOpen] = useState(false)
   const active = !!buffer.sid
   const stepCount = buffer.rows.length
@@ -38,7 +50,8 @@ export function SessionBox({
     return (
       <div className="flex flex-col gap-2 border-b border-border p-3">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          recording <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">{buffer.sid}</code>
+          {buffer.editing ? 'editing' : 'recording'}{' '}
+          <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">{buffer.sid}</code>
           {buffer.paused && (
             <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-400">
               paused
@@ -70,7 +83,7 @@ export function SessionBox({
                 <AlertDialogTitle>Discard this recording?</AlertDialogTitle>
                 <AlertDialogDescription>
                   {stepCount > 0
-                    ? `${stepCount} recorded step${stepCount === 1 ? '' : 's'} will be thrown away. This can’t be undone.`
+                    ? `${stepCount} ${buffer.editing ? 'unsaved edit' : 'recorded step'}${stepCount === 1 ? '' : 's'} will be thrown away. This can’t be undone.`
                     : 'This recording session will be discarded.'}
                 </AlertDialogDescription>
               </AlertDialogHeader>
@@ -115,6 +128,31 @@ export function SessionBox({
         />
       </div>
       <Button onClick={() => onStart(intent, url)}>Start recording session</Button>
+      {scenarios.length > 0 && (
+        <div className="flex items-center gap-2 border-t border-border pt-3">
+          <Select value={sid} onValueChange={setSid}>
+            <SelectTrigger size="sm" className="h-8 flex-1 text-xs" aria-label="Saved scenario">
+              <SelectValue placeholder="saved scenario…" />
+            </SelectTrigger>
+            <SelectContent>
+              {scenarios.map((s) => (
+                <SelectItem key={s} value={s}>
+                  {s}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!sid}
+            onClick={() => onOpen(sid)}
+            title="Load this scenario's steps into the buffer for editing"
+          >
+            Open to edit
+          </Button>
+        </div>
+      )}
     </div>
   )
 }

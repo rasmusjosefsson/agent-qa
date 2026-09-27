@@ -1,6 +1,13 @@
 // web/src/lib/runs-api.ts
 // Typed wrappers for the read-only /api/scenarios/* endpoints.
-import type { RunDetail, RunSummary, ScenarioDef, ScenarioSummary } from '@/features/runs/types'
+import type {
+  CompareReport,
+  RunDetail,
+  RunSummary,
+  ScenarioDef,
+  ScenarioHealth,
+  ScenarioSummary,
+} from '@/features/runs/types'
 
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(path, { headers: { accept: 'application/json' } })
@@ -10,6 +17,13 @@ async function getJson<T>(path: string): Promise<T> {
 
 export function getScenarios(): Promise<{ scenariosRoot: string; scenarios: ScenarioSummary[] }> {
   return getJson('/api/scenarios')
+}
+
+// Silent-degradation rollup: per-scenario step ids flagged by audit
+// flaky / slow / heal-chronic. Empty array when the suite is quiet or
+// the CLI is unavailable.
+export function getHealth(): Promise<{ health: ScenarioHealth[] }> {
+  return getJson('/api/health')
 }
 
 export function getScenarioDef(sid: string): Promise<{ sid: string; scenario: ScenarioDef }> {
@@ -90,6 +104,25 @@ export async function deleteRun(sid: string, runId: string): Promise<{ ok: boole
   if (res.ok) return { ok: true }
   const j = (await res.json().catch(() => ({}))) as { error?: string }
   return { ok: false, error: j.error || String(res.status) }
+}
+
+export async function compareRuns(
+  sid: string,
+  runA?: string,
+  runB?: string
+): Promise<{ ok: boolean; report?: CompareReport; error?: string }> {
+  const res = await fetch(`/api/scenarios/${encodeURIComponent(sid)}/compare`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ...(runA ? { runA } : {}), ...(runB ? { runB } : {}) }),
+  })
+  const j = (await res.json().catch(() => ({}))) as CompareReport & { error?: string }
+  if (!res.ok) return { ok: false, error: j.error || String(res.status) }
+  return { ok: true, report: j }
+}
+
+export function compareShotUrl(sid: string, folder: string, stepId: string): string {
+  return `/api/scenarios/${encodeURIComponent(sid)}/compare/${encodeURIComponent(folder)}/shots/${encodeURIComponent(stepId)}`
 }
 
 export function artifactUrl(sid: string, runId: string, kind: string, stepId: string): string {

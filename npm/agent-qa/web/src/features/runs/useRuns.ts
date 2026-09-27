@@ -1,8 +1,10 @@
 // web/src/features/runs/useRuns.ts
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  compareRuns as apiCompareRuns,
   deleteRun as apiDeleteRun,
   deleteScenario as apiDeleteScenario,
+  getHealth,
   getRunDetail,
   getRuns,
   getScenarioDef,
@@ -12,18 +14,33 @@ import {
 } from '@/lib/runs-api'
 import { isRunLive } from './rows'
 import { useRoute } from '@/router'
-import type { RunDetail, RunSummary, ScenarioDef, ScenarioStep, ScenarioSummary, Selection } from './types'
+import type {
+  CompareReport,
+  RunDetail,
+  RunSummary,
+  ScenarioDef,
+  ScenarioHealth,
+  ScenarioStep,
+  ScenarioSummary,
+  Selection,
+} from './types'
 
 const EMPTY_SEL: Selection = { sid: null, runId: null, stepIdx: null, tab: 'step' }
 
 export interface RunsApi {
   root: string
   scenarios: ScenarioSummary[]
+  healthBySid: Record<string, ScenarioHealth>
   runsBySid: Record<string, RunSummary[]>
   expanded: Set<string>
   sel: Selection
   detail: RunDetail | null
   scenarioDef: ScenarioDef | null
+  compare: CompareReport | null
+  compareBusy: boolean
+  compareErr: string | null
+  startCompare: (runA?: string) => Promise<void>
+  clearCompare: () => void
   runDefSteps: { sid: string | null; steps: ScenarioStep[] }
   reloadDef: (sid: string) => Promise<void>
   live: boolean
@@ -41,12 +58,20 @@ export interface RunsApi {
 export function useRuns(): RunsApi {
   const [root, setRoot] = useState('')
   const [scenarios, setScenarios] = useState<ScenarioSummary[]>([])
+  const [healthBySid, setHealthBySid] = useState<Record<string, ScenarioHealth>>({})
+  // sid → latestRunId at the last health fetch; detectors only move when a
+  // new run lands, so we skip the CLI call on unchanged 1.5s poll ticks.
+  const healthSeen = useRef<Record<string, string | null>>({})
+  const healthSeenInit = useRef(false)
   const [runsBySid, setRunsBySid] = useState<Record<string, RunSummary[]>>({})
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [sel, setSel] = useState<Selection>(EMPTY_SEL)
   const [detail, setDetail] = useState<RunDetail | null>(null)
   const [scenarioDef, setScenarioDef] = useState<ScenarioDef | null>(null)
   const [runDefSteps, setRunDefSteps] = useState<{ sid: string | null; steps: ScenarioStep[] }>({ sid: null, steps: [] })
+  const [compare, setCompare] = useState<CompareReport | null>(null)
+  const [compareBusy, setCompareBusy] = useState(false)
+  const [compareErr, setCompareErr] = useState<string | null>(null)
   const [live, setLive] = useState(true)
 
   // Refs that mirror state so the poll loop / async actions read fresh values.
@@ -97,6 +122,8 @@ export function useRuns(): RunsApi {
     async (sid: string, runId: string, manual = true) => {
       if (manual) autoFollow.current = false
       setScenarioDef(null)
+      setCompare(null)
+      setCompareErr(null)
       setSel({ sid, runId, stepIdx: null, tab: 'step' })
       await refreshRun(sid, runId)
     },
@@ -117,17 +144,39 @@ export function useRuns(): RunsApi {
     [loadRuns, selectRun]
   )
 
+  const loadHealth = useCallback(async () => {
+    try {
+      const data = await getHealth()
+      const map: Record<string, ScenarioHealth> = {}
+      for (const row of data.health || []) map[row.scenarioId] = row
+      setHealthBySid(map)
+    } catch {
+      /* best-effort — badges just stay hidden */
+    }
+  }, [])
+
   const loadScenarios = useCallback(async () => {
     const data = await getScenarios()
     setRoot(data.scenariosRoot)
     const list = data.scenarios || []
     setScenarios(list)
+    // Re-scan health only on first load or when a scenario's latest run
+    // advanced — the audit detectors derive from replays on disk.
+    const moved =
+      !healthSeenInit.current || list.some((sc) => healthSeen.current[sc.sid] !== sc.latestRunId)
+    if (moved) {
+      healthSeenInit.current = true
+      healthSeen.current = Object.fromEntries(list.map((sc) => [sc.sid, sc.latestRunId]))
+      void loadHealth()
+    }
     await maybeAutoFollow(list)
     return list
-  }, [maybeAutoFollow])
+  }, [maybeAutoFollow, loadHealth])
 
   const selectScenario = useCallback(async (sid: string) => {
     autoFollow.current = false
+    setCompare(null)
+    setCompareErr(null)
     setSel({ sid, runId: null, stepIdx: null, tab: 'step' })
     setDetail(null)
     try {
@@ -229,6 +278,32 @@ export function useRuns(): RunsApi {
     [loadRuns, selectRun]
   )
 
+  // Compare the selected run (B) against a baseline run (A). Omitting runA
+  // lets the CLI pick (it defaults to the two latest runs).
+  const startCompare = useCallback(async (runA?: string) => {
+    const { sid, runId } = selRef.current
+    if (!sid || !runId) return
+    setCompareBusy(true)
+    setCompareErr(null)
+    try {
+      const res = await apiCompareRuns(sid, runA, runId)
+      if (!res.ok || !res.report) {
+        setCompareErr(res.error || 'compare failed')
+        return
+      }
+      setCompare(res.report)
+    } catch (e) {
+      setCompareErr(e instanceof Error ? e.message : 'compare failed')
+    } finally {
+      setCompareBusy(false)
+    }
+  }, [])
+
+  const clearCompare = useCallback(() => {
+    setCompare(null)
+    setCompareErr(null)
+  }, [])
+
   const refresh = useCallback(() => {
     loadScenarios().catch(() => {})
     if (selRef.current.sid && selRef.current.runId) refreshRun().catch(() => {})
@@ -307,11 +382,17 @@ export function useRuns(): RunsApi {
   return {
     root,
     scenarios,
+    healthBySid,
     runsBySid,
     expanded,
     sel,
     detail,
     scenarioDef,
+    compare,
+    compareBusy,
+    compareErr,
+    startCompare,
+    clearCompare,
     runDefSteps,
     live,
     setLive,
