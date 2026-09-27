@@ -67,7 +67,75 @@ for (const r of latest.results) {
   );
 }
 lines.push("");
+// For a failed case, walk its newest results dir and list the failing
+// steps (sid · step id · intent · error) from each run's events.jsonl —
+// reviewers see WHAT broke without downloading the artifact.
+interface StepEvent {
+  id?: string;
+  idx?: number;
+  intent?: string;
+  status?: string;
+  error?: string;
+}
+function failingSteps(caseName: string): string[] {
+  try {
+    const prefix = `golden-${short(caseName).replace(/[^a-z0-9]+/gi, "-")}-`;
+    const dirs = readdirSync(resultsDir)
+      .filter((d) => d.startsWith(prefix))
+      .sort();
+    const newest = dirs[dirs.length - 1];
+    if (!newest) return [];
+    const scenRoot = resolve(resultsDir, newest, "scenarios");
+    const out: string[] = [];
+    for (const sidDir of readdirSync(scenRoot)) {
+      const replaysDir = resolve(scenRoot, sidDir, "replays");
+      let runs: string[] = [];
+      try {
+        runs = readdirSync(replaysDir).sort();
+      } catch {
+        continue;
+      }
+      const runId = runs[runs.length - 1];
+      const eventsFile = resolve(replaysDir, runId, "events.jsonl");
+      let evLines: string[] = [];
+      try {
+        evLines = readFileSync(eventsFile, "utf8").split("\n").filter(Boolean);
+      } catch {
+        continue;
+      }
+      for (const line of evLines) {
+        try {
+          const ev = JSON.parse(line) as StepEvent;
+          if (ev.status === "fail") {
+            const id = ev.id ?? `s${ev.idx ?? "?"}`;
+            const err = (ev.error ?? "").split("\n")[0].slice(0, 120);
+            out.push(`\`${sidDir}\` ${id} ${ev.intent ?? ""} — ${err}`);
+            if (out.length >= 5) return out;
+          }
+        } catch {
+          /* skip malformed rows */
+        }
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 if (!ok) {
+  for (const r of latest.results) {
+    if (r.pass) continue;
+    const steps = failingSteps(r.name);
+    if (steps.length) {
+      lines.push(`<details><summary><code>${short(r.name)}</code> — failing steps</summary>`);
+      lines.push("");
+      for (const s of steps) lines.push(`- ${s}`);
+      lines.push("");
+      lines.push("</details>");
+      lines.push("");
+    }
+  }
   lines.push(
     "Download the `qa-gate` artifact on the run for each case's replay dir — `replays/<runId>/` has the screenshot, ARIA snapshot, and step events at the failing step.",
   );
