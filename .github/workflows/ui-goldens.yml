@@ -118,22 +118,13 @@ jobs:
           AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
         run: ./node_modules/.bin/agent-browser install
       - uses: oven-sh/setup-bun@v2
-      - name: replay to capture screenshots (shot claims may fail — expected)
+      - name: replay + mint baselines (accept.ts replays, then shot-accepts)
         working-directory: evals
-        continue-on-error: true
         env:
           AGENT_QA_EVAL_AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
           AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
           AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
-        run: bun selftest/run.ts
-      - name: mint baselines from this run's captures
-        working-directory: evals
-        run: |
-          for s in selftest/scenarios/*/; do
-            sid=$(basename "$s")
-            ../cli/target/debug/agent-qa shot-accept "$sid" --json \
-              || echo "skip $sid (no screenshots)"
-          done
+        run: bun selftest/accept.ts
       - name: open goldens PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
