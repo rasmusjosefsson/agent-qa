@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use regex::Regex;
 use serde_json::Value as Json;
 
@@ -104,9 +104,14 @@ pub fn dispatch_check(
         ClaimSubject::Flag { flag } => {
             check_flag(flag, &claim.predicate, claim.value.as_ref(), ctx)
         }
-        ClaimSubject::Shot { shot } => {
-            check_shot(shot, &claim.predicate, claim.tolerance.as_ref(), ctx)
-        }
+        ClaimSubject::Shot { shot, clip } => check_shot(
+            shot,
+            clip.as_ref(),
+            &claim.predicate,
+            claim.tolerance.as_ref(),
+            ctx,
+            scope,
+        ),
         ClaimSubject::Dialog { dialog } => {
             if !*dialog {
                 bail!("dialog subject requires dialog=true");
@@ -268,9 +273,11 @@ fn check_flag(
 /// the `shot-accept` mint command rather than silently passing.
 fn check_shot(
     shot: &str,
+    clip: Option<&Locator>,
     predicate: &Predicate,
     tolerance: Option<&std::collections::BTreeMap<String, Json>>,
     ctx: &CheckContext,
+    scope: &mut ValueScope,
 ) -> Result<()> {
     if *predicate != Predicate::Matches {
         bail!("shot subject only supports predicate 'matches', got '{predicate:?}'");
@@ -299,8 +306,28 @@ fn check_shot(
         .and_then(|t| t.get("pixels"))
         .and_then(|v| v.as_f64())
         .unwrap_or(0.01);
-    let a = crate::compare::screenshots::decode_png(&baseline)?;
-    let b = crate::compare::screenshots::decode_png(&current)?;
+    let mut a = crate::compare::screenshots::decode_png(&baseline)?;
+    let mut b = crate::compare::screenshots::decode_png(&current)?;
+    if let Some(loc) = clip {
+        // Crop BOTH images to the element's live box (CSS px → image px via
+        // the screenshot's device-pixel scale). The rect is read now, at
+        // claim time — keep the viewport pinned so record ≈ replay rects.
+        let rect = clip_rect(ctx.session, loc, scope, b.width())?;
+        a = crop_to_rect(&a, rect).with_context(|| {
+            format!(
+                "shot '{shot}' clip rect {:?} outside baseline {:?}",
+                rect,
+                a.dimensions()
+            )
+        })?;
+        b = crop_to_rect(&b, rect).with_context(|| {
+            format!(
+                "shot '{shot}' clip rect {:?} outside current {:?}",
+                rect,
+                b.dimensions()
+            )
+        })?;
+    }
     if a.dimensions() != b.dimensions() {
         bail!(
             "shot '{shot}' changed size — baseline {:?} vs current {:?}; re-mint with shot-accept if intentional",
@@ -322,6 +349,70 @@ fn check_shot(
         tol * 100.0,
         diff_path.display()
     )
+}
+
+/// A pixel-space rectangle `(x, y, w, h)` in the screenshot's own
+/// coordinate system (CSS px × device scale).
+type ImgRect = (u32, u32, u32, u32);
+
+/// Resolve the clip locator to its element's box, scaled from CSS px into
+/// the screenshot's pixel space (`css_width` = `window.innerWidth`, so the
+/// scale factor is `img.width / innerWidth`). Reads the rect live — a shot
+/// claim pairs with the step that just ran, so the element should still be
+/// on screen.
+fn clip_rect(
+    session: &str,
+    loc: &Locator,
+    scope: &mut ValueScope,
+    img_width: u32,
+) -> Result<ImgRect> {
+    let selector = match loc {
+        Locator::Raw(raw) => {
+            let v = substitute_scenario_vars(&raw.raw.value, scope);
+            match &raw.raw.kind {
+                RawLocatorKind::Css => v,
+                RawLocatorKind::TestId => {
+                    format!("[data-testid=\"{}\"]", v.replace('"', "\\\""))
+                }
+                other => bail!("shot clip does not support raw locator kind {other:?}"),
+            }
+        }
+        _ => bail!("shot clip currently requires a raw css or testId locator"),
+    };
+    let expr = format!(
+        "(() => {{ const el = document.querySelector({q}); if (!el) throw new Error('clip selector not found: ' + {q}); const r = el.getBoundingClientRect(); return JSON.stringify({{x: r.x, y: r.y, w: r.width, h: r.height, iw: window.innerWidth}}); }})()",
+        q = serde_json::to_string(&selector).expect("string serializes")
+    );
+    let raw = browser::eval_expression(session, &expr)?;
+    let v: Json = serde_json::from_str(&decode_json_string(raw.trim()))
+        .with_context(|| format!("clip rect eval returned {raw}"))?;
+    let f = |k: &str| -> Result<f64> {
+        v.get(k)
+            .and_then(|n| n.as_f64())
+            .ok_or_else(|| anyhow!("clip rect eval missing '{k}' in {v}"))
+    };
+    let iw = f("iw")?;
+    let scale = if iw > 0.0 { img_width as f64 / iw } else { 1.0 };
+    Ok((
+        (f("x")? * scale).round().max(0.0) as u32,
+        (f("y")? * scale).round().max(0.0) as u32,
+        (f("w")? * scale).round().max(0.0) as u32,
+        (f("h")? * scale).round().max(0.0) as u32,
+    ))
+}
+
+/// Crop an image to `(x, y, w, h)` in its own pixel space, clamped to its
+/// bounds. Bails when the requested box is empty or fully outside.
+fn crop_to_rect(img: &image::RgbaImage, (x, y, w, h): ImgRect) -> Result<image::RgbaImage> {
+    if w == 0 || h == 0 {
+        bail!("clip rect is empty ({x},{y} {w}x{h}) — element has zero size or is offscreen");
+    }
+    let (iw, ih) = img.dimensions();
+    let x = x.min(iw.saturating_sub(1));
+    let y = y.min(ih.saturating_sub(1));
+    let w = w.min(iw - x);
+    let h = h.min(ih - y);
+    Ok(image::imageops::crop_imm(img, x, y, w, h).to_image())
 }
 
 /// `{"file": "<name-or-path>"}` claims: poll the filesystem so a check step
@@ -1345,5 +1436,37 @@ mod tests {
         };
         let err2 = dispatch_check(&claim, &ctx2, &mut scope, None).unwrap_err();
         assert!(err2.to_string().contains("shot-accept"), "got: {err2}");
+    }
+
+    #[test]
+    fn shot_clip_parses_and_crop_clamps_to_bounds() {
+        let _g = lock_env();
+        // `{"shot":"s1","clip":{...}}` parses as the Shot subject's locator.
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": {
+                "shot": "s1",
+                "clip": { "raw": { "kind": "css", "value": "#card" }, "reason": "clip target" }
+            },
+            "predicate": "matches"
+        }))
+        .unwrap();
+        match claim.subject {
+            ClaimSubject::Shot { shot, clip } => {
+                assert_eq!(shot, "s1");
+                assert!(clip.is_some());
+            }
+            other => panic!("expected shot subject, got {other:?}"),
+        }
+
+        // Crop clamps to bounds and rejects empty rects.
+        let img = image::RgbaImage::from_pixel(10, 10, image::Rgba([1, 2, 3, 255]));
+        let c = crop_to_rect(&img, (4, 2, 4, 3)).unwrap();
+        assert_eq!(c.dimensions(), (4, 3));
+        assert_eq!(c.get_pixel(0, 0), &image::Rgba([1, 2, 3, 255]));
+        // Overhanging box → clamped to the image edge.
+        let c2 = crop_to_rect(&img, (8, 8, 10, 10)).unwrap();
+        assert_eq!(c2.dimensions(), (2, 2));
+        // Empty rect → hard error.
+        assert!(crop_to_rect(&img, (0, 0, 0, 5)).is_err());
     }
 }
