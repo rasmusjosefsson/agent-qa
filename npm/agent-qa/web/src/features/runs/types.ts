@@ -97,6 +97,30 @@ export interface RunDetail {
 
 export type DetailTab = 'step' | 'scenario' | 'context' | 'network' | 'html' | 'console'
 
+// Compare report returned by POST /api/scenarios/:sid/compare — mirrors the
+// `agent-qa compare` CLI output (compare.md + per-step diff files).
+export interface CompareEntry {
+  stepId: string
+  outcome: 'SAME' | 'CHANGED' | 'ONLY-A' | 'ONLY-B' | string
+  diff?: string | null
+}
+
+export interface CompareShot {
+  stepId: string
+  outcome: string
+  differingPixels: number | null
+  hasDiffPng: boolean
+}
+
+export interface CompareReport {
+  sid: string
+  folder: string
+  runA: string | null
+  runB: string | null
+  snapshots: CompareEntry[]
+  screenshots: CompareShot[]
+}
+
 export interface Selection {
   sid: string | null
   runId: string | null
