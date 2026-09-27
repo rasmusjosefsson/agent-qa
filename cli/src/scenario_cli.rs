@@ -2819,7 +2819,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn coverage_all_rolls_up_and_sorts_worst_first() {
         let _g = crate::test_util::lock_env();
         let tmp = TempDir::new().unwrap();
@@ -2837,7 +2836,8 @@ mod tests {
                 { "id": "s1", "intent": "b", "kind": "do", "verb": "reload" }
               ]
             }"#,
-        );
+        )
+        .unwrap();
         let full = tmp.path().join("full");
         std::fs::create_dir_all(&full).unwrap();
         fs::write(
@@ -2850,7 +2850,8 @@ mod tests {
                   "claim": { "subject": { "url": true }, "predicate": "exists" } }
               ]
             }"#,
-        );
+        )
+        .unwrap();
         assert_eq!(coverage_all(None, false).unwrap(), 0);
         assert_eq!(coverage_all(None, true).unwrap(), 0);
         // --filter narrows the rollup
