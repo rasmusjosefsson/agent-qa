@@ -99,6 +99,14 @@ pub struct RunOptions {
     /// <sid>/replays/<runId>/audit.json; this is for CI artifact upload
     /// or convenience pipelines.
     pub output_audit: Option<PathBuf>,
+    /// `--from <stepId>` — start dispatch at this step instead of the
+    /// first. Steps before it are skipped entirely (no dispatch, no
+    /// events). Only meaningful against a warm session already parked
+    /// at that step's expected page state.
+    pub from_step: Option<String>,
+    /// `--until <stepId>` — stop dispatch after this step (inclusive).
+    /// Steps after it never run; env.close still executes.
+    pub until_step: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -379,6 +387,8 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         heal_overrides_applied: None,
         auto_healed: None,
         tag: opts.tag.clone(),
+        window_from: None,
+        window_until: None,
     };
     write_run_audit(&run, &audit)?;
 
@@ -494,6 +504,25 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 Vec::new()
             }
         };
+        // `--from`/`--until` narrow the dispatch window. Steps outside
+        // the window never dispatch — no events, no summary rows.
+        let flat: Vec<Step> =
+            match apply_step_window(flat, opts.from_step.as_ref(), opts.until_step.as_ref()) {
+                Ok(v) => v,
+                Err(e) => {
+                    summary.ok = false;
+                    first_failure.get_or_insert(format!("step window: {e}"));
+                    Vec::new()
+                }
+            };
+        if opts.from_step.is_some() || opts.until_step.is_some() {
+            eprintln!(
+                "[v2-replay] step window: {}..{} — dispatching {} step(s)",
+                opts.from_step.as_deref().unwrap_or("<start>"),
+                opts.until_step.as_deref().unwrap_or("<end>"),
+                flat.len()
+            );
+        }
         // Event stream: `total` is fixed once the run is flattened; the
         // live status file and the events stream both key off it. All of
         // this is additive — the per-step stderr trace below is unchanged.
@@ -845,6 +874,12 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     }
     if !healed_steps.is_empty() {
         audit.auto_healed = Some(healed_steps);
+    }
+    if let Some(f) = &opts.from_step {
+        audit.window_from = Some(f.clone());
+    }
+    if let Some(u) = &opts.until_step {
+        audit.window_until = Some(u.clone());
     }
     write_run_audit(&run, &audit)?;
 
@@ -1465,6 +1500,8 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut plain = false;
     let mut tag: Option<String> = None;
     let mut output_audit: Option<PathBuf> = None;
+    let mut from_step: Option<String> = None;
+    let mut until_step: Option<String> = None;
     let mut input_overrides: BTreeMap<String, String> = BTreeMap::new();
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
@@ -1499,6 +1536,10 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             s if s.starts_with("--output-audit=") => {
                 output_audit = Some(PathBuf::from(&s["--output-audit=".len()..]))
             }
+            "--from" => from_step = it.next().cloned().or_else(|| bail_missing("--from")),
+            s if s.starts_with("--from=") => from_step = Some(s["--from=".len()..].to_string()),
+            "--until" => until_step = it.next().cloned().or_else(|| bail_missing("--until")),
+            s if s.starts_with("--until=") => until_step = Some(s["--until=".len()..].to_string()),
             "--param" | "-p" => {
                 let pair = it
                     .next()
@@ -1550,7 +1591,51 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         plain,
         tag,
         output_audit,
+        from_step,
+        until_step,
     })
+}
+
+/// Narrow a flattened step list to the `--from`/`--until` dispatch window.
+/// `--from` keeps steps from the first id match onward; `--until` keeps
+/// steps through the first id match (inclusive). Unknown ids and inverted
+/// windows are hard errors — silently dispatching the wrong slice would be
+/// worse than bailing.
+fn apply_step_window(
+    steps: Vec<Step>,
+    from: Option<&String>,
+    until: Option<&String>,
+) -> Result<Vec<Step>> {
+    if from.is_none() && until.is_none() {
+        return Ok(steps);
+    }
+    let ids: Vec<String> = steps.iter().map(|s| s.id().to_string()).collect();
+    let lo = match from {
+        Some(f) => ids.iter().position(|id| id == f).ok_or_else(|| {
+            anyhow!(
+                "--from {f:?}: no step with that id (have {})",
+                ids.join(", ")
+            )
+        })?,
+        None => 0,
+    };
+    let hi = match until {
+        Some(u) => ids.iter().position(|id| id == u).ok_or_else(|| {
+            anyhow!(
+                "--until {u:?}: no step with that id (have {})",
+                ids.join(", ")
+            )
+        })?,
+        None => steps.len().saturating_sub(1),
+    };
+    if lo > hi {
+        bail!(
+            "--from {:?} is after --until {:?} — empty window",
+            from.unwrap(),
+            until.unwrap()
+        );
+    }
+    Ok(steps[lo..=hi].to_vec())
 }
 
 fn bail_missing(flag: &str) -> Option<String> {
@@ -1572,6 +1657,7 @@ Usage:
                   [--heal-from-run <runId>] [--dry-run]
                   [--no-sidecars] [--quiet | -q] [--plain]
                   [--tag <label>] [--output-audit <path>]
+                  [--from <stepId>] [--until <stepId>]
                   [--runs <N>]
 
 Loads + validates the scenario, mints a run id, prepares
@@ -1692,6 +1778,8 @@ mod tests {
             plain: false,
             tag: None,
             output_audit: None,
+            from_step: None,
+            until_step: None,
         };
         let summary = run(&opts).unwrap();
         assert_eq!(summary.total, 1);
@@ -1765,6 +1853,8 @@ mod tests {
             plain: false,
             tag: None,
             output_audit: None,
+            from_step: None,
+            until_step: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -1819,6 +1909,8 @@ mod tests {
             plain: false,
             tag: None,
             output_audit: None,
+            from_step: None,
+            until_step: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -1854,6 +1946,8 @@ mod tests {
             plain: false,
             tag: None,
             output_audit: None,
+            from_step: None,
+            until_step: None,
         };
         let err = format!("{:#}", run(&opts).unwrap_err());
         assert!(err.contains("schema error"), "got: {err}");
@@ -1914,6 +2008,8 @@ esac\nexit 0\n",
             plain: false,
             tag: None,
             output_audit: None,
+            from_step: None,
+            until_step: None,
         }
     }
 
@@ -2162,6 +2258,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             plain: false,
             tag: None,
             output_audit: None,
+            from_step: None,
+            until_step: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2220,6 +2318,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             plain: false,
             tag: None,
             output_audit: None,
+            from_step: None,
+            until_step: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2627,6 +2727,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             plain: false,
             tag: None,
             output_audit: None,
+            from_step: None,
+            until_step: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2709,6 +2811,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             plain: false,
             tag: None,
             output_audit: None,
+            from_step: None,
+            until_step: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2774,6 +2878,61 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
     }
 
     #[test]
+    fn step_window_until_keeps_steps_through_match() {
+        let steps: Vec<Step> = (0..4)
+            .map(|i| parse_step(&format!(r#"{{"id":"s{i}","intent":"x","kind":"do","verb":"goto","value":{{"from":"literal","literal":"u"}}}}"#)))
+            .collect();
+        let out = apply_step_window(steps, None, Some(&"s2".to_string())).unwrap();
+        let ids: Vec<&str> = out.iter().map(|s| s.id()).collect();
+        assert_eq!(ids, ["s0", "s1", "s2"]);
+    }
+
+    #[test]
+    fn step_window_from_keeps_steps_from_match() {
+        let steps: Vec<Step> = (0..4)
+            .map(|i| parse_step(&format!(r#"{{"id":"s{i}","intent":"x","kind":"do","verb":"goto","value":{{"from":"literal","literal":"u"}}}}"#)))
+            .collect();
+        let out = apply_step_window(steps, Some(&"s2".to_string()), None).unwrap();
+        let ids: Vec<&str> = out.iter().map(|s| s.id()).collect();
+        assert_eq!(ids, ["s2", "s3"]);
+    }
+
+    #[test]
+    fn step_window_combined_slices_and_bails_on_bad_ids() {
+        let mk = || -> Vec<Step> {
+            (0..4)
+                .map(|i| parse_step(&format!(r#"{{"id":"s{i}","intent":"x","kind":"do","verb":"goto","value":{{"from":"literal","literal":"u"}}}}"#)))
+                .collect()
+        };
+        let out =
+            apply_step_window(mk(), Some(&"s1".to_string()), Some(&"s2".to_string())).unwrap();
+        let ids: Vec<&str> = out.iter().map(|s| s.id()).collect();
+        assert_eq!(ids, ["s1", "s2"]);
+        assert!(apply_step_window(mk(), Some(&"nope".to_string()), None).is_err());
+        assert!(apply_step_window(mk(), None, Some(&"nope".to_string())).is_err());
+        assert!(apply_step_window(mk(), Some(&"s3".to_string()), Some(&"s1".to_string())).is_err());
+        // No window = pass-through.
+        assert_eq!(apply_step_window(mk(), None, None).unwrap().len(), 4);
+    }
+
+    #[test]
+    fn parse_args_from_until_flags() {
+        let opts = parse_args(&[
+            "x".into(),
+            "--from".into(),
+            "s2".into(),
+            "--until".into(),
+            "s4".into(),
+        ])
+        .unwrap();
+        assert_eq!(opts.from_step.as_deref(), Some("s2"));
+        assert_eq!(opts.until_step.as_deref(), Some("s4"));
+        let opts = parse_args(&["x".into(), "--until=s3".into()]).unwrap();
+        assert_eq!(opts.until_step.as_deref(), Some("s3"));
+        assert_eq!(opts.from_step, None);
+    }
+
+    #[test]
     fn render_summary_formats_pass_and_fail() {
         let s = RunSummary {
             passed: 3,
@@ -2833,6 +2992,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             plain: false,
             tag: None,
             output_audit: None,
+            from_step: None,
+            until_step: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2917,6 +3078,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             plain: false,
             tag: None,
             output_audit: None,
+            from_step: None,
+            until_step: None,
         };
         // The run bails at the failing step; events/status are written
         // before the bail.
@@ -2980,6 +3143,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             plain: false,
             tag: None,
             output_audit: None,
+            from_step: None,
+            until_step: None,
         };
         run(&opts).unwrap();
 
@@ -3021,6 +3186,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             plain: false,
             tag: None,
             output_audit: None,
+            from_step: None,
+            until_step: None,
         };
         run(&opts).unwrap();
         let run_dir = run_dir_for(&jdir);
@@ -3199,6 +3366,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             plain,
             tag: None,
             output_audit: None,
+            from_step: None,
+            until_step: None,
         };
         assert_eq!(resolve_progress_mode(&mk(true, false)), ProgressMode::Quiet);
         // quiet wins over plain.
