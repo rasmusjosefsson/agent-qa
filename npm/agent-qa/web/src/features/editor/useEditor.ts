@@ -268,6 +268,24 @@ export function useEditor() {
     [refreshBuffer]
   )
 
+  // Append a visual ({"shot"}) check right after a do-step — the check
+  // references the do-step's id so replay pixel-diffs its screenshot.
+  const addShotCheck = useCallback(
+    async (index: number, stepId: string) => {
+      const { ok, body } = await api.insertRow(index + 1, 'check', {
+        intent: 'page looks right',
+        claim: { subject: { shot: stepId }, predicate: 'matches' },
+      })
+      if (!ok) {
+        flash(body.error || 'insert failed', true)
+        return
+      }
+      flash('visual check added — mint baselines after the next run')
+      await refreshBuffer()
+    },
+    [flash, refreshBuffer]
+  )
+
   const editRow = useCallback(
     async (index: number, payload: Record<string, unknown>) => {
       const { ok, body } = await api.editRow(index, payload)
@@ -399,6 +417,7 @@ export function useEditor() {
     moveRow,
     deleteRow,
     editRow,
+    addShotCheck,
     togglePause,
     runStep,
     recordStep,

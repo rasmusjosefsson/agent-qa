@@ -13,6 +13,7 @@ pub fn run(args: &[String]) -> Result<u8> {
     }
     match args[0].as_str() {
         "list" => cmd_list(&args[1..]),
+        "insert" => cmd_insert(&args[1..]),
         "delete" | "rm" => cmd_delete(&args[1..]),
         "move" | "mv" => cmd_move(&args[1..]),
         "edit" => cmd_edit(&args[1..]),
@@ -21,7 +22,7 @@ pub fn run(args: &[String]) -> Result<u8> {
         "clear" => cmd_clear(),
         "discard" => cmd_discard(),
         other => {
-            bail!("buffer: unknown subcommand {other:?}; try list|delete|move|edit|load|check|clear|discard")
+            bail!("buffer: unknown subcommand {other:?}; try list|insert|delete|move|edit|load|check|clear|discard")
         }
     }
 }
@@ -32,6 +33,7 @@ fn print_help() {
 
 Usage:
   agent-qa buffer list [--json]
+  agent-qa buffer insert <index> <do|check> <draft-json>
   agent-qa buffer delete <index>
   agent-qa buffer move <from> <to>
   agent-qa buffer edit <index> <draft-json>
@@ -40,15 +42,15 @@ Usage:
   agent-qa buffer clear
   agent-qa buffer discard
 
-Edit replaces the step at <index> with a re-validated draft (same shape as
+Insert appends a validated draft at <index> (use <len> to append), then
+edit replaces the step at <index> with a re-validated draft (same shape as
 `record-step`, minus id/kind — the step keeps its id and position; its kind
-may not change). Delete and move reassign dense s0, s1, ... ids. Load pulls a
-saved scenario's steps into the buffer for editing (`flush` writes them back
-to the same sid, preserving fields the buffer doesn't model — inputs,
-templates, env.close). Check runs the `scenario check` verifier (schema +
-lint) on the scenario flush would write, without writing it. Discard removes
-the active recording."
-
+may not change). Insert, delete, and move reassign dense s0, s1, ... ids. Load
+pulls a saved scenario's steps into the buffer for editing (`flush` writes
+them back to the same sid, preserving fields the buffer doesn't model —
+inputs, templates, env.close). Check runs the `scenario check` verifier
+(schema + lint) on the scenario flush would write, without writing it.
+Discard removes the active recording."
     );
 }
 
@@ -174,6 +176,34 @@ fn cmd_edit(args: &[String]) -> Result<u8> {
     state.steps[index] = replacement;
     state.save()?;
     println!("edited step {index} (stepId={step_id})");
+    Ok(0)
+}
+
+fn cmd_insert(args: &[String]) -> Result<u8> {
+    if args.len() != 3 {
+        bail!("usage: buffer insert <index> <do|check> <draft-json>");
+    }
+    let index = parse_index(&args[0], "index")?;
+    let kind = crate::record_step::StepKind::parse(&args[1])?;
+    let mut state = RecorderState::load_active()?;
+    if index > state.steps.len() {
+        bail!(
+            "index {index} out of range (buffer has {} step(s))",
+            state.steps.len()
+        );
+    }
+    let step_id = format!("s{index}");
+    let payload: serde_json::Value = serde_json::from_str(&args[2])
+        .map_err(|e| anyhow!("parse draft JSON: {:?} ({e})", args[2]))?;
+    let step = crate::record_step::parse_draft(kind, &payload, &step_id)?;
+    state.steps.insert(index, step);
+    normalize_ids(&mut state.steps);
+    state.save()?;
+    println!(
+        "inserted {kind} step at {index} (stepId={step_id}); {len} step(s)",
+        kind = kind.as_str(),
+        len = state.steps.len()
+    );
     Ok(0)
 }
 
@@ -323,6 +353,31 @@ mod tests {
         let state = RecorderState::load_active().unwrap();
         assert_eq!(state.steps.len(), 1);
         assert_eq!(state.steps[0].id(), "s0");
+        std::env::remove_var(crate::paths::RECORD_DIR_ENV);
+    }
+
+    #[test]
+    fn insert_adds_a_validated_step_and_renumbers() {
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var(crate::paths::RECORD_DIR_ENV, tmp.path());
+        state().save().unwrap();
+        cmd_insert(&[
+            "1".into(),
+            "check".into(),
+            "{\"intent\":\"page looks right\",\"claim\":{\"subject\":{\"shot\":\"s0\"},\"predicate\":\"matches\"}}".into(),
+        ])
+        .unwrap();
+        let state = RecorderState::load_active().unwrap();
+        assert_eq!(state.steps.len(), 3);
+        assert_eq!(state.steps[1].id(), "s1");
+        assert_eq!(state.steps[1].intent(), "page looks right");
+        // Steps after the insert point renumber densely.
+        assert_eq!(state.steps[2].id(), "s2");
+        // Out-of-range index and malformed drafts are rejected without writing.
+        assert!(cmd_insert(&["9".into(), "check".into(), "{}".into()]).is_err());
+        assert!(cmd_insert(&["0".into(), "nope".into(), "{}".into()]).is_err());
+        assert_eq!(RecorderState::load_active().unwrap().steps.len(), 3);
         std::env::remove_var(crate::paths::RECORD_DIR_ENV);
     }
 
