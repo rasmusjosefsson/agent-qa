@@ -1532,6 +1532,7 @@ test('chat recording controls run buffer verbs in the chat record dir', async (t
     ['resume', ['record', 'resume']],
     ['step-delete', ['buffer', 'delete', '1']],
     ['step-edit', ['buffer', 'edit', '0', JSON.stringify({ verb: 'click', on: '#a' })]],
+    ['check', ['buffer', 'check']],
   ]) {
     const body = sub === 'step-delete' ? { index: 1 } : sub === 'step-edit' ? { index: 0, payload: { verb: 'click', on: '#a' } } : {};
     const r = await j('POST', `/api/chat/c/${chat.id}/recording/${sub}`, body);

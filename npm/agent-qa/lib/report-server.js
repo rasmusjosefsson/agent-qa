@@ -2882,6 +2882,21 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
     return sendCliResult(res, r);
   }
 
+  // Validate THIS chat's in-progress recording the way `flush` would write it
+  // — schema + lint on the assembled scenario doc, without writing anything.
+  if (sub === 'recording/check' && req.method === 'POST') {
+    if (!deps || typeof deps.runCli !== 'function') {
+      return sendJson(res, 503, { error: 'agent-qa CLI not resolved' });
+    }
+    const dir = entry.recordDir();
+    if (!dir) return badRequest(res, 'no recording for this chat');
+    const body = await readJsonBody(req);
+    const args = ['buffer', 'check'];
+    if (body && body.strict === true) args.push('--strict');
+    const r = await deps.runCli(args, { AGENT_QA_RECORD_DIR: dir });
+    return sendCliResult(res, r);
+  }
+
   // Let a trusted extension prepare credentials (for example, through an
   // interactive provider flow), then retry connection in this chat's session.
   if (sub === 'remediate' && req.method === 'POST') {
