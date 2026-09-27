@@ -84,6 +84,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `scenario summary <file>` | Per-step summary. Flags: `--filter <substr>`, `--json`. |
 | `scenario inputs <file>` | List declared inputs. `--json`. |
 | `scenario new <file>` | Scaffold a minimal valid scenario. Flags: `--force`, `--url`, `--intent`. |
+| `scenario insert <file> <do\|check> <draft-json>` | Splice a validated step into a saved scenario. `--after <stepId>` or `--at <index>` sets the position (default: append); the new step's id is the first free `s<n>`. |
 | `scenario diff <a> <b>` | Unified diff between two scenario JSONs |
 | `scenario hash <file>` | SHA-256 of scenario bytes (rebase-guard hash) |
 | `scenario id <file>` | Print the scenario's id field on one line |
