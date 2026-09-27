@@ -303,6 +303,9 @@ async function scenarioSummary(root, sid) {
       currentIdx: typeof status?.currentIdx === 'number' ? status.currentIdx : null,
       total: typeof status?.total === 'number' ? status.total : null,
       ok: status?.ok ?? null,
+      // Same auto-heal count the runs list exposes — lets plan/case
+      // dashboards badge a run that passed by healing.
+      healed: Array.isArray(audit?.autoHealed) ? audit.autoHealed.length : 0,
     };
   }
   return {
