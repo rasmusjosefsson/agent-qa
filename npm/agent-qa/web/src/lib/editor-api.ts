@@ -53,6 +53,10 @@ export function runStep(kind: EditKind, payload: Json) {
   return postJson('/api/edit/run-step', { kind, payload });
 }
 
+export function insertRow(index: number, kind: EditKind, payload: Json) {
+  return postJson('/api/edit/insert', { index, kind, payload });
+}
+
 export function deleteRow(index: number) {
   return postJson('/api/edit/delete', { index });
 }
