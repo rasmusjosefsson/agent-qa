@@ -2231,11 +2231,12 @@ fn latest(filter: Option<&str>) -> Result<u8> {
     }
 }
 
-fn ls(filter: Option<&str>, json_out: bool) -> Result<u8> {
-    let root = crate::paths::scenarios_root();
+/// Every directory under `root` that contains a `scenario.json`,
+/// as a sorted sid list. `filter` is a case-insensitive substring.
+pub(crate) fn all_sids(root: &Path, filter: Option<&str>) -> Vec<String> {
     let mut sids: Vec<String> = Vec::new();
     let needle = filter.map(|s| s.to_ascii_lowercase());
-    if let Ok(entries) = fs::read_dir(&root) {
+    if let Ok(entries) = fs::read_dir(root) {
         for entry in entries.flatten() {
             let dir = entry.path();
             if !dir.is_dir() {
@@ -2255,6 +2256,12 @@ fn ls(filter: Option<&str>, json_out: bool) -> Result<u8> {
         }
     }
     sids.sort();
+    sids
+}
+
+fn ls(filter: Option<&str>, json_out: bool) -> Result<u8> {
+    let root = crate::paths::scenarios_root();
+    let sids = all_sids(&root, filter);
     if json_out {
         let body = serde_json::json!({
             "scenariosRoot": root.display().to_string(),

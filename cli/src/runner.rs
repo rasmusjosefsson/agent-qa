@@ -1424,22 +1424,46 @@ fn is_safe_step_id(s: &str) -> bool {
 // ---------- CLI verb ----------
 
 pub fn cli(args: &[String]) -> Result<u8> {
-    let (parsed, runs) = parse_args_with_runs(args)?;
+    let flags = parse_args_cli(args)?;
+    if flags.all {
+        return cli_all(
+            &flags.filtered,
+            flags.runs,
+            flags.shard,
+            flags.filter.as_deref(),
+        );
+    }
+    if flags.shard.is_some() {
+        bail!("--shard requires --all");
+    }
+    if flags.filter.is_some() {
+        bail!("--filter requires --all");
+    }
+    let parsed = parse_args(&flags.filtered)?;
+    run_n(&parsed, flags.runs, None)
+}
+
+/// Replay `parsed` `runs` times; `label` prefixes the per-run banner.
+/// Returns the process exit code — 0 iff every run's summary is ok.
+fn run_n(parsed: &RunOptions, runs: u32, label: Option<&str>) -> Result<u8> {
     if runs <= 1 {
-        let summary = run(&parsed)?;
+        let summary = run(parsed)?;
         return Ok(if summary.ok { 0 } else { 1 });
     }
     let mut all_ok = true;
     for i in 1..=runs {
-        eprintln!("[v2-replay] run {i}/{runs}");
-        match run(&parsed) {
+        eprintln!("[v2-replay]{} run {i}/{runs}", label.unwrap_or(""));
+        match run(parsed) {
             Ok(summary) => {
                 if !summary.ok {
                     all_ok = false;
                 }
             }
             Err(e) => {
-                eprintln!("[v2-replay] run {i}/{runs} errored: {e}");
+                eprintln!(
+                    "[v2-replay]{} run {i}/{runs} errored: {e}",
+                    label.unwrap_or("")
+                );
                 all_ok = false;
             }
         }
@@ -1447,11 +1471,86 @@ pub fn cli(args: &[String]) -> Result<u8> {
     Ok(if all_ok { 0 } else { 1 })
 }
 
-/// Wrapper around [`parse_args`] that also peels off `--runs N` (a CLI
-/// loop count) before resolution. Defaults to 1.
-fn parse_args_with_runs(args: &[String]) -> Result<(RunOptions, u32)> {
+/// `replay --all`: every scenario under the scenarios root, optionally
+/// sharded (`--shard k/n` keeps the sids whose sorted index % n == k-1)
+/// and/or name-filtered (`--filter <substr>`).
+fn cli_all(
+    filtered: &[String],
+    runs: u32,
+    shard: Option<(u32, u32)>,
+    filter: Option<&str>,
+) -> Result<u8> {
+    let root = crate::paths::scenarios_root();
+    let mut sids = crate::scenario_cli::all_sids(&root, filter);
+    if let Some((k, n)) = shard {
+        sids = sids
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| (*i as u32) % n == k - 1)
+            .map(|(_, sid)| sid)
+            .collect();
+    }
+    if sids.is_empty() {
+        bail!("replay --all: no scenarios under {}", root.display());
+    }
+    eprintln!(
+        "[v2-replay] --all{}: {} scenario(s){}",
+        shard
+            .map(|(k, n)| format!(" --shard {k}/{n}"))
+            .unwrap_or_default(),
+        sids.len(),
+        filter
+            .map(|f| format!(" matching {f:?}"))
+            .unwrap_or_default()
+    );
+    let mut all_ok = true;
+    let mut failed: Vec<String> = Vec::new();
+    for sid in &sids {
+        let mut per = filtered.to_vec();
+        per.push(sid.clone());
+        let parsed = parse_args(&per)?;
+        let code = run_n(&parsed, runs, Some(&format!(" {sid}")))?;
+        if code != 0 {
+            all_ok = false;
+            failed.push(sid.clone());
+        }
+    }
+    eprintln!(
+        "[v2-replay] --all done: {} passed, {} failed{}",
+        sids.len() - failed.len(),
+        failed.len(),
+        if failed.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", failed.join(", "))
+        }
+    );
+    Ok(if all_ok { 0 } else { 1 })
+}
+
+/// CLI-level flags peeled off before [`parse_args`] sees `args`.
+#[derive(Debug)]
+struct CliFlags {
+    /// Remaining args (positional sid + per-run flags) for parse_args.
+    filtered: Vec<String>,
+    /// `--runs N` repeat count.
+    runs: u32,
+    /// `--all` — replay every scenario under the root.
+    all: bool,
+    /// `--shard k/n` — 1-based shard of the sorted sid list.
+    shard: Option<(u32, u32)>,
+    /// `--filter <substr>` — sid substring filter for --all.
+    filter: Option<String>,
+}
+
+/// Peel the CLI-level flags `--runs N`, `--all`, `--shard k/n`, and
+/// `--filter <substr>` off `args`; the rest feed [`parse_args`].
+fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
     let mut filtered: Vec<String> = Vec::with_capacity(args.len());
     let mut runs: u32 = 1;
+    let mut all = false;
+    let mut shard: Option<(u32, u32)> = None;
+    let mut filter: Option<String> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -1475,11 +1574,53 @@ fn parse_args_with_runs(args: &[String]) -> Result<(RunOptions, u32)> {
                     bail!("--runs must be >= 1");
                 }
             }
+            "--all" => all = true,
+            "--shard" => {
+                let v = it
+                    .next()
+                    .ok_or_else(|| anyhow!("--shard requires k/n (e.g. --shard 2/4)"))?;
+                shard = Some(parse_shard(v)?);
+            }
+            s if s.starts_with("--shard=") => {
+                shard = Some(parse_shard(&s["--shard=".len()..])?);
+            }
+            "--filter" => {
+                filter = Some(
+                    it.next()
+                        .cloned()
+                        .ok_or_else(|| anyhow!("--filter requires a value"))?,
+                );
+            }
+            s if s.starts_with("--filter=") => {
+                filter = Some(s["--filter=".len()..].to_string());
+            }
             other => filtered.push(other.to_string()),
         }
     }
-    let opts = parse_args(&filtered)?;
-    Ok((opts, runs))
+    Ok(CliFlags {
+        filtered,
+        runs,
+        all,
+        shard,
+        filter,
+    })
+}
+
+/// `k/n` — k is 1-based and must be <= n; both must be positive.
+fn parse_shard(v: &str) -> Result<(u32, u32)> {
+    let (k, n) = v
+        .split_once('/')
+        .ok_or_else(|| anyhow!("--shard expects k/n (e.g. 2/4); got {v:?}"))?;
+    let k: u32 = k
+        .parse()
+        .map_err(|_| anyhow!("--shard k must be a positive integer; got {v:?}"))?;
+    let n: u32 = n
+        .parse()
+        .map_err(|_| anyhow!("--shard n must be a positive integer; got {v:?}"))?;
+    if n == 0 || k == 0 || k > n {
+        bail!("--shard expects 1 <= k <= n; got {v:?}");
+    }
+    Ok((k, n))
 }
 
 fn parse_args(args: &[String]) -> Result<RunOptions> {
@@ -1685,6 +1826,15 @@ replays/latest.txt.
 --runs <N>               Repeat the replay N times in one invocation
                          (each run mints its own runId). Useful for
                          flake detection. Exit 0 iff every run is OK.
+--all                    Replay every scenario under the scenarios root
+                         (sorted sid order), printing a per-run banner
+                         plus a final pass/fail rollup. Combines with
+                         every flag except a positional sid.
+--shard k/n              With --all: run only the sids whose index in
+                         the sorted list mod n == k-1 (k is 1-based).
+                         For CI matrix jobs, e.g. shard 1/4 + 2/4 + …
+--filter <substr>        With --all: keep sids containing <substr>
+                         (case-insensitive).
 --no-sidecars            Skip per-step ARIA snapshot + screenshot
                          capture. audit.json is still written. Useful
                          when running with --runs N.
@@ -1714,6 +1864,26 @@ mod tests {
 
     // env mutation isn't thread-safe; serialize via the shared lock.
     use crate::test_util::lock_env;
+
+    #[test]
+    fn parse_shard_validates_bounds() {
+        assert_eq!(parse_shard("1/4").unwrap(), (1, 4));
+        assert_eq!(parse_shard("4/4").unwrap(), (4, 4));
+        assert!(parse_shard("0/4").is_err());
+        assert!(parse_shard("5/4").is_err());
+        assert!(parse_shard("1/0").is_err());
+        assert!(parse_shard("x").is_err());
+        assert!(parse_shard("1/").is_err());
+    }
+
+    #[test]
+    fn cli_shard_without_all_errors() {
+        let args: Vec<String> = ["sid-x", "--shard", "1/2"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(cli(&args).is_err());
+    }
 
     fn write_exec(dir: &Path, name: &str, body: &str) -> PathBuf {
         let p = dir.join(name);
@@ -2423,29 +2593,46 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
     }
 
     #[test]
-    fn parse_args_with_runs_strips_and_parses() {
-        let (opts, runs) =
-            parse_args_with_runs(&["./j.json".into(), "--runs".into(), "5".into()]).unwrap();
-        assert_eq!(runs, 5);
+    fn parse_args_cli_strips_runs_and_parses() {
+        let f = parse_args_cli(&["./j.json".into(), "--runs".into(), "5".into()]).unwrap();
+        assert_eq!(f.runs, 5);
+        assert!(!f.all && f.shard.is_none() && f.filter.is_none());
+        let opts = parse_args(&f.filtered).unwrap();
         assert!(matches!(opts.source, ScenarioSource::Path(_)));
     }
 
     #[test]
-    fn parse_args_with_runs_eq_form() {
-        let (_opts, runs) = parse_args_with_runs(&["./j.json".into(), "--runs=3".into()]).unwrap();
-        assert_eq!(runs, 3);
+    fn parse_args_cli_eq_form() {
+        let f = parse_args_cli(&["./j.json".into(), "--runs=3".into()]).unwrap();
+        assert_eq!(f.runs, 3);
     }
 
     #[test]
-    fn parse_args_with_runs_default_is_one() {
-        let (_opts, runs) = parse_args_with_runs(&["./j.json".into()]).unwrap();
-        assert_eq!(runs, 1);
+    fn parse_args_cli_default_is_one() {
+        let f = parse_args_cli(&["./j.json".into()]).unwrap();
+        assert_eq!(f.runs, 1);
     }
 
     #[test]
-    fn parse_args_with_runs_rejects_zero_and_non_int() {
-        parse_args_with_runs(&["./j.json".into(), "--runs".into(), "0".into()]).unwrap_err();
-        parse_args_with_runs(&["./j.json".into(), "--runs".into(), "x".into()]).unwrap_err();
+    fn parse_args_cli_rejects_zero_and_non_int() {
+        parse_args_cli(&["./j.json".into(), "--runs".into(), "0".into()]).unwrap_err();
+        parse_args_cli(&["./j.json".into(), "--runs".into(), "x".into()]).unwrap_err();
+    }
+
+    #[test]
+    fn parse_args_cli_all_shard_filter() {
+        let f = parse_args_cli(&[
+            "--all".into(),
+            "--shard".into(),
+            "2/4".into(),
+            "--filter=login".into(),
+            "--quiet".into(),
+        ])
+        .unwrap();
+        assert!(f.all);
+        assert_eq!(f.shard, Some((2, 4)));
+        assert_eq!(f.filter.as_deref(), Some("login"));
+        assert_eq!(f.filtered, vec!["--quiet".to_string()]);
     }
 
     #[test]
