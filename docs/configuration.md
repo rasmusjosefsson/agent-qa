@@ -91,3 +91,11 @@ agent-browser and pings each plugin.
 | `AGENT_QA_NO_AUTO_RECOVER` | `1` disables agent-browser orphan-daemon auto-retry (debug only)    |
 | `AGENT_QA_NO_HEAL`         | Set disables the replay auto-heal loop entirely (CI fail-hard)      |
 | `AGENT_QA_HEAL_STRICT`     | Set fails a run that needed any heal, even though every step passed |
+| `AGENT_QA_CHAT_BACKEND`    | Workbench chat agent runtime: `pi` (default) or `opencode`          |
+| `AGENT_QA_PI_SDK`          | Explicit path to the pi SDK (`@earendil-works/pi-coding-agent`)     |
+| `AGENT_QA_OPENCODE_SDK`    | Explicit path to the opencode SDK (`@opencode-ai/sdk`, v2 surface)  |
+| `AGENT_QA_NO_CHAT`         | `1` disables the in-app Chat tab entirely                           |
+
+The `opencode` backend needs the `opencode` CLI on `PATH` (`npm i -g
+opencode-ai`) — each chat spawns its own `opencode serve` process with that
+chat's per-session env, while `pi` runs in-process via its SDK.

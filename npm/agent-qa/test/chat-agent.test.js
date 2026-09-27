@@ -856,3 +856,235 @@ test('multi-chat: per-chat live recording view + artifacts', async (t) => {
   const shot2 = await fetch(`${base}/api/chat/c/${c.id}/recording/step/s0/screenshot`);
   assert.equal(shot2.status, 200);
 });
+
+// ---- opencode backend (v2 SDK) ----
+
+function makeFakeOpencodeClient() {
+  const calls = { prompt: [], interrupt: [], switchModel: [], messages: 0 };
+  // Queue-backed async iterator: events emitted before the pump parks on
+  // next() must still be delivered (the real SSE stream behaves the same).
+  const queue = [];
+  let waiter = null;
+  const iterator = {
+    next() {
+      if (queue.length) {
+        const v = queue.shift();
+        return Promise.resolve(v === null ? { done: true } : { value: v, done: false });
+      }
+      return new Promise((resolve) => {
+        waiter = resolve;
+      });
+    },
+  };
+  const stream = { [Symbol.asyncIterator]: () => iterator };
+  const client = {
+    session: {
+      create: async () => ({ data: { id: 'sess-oc-1' } }),
+      get: async () => ({ data: { id: 'sess-oc-1', model: { providerID: 'prov', id: 'm-1' } } }),
+      prompt: async (args) => {
+        calls.prompt.push(args);
+        return { data: {} };
+      },
+      interrupt: async (args) => {
+        calls.interrupt.push(args);
+        return { data: {} };
+      },
+      messages: async () => {
+        calls.messages++;
+        return { data: { data: [] } };
+      },
+      switchModel: async (args) => {
+        calls.switchModel.push(args);
+        return { data: {} };
+      },
+    },
+    event: {
+      subscribe: async () => ({ stream }),
+    },
+    provider: {
+      list: async () => ({ data: { data: [{ id: 'prov', models: [{ id: 'm-1' }] }] } }),
+    },
+  };
+  return {
+    client,
+    calls,
+    emit: (ev) => {
+      queue.push(ev);
+      if (waiter) {
+        const r = waiter;
+        waiter = null;
+        r(iterator.next());
+      }
+    },
+    endStream: () => {
+      queue.push(null);
+      if (waiter) {
+        const r = waiter;
+        waiter = null;
+        r(iterator.next());
+      }
+    },
+  };
+}
+
+test('mapOpencodeEvent maps the session.next vocabulary onto pi events', async () => {
+  const { mapOpencodeEvent } = await chatAgent();
+
+  assert.deepEqual(mapOpencodeEvent({ type: 'session.next.prompt.admitted' }), { type: 'agent_start' });
+  assert.deepEqual(mapOpencodeEvent({ type: 'session.next.step.started' }), { type: 'turn_start' });
+  assert.deepEqual(mapOpencodeEvent({ type: 'session.next.step.ended' }), { type: 'turn_end' });
+  assert.deepEqual(mapOpencodeEvent({ type: 'session.next.text.delta', data: { delta: 'hi' } }), {
+    type: 'message_update',
+    assistantMessageEvent: { type: 'text_delta', delta: 'hi' },
+  });
+  assert.deepEqual(mapOpencodeEvent({ type: 'session.next.reasoning.delta', data: { delta: 'hmm' } }), {
+    type: 'message_update',
+    assistantMessageEvent: { type: 'thinking_delta', delta: 'hmm' },
+  });
+  assert.deepEqual(
+    mapOpencodeEvent({
+      type: 'session.next.tool.called',
+      data: { callID: 'c1', tool: 'bash', input: { cmd: 'ls' } },
+    }),
+    { type: 'tool_execution_start', toolCallId: 'c1', toolName: 'bash', args: { cmd: 'ls' } },
+  );
+  assert.deepEqual(
+    mapOpencodeEvent({ type: 'session.next.tool.success', data: { callID: 'c1', tool: 'bash', result: 'ok' } }),
+    { type: 'tool_execution_end', toolCallId: 'c1', toolName: 'bash', isError: false, result: 'ok' },
+  );
+  assert.deepEqual(
+    mapOpencodeEvent({ type: 'session.next.tool.failed', data: { callID: 'c1', tool: 'bash', error: 'boom' } }),
+    { type: 'tool_execution_end', toolCallId: 'c1', toolName: 'bash', isError: true, result: 'boom' },
+  );
+  assert.deepEqual(mapOpencodeEvent({ type: 'session.idle' }), { type: 'agent_end' });
+  assert.equal(mapOpencodeEvent({ type: 'session.error', data: { error: { message: 'nope' } } }).type, 'error');
+  assert.equal(mapOpencodeEvent({ type: 'session.unknown' }), null);
+});
+
+test('mapOpencodeMessage projects SessionMessage rows', async () => {
+  const { mapOpencodeMessage } = await chatAgent();
+  assert.deepEqual(mapOpencodeMessage({ type: 'user', text: 'hello' }), [
+    { role: 'user', content: [{ type: 'text', text: 'hello' }] },
+  ]);
+  const rows = mapOpencodeMessage({
+    type: 'assistant',
+    content: [
+      { type: 'text', text: 'running ls' },
+      { type: 'reasoning', text: 'think' },
+      { type: 'tool', id: 't1', name: 'bash', state: { status: 'completed', input: { cmd: 'ls' }, result: 'ok' } },
+    ],
+  });
+  assert.equal(rows[0].role, 'assistant');
+  assert.deepEqual(rows[0].content[0], { type: 'text', text: 'running ls' });
+  assert.deepEqual(rows[0].content[1], { type: 'thinking', thinking: 'think' });
+  assert.equal(rows[0].content[2].type, 'toolCall');
+  assert.equal(rows[0].content[2].name, 'bash');
+  assert.deepEqual(rows[1], {
+    role: 'toolResult',
+    toolCallId: 't1',
+    toolName: 'bash',
+    isError: false,
+    content: 'ok',
+  });
+  assert.deepEqual(mapOpencodeMessage({ type: 'system' }), []);
+});
+
+test('resolveOpencodeSdkUrl resolves an explicit file and errors clearly when absent', async () => {
+  const { resolveOpencodeSdkUrl } = await chatAgent();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-ocsdk-'));
+  const entry = path.join(dir, 'dist', 'index.js');
+  fs.mkdirSync(path.dirname(entry), { recursive: true });
+  fs.writeFileSync(entry, 'export const ok = true;');
+  assert.equal(resolveOpencodeSdkUrl({ sdkPath: entry, env: {} }), pathToFileURL(entry).href);
+
+  // moduleUrl inside an empty tree + no override → named-package error.
+  const bare = path.join(dir, 'lib', 'chat-agent.mjs');
+  assert.throws(
+    () => resolveOpencodeSdkUrl({ env: {}, moduleUrl: pathToFileURL(bare).href }),
+    /@opencode-ai\/sdk/,
+  );
+});
+
+test('detectChatBackends reports pi + opencode availability separately', async () => {
+  const { detectChatBackends, __internal } = await chatAgent();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-ocbin-'));
+  const bin = path.join(dir, 'opencode');
+  fs.writeFileSync(bin, '#!/bin/sh\n');
+  assert.equal(__internal.whichOnPath('opencode', { PATH: dir }), bin);
+
+  // A moduleUrl inside an empty tree → neither SDK resolves; bin still detected.
+  const bare = path.join(dir, 'lib', 'chat-agent.mjs');
+  const det = detectChatBackends({ env: { PATH: dir }, moduleUrl: pathToFileURL(bare).href });
+  assert.equal(det.pi.available, false);
+  assert.equal(det.opencode.sdkAvailable, false);
+  assert.equal(det.opencode.binary, bin);
+  assert.equal(det.opencode.available, false); // sdk missing → not usable
+  assert.match(det.opencode.install, /opencode-ai/);
+});
+
+test('createChatBackend rejects an unknown backend', async () => {
+  const { createChatBackend } = await chatAgent();
+  await assert.rejects(createChatBackend({ backend: 'bogus', env: {} }), /unknown chat backend/);
+});
+
+test('opencode session adapter speaks the pi contract (subscribe/prompt/abort)', async () => {
+  const { __internal } = await chatAgent();
+  const { client, calls, emit } = makeFakeOpencodeClient();
+  const session = __internal.makeOpencodeSessionAdapter({
+    client,
+    sessionID: 'sess-oc-1',
+    models: () => [{ provider: 'prov', id: 'm-1' }],
+    cwd: '/tmp',
+  });
+  await session.init();
+  assert.equal(session.sessionId, 'sess-oc-1');
+  assert.deepEqual(session.model, { provider: 'prov', id: 'm-1', label: 'm-1' });
+
+  const seen = [];
+  const unsub = session.subscribe((ev) => seen.push(ev));
+  emit({ type: 'session.next.prompt.admitted', properties: { sessionID: 'sess-oc-1' } });
+  emit({ type: 'session.next.text.delta', properties: { sessionID: 'sess-oc-1', delta: 'he' } });
+  // Other session's events are filtered out.
+  emit({ type: 'session.next.text.delta', properties: { sessionID: 'other', delta: 'no' } });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.deepEqual(seen.map((e) => e.type), ['agent_start', 'message_update']);
+  assert.equal(seen[1].assistantMessageEvent.delta, 'he');
+  assert.equal(session.isStreaming, true);
+
+  // A prompt while streaming steers rather than queueing.
+  await session.prompt('steer me');
+  assert.deepEqual(calls.prompt[0], {
+    sessionID: 'sess-oc-1',
+    prompt: { text: 'steer me' },
+    delivery: 'steer',
+  });
+
+  emit({ type: 'session.idle', properties: { sessionID: 'sess-oc-1' } });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(session.isStreaming, false);
+
+  await session.prompt('hi');
+  assert.deepEqual(calls.prompt[1], { sessionID: 'sess-oc-1', prompt: { text: 'hi' } });
+
+  await session.abort();
+  assert.equal(calls.interrupt.length, 1);
+
+  await session.setModel({ provider: 'prov', id: 'm-1' });
+  assert.equal(calls.switchModel[0].sessionID, 'sess-oc-1');
+  assert.deepEqual(calls.switchModel[0].model, { providerID: 'prov', id: 'm-1' });
+
+  unsub();
+  session.dispose();
+});
+
+test('chat state reports the backend + install hint when unavailable', async (t) => {
+  const { server, base } = await boot('/tmp/whatever', {
+    chat: { createHub: () => Promise.reject(new Error('SDK not found')) },
+  });
+  t.after(() => server.close());
+  const body = await (await fetch(`${base}/api/chat/state`)).json();
+  assert.equal(body.available, false);
+  assert.match(body.reason, /SDK not found/);
+  assert.ok(['pi', 'opencode'].includes(body.backend));
+  assert.ok(body.install && body.install.startsWith('npm'));
+});

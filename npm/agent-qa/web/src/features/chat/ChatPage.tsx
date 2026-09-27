@@ -452,7 +452,9 @@ function ChatConversation({
       className="flex min-h-0 min-w-0 flex-1 flex-col"
       style={isDesktop ? { flexBasis: `${leftPct}%`, flexGrow: 0, flexShrink: 0 } : undefined}
     >
-          {state.hydrated && !state.available && <ChatSetupNotice reason={state.reason} />}
+          {state.hydrated && !state.available && (
+            <ChatSetupNotice reason={state.reason} install={state.install} backend={state.backend} />
+          )}
           <div className="flex items-center justify-end border-b border-border px-2 py-1">
             <button
               type="button"
@@ -769,17 +771,28 @@ function ConnectBar({ cid }: { cid: string }) {
   )
 }
 
-// Chat agent isn't set up (pi SDK missing) — a calm setup nudge with a
-// copy-paste install CTA, not an error. The server reason already names the
-// fix, so we don't repeat the install instructions in prose.
+// Chat agent isn't set up — a calm setup nudge with a copy-paste install
+// CTA, not an error. The server names the backend + install command; the
+// pi command stays as fallback for older servers.
 const PI_INSTALL_CMD = 'npm i -g @earendil-works/pi-coding-agent'
+const BACKEND_LABELS: Record<string, string> = { pi: 'pi', opencode: 'opencode' }
 
-function ChatSetupNotice({ reason }: { reason?: string }) {
+function ChatSetupNotice({
+  reason,
+  install,
+  backend,
+}: {
+  reason?: string
+  install?: string
+  backend?: string
+}) {
   const [copied, setCopied] = useState(false)
+  const installCmd = install || PI_INSTALL_CMD
+  const backendLabel = (backend && BACKEND_LABELS[backend]) || 'the chat agent'
 
   const copyInstall = async () => {
     try {
-      await navigator.clipboard.writeText(PI_INSTALL_CMD)
+      await navigator.clipboard.writeText(installCmd)
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1500)
     } catch {
@@ -792,8 +805,11 @@ function ChatSetupNotice({ reason }: { reason?: string }) {
       <PlugZapIcon className="size-4 shrink-0 text-muted-foreground" />
       <div className="min-w-0 flex-1 basis-56">
         <div className="text-[13px] font-semibold tracking-tight">Finish chat setup</div>
-        <div className="truncate text-xs text-muted-foreground" title={reason || 'The chat agent needs the pi SDK.'}>
-          {reason || 'The chat agent needs the pi SDK.'}
+        <div
+          className="truncate text-xs text-muted-foreground"
+          title={reason || `${backendLabel} needs its agent runtime installed.`}
+        >
+          {reason || `${backendLabel} needs its agent runtime installed.`}
         </div>
       </div>
       <button
@@ -803,7 +819,7 @@ function ChatSetupNotice({ reason }: { reason?: string }) {
         className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 font-mono text-[11px] text-muted-foreground shadow-sm transition-colors hover:text-foreground"
       >
         {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
-        {copied ? 'Copied' : PI_INSTALL_CMD}
+        {copied ? 'Copied' : installCmd}
       </button>
     </div>
   )
