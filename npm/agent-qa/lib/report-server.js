@@ -2418,7 +2418,16 @@ async function chatUnavailableFields(reason) {
 
 // Metadata for one chat (safe to serialize to the frontend).
 function chatMeta(e) {
-  return { id: e.id, title: e.title, createdAt: e.createdAt, session: e.browser.name };
+  return {
+    id: e.id,
+    title: e.title,
+    createdAt: e.createdAt,
+    session: e.browser.name,
+    // 'live' = an agent session exists; 'busy' = it is streaming a reply right
+    // now. Cheap sync reads off the resolved hub — no hub construction.
+    live: e.isLive(),
+    busy: e.isBusy(),
+  };
 }
 
 // Read the chat's active recorder state, or its last sealed scenario.
@@ -2598,6 +2607,8 @@ function createChatManager(deps, root) {
       // Per-chat record scratch dir so concurrent recordings don't collide and
       // the chat's pane can detect its own active recording.
       recordDir: () => (recordRoot ? path.join(recordRoot, browser.name) : null),
+      isLive: () => resolvedHub != null,
+      isBusy: () => !!(resolvedHub && resolvedHub.isStreaming),
       getHub() {
         if (!chat) return Promise.resolve(null);
         if (chat.hub) {
@@ -2861,60 +2872,6 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
   // per-step screenshot/snapshot artifacts. Cheap file reads — pollable.
   if (sub === 'recording' && req.method === 'GET') {
     return sendJson(res, 200, await chatRecordingState(entry, scenariosRoot));
-  }
-
-  // Pause/resume step capture for THIS chat's recording: flips the paused
-  // flag in the chat's own recorder-state.json (its per-chat recordDir), so
-  // the chat agent's record-step calls keep executing but drop their steps.
-  if ((sub === 'recording/pause' || sub === 'recording/resume') && req.method === 'POST') {
-    if (!deps || typeof deps.runCli !== 'function') {
-      return sendJson(res, 503, { error: 'agent-qa CLI not resolved' });
-    }
-    const dir = entry.recordDir();
-    if (!dir) return badRequest(res, 'no recording for this chat');
-    const verb = sub === 'recording/pause' ? 'pause' : 'resume';
-    const r = await deps.runCli(['record', verb], { AGENT_QA_RECORD_DIR: dir });
-    return sendCliResult(res, r);
-  }
-
-  // Rewrite/remove one buffered step of THIS chat's in-progress recording —
-  // same `buffer` verbs the editor uses, run against the chat's recordDir so
-  // concurrent recordings don't cross streams.
-  if (sub === 'recording/step-edit' && req.method === 'POST') {
-    if (!deps || typeof deps.runCli !== 'function') {
-      return sendJson(res, 503, { error: 'agent-qa CLI not resolved' });
-    }
-    const dir = entry.recordDir();
-    if (!dir) return badRequest(res, 'no recording for this chat');
-    const body = await readJsonBody(req);
-    const index = Number(body.index);
-    if (!Number.isInteger(index) || index < 0) {
-      return badRequest(res, 'index (non-negative integer) is required');
-    }
-    if (body.payload == null || typeof body.payload !== 'object' || Array.isArray(body.payload)) {
-      return badRequest(res, 'payload (object) is required');
-    }
-    const r = await deps.runCli(
-      ['buffer', 'edit', String(index), JSON.stringify(body.payload)],
-      { AGENT_QA_RECORD_DIR: dir },
-    );
-    return sendCliResult(res, r);
-  }
-  if (sub === 'recording/step-delete' && req.method === 'POST') {
-    if (!deps || typeof deps.runCli !== 'function') {
-      return sendJson(res, 503, { error: 'agent-qa CLI not resolved' });
-    }
-    const dir = entry.recordDir();
-    if (!dir) return badRequest(res, 'no recording for this chat');
-    const body = await readJsonBody(req);
-    const index = Number(body.index);
-    if (!Number.isInteger(index) || index < 0) {
-      return badRequest(res, 'index (non-negative integer) is required');
-    }
-    const r = await deps.runCli(['buffer', 'delete', String(index)], {
-      AGENT_QA_RECORD_DIR: dir,
-    });
-    return sendCliResult(res, r);
   }
 
   // Let a trusted extension prepare credentials (for example, through an
