@@ -29,7 +29,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 
 | Verb | What it does |
 | --- | --- |
-| `replay <sid \| path>` | Run a scenario. Flags: `--profile`, `--session`, `--param name=value`, `--heal-from-run <runId>`, `--dry-run`, `--no-sidecars`, `--runs <N>`, `--quiet`/`-q`, `--tag <label>`, `--output-audit <path>` |
+| `replay <sid \| path>` | Run a scenario. Flags: `--profile`, `--session`, `--param name=value`, `--heal-from-run <runId>`, `--dry-run`, `--no-sidecars`, `--runs <N>`, `--quiet`/`-q`, `--tag <label>`, `--output-audit <path>`, `--from <stepId>` (skip earlier steps — needs a warm session at that state), `--until <stepId>` (stop after it, inclusive) |
 | `list` | Enumerate scenarios (root mode) or one scenario's replays. Flags: `--json`, `--filter <substr>`, `--limit <N>` |
 | `compare <a> <b>` | Diff two replay run directories. Alias `diff`. |
 | `audit show <sid> <runId \| latest>` | Pretty-print one replay's audit.json. `--json` for raw. |
