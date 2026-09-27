@@ -1856,3 +1856,47 @@ test('POST /api/config/plugins/import saves, chmods, and registers a plugin file
   // bad input rejected
   assert.equal((await j('POST', '/api/config/plugins/import', { filename: 'x' })).status, 400);
 });
+
+test('POST /api/scenarios/:sid/insert-step delegates to scenario insert', async (t) => {
+  const fx = makeFixture();
+  const calls = [];
+  const deps = {
+    runCli: async (args) => {
+      calls.push(args);
+      return { code: 0, stdout: 'inserted check step at 2 (id=s3); 4 step(s)\n', stderr: '' };
+    },
+  };
+  const { server, base } = await boot(fx.root, deps);
+  t.after(() => server.close());
+  const j = (p, b) =>
+    fetch(`${base}${p}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(b),
+    });
+
+  const draft = { intent: 'still ok', claim: { subject: { url: true }, predicate: 'exists' } };
+  const res = await j(`/api/scenarios/${fx.sid}/insert-step`, { kind: 'check', draft, after: 's1' });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ok, true);
+  assert.deepEqual(calls[0], [
+    'scenario',
+    'insert',
+    path.join(fx.root, fx.sid, 'scenario.json'),
+    'check',
+    JSON.stringify(draft),
+    '--after',
+    's1',
+  ]);
+
+  // --at index fallback
+  await j(`/api/scenarios/${fx.sid}/insert-step`, { kind: 'do', draft, at: 0 });
+  assert.equal(calls[1][5], '--at');
+  assert.equal(calls[1][6], '0');
+
+  // bad input rejected: unsafe sid, missing draft, bad kind
+  assert.equal((await j(`/api/scenarios/..%2fescape/insert-step`, { kind: 'check', draft })).status, 400);
+  assert.equal((await j(`/api/scenarios/${fx.sid}/insert-step`, { kind: 'check' })).status, 400);
+  assert.equal((await j(`/api/scenarios/${fx.sid}/insert-step`, { kind: 'wait', draft })).status, 400);
+});
