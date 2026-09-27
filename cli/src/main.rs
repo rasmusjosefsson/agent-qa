@@ -52,6 +52,7 @@ mod runner;
 mod scenario;
 mod scenario_cli;
 mod schema;
+mod shot_accept;
 mod sidecar;
 mod skills;
 mod smart_click;
@@ -126,9 +127,10 @@ fn main() -> ExitCode {
         "heal-apply" => heal_apply::run(rest),
         "heal-list" => heal_list::run(rest),
         "heal-chronic" => heal_chronic::run(rest),
+        "shot-accept" => shot_accept::run(rest),
         _ => {
             eprintln!(
-                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, design, audit, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic."
+                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, design, audit, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept."
             );
             eprintln!("Run `agent-qa --help` for usage.");
             Ok(2)
@@ -244,6 +246,7 @@ Verbs:
   heal-apply <sid> --step <id> [--target-step <…>] [--dry-run]   Patch buffer in place
   heal-list <sid> [--run <id>] [--json]    List heal-responses + applied state
   heal-chronic <sid> [--min-runs N] [--json]  Flag steps that self-heal across runs
+  shot-accept <sid> [--run <id>] [--steps <…>] [--json]   Mint screenshot baselines for shot claims
 
 Step dispatch covers `do` verbs and `check` claims."
     );
