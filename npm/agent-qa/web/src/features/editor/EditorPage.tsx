@@ -85,6 +85,7 @@ export function EditorPage() {
             onStart={(intent, url) => void ed.startSession(intent, url)}
             onFlush={() => void ed.flushScenario()}
             onCancel={() => void ed.cancelScenario()}
+            onTogglePause={() => void ed.togglePause()}
           />
           <div className="border-b border-border p-3">
             <div className="mb-1 flex items-center justify-between px-1">
@@ -99,7 +100,7 @@ export function EditorPage() {
                 <RefreshCwIcon className="size-3.5" />
               </button>
             </div>
-            <StepList rows={ed.buffer.rows} onMove={ed.moveRow} onDelete={ed.deleteRow} />
+            <StepList rows={ed.buffer.rows} onMove={ed.moveRow} onDelete={ed.deleteRow} onEdit={ed.editRow} />
           </div>
           <Composer
             form={form}

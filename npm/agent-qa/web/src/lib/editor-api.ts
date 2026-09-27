@@ -30,6 +30,7 @@ export async function getBuffer(): Promise<BufferState> {
     intent: body.intent ?? null,
     session: body.session ?? null,
     baseline: body.baseline ?? null,
+    paused: !!body.paused,
     rows: Array.isArray(body.rows) ? body.rows : [],
   };
 }
@@ -58,6 +59,18 @@ export function deleteRow(index: number) {
 
 export function moveRow(from: number, to: number) {
   return postJson('/api/edit/move', { from, to });
+}
+
+export function editRow(index: number, payload: Json) {
+  return postJson('/api/edit/edit', { index, payload });
+}
+
+export function pauseRecording() {
+  return postJson('/api/edit/pause', {});
+}
+
+export function resumeRecording() {
+  return postJson('/api/edit/resume', {});
 }
 
 export function flush() {

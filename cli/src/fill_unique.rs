@@ -57,13 +57,19 @@ pub fn run(args: &[String]) -> Result<u8> {
             "on": { "role": "textbox", "name": opts.label },
             "value": { "from": "literal", "literal": opts.template },
         });
-        let row = crate::record_step::record_draft(&mut state, StepKind::Do, &payload, &session)?;
-        println!(
-            "filled {} (step {}) → {}",
-            opts.label,
-            row.step_id,
-            redact_unique(&resolved)
-        );
+        match crate::record_step::record_draft(&mut state, StepKind::Do, &payload, &session)? {
+            Some(row) => println!(
+                "filled {} (step {}) → {}",
+                opts.label,
+                row.step_id,
+                redact_unique(&resolved)
+            ),
+            None => println!(
+                "filled {} → {} — not recorded (recording paused)",
+                opts.label,
+                redact_unique(&resolved)
+            ),
+        }
     } else {
         println!("filled {} → {}", opts.label, redact_unique(&resolved));
     }

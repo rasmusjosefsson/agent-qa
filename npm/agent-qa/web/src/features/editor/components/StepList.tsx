@@ -2,8 +2,8 @@
 import type { BufferRow } from '../types'
 import { rowLabel } from '../compose'
 import { cn } from '@/lib/utils'
-import type { ReactNode } from 'react'
-import { ArrowUpIcon, ArrowDownIcon, XIcon } from 'lucide-react'
+import { useState, type ReactNode } from 'react'
+import { ArrowUpIcon, ArrowDownIcon, XIcon, PencilIcon } from 'lucide-react'
 
 const BADGE: Record<string, string> = {
   nav: 'bg-sky-500/15 text-sky-400',
@@ -15,15 +15,50 @@ const BADGE: Record<string, string> = {
   action: 'bg-zinc-500/15 text-zinc-400',
 }
 
+// The editable draft of a step is its JSON minus the recorder-assigned
+// id/kind — same contract as `record-step` / `buffer edit`.
+function draftOf(row: BufferRow): string {
+  const { id: _id, kind: _kind, ...rest } = row.step as Record<string, unknown>
+  return JSON.stringify(rest, null, 2)
+}
+
 export function StepList({
   rows,
   onMove,
   onDelete,
+  onEdit,
 }: {
   rows: BufferRow[]
   onMove: (from: number, to: number) => void
   onDelete: (index: number) => void
+  onEdit?: (index: number, draft: Record<string, unknown>) => Promise<boolean> | boolean
 }) {
+  const [editing, setEditing] = useState<number | null>(null)
+  const [draft, setDraft] = useState('')
+  const [editError, setEditError] = useState('')
+
+  const beginEdit = (i: number, row: BufferRow) => {
+    setEditing(i)
+    setDraft(draftOf(row))
+    setEditError('')
+  }
+
+  const saveEdit = async () => {
+    if (editing == null || !onEdit) return
+    let parsed: Record<string, unknown>
+    try {
+      parsed = JSON.parse(draft)
+    } catch {
+      setEditError('not valid JSON')
+      return
+    }
+    if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      setEditError('draft must be a JSON object')
+      return
+    }
+    const ok = await onEdit(editing, parsed)
+    if (ok) setEditing(null)
+  }
   if (rows.length === 0) {
     return <div className="px-3 py-6 text-center text-xs text-muted-foreground">No steps recorded yet.</div>
   }
@@ -34,7 +69,7 @@ export function StepList({
         return (
           <li
             key={i}
-            className="group flex items-start gap-2 rounded-md border border-border bg-card px-2 py-1.5"
+            className="group flex flex-wrap items-start gap-2 rounded-md border border-border bg-card px-2 py-1.5"
           >
             <span className="mt-0.5 w-4 shrink-0 text-right font-mono text-[10px] text-muted-foreground">{i}</span>
             <span className="min-w-0 flex-1">
@@ -51,10 +86,41 @@ export function StepList({
               </span>
             </span>
             <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+              {onEdit && (
+                <IconBtn icon={<PencilIcon className="size-3" />} title="Edit step (draft JSON)" onClick={() => beginEdit(i, row)} />
+              )}
               <IconBtn icon={<ArrowUpIcon className="size-3.5" />} title="Move up" disabled={i === 0} onClick={() => onMove(i, i - 1)} />
               <IconBtn icon={<ArrowDownIcon className="size-3.5" />} title="Move down" disabled={i === rows.length - 1} onClick={() => onMove(i, i + 1)} />
               <IconBtn icon={<XIcon className="size-3.5" />} title="Delete" danger onClick={() => onDelete(i)} />
             </span>
+            {editing === i && (
+              <div className="mt-1.5 w-full basis-full space-y-1.5">
+                <textarea
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  spellCheck={false}
+                  rows={Math.min(14, draft.split('\n').length + 1)}
+                  className="w-full resize-y rounded-md border border-border bg-background p-2 font-mono text-[11px] leading-snug outline-none focus:border-ring"
+                />
+                {editError && <div className="text-[11px] text-destructive">{editError}</div>}
+                <div className="flex justify-end gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setEditing(null)}
+                    className="rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void saveEdit()}
+                    className="rounded-md bg-primary px-2 py-0.5 text-[11px] font-medium text-primary-foreground hover:opacity-90"
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            )}
           </li>
         )
       })}

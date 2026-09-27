@@ -24,6 +24,7 @@ export interface BufferState {
   intent: string | null
   session?: string | null
   baseline?: string | null
+  paused?: boolean
   rows: BufferRow[]
 }
 

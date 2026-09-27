@@ -13,8 +13,10 @@ use crate::verb_shape;
 
 pub fn run(args: &[String]) -> Result<u8> {
     let opts = parse_args(args)?;
-    let row = record(&opts)?;
-    println!("recorded step {} (stepId={})", row.step_index, row.step_id);
+    match record(&opts)? {
+        Some(row) => println!("recorded step {} (stepId={})", row.step_index, row.step_id),
+        None => println!("skipped (recording paused — `record resume` to capture)"),
+    }
     Ok(0)
 }
 
@@ -88,28 +90,34 @@ fn parse_args(args: &[String]) -> Result<Opts> {
     Ok(Opts { kind, payload })
 }
 
-fn record(opts: &Opts) -> Result<RecordedStep> {
+fn record(opts: &Opts) -> Result<Option<RecordedStep>> {
     let mut state = RecorderState::load_active()?;
     let session = state.session.clone();
     record_draft(&mut state, opts.kind, &opts.payload, &session)
 }
 
+/// Appends one validated step, or `Ok(None)` when the recorder is paused —
+/// callers keep their action (the click/fill already happened) but nothing
+/// lands in the buffer until `record resume`.
 pub(crate) fn record_draft(
     state: &mut RecorderState,
     kind: StepKind,
     payload: &Json,
     session: &str,
-) -> Result<RecordedStep> {
+) -> Result<Option<RecordedStep>> {
+    if state.paused {
+        return Ok(None);
+    }
     let step_index = state.steps.len();
     let step_id = format!("s{step_index}");
     let step = parse_draft(kind, payload, &step_id)?;
     state.steps.push(step);
     state.save()?;
     capture_step_sidecars(&state.sid, session, &step_id);
-    Ok(RecordedStep {
+    Ok(Some(RecordedStep {
         step_index,
         step_id,
-    })
+    }))
 }
 
 pub(crate) fn parse_draft(kind: StepKind, payload: &Json, step_id: &str) -> Result<Step> {
@@ -241,8 +249,8 @@ mod tests {
         .save()
         .unwrap();
 
-        let first = record(&Opts { kind: StepKind::Do, payload: json!({"intent":"open","verb":"goto","value":{"from":"literal","literal":"https://example.com/"}}) }).unwrap();
-        let second = record(&Opts { kind: StepKind::Check, payload: json!({"intent":"loaded","claim":{"subject":{"url":true},"predicate":"exists"}}) }).unwrap();
+        let first = record(&Opts { kind: StepKind::Do, payload: json!({"intent":"open","verb":"goto","value":{"from":"literal","literal":"https://example.com/"}}) }).unwrap().unwrap();
+        let second = record(&Opts { kind: StepKind::Check, payload: json!({"intent":"loaded","claim":{"subject":{"url":true},"predicate":"exists"}}) }).unwrap().unwrap();
         let state = RecorderState::load_active().unwrap();
 
         assert_eq!(first.step_id, "s0");

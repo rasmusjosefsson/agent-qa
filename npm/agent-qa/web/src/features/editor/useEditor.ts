@@ -234,6 +234,30 @@ export function useEditor() {
     [refreshBuffer]
   )
 
+  const editRow = useCallback(
+    async (index: number, payload: Record<string, unknown>) => {
+      const { ok, body } = await api.editRow(index, payload)
+      if (!ok) {
+        flash(body.error || 'edit failed', true)
+        return false
+      }
+      flash('step updated')
+      await refreshBuffer()
+      return true
+    },
+    [flash, refreshBuffer]
+  )
+
+  const togglePause = useCallback(async () => {
+    const { ok, body } = buffer.paused ? await api.resumeRecording() : await api.pauseRecording()
+    if (!ok) {
+      flash(body.error || 'pause/resume failed', true)
+      return
+    }
+    flash(buffer.paused ? 'recording resumed' : 'recording paused — steps are skipped')
+    await refreshBuffer()
+  }, [buffer.paused, flash, refreshBuffer])
+
   const runStep = useCallback(
     async (kind: EditKind, payload: Record<string, unknown>): Promise<RunResult> => {
       const { ok, body } = await api.runStep(kind, payload)
@@ -334,6 +358,8 @@ export function useEditor() {
     cancelScenario,
     moveRow,
     deleteRow,
+    editRow,
+    togglePause,
     runStep,
     recordStep,
     connectLive,

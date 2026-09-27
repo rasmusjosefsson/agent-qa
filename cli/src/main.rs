@@ -42,6 +42,7 @@ mod profile_add;
 mod profile_bootstrap;
 mod profile_list;
 mod profile_status;
+mod record;
 mod record_setup;
 mod record_step;
 mod recorder_contract;
@@ -102,6 +103,7 @@ fn main() -> ExitCode {
         "audit" => audit::run(rest),
         "start" => start::run(rest),
         "browser" => browser::passthrough(rest),
+        "record" => record::run(rest),
         "record-step" => record_step::run(rest),
         "record-setup" => record_setup::run(rest),
         "run-step" => run_step::run(rest),
@@ -126,7 +128,7 @@ fn main() -> ExitCode {
         "heal-chronic" => heal_chronic::run(rest),
         _ => {
             eprintln!(
-                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, design, audit, start, browser, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic."
+                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, design, audit, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic."
             );
             eprintln!("Run `agent-qa --help` for usage.");
             Ok(2)
@@ -219,12 +221,14 @@ Verbs:
                                 binary (same one every other verb uses) —
                                 use this instead of a bare `agent-browser`
                                 shell command to avoid daemon version drift
+  record pause|resume|status     Freeze capture while you set up page state
   record-step <do|check> <json> Append a step to the in-flight buffer
   record-setup <env-op-json>       Append one generic env.open operation
   run-step <do|check> <draft-json> Dispatch one direct step against the live session
   aria-snapshot [--json]        Dump the live ARIA tree (element picker data)
   cdp-url [--json]              Print the live session's CDP WebSocket endpoint
-  buffer list|delete|move|clear|discard Inspect or discard the active recording
+  buffer list|delete|move|edit|clear|discard
+                                Inspect, edit, or discard the active recording
   flush                         Assemble scenario.json from the buffer
   verify                        Sanity-check the in-flight buffer
   truncate <N> [--archive-tag <slug>]   Drop steps ≥ N + archive sidecars
