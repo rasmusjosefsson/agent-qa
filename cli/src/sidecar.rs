@@ -137,6 +137,15 @@ pub struct RunAudit {
     /// across replays (e.g. 'pre-deploy', 'nightly').
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
+    /// `replay --from <stepId>` — the run started dispatch at this step
+    /// (earlier steps were skipped, e.g. debugging a window on a warm
+    /// session). `None` for full runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_from: Option<String>,
+    /// `replay --until <stepId>` — the run stopped dispatch after this
+    /// step (inclusive). `None` for full runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_until: Option<String>,
 }
 
 impl RunAudit {
@@ -550,6 +559,8 @@ mod tests {
             heal_overrides_applied: None,
             auto_healed: None,
             tag: None,
+            window_from: None,
+            window_until: None,
         };
         write_run_audit(&rp, &audit).unwrap();
         let body = fs::read_to_string(rp.run_root.join("audit.json")).unwrap();

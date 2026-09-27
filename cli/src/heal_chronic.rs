@@ -52,8 +52,8 @@ struct Opts {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Chronic {
-    step_id: String,
+pub(crate) struct Chronic {
+    pub(crate) step_id: String,
     runs_count: usize,
     runs: Vec<String>,
     last_run_id: String,
@@ -112,11 +112,21 @@ fn parse_args(args: &[String]) -> Result<Opts> {
 
 fn collect(opts: &Opts) -> Result<Vec<Chronic>> {
     let scenario_dir = paths::scenario_dir(&opts.sid)?;
+    Ok(collect_dir(&scenario_dir, opts.min_runs, &opts.sid))
+}
+
+/// Collect chronic-heal rows for one scenario directory. `sid` only feeds the
+/// printed `heal-promote` command — pass the scenario id, not the path.
+pub(crate) fn collect_dir(
+    scenario_dir: &std::path::Path,
+    min_runs: usize,
+    sid: &str,
+) -> Vec<Chronic> {
     let replays = scenario_dir.join("replays");
     let mut by_step: BTreeMap<String, Acc> = BTreeMap::new();
     let runs = match fs::read_dir(&replays) {
         Ok(it) => it,
-        Err(_) => return Ok(Vec::new()),
+        Err(_) => return Vec::new(),
     };
     for entry in runs.flatten() {
         let run_dir = entry.path();
@@ -151,7 +161,7 @@ fn collect(opts: &Opts) -> Result<Vec<Chronic>> {
     }
     let mut out: Vec<Chronic> = by_step
         .into_iter()
-        .filter(|(_, acc)| acc.runs.len() >= opts.min_runs)
+        .filter(|(_, acc)| acc.runs.len() >= min_runs)
         .map(|(step_id, acc)| {
             let last_run_id = acc.runs.iter().next_back().cloned().unwrap_or_default();
             Chronic {
@@ -161,7 +171,7 @@ fn collect(opts: &Opts) -> Result<Vec<Chronic>> {
                 modes: acc.modes.into_iter().collect(),
                 promote: format!(
                     "agent-qa heal-promote {} --run {} --steps {}",
-                    opts.sid, last_run_id, step_id
+                    sid, last_run_id, step_id
                 ),
                 step_id,
             }
@@ -172,7 +182,7 @@ fn collect(opts: &Opts) -> Result<Vec<Chronic>> {
             .cmp(&a.runs_count)
             .then(a.step_id.cmp(&b.step_id))
     });
-    Ok(out)
+    out
 }
 
 fn render_text(opts: &Opts, entries: &[Chronic]) {

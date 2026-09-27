@@ -84,6 +84,13 @@ fn rule_for(verb: &Verb) -> VerbRule {
             params_required: &["files"],
             ..VerbRule::default()
         },
+        // `on` is the drag source; `params.to` is the drop target locator.
+        Verb::Drag => VerbRule {
+            required: &[DoField::On, DoField::Params],
+            forbidden: &[DoField::Value],
+            params_required: &["to"],
+            ..VerbRule::default()
+        },
         Verb::Press => VerbRule {
             required: &[DoField::Value],
             value_kinds: &["literal"],
@@ -462,6 +469,52 @@ mod tests {
             "id": "s1", "intent": "x", "kind": "do", "verb": "download",
             "on": { "raw": { "kind": "css", "value": "#dl" }, "reason": "test" },
             "value": { "from": "literal", "literal": "out/report.pdf" }
+        }));
+        assert_verb_shape(&s).unwrap();
+    }
+
+    #[test]
+    fn drag_requires_on_and_to_locator() {
+        let s = parse(json!({ "id": "s1", "intent": "x", "kind": "do", "verb": "drag" }));
+        assert!(assert_verb_shape(&s)
+            .unwrap_err()
+            .to_string()
+            .contains("requires 'on'"));
+
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "drag",
+            "on": { "role": "listitem", "name": "Card A" }
+        }));
+        assert!(assert_verb_shape(&s)
+            .unwrap_err()
+            .to_string()
+            .contains("requires 'params'"));
+
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "drag",
+            "on": { "role": "listitem", "name": "Card A" },
+            "params": { "into": "Done" }
+        }));
+        assert!(assert_verb_shape(&s)
+            .unwrap_err()
+            .to_string()
+            .contains("params requires 'to'"));
+
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "drag",
+            "on": { "role": "listitem", "name": "Card A" },
+            "params": { "to": { "role": "list", "name": "Done" } },
+            "value": { "from": "literal", "literal": "x" }
+        }));
+        assert!(assert_verb_shape(&s)
+            .unwrap_err()
+            .to_string()
+            .contains("must not carry 'value'"));
+
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "drag",
+            "on": { "role": "listitem", "name": "Card A" },
+            "params": { "to": { "role": "list", "name": "Done" } }
         }));
         assert_verb_shape(&s).unwrap();
     }

@@ -160,6 +160,11 @@ pub enum Verb {
     /// click that would open the OS picker resolves with these files instead.
     /// An empty `files` array simulates cancelling the picker.
     FileChooser,
+    /// Drag `on` onto `params.to` — both locators. Dispatches the HTML5
+    /// `dragstart → dragenter/over → drop → dragend` chain with a real
+    /// `DataTransfer` plus the pointer/mouse sequence pointer-based
+    /// drag libraries listen for.
+    Drag,
     #[serde(rename = "loop")]
     Loop,
     Group,
@@ -335,6 +340,15 @@ pub enum ClaimSubject {
         file: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         attribute: Option<String>,
+    },
+    /// `{"shot": "<stepId>"}` — compare this run's screenshot for the named
+    /// do-step against the checked-in baseline at `<scenario>/baselines/
+    /// <stepId>.png`. Only predicate is `matches` — pass when the fraction of
+    /// differing pixels ≤ `tolerance.pixels` (default 0.01). On mismatch the
+    /// delta map lands at `<run>/shots-diff/<stepId>.diff.png` and the claim
+    /// fails with the diff ratio. Baselines are minted with `shot-accept`.
+    Shot {
+        shot: String,
     },
     Var {
         kind: String, // always "var" — kept literal to disambiguate untagged

@@ -139,7 +139,7 @@ pub(super) fn build(
     Ok(ShotReport { entries })
 }
 
-fn decode_png(path: &Path) -> Result<RgbaImage> {
+pub(crate) fn decode_png(path: &Path) -> Result<RgbaImage> {
     let img = ImageReader::open(path)
         .with_context(|| format!("open {}", path.display()))?
         .with_guessed_format()
@@ -151,7 +151,7 @@ fn decode_png(path: &Path) -> Result<RgbaImage> {
 
 /// Returns (differing-fraction, delta-map image). Delta map shows the
 /// baseline (`a`) faded to 50% greyscale; differing pixels are red.
-fn pixel_diff(a: &RgbaImage, b: &RgbaImage) -> (f64, RgbaImage) {
+pub(crate) fn pixel_diff(a: &RgbaImage, b: &RgbaImage) -> (f64, RgbaImage) {
     let (w, h) = a.dimensions();
     let total = (w as u64) * (h as u64);
     let mut diff = RgbaImage::new(w, h);
