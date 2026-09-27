@@ -425,6 +425,61 @@ test('auto-record turns named keys (Tab/Escape/arrows) into press steps', async 
   assert.deepEqual(keys, ['Tab', 'Escape', 'ArrowDown']);
 });
 
+test('chorded keys dispatch with the modifiers bitmask and record press chords', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+
+  bridge.input({ type: 'key', text: 'a', mods: { ctrl: true }, record: true });
+  bridge.input({ type: 'key', key: 'Tab', mods: { shift: true }, record: true });
+  bridge.input({ type: 'key', key: 's', mods: { ctrl: true, shift: true }, record: true });
+  // Bare modifier keydowns dispatch nothing and record nothing.
+  bridge.input({ type: 'key', key: 'Control', record: true });
+  // Shift+char is typing, not a chord.
+  bridge.input({ type: 'key', text: 'A', mods: { shift: true }, record: true });
+  for (let i = 0; i < 6; i++) {
+    await flush();
+    const ev = sock.sent.filter((m) => m.method === 'Runtime.evaluate').at(-1);
+    if (ev) sock.recv({ id: ev.id, result: { result: { value: null } } });
+  }
+  await flush();
+  await flush();
+
+  const downs = sock.sent.filter((m) => m.method === 'Input.dispatchKeyEvent' && m.params.type === 'keyDown');
+  const ctrlA = downs.find((m) => m.params.key === 'a');
+  assert.equal(ctrlA.params.modifiers, 2);
+  assert.equal(ctrlA.params.code, 'KeyA');
+  const shiftTab = downs.find((m) => m.params.key === 'Tab');
+  assert.equal(shiftTab.params.modifiers, 8);
+  assert.equal(shiftTab.params.code, 'Tab');
+  assert.ok(!downs.some((m) => m.params.key === 'Control'), 'bare Control not dispatched');
+  // 'A' with shift goes down the char path, not keyDown.
+  const chars = sock.sent.filter((m) => m.method === 'Input.dispatchKeyEvent' && m.params.type === 'char');
+  assert.ok(chars.some((m) => m.params.text === 'A'), 'shifted char still types');
+
+  const presses = recorded.filter((r) => r.payload.verb === 'press').map((r) => r.payload.value.literal);
+  assert.deepEqual(presses, ['Control+a', 'Shift+Tab', 'Control+Shift+s']);
+});
+
+test('previously unmapped named keys (Delete/F-keys) dispatch and record', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  bridge.input({ type: 'key', key: 'Delete', record: true });
+  bridge.input({ type: 'key', key: 'F5', record: true });
+  for (let i = 0; i < 4; i++) {
+    await flush();
+    const ev = sock.sent.filter((m) => m.method === 'Runtime.evaluate').at(-1);
+    if (ev) sock.recv({ id: ev.id, result: { result: { value: null } } });
+  }
+  await flush();
+  await flush();
+  const downs = sock.sent.filter((m) => m.method === 'Input.dispatchKeyEvent' && m.params.type === 'keyDown');
+  assert.ok(downs.some((m) => m.params.key === 'Delete' && m.params.windowsVirtualKeyCode === 46));
+  assert.ok(downs.some((m) => m.params.key === 'F5' && m.params.windowsVirtualKeyCode === 116));
+  assert.deepEqual(recorded.map((r) => r.payload.value.literal), ['Delete', 'F5']);
+});
+
 test('last unsubscribe closes the CDP socket', async () => {
   const bridge = makeBridge();
   const res = { write() {}, end() {} };
