@@ -100,7 +100,13 @@ export function EditorPage() {
                 <RefreshCwIcon className="size-3.5" />
               </button>
             </div>
-            <StepList rows={ed.buffer.rows} onMove={ed.moveRow} onDelete={ed.deleteRow} onEdit={ed.editRow} />
+            <StepList
+              rows={ed.buffer.rows}
+              onMove={ed.moveRow}
+              onDelete={ed.deleteRow}
+              onEdit={ed.editRow}
+              onAddShot={(i, stepId) => void ed.addShotCheck(i, stepId)}
+            />
           </div>
           <Composer
             form={form}

@@ -3,7 +3,7 @@ import type { BufferRow } from '../types'
 import { rowLabel } from '../compose'
 import { cn } from '@/lib/utils'
 import { useState, type ReactNode } from 'react'
-import { ArrowUpIcon, ArrowDownIcon, XIcon, PencilIcon } from 'lucide-react'
+import { ArrowUpIcon, ArrowDownIcon, XIcon, PencilIcon, CameraIcon } from 'lucide-react'
 
 const BADGE: Record<string, string> = {
   nav: 'bg-sky-500/15 text-sky-400',
@@ -27,11 +27,13 @@ export function StepList({
   onMove,
   onDelete,
   onEdit,
+  onAddShot,
 }: {
   rows: BufferRow[]
   onMove: (from: number, to: number) => void
   onDelete: (index: number) => void
   onEdit?: (index: number, draft: Record<string, unknown>) => Promise<boolean> | boolean
+  onAddShot?: (index: number, stepId: string) => void
 }) {
   const [editing, setEditing] = useState<number | null>(null)
   const [draft, setDraft] = useState('')
@@ -86,6 +88,13 @@ export function StepList({
               </span>
             </span>
             <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+              {onAddShot && row.step.kind === 'do' && (
+                <IconBtn
+                  icon={<CameraIcon className="size-3.5" />}
+                  title="Add a visual check ({shot} claim) after this step"
+                  onClick={() => onAddShot(i, row.stepId)}
+                />
+              )}
               {onEdit && (
                 <IconBtn icon={<PencilIcon className="size-3" />} title="Edit step (draft JSON)" onClick={() => beginEdit(i, row)} />
               )}
