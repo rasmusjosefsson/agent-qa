@@ -73,8 +73,9 @@ pub fn dispatch_check(
         ClaimSubject::Url { url: _ } => {
             check_url(&claim.predicate, claim.value.as_ref(), ctx, scope, timeout)
         }
-        ClaimSubject::File { file } => check_file(
+        ClaimSubject::File { file, attribute } => check_file(
             file,
+            attribute.as_deref(),
             &claim.predicate,
             claim.value.as_ref(),
             ctx,
@@ -254,12 +255,19 @@ fn check_flag(
 /// right after `do/download` sees the file as soon as the browser flushes it.
 fn check_file(
     file: &str,
+    attribute: Option<&str>,
     predicate: &Predicate,
     expected: Option<&Json>,
     ctx: &CheckContext,
     scope: &mut ValueScope,
     timeout: Duration,
 ) -> Result<()> {
+    // `attribute: "name"` (default) — string predicates match the file name;
+    // `"content"` — they match the file's UTF-8 text (reads are size-capped).
+    match attribute {
+        None | Some("name") | Some("content") => {}
+        Some(other) => bail!("file subject does not support attribute '{other}'"),
+    }
     let raw = substitute_scenario_vars(file, scope);
     let path = {
         let p = PathBuf::from(&raw);
@@ -292,22 +300,34 @@ fn check_file(
                     None => false,
                 }
             }
-            // String predicates compare the file name once it exists.
+            // String predicates compare the file name once it exists — or
+            // the file's UTF-8 text when `attribute` is `"content"`.
             other @ (Predicate::Equals
             | Predicate::Contains
             | Predicate::Matches
             | Predicate::StartsWith
             | Predicate::EndsWith) => match meta {
                 Some(m) if m.is_file() => {
-                    let name = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
                     let need = expected.ok_or_else(|| {
-                        anyhow!("file name claim with predicate '{other:?}' requires 'value'")
+                        anyhow!("file claim with predicate '{other:?}' requires 'value'")
                     })?;
                     let need = substitute_scenario_vars(&value_to_string(need), scope);
-                    compare_string(other, &name, &need).is_ok()
+                    let actual = if attribute == Some("content") {
+                        const CONTENT_CAP: u64 = 1024 * 1024;
+                        if m.len() > CONTENT_CAP {
+                            bail!(
+                                "file content claim on {raw:?}: {} bytes exceeds the 1 MiB content cap",
+                                m.len()
+                            );
+                        }
+                        String::from_utf8_lossy(&std::fs::read(&path).unwrap_or_default())
+                            .into_owned()
+                    } else {
+                        path.file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default()
+                    };
+                    compare_string(other, &actual, &need).is_ok()
                 }
                 _ => false,
             },
@@ -1116,6 +1136,56 @@ mod tests {
                 .unwrap_err()
                 .to_string();
             assert!(err.contains("file claim timed out"), "got: {err}");
+        }
+
+        #[test]
+        fn content_attribute_compares_file_text() {
+            let tmp = TempDir::new().unwrap();
+            std::fs::write(tmp.path().join("data.json"), b"{\"fixture\":true}").unwrap();
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: tmp.path(),
+            };
+            let mut scope = ValueScope::default();
+
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "file": "data.json", "attribute": "content" },
+                "predicate": "contains",
+                "value": "\"fixture\":true"
+            }))
+            .unwrap();
+            dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "file": "data.json", "attribute": "content" },
+                "predicate": "equals",
+                "value": "{\"fixture\":true}"
+            }))
+            .unwrap();
+            dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+        }
+
+        #[test]
+        fn unknown_attribute_errors() {
+            let tmp = TempDir::new().unwrap();
+            std::fs::write(tmp.path().join("a.txt"), b"x").unwrap();
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: tmp.path(),
+            };
+            let mut scope = ValueScope::default();
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "file": "a.txt", "attribute": "sha256" },
+                "predicate": "exists"
+            }))
+            .unwrap();
+            let err = dispatch_check(&claim, &ctx, &mut scope, None)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("does not support attribute 'sha256'"),
+                "got: {err}"
+            );
         }
     }
 }

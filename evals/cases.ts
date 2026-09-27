@@ -317,7 +317,7 @@ Do not write Selenium or Playwright code. Use agent-qa and agent-browser only. D
       "Prefer data-testid or id selectors for the file input, upload button, download button, status messages, and file list when present.",
       ...(group === "Download" ? [
         "The live /practice/file-upload page ships NO download widget — every download link named on the page belongs to static tutorial content. Report the live-page gap rather than fabricating one.",
-        "Download replay semantics are already covered by golden runner golden:file-upload:download:tc01, which drives evals/fixtures/downloads.html with the do/download verb and {\"file\": ...} claims (exists, name, size). Use that fixture + contract if you exercise downloads.",
+        "Download replay semantics are covered by golden runners golden:file-upload:download:tc01–07 and tc10–14, which drive evals/fixtures/downloads.html with the do/download verb and {\"file\": ...} claims (exists, name, size, content). Use that fixture + contract if you exercise downloads.",
       ] : []),
       ...extraConstraints,
     ],

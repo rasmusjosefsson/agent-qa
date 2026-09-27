@@ -58,13 +58,13 @@ Golden runners prove:
 - Upload TC03-TC05 are intentionally not cataloged. They require an upload submit button/progress/success flow, but the live widget exposes only `#file-upload`; the visible `Download Image/PDF/Excel/Word` buttons belong to Download test cases.
 - The live page actually exposes 8 upload widgets (`fu-single-input`, `fu-multi-input`, `fu-filename-input`/`fu-filename-display`, `fu-drop-zone`, `fu-type-input`, `fu-size-input`, `fu-hidden-zone`, `fu-progress-file`+`fu-upload-btn`), each writing to a `result-sNN` holder.
 - Upload TC09 is a page gap: `#fu-upload-btn` disables after select and no cancel control exists. TC12 needs a viewport verb (framework boundary). TC13 hits the native OS file dialog (framework boundary). TC14 is a page gap: no upload input has an accessible name.
-- Download TC01-TC14 have no live widget to drive — download semantics are proven on `evals/fixtures/downloads.html` via `do/download` (click a download trigger, save the file into the scenario dir) and `{"file": "..."}` claims (`exists`, name predicates, `gt` size in bytes).
+- Download TC01-TC14 have no live widget to drive — download semantics are proven on `evals/fixtures/downloads.html` via `do/download` (click a download trigger, save the file into the scenario dir) and `{"file": "..."}` claims (`exists`, name predicates, `gt` size in bytes, `attribute: "content"` for UTF-8 text). TC08 needs multi-browser replay (framework boundary); TC09 needs a mobile-viewport verb (framework boundary).
 
 Passing proof:
 
 - Upload TC01: `do/upload` + filename display replay passes.
 - Upload TC02, TC06-TC08, TC10, TC11, TC15: `bun run golden:file-upload:upload:tcNN` pass.
-- Download TC01-TC03 equivalents: `bun run golden:file-upload:download:tc01` passes (fixture-based).
+- Download TC01-TC07 and TC10-TC14: `bun run golden:file-upload:download:tcNN` pass (fixture-based).
 
 ## Runbook
 

@@ -40,11 +40,22 @@ export interface FileUploadGolden extends GoldenContext {
   waitSelectorText(selector: string, text: string, intent: string): Promise<void>;
   waitSelectorVisible(selector: string, intent: string): Promise<void>;
   assertLiveCondition(expression: string, intent: string): Promise<void>;
-  assertElementAttribute(selector: string, attribute: string, expected: string, intent: string): Promise<void>;
+  assertElementAttribute(selector: string, attribute: string, expected: string, intent: string, predicate?: string): Promise<void>;
   downloadBySelector(selector: string, scenarioRelPath: string, intent: string): Promise<void>;
   assertFileExists(scenarioRelPath: string, intent: string): Promise<void>;
   assertFileName(scenarioRelPath: string, expectedName: string, intent: string): Promise<void>;
   assertFileSizeGt(scenarioRelPath: string, bytes: number, intent: string): Promise<void>;
+  assertFileContent(scenarioRelPath: string, needle: string, intent: string): Promise<void>;
+  assertFileString(scenarioRelPath: string, predicate: string, value: string, intent: string): Promise<void>;
+  assertRolePresent(role: string, name: string, intent: string): Promise<void>;
+  assertRoleAbsent(role: string, name: string, intent: string): Promise<void>;
+  clickSelector(selector: string, intent: string): Promise<void>;
+  focusBySelector(selector: string, intent: string): Promise<void>;
+  pressKeyOn(selector: string, key: string, intent: string): Promise<void>;
+  pressKey(key: string, intent: string): Promise<void>;
+  waitText(selector: string, text: string, intent: string): Promise<void>;
+  assertUrlEquals(url: string, intent: string): Promise<void>;
+  assertElementVisible(selector: string, intent: string): Promise<void>;
 }
 
 function createContext(tc: string, intent: string): GoldenContext {
@@ -164,8 +175,8 @@ export async function runFileUploadGolden(
     async assertLiveCondition(expression, stepIntent) {
       await run(ctx, `live condition ${stepIntent}`, [ctx.agentBrowser, "--session", ctx.session, "eval", expression]);
     },
-    async assertElementAttribute(selector, attribute, expected, stepIntent) {
-      await record(ctx, "assert", { kind: "elementAttribute", args: [selector, attribute, "equals", expected], intent: stepIntent });
+    async assertElementAttribute(selector, attribute, expected, stepIntent, predicate = "equals") {
+      await record(ctx, "assert", { kind: "elementAttribute", args: [selector, attribute, predicate, expected], intent: stepIntent });
     },
     async downloadBySelector(selector, scenarioRelPath, stepIntent) {
       // Replay resolves relative download destinations against the scenario
@@ -184,6 +195,46 @@ export async function runFileUploadGolden(
     },
     async assertFileSizeGt(scenarioRelPath, bytes, stepIntent) {
       await record(ctx, "assert", { kind: "fileSizeGt", args: [scenarioRelPath, bytes], intent: stepIntent });
+    },
+    async assertFileContent(scenarioRelPath, needle, stepIntent) {
+      await record(ctx, "assert", { kind: "fileContent", args: [scenarioRelPath, needle], intent: stepIntent });
+    },
+    async assertFileString(scenarioRelPath, predicate, value, stepIntent) {
+      await record(ctx, "assert", { kind: "fileString", args: [scenarioRelPath, predicate, value], intent: stepIntent });
+    },
+    async assertRolePresent(role, name, stepIntent) {
+      await record(ctx, "assert", { kind: "present", args: [role, name], intent: stepIntent });
+    },
+    async assertRoleAbsent(role, name, stepIntent) {
+      await record(ctx, "assert", { kind: "absent", args: [role, name], intent: stepIntent });
+    },
+    async clickSelector(selector, stepIntent) {
+      await run(ctx, `click ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "click", selector]);
+      await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
+    },
+    async focusBySelector(selector, stepIntent) {
+      await run(ctx, `focus ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "focus", selector]);
+      await record(ctx, "action", { method: "focusBySelector", args: [selector], intent: stepIntent });
+    },
+    async pressKeyOn(selector, key, stepIntent) {
+      // pressSelector focuses the locator then sends the key — the faithful
+      // "press KEY on SELECTOR" replay (keyboard-operable downloads).
+      await run(ctx, `press ${key} on ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "eval", `(document.querySelector(${JSON.stringify(selector)}))?.focus()`]);
+      await run(ctx, `send ${key}`, [ctx.agentBrowser, "--session", ctx.session, "press", key]);
+      await record(ctx, "action", { method: "pressSelector", args: [selector, key], intent: stepIntent });
+    },
+    async pressKey(key, stepIntent) {
+      await run(ctx, `press ${key}`, [ctx.agentBrowser, "--session", ctx.session, "press", key]);
+      await record(ctx, "action", { method: "pressKey", args: [key], intent: stepIntent });
+    },
+    async waitText(selector, text, stepIntent) {
+      await record(ctx, "wait", { condition: { kind: "selectorText", selector, text }, intent: stepIntent });
+    },
+    async assertUrlEquals(url, stepIntent) {
+      await record(ctx, "assert", { kind: "url", args: [url, "equals"], intent: stepIntent });
+    },
+    async assertElementVisible(selector, stepIntent) {
+      await record(ctx, "assert", { kind: "elementPresent", args: [selector], intent: stepIntent });
     },
   };
 

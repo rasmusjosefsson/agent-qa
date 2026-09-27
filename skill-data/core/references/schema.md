@@ -126,5 +126,27 @@ For plain visible file inputs the direct `upload` verb is simpler; use
 `fileChooser` when the input is hidden/transient (created on click), styled
 behind a button or label, or driven through `showOpenFilePicker`.
 
+### Downloads and file claims
+
+`do/download` clicks a trigger (`on` locator) and saves the browser download
+to `value` — a path relative to the scenario dir:
+
+```json
+{
+  "id": "s3",
+  "intent": "download the report",
+  "kind": "do",
+  "verb": "download",
+  "on": { "raw": { "kind": "css", "value": "[data-testid=dl-json]" }, "reason": "download anchor" },
+  "value": "downloads/qa-data.json"
+}
+```
+
+Assert on the saved file with the `{"file": "<path>"}` check subject:
+`exists`/`notExists` for presence, `gt`/`gte`/`lt`/`lte` compare size in
+bytes, and string predicates match the file name — or the file's UTF-8
+text when `"attribute": "content"` is set (files over 1 MiB are rejected
+for content claims). Relative paths resolve against the scenario dir.
+
 Use `agent-qa scenario check <scenario.json>` before replay. It validates the
 schema and runs the scenario linter.
