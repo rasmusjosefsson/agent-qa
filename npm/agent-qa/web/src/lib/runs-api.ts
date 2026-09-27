@@ -64,6 +64,22 @@ export async function deleteScenario(sid: string): Promise<{ ok: boolean; error?
   return { ok: false, error: j.error || String(res.status) }
 }
 
+// POST .../runs/:runId/shot-accept — promote this run's screenshot for
+// stepId to the checked-in baseline (the web-side `agent-qa shot-accept`).
+export async function acceptShot(
+  sid: string,
+  runId: string,
+  stepId: string
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch(
+    `/api/scenarios/${encodeURIComponent(sid)}/runs/${encodeURIComponent(runId)}/shot-accept`,
+    { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stepId }) }
+  )
+  if (res.ok) return { ok: true }
+  const j = (await res.json().catch(() => ({}))) as { error?: string }
+  return { ok: false, error: j.error || String(res.status) }
+}
+
 export async function deleteRun(sid: string, runId: string): Promise<{ ok: boolean; error?: string }> {
   const res = await fetch(
     `/api/scenarios/${encodeURIComponent(sid)}/runs/${encodeURIComponent(runId)}/delete`,

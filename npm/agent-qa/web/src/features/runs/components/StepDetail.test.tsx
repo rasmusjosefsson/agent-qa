@@ -9,6 +9,6 @@ describe('ShotDiffCard', () => {
     )
     expect(html).toContain('/api/scenarios/s1/runs/r9/artifact/shots-diff/openDialog')
     expect(html).toContain('Visual diff')
-    expect(html).toContain('shot-accept s1 --steps openDialog')
+    expect(html).toContain('Re-mint baseline')
   })
 })
