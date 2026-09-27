@@ -100,7 +100,16 @@ export function EditorPage() {
                 <RefreshCwIcon className="size-3.5" />
               </button>
             </div>
-            <StepList rows={ed.buffer.rows} onMove={ed.moveRow} onDelete={ed.deleteRow} onEdit={ed.editRow} />
+            <StepList
+              rows={ed.buffer.rows}
+              onMove={ed.moveRow}
+              onDelete={ed.deleteRow}
+              onEdit={ed.editRow}
+              onRun={(row) => {
+                const { id: _id, kind: _k, ...draft } = row.step as Record<string, unknown>
+                void ed.runStep(row.step.kind ?? 'do', draft).then(setRunResult)
+              }}
+            />
           </div>
           <Composer
             form={form}
