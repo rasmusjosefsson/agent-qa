@@ -5,9 +5,11 @@ import {
   PlayIcon,
   PlugZapIcon,
   RefreshCwIcon,
+  RotateCwIcon,
   SaveIcon,
   Trash2Icon,
   UploadIcon,
+  WrenchIcon,
 } from 'lucide-react'
 import { BrowserModeToggle } from '@/components/browser-mode-toggle'
 import { Button } from '@/components/ui/button'
@@ -26,6 +28,7 @@ import {
 import { getCases } from '@/lib/cases-api'
 import { getSets } from '@/lib/sets-api'
 import { deletePlan, getPlan, runPlan, upsertPlan } from '@/lib/plans-api'
+import { startReplay } from '@/lib/runs-api'
 import { getPersonas, getEnvironments, connectPersona } from '@/lib/run-config-api'
 import type { CaseWithScenario } from '@/features/cases/types'
 import type { SetWithCount } from '@/features/sets/types'
@@ -253,6 +256,28 @@ export function PlanDetail({ id }: { id: string }) {
     }
   }
 
+  // Re-run just this member's scenario with the plan's current persona/env
+  // picks — narrower than Run plan when only one case is red.
+  const rerunCase = async (c: CaseWithScenario) => {
+    const sid = c.scenario?.sid
+    if (!sid || busy) return
+    setBusy(true)
+    setErr('')
+    setRunMsg('')
+    try {
+      const r = await startReplay(sid, buildRunOpts())
+      if (!r.ok) {
+        setErr(`${c.id}: ${r.error || 'replay refused'}`)
+        return
+      }
+      setRunMsg(`Replaying ${c.title}`)
+      setLive(true)
+      void refreshCases()
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const connect = async () => {
     if (!personaId || !envId) return
     setBusy(true)
@@ -475,20 +500,42 @@ export function PlanDetail({ id }: { id: string }) {
                   const recorded = !!c.scenario?.hasScenario
                   const progress = stepProgress(c)
                   const running = isRunning(c)
+                  const healed = c.scenario?.latestRun?.healed ?? 0
                   return (
                     <div key={c.id}>
-                      <button
-                        onClick={() => (recorded ? gotoRun(c.scenario!.sid) : gotoCase(c.id))}
-                        title={recorded ? 'Open the live run + step details' : 'Open the case'}
-                        className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-muted/40"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-sm font-medium text-foreground">{c.title}</div>
-                          <div className="font-mono text-[11px] text-muted-foreground">{c.id}</div>
-                        </div>
+                      <div className="flex w-full items-center gap-3 px-3 py-2 hover:bg-muted/40">
+                        <button
+                          onClick={() => (recorded ? gotoRun(c.scenario!.sid) : gotoCase(c.id))}
+                          title={recorded ? 'Open the live run + step details' : 'Open the case'}
+                          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-sm font-medium text-foreground">{c.title}</div>
+                            <div className="font-mono text-[11px] text-muted-foreground">{c.id}</div>
+                          </div>
+                        </button>
+                        {healed > 0 && (
+                          <span
+                            className="flex shrink-0 items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-400"
+                            title="The latest run passed/failed only after the auto-heal loop corrected a drifting locator — review the diff on the run."
+                          >
+                            <WrenchIcon className="size-3" />
+                            {healed} healed
+                          </span>
+                        )}
                         {progress && <span className="text-[11px] text-amber-400">{progress}</span>}
+                        {recorded && (
+                          <button
+                            onClick={() => void rerunCase(c)}
+                            disabled={busy || running}
+                            title="Re-run just this case with the current persona/environment picks"
+                            className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+                          >
+                            <RotateCwIcon className="size-3.5" />
+                          </button>
+                        )}
                         <StatusBadge scenario={c.scenario} />
-                      </button>
+                      </div>
                       {/* Live browser, inline under the case it belongs to. */}
                       {running && (
                         <div className="h-52 border-t border-amber-500/30 bg-black/40 px-2 pb-2 pt-1">
