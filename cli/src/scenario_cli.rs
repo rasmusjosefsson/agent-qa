@@ -1057,6 +1057,11 @@ fn list_lint_rules(json_out: bool) -> Result<u8> {
             description: "A scenario with do steps has no { shot: ... } claim — nothing pixel-diffs a baseline.",
         },
         Rule {
+            code: "shot-missing-baseline",
+            severity: "error",
+            description: "A { shot: <stepId> } claim has no <scenario>/baselines/<stepId>.png — replay always fails the claim.",
+        },
+        Rule {
             code: "undeclared-input",
             severity: "error",
             description: "A value references inputs.<name> not declared on the scenario.",
@@ -1253,6 +1258,31 @@ pub(crate) fn lint(
             code: "no-visual-check",
             message: "scenario has do steps but no { shot: ... } claim — add one for pixel-diff coverage (`flush --auto-shots` covers every do step)".to_string(),
         });
+    }
+
+    // 3c) shot claim with no minted baseline — guaranteed replay failure.
+    // Only meaningful when the lint target is a real `<sid>/scenario.json`
+    // on disk (stdin has no scenario dir, so baselines can't be resolved).
+    if path.file_name().is_some_and(|n| n == "scenario.json") {
+        let baselines = path
+            .parent()
+            .map(|d| d.join("baselines"))
+            .unwrap_or_default();
+        for step in &j.steps {
+            if let Step::Check { id, claim, .. } = step {
+                if let crate::scenario::ClaimSubject::Shot { shot } = &claim.subject {
+                    if !baselines.join(format!("{shot}.png")).is_file() {
+                        findings.push(Finding {
+                            severity: "error",
+                            code: "shot-missing-baseline",
+                            message: format!(
+                                "step {id:?} claims shot {shot:?} but baselines/{shot}.png is missing — mint it with `shot-accept <sid>`"
+                            ),
+                        });
+                    }
+                }
+            }
+        }
     }
 
     // 4) input references vs declarations
@@ -3100,6 +3130,32 @@ mod tests {
         assert_eq!(c.do_followed_by_check, 1);
         assert_eq!(c.bare_do, 1);
         assert!((c.ratio() - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn lint_shot_claim_without_baseline_is_an_error() {
+        // Only fires for a real `<sid>/scenario.json` layout — baselines live
+        // beside it; a bare `j.json` skips the rule entirely.
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("demo");
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("scenario.json");
+        fs::write(
+            &p,
+            r#"{
+              "schema": "scenario/2", "id": "demo", "intent": "x",
+              "steps": [
+                { "id": "s0", "intent": "go", "kind": "do", "verb": "reload" },
+                { "id": "s1", "intent": "looks", "kind": "check",
+                  "claim": { "subject": { "shot": "s0" }, "predicate": "matches" } }
+              ]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(lint(&p, LintFormat::Text, false, None, None).unwrap(), 1);
+        fs::create_dir_all(dir.join("baselines")).unwrap();
+        fs::write(dir.join("baselines/s0.png"), b"png").unwrap();
+        assert_eq!(lint(&p, LintFormat::Text, false, None, None).unwrap(), 0);
     }
 
     #[test]
