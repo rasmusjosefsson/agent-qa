@@ -295,6 +295,26 @@ pub enum NetworkClaimKind {
     Fired,
 }
 
+/// `{"console": true}` matches every message; `{"type": "error"}` narrows
+/// to one console level (verbatim — "error", "warn", "log", ...);
+/// `{"text": "<substring>"}` prefilters message text.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsoleMatcher {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub r#type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+/// `console` accepts either `true` (all messages) or a matcher object.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ConsoleSubject {
+    Flag(bool),
+    Matcher(ConsoleMatcher),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ClaimSubject {
@@ -349,6 +369,14 @@ pub enum ClaimSubject {
     /// fails with the diff ratio. Baselines are minted with `shot-accept`.
     Shot {
         shot: String,
+    },
+    /// `{"console": true}` or `{"console": {"type": "error"}}` — assert on
+    /// messages the page logged this session. `exists`/`notExists` on
+    /// presence of a matching message; numeric predicates
+    /// (`countEquals`/`gt`/`gte`/`lt`/`lte`) compare the count; text
+    /// predicates pass when ANY matching message's text satisfies them.
+    Console {
+        console: ConsoleSubject,
     },
     Var {
         kind: String, // always "var" — kept literal to disambiguate untagged
