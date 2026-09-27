@@ -3462,6 +3462,40 @@ function createRequestHandler(root, deps, chat) {
         return sendJson(res, 202, { ok: true, sid, started: true });
       }
 
+      // Insert a step into a saved scenario (POST): {kind: 'do'|'check',
+      // draft: {...}, after?: stepId | at?: index} → CLI `scenario insert`.
+      // The CLI re-validates and rewrites scenario.json atomically; bad
+      // drafts surface as a non-zero exit with the schema error as stderr.
+      if (
+        req.method === 'POST' &&
+        segAll[0] === 'api' &&
+        segAll[1] === 'scenarios' &&
+        segAll[3] === 'insert-step' &&
+        segAll.length === 4
+      ) {
+        if (!deps || !deps.runCli) {
+          return sendJson(res, 503, { error: 'insert unavailable: agent-qa CLI not resolved' });
+        }
+        const sid = decodeURIComponent(segAll[2]);
+        if (!isSafeSegment(sid)) return badRequest(res, 'unsafe sid');
+        const file = path.join(root, sid, 'scenario.json');
+        let body;
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          return badRequest(res, 'expected JSON body');
+        }
+        const kind = body && body.kind === 'do' ? 'do' : body && body.kind === 'check' ? 'check' : null;
+        if (!kind || typeof body.draft !== 'object' || body.draft === null) {
+          return badRequest(res, 'kind (do|check) + draft (object) are required');
+        }
+        const args = ['scenario', 'insert', file, kind, JSON.stringify(body.draft)];
+        if (typeof body.after === 'string' && body.after) args.push('--after', body.after);
+        else if (Number.isInteger(body.at)) args.push('--at', String(body.at));
+        const r = await deps.runCli(args);
+        return sendCliResult(res, r);
+      }
+
       // Delete a recorded scenario (POST): remove its dir + all replays via the
       // Rust CLI `scenario delete <sid> --yes`. Requires deps.runCli.
       if (

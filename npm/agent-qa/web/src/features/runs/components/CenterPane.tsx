@@ -1,7 +1,9 @@
 // web/src/features/runs/components/CenterPane.tsx
+import { useState } from 'react'
 import { BrowserModeToggle } from '@/components/browser-mode-toggle'
 import { cn } from '@/lib/utils'
-import { Loader2Icon, PlayIcon, WrenchIcon } from 'lucide-react'
+import { Loader2Icon, PlayIcon, PlusIcon, WrenchIcon } from 'lucide-react'
+import { InsertCheckDialog } from './InsertCheckDialog'
 import {
   cleanSummary,
   collapseEvents,
@@ -72,6 +74,7 @@ export function CenterPane({
   runConfig?: RunConfig
 }) {
   const { detail, scenarioDef, sel, runDefSteps, runsBySid } = runs
+  const [insertAfter, setInsertAfter] = useState<{ stepId: string; label: string } | null>(null)
 
   // Mode A — a recorded scenario is previewed (no run selected).
   if (scenarioDef && !detail) {
@@ -158,14 +161,28 @@ export function CenterPane({
         </div>
         <ol className="min-h-0 flex-1 space-y-px overflow-auto p-2.5">
           {steps.map((st, i) => (
-            <li key={i} className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 transition-colors hover:bg-muted/60">
+            <li
+              key={i}
+              className="group relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 transition-colors hover:bg-muted/60"
+            >
               <span className="tnum w-5 shrink-0 text-right text-xs text-muted-foreground/70">{i}</span>
               <VerbBadge verb={st.verb} />
               <span className="truncate text-[13px]">{st.intent || stepText(st)}</span>
+              {st.id && (
+                <button
+                  type="button"
+                  title={`Insert a check after “${st.id}”`}
+                  onClick={() => setInsertAfter({ stepId: st.id!, label: st.intent || st.id! })}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 rounded bg-background p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
+                >
+                  <PlusIcon className="size-3.5" />
+                </button>
+              )}
             </li>
           ))}
           {steps.length === 0 && <li className="px-2 py-3 text-xs text-muted-foreground">This scenario has no steps.</li>}
         </ol>
+        {insertDialog(insertAfter, setInsertAfter, sel.sid, runs)}
       </Pane>
     )
   }
@@ -279,7 +296,7 @@ export function CenterPane({
             const isCurrent = st.idx === liveCurrent
             const pending = st.status === 'pending'
             return (
-              <li key={st.idx}>
+              <li key={st.idx} className="group relative">
                 <button
                   type="button"
                   disabled={pending}
@@ -320,6 +337,18 @@ export function CenterPane({
                   {st.kind && <span className="shrink-0 text-xs text-muted-foreground">({st.kind})</span>}
                   <span className="ml-auto shrink-0 text-xs text-muted-foreground">{pending ? '' : fmtMs(st.ms)}</span>
                 </button>
+                {st.id && !live && (
+                  <button
+                    type="button"
+                    title={`Insert a check after “${st.id}” in the saved scenario`}
+                    onClick={() =>
+                      setInsertAfter({ stepId: st.id!, label: st.intent || st.id! })
+                    }
+                    className="absolute right-1 top-1/2 -translate-y-1/2 rounded bg-background p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
+                  >
+                    <PlusIcon className="size-3.5" />
+                  </button>
+                )}
               </li>
             )
           })}
@@ -329,6 +358,7 @@ export function CenterPane({
             </li>
           )}
         </ol>
+        {insertDialog(insertAfter, setInsertAfter, sel.sid, runs)}
       </Pane>
     )
   }
@@ -357,4 +387,25 @@ export function CenterPane({
 
 function Pane({ children }: { children: React.ReactNode }) {
   return <section className="@container flex h-full min-h-0 flex-col overflow-hidden">{children}</section>
+}
+
+function insertDialog(
+  insertAfter: { stepId: string; label: string } | null,
+  setInsertAfter: (v: { stepId: string; label: string } | null) => void,
+  sid: string | null,
+  runs: RunsApi
+) {
+  if (!sid) return null
+  return (
+    <InsertCheckDialog
+      open={!!insertAfter}
+      onOpenChange={(v) => {
+        if (!v) setInsertAfter(null)
+      }}
+      sid={sid}
+      afterStepId={insertAfter?.stepId || ''}
+      afterLabel={insertAfter?.label || ''}
+      onDone={() => void runs.reloadDef(sid)}
+    />
+  )
 }
