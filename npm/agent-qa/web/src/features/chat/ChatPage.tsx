@@ -162,6 +162,23 @@ export function ChatPage() {
     }
   }, [])
 
+  // Refresh per-chat live/busy badges on a slow poll — the list endpoint only
+  // reads flags off already-resolved hubs, so it never spins up an agent.
+  useEffect(() => {
+    if (!chatsReady || chats.length <= 1) return
+    const t = setInterval(async () => {
+      const list = await listChats()
+      setChats((prev) => {
+        if (list.length !== prev.length) return prev // structural changes come from local actions
+        return prev.map((c) => {
+          const next = list.find((l) => l.id === c.id)
+          return next ? { ...c, busy: next.busy, live: next.live } : c
+        })
+      })
+    }, 2500)
+    return () => clearInterval(t)
+  }, [chatsReady, chats.length])
+
   // Seed a fresh chat from ?ask= once the chat list exists. Clears the param
   // so refresh doesn't re-seed.
   useEffect(() => {
@@ -224,9 +241,20 @@ export function ChatPage() {
                 <button
                   type="button"
                   onClick={() => startTransition(() => setActiveId(c.id))}
-                  title={`session: ${c.session}`}
-                  className="max-w-[12rem] truncate"
+                  title={
+                    `session: ${c.session}` +
+                    (c.busy ? ' · working…' : c.live ? ' · ready for input' : '')
+                  }
+                  className="flex max-w-[12rem] items-center gap-1.5 truncate"
                 >
+                  {(c.busy || c.live) && (
+                    <span
+                      className={cn(
+                        'size-1.5 shrink-0 rounded-full',
+                        c.busy ? 'animate-pulse bg-amber-500' : 'bg-emerald-500'
+                      )}
+                    />
+                  )}
                   {c.title && c.title !== 'New chat' ? c.title : `Chat ${i + 1}`}
                 </button>
                 {chats.length > 1 && (
@@ -572,7 +600,7 @@ function ChatConversation({
           <div className={cn('min-h-0', hasRecording ? 'flex-[3]' : 'flex-1')}>{liveBrowserPane}</div>
           {hasRecording && (
             <div className="flex min-h-0 flex-[2] flex-col overflow-hidden border-t border-border">
-              <RecordingView cid={cid} rec={rec} onChanged={() => void getRecording(cid).then(setRec)} />
+              <RecordingView cid={cid} rec={rec} />
             </div>
           )}
         </div>
