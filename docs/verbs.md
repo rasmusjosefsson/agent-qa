@@ -13,7 +13,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `run-step <do|check> <draft-json>` | Dispatch ONE trigger payload against the live session for author-time feedback, without recording. Same direct draft shapes as `record-step`; prints a `{ok,…}` JSON line. `--session`. |
 | `aria-snapshot` | Dump the live page's accessibility tree as structured picker rows (a thin adapter over `agent-browser snapshot`). Flags: `--interactive`, `--session`. |
 | `cdp-url [--session] [--json]` | Print the live session's CDP WebSocket endpoint. Powers the editor's inline live-browser pane (screencast + drive-to-record: clicks, typing, select commits, checkbox/radio toggles, and named-key presses all land as steps). Read-only. |
-| `buffer list \| delete <i> \| move <from> <to> \| edit <i> <draft-json> \| clear` | Inspect / reorder / rewrite / delete rows in the in-flight buffer; delete + move re-index `s0,s1,…` so `flush` stays clean. `edit` re-validates the draft and preserves the step's id/kind. `list --json` (includes `paused`). |
+| `buffer list \| delete <i> \| move <from> <to> \| edit <i> <draft-json> \| load <sid> [--force] \| clear` | Inspect / reorder / rewrite / delete rows in the in-flight buffer; delete + move re-index `s0,s1,…` so `flush` stays clean. `edit` re-validates the draft and preserves the step's id/kind. `load` copies a saved scenario's steps into the buffer for editing — `flush` then writes back to the same `<sid>` and keeps fields the buffer doesn't model (`id`, `tags`, `inputs`, `templates`, `env.close`). `list --json` (includes `paused`, `editing`). |
 | `fill-unique` | Locator-uniqueness helper for `type`/`fill` style do steps |
 | `smart-click` | High-level click that resolves a label to a unique locator |
 | `truncate` | Drop the trailing N steps from the in-flight scenario |
@@ -95,6 +95,7 @@ Size changes fail outright — re-mint with `shot-accept` when the change is leg
 | `scenario summary <file>` | Per-step summary. Flags: `--filter <substr>`, `--json`. |
 | `scenario inputs <file>` | List declared inputs. `--json`. |
 | `scenario new <file>` | Scaffold a minimal valid scenario. Flags: `--force`, `--url`, `--intent`. |
+| `scenario insert <file> <do\|check> <draft-json>` | Splice a validated step into a saved scenario. `--after <stepId>` or `--at <index>` sets the position (default: append); the new step's id is the first free `s<n>`. |
 | `scenario diff <a> <b>` | Unified diff between two scenario JSONs |
 | `scenario hash <file>` | SHA-256 of scenario bytes (rebase-guard hash) |
 | `scenario id <file>` | Print the scenario's id field on one line |

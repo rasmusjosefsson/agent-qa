@@ -25,6 +25,7 @@ export interface BufferState {
   session?: string | null
   baseline?: string | null
   paused?: boolean
+  editing?: boolean
   rows: BufferRow[]
 }
 

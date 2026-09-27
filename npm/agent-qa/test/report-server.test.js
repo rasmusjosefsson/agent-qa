@@ -1696,6 +1696,29 @@ test('chat remediation runs the extension command and retries that chat connecti
   assert.equal(result.session, chat.session);
 });
 
+test('POST /api/edit/load delegates to buffer load with a safe sid', async (t) => {
+  const fx = makeFixture();
+  const calls = [];
+  const deps = { runCli: async (args) => (calls.push(args), { code: 0, stdout: 'ok', stderr: '' }) };
+  const { server, base } = await boot(fx.root, deps);
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  let res = await j('POST', '/api/edit/load', { sid: 'flow' });
+  assert.equal(res.status, 200);
+  assert.deepEqual(calls.at(-1), ['buffer', 'load', 'flow']);
+
+  res = await j('POST', '/api/edit/load', { sid: 'flow', force: true });
+  assert.equal(res.status, 200);
+  assert.deepEqual(calls.at(-1), ['buffer', 'load', 'flow', '--force']);
+
+  res = await j('POST', '/api/edit/load', { sid: '../escape' });
+  assert.equal(res.status, 400);
+  res = await j('POST', '/api/edit/load', {});
+  assert.equal(res.status, 400);
+});
+
 test('autoConnectDefault is a no-op when no persona/environment is configured', async (t) => {
   const fx = makeFixture();
   const calls = [];
