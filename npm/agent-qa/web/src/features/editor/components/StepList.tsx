@@ -3,7 +3,7 @@ import type { BufferRow } from '../types'
 import { rowLabel } from '../compose'
 import { cn } from '@/lib/utils'
 import { useState, type ReactNode } from 'react'
-import { ArrowUpIcon, ArrowDownIcon, XIcon, PencilIcon, PlayIcon } from 'lucide-react'
+import { ArrowUpIcon, ArrowDownIcon, XIcon, PencilIcon, CameraIcon, PlayIcon } from 'lucide-react'
 
 const BADGE: Record<string, string> = {
   nav: 'bg-sky-500/15 text-sky-400',
@@ -27,12 +27,14 @@ export function StepList({
   onMove,
   onDelete,
   onEdit,
+  onAddShot,
   onRun,
 }: {
   rows: BufferRow[]
   onMove: (from: number, to: number) => void
   onDelete: (index: number) => void
   onEdit?: (index: number, draft: Record<string, unknown>) => Promise<boolean> | boolean
+  onAddShot?: (index: number, stepId: string) => void
   // Dispatch one buffered step against the live session (run-step) —
   // author-time feedback without flushing the buffer.
   onRun?: (row: BufferRow) => void
@@ -90,6 +92,13 @@ export function StepList({
               </span>
             </span>
             <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+              {onAddShot && row.step.kind === 'do' && (
+                <IconBtn
+                  icon={<CameraIcon className="size-3.5" />}
+                  title="Add a visual check ({shot} claim) after this step"
+                  onClick={() => onAddShot(i, row.stepId)}
+                />
+              )}
               {onRun && (
                 <IconBtn icon={<PlayIcon className="size-3.5" />} title="Run this step live" onClick={() => onRun(row)} />
               )}

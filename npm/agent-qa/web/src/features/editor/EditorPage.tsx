@@ -111,6 +111,7 @@ export function EditorPage() {
                 const { id: _id, kind: _k, ...draft } = row.step as Record<string, unknown>
                 void ed.runStep(row.step.kind ?? 'do', draft).then(setRunResult)
               }}
+              onAddShot={(i, stepId) => void ed.addShotCheck(i, stepId)}
             />
           </div>
           <Composer
