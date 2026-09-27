@@ -33,6 +33,7 @@ mod heal_promote;
 mod heal_respond;
 mod i18n;
 mod info;
+mod init;
 mod io;
 mod list;
 mod paths;
@@ -128,9 +129,10 @@ fn main() -> ExitCode {
         "heal-list" => heal_list::run(rest),
         "heal-chronic" => heal_chronic::run(rest),
         "shot-accept" => shot_accept::run(rest),
+        "init" => init::cli(rest),
         _ => {
             eprintln!(
-                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, design, audit, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept."
+                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, design, audit, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, init."
             );
             eprintln!("Run `agent-qa --help` for usage.");
             Ok(2)
@@ -218,6 +220,7 @@ Verbs:
                                 is ok or accepted against current design bytes
   design verdict <sid> --step <id> (--ok | --accepted --reason <t> | --fail --reason <t> | --ask)
                                 Record a design decision in designs/verdicts.json
+  init [dir] [--force]          Bootstrap a dir: agent-qa.toml + scenarios/hello + .gitignore
   start \"<intent>\"             Begin a new recording session
   browser <args...>             Passthrough exec of the pinned agent-browser
                                 binary (same one every other verb uses) —
