@@ -67,6 +67,10 @@ export function StepDetail({ runs, onLightbox }: { runs: Api; onLightbox: (url: 
   const runId = sel.runId!
   const defStep = scenario?.steps?.find((s) => s.id === step.id)
   const heal = (detail.heals || []).find((h) => h.stepId === step.id)
+  // A failing {"shot":"x"} check references the do-step whose screenshot
+  // drifted; the delta map is keyed by that referenced id.
+  const shotRef = (defStep?.claim as { subject?: { shot?: string } } | undefined)?.subject?.shot
+  const shotDiff = shotRef && (detail.shotDiffs || []).includes(shotRef) ? shotRef : null
 
   // Open a NEW chat seeded with the failure context so the agent can triage
   // flake-vs-real. ChatPage consumes the ?ask= param on load.
@@ -132,6 +136,9 @@ export function StepDetail({ runs, onLightbox }: { runs: Api; onLightbox: (url: 
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
         {heal && <HealCard heal={heal} />}
+        {shotDiff && (
+          <ShotDiffCard sid={sid} runId={runId} shotStep={shotDiff} onLightbox={onLightbox} />
+        )}
         {step.error && (
           <pre className="mb-3 whitespace-pre-wrap rounded-md border border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">
             {step.error}
@@ -298,6 +305,37 @@ function HealCard({ heal }: { heal: HealRow }) {
           </pre>
         </details>
       )}
+    </div>
+  )
+}
+
+// The delta map a {"shot"} claim wrote when it missed its baseline — red over
+// a faded baseline. Re-mint with `shot-accept` when the change is legitimate.
+export function ShotDiffCard({
+  sid,
+  runId,
+  shotStep,
+  onLightbox,
+}: {
+  sid: string
+  runId: string
+  shotStep: string
+  onLightbox: (url: string, caption: string) => void
+}) {
+  const url = artifactUrl(sid, runId, 'shots-diff', shotStep)
+  const caption = `Visual diff · ${shotStep}`
+  return (
+    <div className="mb-3 rounded-md border border-sky-500/30 bg-sky-500/10 p-2.5 text-xs">
+      <div className="mb-1.5 flex items-center gap-1.5 font-medium text-sky-300">
+        <WrenchIcon className="size-3.5 shrink-0" />
+        Visual diff — shot “{shotStep}” changed vs baseline
+      </div>
+      <button type="button" onClick={() => onLightbox(url, caption)} className="block w-full">
+        <img src={url} alt={caption} loading="lazy" className="w-full rounded border border-border" />
+      </button>
+      <div className="mt-1.5 text-muted-foreground">
+        Legitimate change? Re-mint with <span className="font-mono">shot-accept {sid} --steps {shotStep}</span>
+      </div>
     </div>
   )
 }

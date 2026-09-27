@@ -36,6 +36,7 @@ const EDIT_KINDS = ['do', 'check'];
 const ARTIFACT_KINDS = {
   screenshots: { ext: '.png', type: 'image/png' },
   snapshots: { ext: '.txt', type: 'text/plain; charset=utf-8' },
+  'shots-diff': { ext: '.diff.png', type: 'image/png' },
   network: { ext: '.json', type: 'application/json; charset=utf-8' },
   probes: { ext: '.json', type: 'application/json; charset=utf-8' },
   perf: { ext: '.json', type: 'application/json; charset=utf-8' },
@@ -1529,6 +1530,10 @@ async function runDetail(root, sid, runId) {
       return { ...row, patch };
     })
   );
+  // StepIds with a shots-diff/<stepId>.diff.png — written when a {"shot"}
+  // claim missed its baseline. Listed here so the Runs pane can render the
+  // delta map inline on the failing check step.
+  const shotDiffs = await listShotDiffs(runDir);
   return {
     sid,
     runId,
@@ -1537,7 +1542,20 @@ async function runDetail(root, sid, runId) {
     status,
     events,
     heals,
+    shotDiffs,
   };
+}
+
+async function listShotDiffs(runDir) {
+  let names;
+  try {
+    names = await fsp.readdir(path.join(runDir, 'shots-diff'));
+  } catch {
+    return [];
+  }
+  return names
+    .filter((n) => n.endsWith('.diff.png'))
+    .map((n) => n.slice(0, -'.diff.png'.length));
 }
 
 // -------- http helpers --------

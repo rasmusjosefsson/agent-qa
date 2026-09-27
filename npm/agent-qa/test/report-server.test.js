@@ -123,6 +123,9 @@ function makeFixture() {
       }),
     ].join('\n') + '\n',
   );
+  fs.mkdirSync(path.join(runDir, 'shots-diff'), { recursive: true });
+  fs.writeFileSync(path.join(runDir, 'shots-diff', 'navHome.diff.png'), 'DIFFDATA-navHome');
+
   fs.writeFileSync(
     path.join(runDir, 'diffs', 'navHome.patch.json'),
     JSON.stringify({
@@ -413,6 +416,21 @@ test('report viewer endpoints', async (t) => {
     const res = await fetch(`${base}/api/scenarios/${fx.sid}/runs`);
     const body = await res.json();
     assert.equal(body.replays[0].healed, 1); // audit.autoHealed lists navHome
+  });
+
+  await t.test('GET /runs/:runId lists stepIds with a shot diff map', async () => {
+    const res = await fetch(`${base}/api/scenarios/${fx.sid}/runs/${fx.runId}`);
+    const body = await res.json();
+    assert.deepEqual(body.shotDiffs, ['navHome']);
+  });
+
+  await t.test('GET artifact streams a shot diff map as png', async () => {
+    const res = await fetch(
+      `${base}/api/scenarios/${fx.sid}/runs/${fx.runId}/artifact/shots-diff/navHome`,
+    );
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('content-type'), 'image/png');
+    assert.equal(await res.text(), 'DIFFDATA-navHome');
   });
 
   await t.test('GET artifact streams a captured screenshot', async () => {
