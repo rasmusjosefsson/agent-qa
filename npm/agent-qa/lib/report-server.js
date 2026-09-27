@@ -2281,6 +2281,21 @@ async function handleEdit(req, res, deps, seg) {
       const r = await deps.runCli([verb, kind, JSON.stringify(body.payload)]);
       return sendCliResult(res, r);
     }
+    case 'insert': {
+      const index = Number(body.index);
+      if (!Number.isInteger(index) || index < 0) {
+        return badRequest(res, 'index (non-negative integer) is required');
+      }
+      const kind = String(body.kind || '');
+      if (!EDIT_KINDS.includes(kind)) {
+        return badRequest(res, `kind must be one of ${EDIT_KINDS.join(', ')}`);
+      }
+      if (body.payload == null || typeof body.payload !== 'object') {
+        return badRequest(res, 'payload (object) is required');
+      }
+      const r = await deps.runCli(['buffer', 'insert', String(index), kind, JSON.stringify(body.payload)]);
+      return sendCliResult(res, r);
+    }
     case 'delete': {
       const index = Number(body.index);
       if (!Number.isInteger(index) || index < 0) {
