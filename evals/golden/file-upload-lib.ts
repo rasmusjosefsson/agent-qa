@@ -197,7 +197,6 @@ export async function runFileUploadGolden(
     async assertFileSizeGt(scenarioRelPath, bytes, stepIntent) {
       await record(ctx, "assert", { kind: "fileSizeGt", args: [scenarioRelPath, bytes], intent: stepIntent });
     },
-<<<<<<< HEAD
     async assertFileContent(scenarioRelPath, needle, stepIntent) {
       await record(ctx, "assert", { kind: "fileContent", args: [scenarioRelPath, needle], intent: stepIntent });
     },
