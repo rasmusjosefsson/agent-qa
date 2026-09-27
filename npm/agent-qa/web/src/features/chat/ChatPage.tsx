@@ -600,7 +600,7 @@ function ChatConversation({
           <div className={cn('min-h-0', hasRecording ? 'flex-[3]' : 'flex-1')}>{liveBrowserPane}</div>
           {hasRecording && (
             <div className="flex min-h-0 flex-[2] flex-col overflow-hidden border-t border-border">
-              <RecordingView cid={cid} rec={rec} />
+              <RecordingView cid={cid} rec={rec} onChanged={() => void getRecording(cid).then(setRec)} />
             </div>
           )}
         </div>
