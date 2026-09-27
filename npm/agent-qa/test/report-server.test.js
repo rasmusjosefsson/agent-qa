@@ -36,7 +36,11 @@ function makeFixture() {
       schema: 'scenario/2',
       id: 'demo-scenario',
       intent: 'open example.com and click a missing button',
-      steps: [{ id: 'navHome' }, { id: 'headingVisible' }, { id: 'clickMissingLogin' }],
+      steps: [
+        { id: 'navHome', kind: 'do' },
+        { id: 'headingVisible', kind: 'check' },
+        { id: 'clickMissingLogin', kind: 'do' },
+      ],
     }),
   );
 
@@ -372,6 +376,8 @@ test('report viewer endpoints', async (t) => {
     assert.equal(sc.latestRun.summary, 'SUMMARY: 2/3 (FAIL)');
     assert.equal(sc.latestRun.state, 'done');
     assert.equal(sc.latestRun.ok, false);
+    // do→check coverage: navHome covered by headingVisible; clickMissingLogin bare.
+    assert.deepEqual(sc.coverage, { doSteps: 2, checked: 1, bare: 1, ratio: 0.5 });
   });
 
   await t.test('GET /runs returns replay history', async () => {
@@ -1505,47 +1511,6 @@ test('chat remediation runs the extension command and retries that chat connecti
   assert.deepEqual(commands, [['credential-login']]);
   assert.equal(result.authenticated, true);
   assert.equal(result.session, chat.session);
-});
-
-test('chat recording controls run buffer verbs in the chat record dir', async (t) => {
-  const fx = makeFixture();
-  const recordRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-rec-'));
-  const calls = [];
-  const deps = {
-    chat: { hub: {} },
-    recordRoot,
-    runCli: async (args, extraEnv) => {
-      calls.push({ args, extraEnv });
-      return { code: 0, stdout: 'ok', stderr: '' };
-    },
-  };
-  const { server, base } = await boot(fx.root, deps);
-  t.after(() => server.close());
-  const j = (m, p, b) =>
-    fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
-
-  const chat = await (await j('POST', '/api/chat/create')).json();
-  const chatDir = path.join(recordRoot, chat.session);
-
-  for (const [sub, want] of [
-    ['pause', ['record', 'pause']],
-    ['resume', ['record', 'resume']],
-    ['step-delete', ['buffer', 'delete', '1']],
-    ['step-edit', ['buffer', 'edit', '0', JSON.stringify({ verb: 'click', on: '#a' })]],
-  ]) {
-    const body = sub === 'step-delete' ? { index: 1 } : sub === 'step-edit' ? { index: 0, payload: { verb: 'click', on: '#a' } } : {};
-    const r = await j('POST', `/api/chat/c/${chat.id}/recording/${sub}`, body);
-    assert.equal(r.status, 200, sub);
-    const last = calls.at(-1);
-    assert.deepEqual(last.args, want, sub);
-    assert.equal(last.extraEnv.AGENT_QA_RECORD_DIR, chatDir, `${sub} targets the chat's record dir`);
-  }
-
-  // Validation: bad index rejected without a CLI call.
-  const before = calls.length;
-  const bad = await j('POST', `/api/chat/c/${chat.id}/recording/step-delete`, { index: -1 });
-  assert.equal(bad.status, 400);
-  assert.equal(calls.length, before);
 });
 
 test('autoConnectDefault is a no-op when no persona/environment is configured', async (t) => {

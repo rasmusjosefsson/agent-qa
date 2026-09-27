@@ -53,6 +53,15 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `heal-apply <sid>` | Mark a heal-response as consumed |
 | `heal-list <sid>` | List heal-responses. Flags: `--run <runId>`, `--mode value-correction\|reject`, `--applied`, `--unapplied`, `--json` |
 | `heal-chronic <sid>` | Flag steps that auto-healed in ≥ `--min-runs` distinct runs (default 2) — silent locator debt. Prints the `heal-promote` command per step. Flags: `--min-runs N`, `--json` |
+| `shot-accept <sid>` | Mint screenshot baselines for `{"shot"}` claims: copies the run's per-step PNGs into `<sid>/baselines/`. Flags: `--run <runId>` (default `latest.txt`), `--steps <csv>` (default every captured shot), `--json` |
+
+### `{"shot"}` claims — visual diff vs a baseline
+
+A check step `{"check": {"shot": "<stepId>"}, "predicate": "matches"}` pixel-compares
+the current run's `screenshots/<stepId>.png` against `<sid>/baselines/<stepId>.png`.
+It passes when the differing-pixel fraction ≤ `tolerance.pixels` (default `0.01` = 1%);
+on a miss the claim fails and a red delta map lands at `<run>/shots-diff/<stepId>.diff.png`.
+Size changes fail outright — re-mint with `shot-accept` when the change is legitimate.
 
 ## Profiles
 
@@ -97,6 +106,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `scenario prune-replays <sid> --keep N` | Keep most recent N replays. `--yes` / `-y` confirms. |
 | `scenario prune-all --keep N` | Same across every scenario. `--yes` / `-y` confirms. |
 | `scenario coverage <file>` | Per-step check coverage ratio. `--json`. |
+| `scenario coverage-all` | The same do→check ratio rolled up across every scenario in the root — rows sorted worst-first + OVERALL rollup. `--filter <substr>`, `--json`. |
 | `scenario lint <file>` | Common-smell linter. Flags: `--json`, `--format text\|json\|github`, `--strict`, `--rule <code>` (repeatable), `--exclude-rule <code>` (repeatable), `--list-rules`. |
 | `scenario lint-all` | Same across every scenario under the root. Flags: `--json`, `--format`, `--strict`, `--rule`, `--exclude-rule`. |
 | `scenario check <file>` | Schema validate + lint in one pass. Flags: `--strict`, `--format`. |
