@@ -38,6 +38,7 @@ export type LiveTone = 'idle' | 'busy' | 'ok' | 'err'
 export interface LiveStatus { text: string; tone: LiveTone }
 export type LiveInput =
   | { type: 'click'; nx: number; ny: number; record?: boolean }
+  | { type: 'drag'; nx0: number; ny0: number; nx1: number; ny1: number; record?: boolean }
   | { type: 'scroll'; nx: number; ny: number; dx: number; dy: number }
   | { type: 'key'; text?: string; key?: string; mods?: { ctrl?: boolean; shift?: boolean; alt?: boolean; meta?: boolean }; record?: boolean }
   | { type: 'back' } | { type: 'forward' } | { type: 'reload' } | { type: 'navigate'; url: string; record?: boolean }

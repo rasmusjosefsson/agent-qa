@@ -362,6 +362,126 @@ fn scoped_target_js(role: &str, name: &str, act_js: &str) -> String {
     )
 }
 
+/// One resolved endpoint of a `drag` step — a locator already lowered to
+/// JS literals (names/i18n/vars resolved by the caller).
+#[derive(Debug)]
+pub enum DragEndpoint {
+    /// ARIA role (+ resolved accessible name) inside an optional scope chain.
+    Role {
+        role: String,
+        name: String,
+        scope: Vec<ScopeStep>,
+    },
+    /// `container.querySelector(<css>)` — also how testId locators arrive.
+    Css(String),
+    /// `document.evaluate(<xpath>, …).singleNodeValue`.
+    Xpath(String),
+    /// First visible in-root node whose text contains `<text>`.
+    Text(String),
+}
+
+fn drag_endpoint_json(ep: &DragEndpoint) -> String {
+    match ep {
+        DragEndpoint::Role { role, name, scope } => {
+            let steps = scope
+                .iter()
+                .map(|s| match s {
+                    ScopeStep::Css(v) => format!("{{\"css\":{}}}", json_str(v)),
+                    ScopeStep::Xpath(v) => format!("{{\"xpath\":{}}}", json_str(v)),
+                    ScopeStep::Text(v) => format!("{{\"text\":{}}}", json_str(v)),
+                    ScopeStep::Role { role, name } => {
+                        format!(
+                            "{{\"role\":{},\"name\":{}}}",
+                            json_str(role),
+                            json_str(name)
+                        )
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(
+                "{{\"kind\":\"role\",\"role\":{},\"name\":{},\"scope\":[{}]}}",
+                json_str(role),
+                json_str(name),
+                steps
+            )
+        }
+        DragEndpoint::Css(v) => format!("{{\"kind\":\"css\",\"value\":{}}}", json_str(v)),
+        DragEndpoint::Xpath(v) => format!("{{\"kind\":\"xpath\",\"value\":{}}}", json_str(v)),
+        DragEndpoint::Text(v) => format!("{{\"kind\":\"text\",\"value\":{}}}", json_str(v)),
+    }
+}
+
+/// JS that resolves the drag `src`/`dst` endpoints and dispatches a full
+/// drag gesture **on the nodes themselves** — the same overlay-immune,
+/// coordinate-free approach as the click activation:
+///
+///   pointerdown + mousedown on src
+///   → dragstart(src, shared DataTransfer)
+///   → mousemove + pointermove at dst
+///   → dragenter + dragover + drop on dst (shared DataTransfer)
+///   → pointerup + mouseup on dst → dragend(src)
+///
+/// Covers both HTML5 `draggable` dnd (the DragEvent chain) and
+/// pointer/mouse-driven sortable libraries in one gesture.
+/// Returns `"true"`, `"src-miss"`, or `"dst-miss"` on stdout.
+/// `__aqDrag` marker for test doubles.
+pub fn build_drag_js(src: &DragEndpoint, dst: &DragEndpoint) -> String {
+    format!(
+        r#"(() => {{ const __aqDrag = true;
+{prelude}
+{find}
+  const __aqDragFind = (d) => {{
+    let root = document;
+    for (const s of (d.scope || [])) {{
+      if (!root || !root.querySelectorAll) return null;
+      if (s.css != null) root = root.querySelector(s.css);
+      else if (s.xpath != null) {{ const r = document.evaluate(s.xpath, root, null, 9, null); root = r && r.singleNodeValue; }}
+      else if (s.role != null) root = __aqScopedFind(s.role, s.name || '', root);
+      else if (s.text != null) {{ const want = __aqText(s.text); const hits = Array.from(root.querySelectorAll('*')).filter((n) => __aqVisible(n) && __aqName(n).some((c) => __aqText(c).includes(want))); const inter = hits.filter(__aqIsInteractive); root = inter[0] || hits.sort((a, b) => (a.textContent || '').length - (b.textContent || '').length)[0] || null; }}
+      if (!root) return null;
+    }}
+    if (d.kind === 'role') return __aqScopedFind(d.role, d.name || '', root);
+    if (d.kind === 'css') return root.querySelector(d.value);
+    if (d.kind === 'xpath') {{ const r = document.evaluate(d.value, root, null, 9, null); return r && r.singleNodeValue; }}
+    if (d.kind === 'text') {{ const want = __aqText(d.value); const hits = Array.from(root.querySelectorAll('*')).filter((n) => __aqVisible(n) && __aqName(n).some((c) => __aqText(c).includes(want))); const inter = hits.filter(__aqIsInteractive); return inter[0] || hits.sort((a, b) => (a.textContent || '').length - (b.textContent || '').length)[0] || null; }}
+    return null;
+  }};
+  const src = __aqDragFind({src});
+  if (!src) return "src-miss";
+  const dst = __aqDragFind({dst});
+  if (!dst) return "dst-miss";
+  try {{ src.scrollIntoView({{ block: 'center', inline: 'center' }}); }} catch (e) {{}}
+  try {{ dst.scrollIntoView({{ block: 'center', inline: 'center' }}); }} catch (e) {{}}
+  const ctr = (el) => {{ const r = el.getBoundingClientRect(); return {{ x: r.left + r.width / 2, y: r.top + r.height / 2 }}; }};
+  const s = ctr(src), dp = ctr(dst);
+  const o = (x, y, up) => ({{ bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y, button: 0, buttons: up ? 0 : 1 }});
+  src.dispatchEvent(new PointerEvent('pointerdown', o(s.x, s.y)));
+  src.dispatchEvent(new MouseEvent('mousedown', o(s.x, s.y)));
+  try {{
+    const dt = new DataTransfer();
+    src.dispatchEvent(new DragEvent('dragstart', Object.assign(o(s.x, s.y), {{ dataTransfer: dt }})));
+    document.dispatchEvent(new MouseEvent('mousemove', o(dp.x, dp.y)));
+    dst.dispatchEvent(new PointerEvent('pointermove', o(dp.x, dp.y)));
+    dst.dispatchEvent(new DragEvent('dragenter', Object.assign(o(dp.x, dp.y), {{ dataTransfer: dt }})));
+    dst.dispatchEvent(new DragEvent('dragover', Object.assign(o(dp.x, dp.y), {{ dataTransfer: dt }})));
+    dst.dispatchEvent(new DragEvent('drop', Object.assign(o(dp.x, dp.y), {{ dataTransfer: dt }})));
+    src.dispatchEvent(new DragEvent('dragend', Object.assign(o(dp.x, dp.y), {{ dataTransfer: dt }})));
+  }} catch (e) {{
+    document.dispatchEvent(new MouseEvent('mousemove', o(dp.x, dp.y)));
+    dst.dispatchEvent(new PointerEvent('pointermove', o(dp.x, dp.y)));
+  }}
+  dst.dispatchEvent(new PointerEvent('pointerup', o(dp.x, dp.y, true)));
+  dst.dispatchEvent(new MouseEvent('mouseup', o(dp.x, dp.y, true)));
+  return "true";
+}})()"#,
+        prelude = activation_prelude(),
+        find = scoped_find_helper_js(),
+        src = drag_endpoint_json(src),
+        dst = drag_endpoint_json(dst),
+    )
+}
+
 /// JS returning `"true"` when `role`+`name` resolves inside `scope` — the
 /// claims presence probe. Same miss encoding as [`build_scoped_role_act`].
 pub fn build_scoped_role_probe(role: &str, name: &str, scope: &[ScopeStep]) -> String {
@@ -770,5 +890,48 @@ mod tests {
     fn field_probe_without_hint_skips_element_lookup() {
         let js = build_field_rejection_probe(None);
         assert!(js.contains("const hinted = null;"));
+    }
+
+    #[test]
+    fn drag_js_emits_finder_and_full_gesture() {
+        let js = build_drag_js(
+            &DragEndpoint::Role {
+                role: "listitem".into(),
+                name: "Card A".into(),
+                scope: vec![ScopeStep::Css("#board".into())],
+            },
+            &DragEndpoint::Css(".dropzone".into()),
+        );
+        assert!(js.contains("__aqDrag"), "{js}");
+        assert!(js.contains("\"listitem\""), "{js}");
+        assert!(js.contains("\"Card A\""), "{js}");
+        assert!(js.contains("\"#board\""), "{js}");
+        assert!(js.contains("\".dropzone\""), "{js}");
+        for evt in [
+            "pointerdown",
+            "mousedown",
+            "dragstart",
+            "dragenter",
+            "dragover",
+            "drop",
+            "dragend",
+            "pointerup",
+            "mouseup",
+        ] {
+            assert!(js.contains(evt), "{evt} missing from {js}");
+        }
+        assert!(js.contains("new DataTransfer()"), "{js}");
+        assert!(js.contains("src-miss") && js.contains("dst-miss"), "{js}");
+    }
+
+    #[test]
+    fn drag_js_supports_xpath_and_text_endpoints() {
+        let js = build_drag_js(
+            &DragEndpoint::Xpath("//li[1]".into()),
+            &DragEndpoint::Text("Archive".into()),
+        );
+        assert!(js.contains("\"kind\":\"xpath\""), "{js}");
+        assert!(js.contains("\"kind\":\"text\""), "{js}");
+        assert!(js.contains("//li[1]") && js.contains("Archive"), "{js}");
     }
 }

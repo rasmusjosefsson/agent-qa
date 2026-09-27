@@ -605,6 +605,111 @@ function createLiveBridge({
     send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 });
   }
 
+  // The same drag gesture `do/drag` emits, run directly on the resolved nodes.
+  // CDP's dispatched mouse presses never initiate native HTML5 dnd, so the
+  // bridge performs the DOM-level chain itself: pointerdown/mousedown on the
+  // source, a shared-DataTransfer dragstart→enter/over→drop→dragend chain on
+  // the endpoints, pointerup/mouseup on the target. Element-targeted (not
+  // coordinate-targeted), so overlay interception can't swallow the drop and
+  // the gesture replays identically.
+  const DRAG_GESTURE_FN = `function (dst) {
+    const src = this;
+    const ctr = (el) => { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; };
+    const s = ctr(src), d = ctr(dst);
+    const o = (x, y, up) => ({ bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y, button: 0, buttons: up ? 0 : 1 });
+    src.dispatchEvent(new PointerEvent('pointerdown', o(s.x, s.y)));
+    src.dispatchEvent(new MouseEvent('mousedown', o(s.x, s.y)));
+    try {
+      const dt = new DataTransfer();
+      src.dispatchEvent(new DragEvent('dragstart', Object.assign(o(s.x, s.y), { dataTransfer: dt })));
+      document.dispatchEvent(new MouseEvent('mousemove', o(d.x, d.y)));
+      dst.dispatchEvent(new PointerEvent('pointermove', o(d.x, d.y)));
+      dst.dispatchEvent(new DragEvent('dragenter', Object.assign(o(d.x, d.y), { dataTransfer: dt })));
+      dst.dispatchEvent(new DragEvent('dragover', Object.assign(o(d.x, d.y), { dataTransfer: dt })));
+      dst.dispatchEvent(new DragEvent('drop', Object.assign(o(d.x, d.y), { dataTransfer: dt })));
+      src.dispatchEvent(new DragEvent('dragend', Object.assign(o(d.x, d.y), { dataTransfer: dt })));
+    } catch (e) {
+      document.dispatchEvent(new MouseEvent('mousemove', o(d.x, d.y)));
+      dst.dispatchEvent(new PointerEvent('pointermove', o(d.x, d.y)));
+    }
+    dst.dispatchEvent(new PointerEvent('pointerup', o(d.x, d.y, true)));
+    dst.dispatchEvent(new MouseEvent('mouseup', o(d.x, d.y, true)));
+    return true;
+  }`;
+
+  async function dispatchDragOn(srcBackendId, dstBackendId) {
+    const s = await call('DOM.resolveNode', { backendNodeId: srcBackendId });
+    const d = await call('DOM.resolveNode', { backendNodeId: dstBackendId });
+    const srcObj = s && s.object && s.object.objectId;
+    const dstObj = d && d.object && d.object.objectId;
+    if (!srcObj || !dstObj) throw new Error('drag endpoint not resolvable');
+    await call('Runtime.callFunctionOn', {
+      objectId: srcObj,
+      functionDeclaration: DRAG_GESTURE_FN,
+      arguments: [{ objectId: dstObj }],
+      returnByValue: true,
+    });
+  }
+
+  async function backendNodeAt(nx, ny) {
+    if (!css.width) return 0;
+    const x = Math.round((Number(nx) || 0) * css.width);
+    const y = Math.round((Number(ny) || 0) * css.height);
+    const r = await call('DOM.getNodeForLocation', { x, y, includeUserAgentShadowDOM: false });
+    return (r && r.backendNodeId) || 0;
+  }
+
+  async function dispatchDrag(nx0, ny0, nx1, ny1) {
+    const s = await backendNodeAt(nx0, ny0);
+    const d = await backendNodeAt(nx1, ny1);
+    if (!s || !d) return;
+    try {
+      await dispatchDragOn(s, d);
+    } catch {
+      /* gesture failed — drop just doesn't happen */
+    }
+  }
+
+  // Resolve both endpoints to role+name BEFORE dispatching the gesture — a
+  // drop often reorders or rebuilds the list, after which a pick at the
+  // original point would resolve the element that slid into place.
+  // Then run the DOM-level drag gesture on the picked nodes and emit a
+  // recordable `drag` step. Nameless endpoints can't be replayed — same
+  // contract as click.
+  async function recordAndDrag(nx0, ny0, nx1, ny1) {
+    await finalizeFill();
+    let src = null;
+    let dst = null;
+    try {
+      src = await pick(nx0, ny0);
+      dst = await pick(nx1, ny1);
+    } catch {
+      /* unpickable endpoint */
+    }
+    if (!src || !dst || !src.backendNodeId || !dst.backendNodeId) {
+      broadcastEvent('record-skip', { reason: 'drag endpoint not resolvable' });
+      return;
+    }
+    try {
+      await dispatchDragOn(src.backendNodeId, dst.backendNodeId);
+    } catch {
+      /* gesture failed — still emit the step so the recorder can retry */
+    }
+    if (!src.name || !dst.name) {
+      broadcastEvent('record-skip', {
+        reason: `drag ${src.name ? 'target' : 'source'} has no accessible name`,
+      });
+      return;
+    }
+    emitRecord('do', {
+      intent: `drag ${src.name} onto ${dst.name}`,
+      verb: 'drag',
+      on: { role: src.role, name: src.name },
+      params: { to: { role: dst.role, name: dst.name } },
+    });
+    lastFill = null;
+  }
+
   // Normalized input -> CSS-pixel CDP events. Returns false if not connected.
   function input(evt) {
     if (!ws || ws.readyState !== 1) return false;
@@ -621,6 +726,19 @@ function createLiveBridge({
           recordAndClick(Number(evt.nx) || 0, Number(evt.ny) || 0, x, y);
         } else {
           dispatchClick(x, y);
+        }
+        return true;
+      }
+      case 'drag': {
+        if (!css.width) return false;
+        const nx0 = Number(evt.nx0) || 0;
+        const ny0 = Number(evt.ny0) || 0;
+        const nx1 = Number(evt.nx1) || 0;
+        const ny1 = Number(evt.ny1) || 0;
+        if (evt.record) {
+          recordAndDrag(nx0, ny0, nx1, ny1);
+        } else {
+          dispatchDrag(nx0, ny0, nx1, ny1);
         }
         return true;
       }
@@ -770,6 +888,7 @@ function createLiveBridge({
         role = (node.role && node.role.value) || '';
         name = (node.name && node.name.value) || '';
       }
+      if (!name && backendNodeId) name = await textName(backendNodeId);
     } catch {
       /* a11y lookup failed — return coords only */
     }
@@ -796,7 +915,28 @@ function createLiveBridge({
     } catch {
       /* no box model — highlight just won't draw */
     }
-    return { role, name, x, y, box, interactive: INTERACTIVE_ROLES.has(role) };
+    return { role, name, x, y, box, interactive: INTERACTIVE_ROLES.has(role), backendNodeId };
+  }
+
+  // Content-derived name fallback for elements whose accessible name the AX
+  // tree leaves empty (plain listitems, generic containers). Replay's name
+  // ladder matches innerText/textContent alongside accName, so a text-derived
+  // name records a locator that replays.
+  async function textName(backendNodeId) {
+    try {
+      const r = await call('DOM.resolveNode', { backendNodeId });
+      const oid = r && r.object && r.object.objectId;
+      if (!oid) return '';
+      const res = await call('Runtime.callFunctionOn', {
+        objectId: oid,
+        functionDeclaration:
+          'function () { return ((this.innerText || this.textContent || "").trim()).slice(0, 80); }',
+        returnByValue: true,
+      });
+      return (res && res.result && res.result.value) || '';
+    } catch {
+      return '';
+    }
   }
 
   function stop() {
