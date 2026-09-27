@@ -149,6 +149,7 @@ export interface RecordingState {
   startedAt: string | null;
   baseline: string | null;
   flushed: boolean;
+  paused?: boolean;
   steps: RecordingStep[];
 }
 

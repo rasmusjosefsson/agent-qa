@@ -15,9 +15,12 @@ pub fn run(args: &[String]) -> Result<u8> {
         "list" => cmd_list(&args[1..]),
         "delete" | "rm" => cmd_delete(&args[1..]),
         "move" | "mv" => cmd_move(&args[1..]),
+        "edit" => cmd_edit(&args[1..]),
         "clear" => cmd_clear(),
         "discard" => cmd_discard(),
-        other => bail!("buffer: unknown subcommand {other:?}; try list|delete|move|clear|discard"),
+        other => {
+            bail!("buffer: unknown subcommand {other:?}; try list|delete|move|edit|clear|discard")
+        }
     }
 }
 
@@ -29,10 +32,14 @@ Usage:
   agent-qa buffer list [--json]
   agent-qa buffer delete <index>
   agent-qa buffer move <from> <to>
+  agent-qa buffer edit <index> <draft-json>
   agent-qa buffer clear
   agent-qa buffer discard
 
-Delete and move reassign dense s0, s1, ... ids. Discard removes the active recording."
+Edit replaces the step at <index> with a re-validated draft (same shape as
+`record-step`, minus id/kind — the step keeps its id and position; its kind
+may not change). Delete and move reassign dense s0, s1, ... ids. Discard
+removes the active recording."
     );
 }
 
@@ -75,6 +82,7 @@ fn cmd_list(args: &[String]) -> Result<u8> {
                 "intent": state.intent,
                 "session": state.session,
                 "baseline": state.baseline,
+                "paused": state.paused,
                 "rows": rows,
             }))?
         );
@@ -133,6 +141,32 @@ fn cmd_move(args: &[String]) -> Result<u8> {
     Ok(0)
 }
 
+fn cmd_edit(args: &[String]) -> Result<u8> {
+    if args.len() != 2 {
+        bail!("usage: buffer edit <index> <draft-json>");
+    }
+    let index = parse_index(&args[0], "index")?;
+    let mut state = RecorderState::load_active()?;
+    let existing = state.steps.get(index).ok_or_else(|| {
+        anyhow!(
+            "index {index} out of range (buffer has {} step(s))",
+            state.steps.len()
+        )
+    })?;
+    let kind = match existing {
+        Step::Do { .. } => crate::record_step::StepKind::Do,
+        Step::Check { .. } => crate::record_step::StepKind::Check,
+    };
+    let step_id = existing.id().to_string();
+    let payload: serde_json::Value = serde_json::from_str(&args[1])
+        .map_err(|e| anyhow!("parse draft JSON: {:?} ({e})", args[1]))?;
+    let replacement = crate::record_step::parse_draft(kind, &payload, &step_id)?;
+    state.steps[index] = replacement;
+    state.save()?;
+    println!("edited step {index} (stepId={step_id})");
+    Ok(0)
+}
+
 fn cmd_clear() -> Result<u8> {
     let mut state = RecorderState::load_active()?;
     state.steps.clear();
@@ -182,6 +216,32 @@ mod tests {
         let state = RecorderState::load_active().unwrap();
         assert_eq!(state.steps.len(), 1);
         assert_eq!(state.steps[0].id(), "s0");
+        std::env::remove_var(crate::paths::RECORD_DIR_ENV);
+    }
+
+    #[test]
+    fn edit_replaces_step_keeping_id_and_position() {
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var(crate::paths::RECORD_DIR_ENV, tmp.path());
+        state().save().unwrap();
+        cmd_edit(&[
+            "1".into(),
+            "{\"intent\":\"url now\",\"claim\":{\"subject\":{\"url\":true},\"predicate\":\"contains\",\"value\":\"/done\"}}".into(),
+        ])
+        .unwrap();
+        let state = RecorderState::load_active().unwrap();
+        assert_eq!(state.steps.len(), 2);
+        assert_eq!(state.steps[1].id(), "s1");
+        assert_eq!(state.steps[1].intent(), "url now");
+        assert!(matches!(state.steps[1], Step::Check { .. }));
+        // Kind mismatch and malformed drafts are rejected without writing.
+        assert!(cmd_edit(&["1".into(), "{\"intent\":\"x\",\"verb\":\"reload\"}".into()]).is_err());
+        assert!(cmd_edit(&["9".into(), "{}".into()]).is_err());
+        assert_eq!(
+            RecorderState::load_active().unwrap().steps[1].intent(),
+            "url now"
+        );
         std::env::remove_var(crate::paths::RECORD_DIR_ENV);
     }
 }

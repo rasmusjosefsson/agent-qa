@@ -59,6 +59,11 @@ pub(crate) struct RecorderState {
     pub(crate) started_at: String,
     pub(crate) browser: BrowserConnection,
     pub(crate) steps: Vec<Step>,
+    /// While paused, record append paths (`record-step`, smart-click,
+    /// fill-unique, the workbench auto-record hook) drop steps instead of
+    /// writing them. Missing on state files written before this field existed.
+    #[serde(default)]
+    pub(crate) paused: bool,
 }
 
 impl RecorderState {
@@ -83,6 +88,7 @@ impl RecorderState {
                 .to_string(),
             browser,
             steps: Vec::new(),
+            paused: false,
         }
     }
 

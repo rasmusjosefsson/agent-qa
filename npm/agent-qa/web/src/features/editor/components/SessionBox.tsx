@@ -20,11 +20,13 @@ export function SessionBox({
   onStart,
   onFlush,
   onCancel,
+  onTogglePause,
 }: {
   buffer: BufferState
   onStart: (intent: string, url: string) => void
   onFlush: () => void
   onCancel: () => void
+  onTogglePause: () => void
 }) {
   const [intent, setIntent] = useState('')
   const [url, setUrl] = useState('')
@@ -35,12 +37,29 @@ export function SessionBox({
   if (active) {
     return (
       <div className="flex flex-col gap-2 border-b border-border p-3">
-        <div className="text-xs text-muted-foreground">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
           recording <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">{buffer.sid}</code>
+          {buffer.paused && (
+            <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-400">
+              paused
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Button size="sm" onClick={onFlush}>
             Flush → scenario.json
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onTogglePause}
+            title={
+              buffer.paused
+                ? 'Resume capturing steps'
+                : 'Pause capture — drive the browser without recording steps'
+            }
+          >
+            {buffer.paused ? 'Resume' : 'Pause'}
           </Button>
           <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
             <Button size="sm" variant="ghost" onClick={() => setConfirmOpen(true)} title="Discard this recording">

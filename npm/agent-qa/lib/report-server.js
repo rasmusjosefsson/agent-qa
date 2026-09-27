@@ -2194,6 +2194,7 @@ async function readBuffer(deps) {
     intent: parsed.intent || null,
     session: parsed.session || null,
     baseline: parsed.baseline || null,
+    paused: !!parsed.paused,
     rows: Array.isArray(parsed.rows) ? parsed.rows : [],
     spawnError: r.spawnError ? String(r.spawnError.message || r.spawnError) : null,
   };
@@ -2277,6 +2278,22 @@ async function handleEdit(req, res, deps, seg) {
         return badRequest(res, 'from and to (non-negative integers) are required');
       }
       const r = await deps.runCli(['buffer', 'move', String(from), String(to)]);
+      return sendCliResult(res, r);
+    }
+    case 'edit': {
+      const index = Number(body.index);
+      if (!Number.isInteger(index) || index < 0) {
+        return badRequest(res, 'index (non-negative integer) is required');
+      }
+      if (body.payload == null || typeof body.payload !== 'object') {
+        return badRequest(res, 'payload (object) is required');
+      }
+      const r = await deps.runCli(['buffer', 'edit', String(index), JSON.stringify(body.payload)]);
+      return sendCliResult(res, r);
+    }
+    case 'pause':
+    case 'resume': {
+      const r = await deps.runCli(['record', route]);
       return sendCliResult(res, r);
     }
     case 'clear': {
@@ -2400,6 +2417,7 @@ async function chatRecordingState(entry, scenariosRoot) {
     out.session = state.session || null;
     out.startedAt = state.startedAt || null;
     out.baseline = state.baseline || null;
+    out.paused = !!state.paused;
     out.steps = Array.isArray(state.steps) ? state.steps.map(normalizeStep) : [];
     if (scenariosRoot && isSafeSegment(state.sid) && await readJson(path.join(scenariosRoot, state.sid, 'scenario.json'))) {
       out.flushed = true;

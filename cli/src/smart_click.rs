@@ -92,21 +92,25 @@ pub fn run(args: &[String]) -> Result<u8> {
                 },
             }),
         };
-        let row = crate::record_step::record_draft(&mut state, StepKind::Do, &payload, &session)?;
-        let step_id = row.step_id;
-        match &recovery {
-            Recovery::None => println!(
-                "clicked {} (step {step_id}) — role={} name={:?}",
-                step_id, opts.role, opts.name
-            ),
-            Recovery::Text(matched) => println!(
-                "clicked {} (step {step_id}) — text={:?} (role+name miss recovered via text)",
-                step_id, matched
-            ),
-            Recovery::Snapshot => println!(
-                "clicked {} (step {step_id}) — role={} name={:?} (recovered via snapshot ref)",
-                step_id, opts.role, opts.name
-            ),
+        match crate::record_step::record_draft(&mut state, StepKind::Do, &payload, &session)? {
+            Some(row) => {
+                let step_id = row.step_id;
+                match &recovery {
+                    Recovery::None => println!(
+                        "clicked {} (step {step_id}) — role={} name={:?}",
+                        step_id, opts.role, opts.name
+                    ),
+                    Recovery::Text(matched) => println!(
+                        "clicked {} (step {step_id}) — text={:?} (role+name miss recovered via text)",
+                        step_id, matched
+                    ),
+                    Recovery::Snapshot => println!(
+                        "clicked {} (step {step_id}) — role={} name={:?} (recovered via snapshot ref)",
+                        step_id, opts.role, opts.name
+                    ),
+                }
+            }
+            None => println!("clicked {} — not recorded (recording paused)", opts.name),
         }
     } else {
         match &recovery {
