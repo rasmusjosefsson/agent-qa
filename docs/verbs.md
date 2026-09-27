@@ -41,6 +41,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `audit exit-code <sid> <runId \| latest>` | Print just the run's exitCode (-1 if absent) |
 | `audit field <sid> <runId \| latest> <name>` | Print any top-level audit field (scalars verbatim; object/array as compact JSON) |
 | `audit diff <sid> <runIdA> <runIdB>` | Unified diff between two replays' audit.json. `latest` accepted for either side. |
+| `audit flaky <sid>` | Flag steps whose outcome interleaves pass/fail across runs — the flake signature (vs `heal-chronic`, which flags locator churn). Flags: `--min-flips N` (default 2), `--min-runs N` (default 3), `--json` |
 
 ## Heal
 

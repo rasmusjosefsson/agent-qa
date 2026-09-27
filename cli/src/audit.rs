@@ -25,6 +25,8 @@ pub fn run(args: &[String]) -> Result<u8> {
     let mut sort_runid_desc = false;
     let mut since_ms: Option<u64> = None;
     let mut until_ms: Option<u64> = None;
+    let mut min_flips: usize = 2;
+    let mut min_runs: usize = 3;
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -143,6 +145,34 @@ pub fn run(args: &[String]) -> Result<u8> {
                 let v = &s["--until=".len()..];
                 until_ms = Some(crate::time::parse_iso_ms(v)?);
             }
+            "--min-flips" => {
+                min_flips = it
+                    .next()
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .filter(|n| *n >= 1)
+                    .ok_or_else(|| anyhow!("--min-flips expects a positive integer"))?;
+            }
+            s if s.starts_with("--min-flips=") => {
+                min_flips = s["--min-flips=".len()..]
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|n| *n >= 1)
+                    .ok_or_else(|| anyhow!("--min-flips expects a positive integer"))?;
+            }
+            "--min-runs" => {
+                min_runs = it
+                    .next()
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .filter(|n| *n >= 1)
+                    .ok_or_else(|| anyhow!("--min-runs expects a positive integer"))?;
+            }
+            s if s.starts_with("--min-runs=") => {
+                min_runs = s["--min-runs=".len()..]
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|n| *n >= 1)
+                    .ok_or_else(|| anyhow!("--min-runs expects a positive integer"))?;
+            }
             other if other.starts_with("--") => bail!("unknown flag {other:?}"),
             other => positionals.push(other.to_string()),
         }
@@ -177,8 +207,9 @@ pub fn run(args: &[String]) -> Result<u8> {
         "field" => field(&positionals),
         "count" => count(&positionals),
         "duration" => duration(&positionals),
+        "flaky" => flaky(&positionals, json_out, min_flips, min_runs),
         other => bail!(
-            "unknown audit subverb {other:?} (try: show | list | stats | stats-all | diff | summary | exit-code | field | count | duration)"
+            "unknown audit subverb {other:?} (try: show | list | stats | stats-all | diff | summary | exit-code | field | count | duration | flaky)"
         ),
     }
 }
@@ -943,6 +974,169 @@ fn stats_all(json_out: bool, since_ms: Option<u64>, until_ms: Option<u64>) -> Re
     Ok(0)
 }
 
+/// `audit flaky <sid>` — flag steps whose outcome interleaves across runs.
+///
+/// `heal-chronic` catches locator churn (a step that self-heals every run);
+/// this catches *outcome* churn: a step that passes, then fails, then passes
+/// again is flaky even when nothing heals. Per run we take the step's last
+/// terminal `events.jsonl` row (`pass`/`fail`); a run where the step never
+/// reached a terminal state contributes no observation (not a gap — early
+/// aborts shouldn't count as flips). A step is flaky when its observed
+/// outcome sequence flips at least `--min-flips` times (default 2, i.e. a
+/// true P→F→P / F→P→F interleave) across at least `--min-runs` observations
+/// (default 3). One flip (P→F staying failed) reads as a regression, not
+/// flake, and `audit stats`/`list` already show that.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FlakyStep {
+    step_id: String,
+    flips: usize,
+    seen: usize,
+    seq: String,
+    heals: usize,
+    fail_runs: Vec<String>,
+    last_error: Option<String>,
+}
+
+fn collect_flaky(dir: &std::path::Path, min_flips: usize, min_runs: usize) -> Vec<FlakyStep> {
+    let replays_dir = dir.join("replays");
+    let mut runs: Vec<PathBuf> = match fs::read_dir(&replays_dir) {
+        Ok(it) => it
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    runs.sort();
+
+    // Per step: ordered outcome observations + which runs failed + heal rows.
+    #[derive(Default)]
+    struct Acc {
+        seq: Vec<char>,         // 'P' | 'F' in chronological run order
+        seen: usize,            // runs where the step reached a terminal row
+        fail_runs: Vec<String>, // run ids where the terminal row was 'fail'
+        heals: usize,           // heal.jsonl rows across all runs
+        last_error: Option<String>,
+    }
+    let mut by_step: std::collections::BTreeMap<String, Acc> = Default::default();
+
+    for run in &runs {
+        let run_id = run
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        // Last terminal status per step wins (a step can emit running → fail
+        // → pass under a retry/self-heal within one run).
+        let mut terminal: std::collections::BTreeMap<String, (char, Option<String>)> =
+            Default::default();
+        if let Ok(body) = fs::read_to_string(run.join("events.jsonl")) {
+            for line in body.lines() {
+                let v: Value = match serde_json::from_str(line.trim()) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("");
+                if status != "pass" && status != "fail" {
+                    continue;
+                }
+                let id = match v.get("id").and_then(|s| s.as_str()) {
+                    Some(s) => s.to_string(),
+                    None => continue,
+                };
+                let err = v
+                    .get("error")
+                    .and_then(|e| e.as_str())
+                    .map(|s| s.to_string());
+                terminal.insert(id, (if status == "pass" { 'P' } else { 'F' }, err));
+            }
+        }
+        let mut heal_steps: std::collections::BTreeSet<String> = Default::default();
+        if let Ok(body) = fs::read_to_string(run.join("heal.jsonl")) {
+            for line in body.lines() {
+                if let Ok(v) = serde_json::from_str::<Value>(line.trim()) {
+                    if let Some(id) = v.get("stepId").and_then(|s| s.as_str()) {
+                        heal_steps.insert(id.to_string());
+                    }
+                }
+            }
+        }
+        for id in &heal_steps {
+            by_step.entry(id.clone()).or_default().heals += 1;
+        }
+        for (id, (mark, err)) in terminal {
+            let acc = by_step.entry(id).or_default();
+            acc.seq.push(mark);
+            acc.seen += 1;
+            if mark == 'F' {
+                acc.fail_runs.push(run_id.clone());
+                acc.last_error = err;
+            }
+        }
+    }
+
+    let mut out: Vec<FlakyStep> = by_step
+        .into_iter()
+        .filter_map(|(step_id, acc)| {
+            let flips = acc.seq.windows(2).filter(|w| w[0] != w[1]).count();
+            if flips < min_flips || acc.seen < min_runs {
+                return None;
+            }
+            Some(FlakyStep {
+                step_id,
+                flips,
+                seen: acc.seen,
+                seq: acc.seq.iter().collect(),
+                heals: acc.heals,
+                fail_runs: acc.fail_runs,
+                last_error: acc.last_error,
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| b.flips.cmp(&a.flips).then(a.step_id.cmp(&b.step_id)));
+    out
+}
+
+fn flaky(positionals: &[String], json_out: bool, min_flips: usize, min_runs: usize) -> Result<u8> {
+    let sid = positionals
+        .get(1)
+        .ok_or_else(|| anyhow!("usage: audit flaky <sid> [--min-flips N] [--min-runs N]"))?;
+    let dir = paths::scenario_dir(sid)?;
+    let out = collect_flaky(&dir, min_flips, min_runs);
+
+    if json_out {
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(0);
+    }
+    if out.is_empty() {
+        println!("(no flaky steps — min-flips={min_flips} min-runs={min_runs})");
+        return Ok(0);
+    }
+    println!(
+        "{:<10} {:<6} {:<6} {:<8} last error",
+        "stepId", "flips", "seen", "seq"
+    );
+    println!("{}", "-".repeat(100));
+    for e in &out {
+        let err = e
+            .last_error
+            .as_deref()
+            .map(|s| s.chars().take(60).collect::<String>())
+            .unwrap_or_default();
+        println!(
+            "{:<10} {:<6} {:<6} {:<8} {}",
+            e.step_id, e.flips, e.seen, e.seq, err
+        );
+    }
+    println!();
+    println!(
+        "{} flaky step(s) interleaved pass/fail across {}+ observations — quarantine or fix the cause.",
+        out.len(),
+        min_runs
+    );
+    Ok(0)
+}
+
 pub(crate) fn resolve_run_id(scenario_dir: &std::path::Path, run_ref: &str) -> Result<String> {
     if run_ref != "latest" {
         return Ok(run_ref.to_string());
@@ -1027,7 +1221,7 @@ fn render_text(path: &std::path::Path, audit: &Value) {
 
 fn print_help() {
     println!(
-                "agent-qa audit \u{2014} inspect a replay's audit.json\n\nUsage:\n  agent-qa audit show <sid> <runId | latest> [--json | --format text|json|github]\n  agent-qa audit list <sid>                    Table view: every run's\n                                               summary / exit / profile / tag\n  agent-qa audit list <sid> --json             Structured rows on stdout\n  agent-qa audit list <sid> [--passed | --failed] [--tag <pat>] [--profile <pat>] [--limit N] [--slow <secs>] [--sort duration|runId-desc] [--since <iso-ts>] [--until <iso-ts>] [--format text|json|github]\n                                               Filters: case-insensitive substring\n                                               --passed/--failed are exit-code partitions\n  agent-qa audit stats <sid> [--since <iso-ts>] [--until <iso-ts>]\n                                               Pass/fail/tag rollup for one scenario\n  agent-qa audit stats <sid> --json            Structured rollup on stdout\n  agent-qa audit stats-all                     Per-scenario + overall pass/fail rollup\n  agent-qa audit stats-all --json              Structured rollup on stdout\n  agent-qa audit stats-all [--since <iso-ts>] [--until <iso-ts>]\n                                               Constrain to a date window\n  agent-qa audit diff <sid> <runIdA> <runIdB>  Unified diff between two replays'\n                                               audit.json (canonicalised JSON;\n                                               'latest' accepted for either side;\n                                               exit 1 on difference)\n  agent-qa audit summary <sid> <runId | latest>\n                                               Print just the summary line (one line out)\n  agent-qa audit exit-code <sid> <runId | latest>\n                                               Print just the run's exitCode (-1 if missing)\n  agent-qa audit field <sid> <runId | latest> <fieldName>\n                                               Print any top-level audit field. String/\n                                               number/bool print verbatim; null prints\n                                               empty; object/array prints compact JSON.\n  agent-qa audit count <sid>                   Print the number of runs under <sid>\n  agent-qa audit duration <sid> <runId | latest>\n                                               Print the run's duration in seconds\n                                               (finishedAt - startedAt, 3 decimals)\n\n'latest' resolves to <sid>/replays/latest.txt if present, otherwise the\nhighest lex-sorted run directory (run_id is timestamp-prefixed)."
+                "agent-qa audit \u{2014} inspect a replay's audit.json\n\nUsage:\n  agent-qa audit show <sid> <runId | latest> [--json | --format text|json|github]\n  agent-qa audit list <sid>                    Table view: every run's\n                                               summary / exit / profile / tag\n  agent-qa audit list <sid> --json             Structured rows on stdout\n  agent-qa audit list <sid> [--passed | --failed] [--tag <pat>] [--profile <pat>] [--limit N] [--slow <secs>] [--sort duration|runId-desc] [--since <iso-ts>] [--until <iso-ts>] [--format text|json|github]\n                                               Filters: case-insensitive substring\n                                               --passed/--failed are exit-code partitions\n  agent-qa audit stats <sid> [--since <iso-ts>] [--until <iso-ts>]\n                                               Pass/fail/tag rollup for one scenario\n  agent-qa audit stats <sid> --json            Structured rollup on stdout\n  agent-qa audit stats-all                     Per-scenario + overall pass/fail rollup\n  agent-qa audit stats-all --json              Structured rollup on stdout\n  agent-qa audit stats-all [--since <iso-ts>] [--until <iso-ts>]\n                                               Constrain to a date window\n  agent-qa audit diff <sid> <runIdA> <runIdB>  Unified diff between two replays'\n                                               audit.json (canonicalised JSON;\n                                               'latest' accepted for either side;\n                                               exit 1 on difference)\n  agent-qa audit summary <sid> <runId | latest>\n                                               Print just the summary line (one line out)\n  agent-qa audit exit-code <sid> <runId | latest>\n                                               Print just the run's exitCode (-1 if missing)\n  agent-qa audit field <sid> <runId | latest> <fieldName>\n                                               Print any top-level audit field. String/\n                                               number/bool print verbatim; null prints\n                                               empty; object/array prints compact JSON.\n  agent-qa audit count <sid>                   Print the number of runs under <sid>\n  agent-qa audit duration <sid> <runId | latest>\n                                               Print the run's duration in seconds\n                                               (finishedAt - startedAt, 3 decimals)\n  agent-qa audit flaky <sid> [--min-flips N] [--min-runs N] [--json]\n                                               Flag steps whose outcome interleaves\n                                               pass/fail across runs (outcome churn;\n                                               heal-chronic covers locator churn)\n\n'latest' resolves to <sid>/replays/latest.txt if present, otherwise the\nhighest lex-sorted run directory (run_id is timestamp-prefixed)."
     );
 }
 
@@ -1433,6 +1627,121 @@ mod tests {
         let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
         std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path().join("empty"));
         assert_eq!(stats_all(false, None, None).unwrap(), 0);
+        match prev {
+            Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    fn write_events(dir: &std::path::Path, run_id: &str, outcomes: &[(&str, &str)]) {
+        let run_dir = dir.join("replays").join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        let mut body = String::new();
+        for (i, (id, status)) in outcomes.iter().enumerate() {
+            let err = if *status == "fail" {
+                r#","error":"boom""#
+            } else {
+                ""
+            };
+            body.push_str(&format!(
+                r#"{{"idx":{},"total":{},"id":"{}","intent":"x","kind":"do:click","status":"{}"{}}}"#,
+                i + 1,
+                outcomes.len(),
+                id,
+                status,
+                err
+            ));
+            body.push('\n');
+        }
+        std::fs::write(run_dir.join("events.jsonl"), body).unwrap();
+    }
+
+    #[test]
+    fn flaky_flags_interleaved_outcome() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        let jdir = tmp.path().join("sid");
+        // s1 interleaves P-F-P (2 flips) across 3 runs; s2 fails once and
+        // stays failed (1 flip — a regression signature, not flake).
+        write_events(&jdir, "2026-01-01__a", &[("s1", "pass"), ("s2", "pass")]);
+        write_events(&jdir, "2026-01-02__b", &[("s1", "fail"), ("s2", "fail")]);
+        write_events(&jdir, "2026-01-03__c", &[("s1", "pass"), ("s2", "fail")]);
+        let out = collect_flaky(&jdir, 2, 3);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].step_id, "s1");
+        assert_eq!(out[0].flips, 2);
+        assert_eq!(out[0].seen, 3);
+        assert_eq!(out[0].seq, "PFP");
+        assert_eq!(out[0].fail_runs, vec!["2026-01-02__b".to_string()]);
+        assert_eq!(out[0].last_error.as_deref(), Some("boom"));
+        assert_eq!(
+            flaky(&["flaky".into(), "sid".into()], true, 2, 3).unwrap(),
+            0
+        );
+        match prev {
+            Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    #[test]
+    fn flaky_json_reports_sequence_and_fail_runs() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        let jdir = tmp.path().join("sid");
+        write_events(&jdir, "2026-01-01__a", &[("s1", "pass")]);
+        write_events(&jdir, "2026-01-02__b", &[("s1", "fail")]);
+        write_events(&jdir, "2026-01-03__c", &[("s1", "pass")]);
+        write_events(&jdir, "2026-01-04__d", &[("s1", "fail")]);
+        // heal row in one run gets counted for context
+        let heal_dir = jdir.join("replays").join("2026-01-02__b");
+        std::fs::write(
+            heal_dir.join("heal.jsonl"),
+            r#"{"stepId":"s1","mode":"locator-correction"}"#.to_string() + "\n",
+        )
+        .unwrap();
+        let out = collect_flaky(&jdir, 2, 3);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].seq, "PFPF");
+        assert_eq!(out[0].flips, 3);
+        assert_eq!(out[0].seen, 4);
+        assert_eq!(out[0].heals, 1);
+        assert_eq!(
+            flaky(&["flaky".into(), "sid".into()], false, 2, 3).unwrap(),
+            0
+        );
+        match prev {
+            Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    #[test]
+    fn flaky_skips_runs_where_step_never_ran() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        let jdir = tmp.path().join("sid");
+        // s2 absent in run b (early abort) — must not count as a flip.
+        write_events(&jdir, "2026-01-01__a", &[("s1", "fail"), ("s2", "pass")]);
+        write_events(&jdir, "2026-01-02__b", &[("s1", "fail")]);
+        write_events(&jdir, "2026-01-03__c", &[("s1", "pass"), ("s2", "pass")]);
+        // s1: F F P = 1 flip; s2: P (absent) P = 0 flips → neither flags.
+        assert!(collect_flaky(&jdir, 2, 2).is_empty());
+        // …but with min-flips=1, s1 does flag while absent-run s2 still doesn't.
+        let out = collect_flaky(&jdir, 1, 2);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].step_id, "s1");
+        assert_eq!(out[0].seen, 3);
+        assert_eq!(
+            flaky(&["flaky".into(), "sid".into()], true, 2, 2).unwrap(),
+            0
+        );
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
