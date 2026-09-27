@@ -1724,6 +1724,59 @@ mod tests {
     }
 
     #[test]
+    fn replay_viewport_step_invokes_agent_browser_viewport() {
+        let _g = lock_env();
+        let work = TempDir::new().unwrap();
+        let log = work.path().join("ab.log");
+        install_fake_browser(work.path(), &log);
+
+        let jdir = work.path().join("sid");
+        fs::create_dir_all(&jdir).unwrap();
+        let jfile = jdir.join("scenario.json");
+        fs::write(
+            &jfile,
+            r#"{
+            "schema": "scenario/2",
+            "id": "viewport-smoke",
+            "intent": "resize then assert",
+            "env": {
+                "open": [
+                    { "kind": "nav", "url": "https://example.com/", "intent": "land" }
+                ]
+            },
+            "steps": [
+                { "id": "s1", "intent": "resize to mobile", "kind": "do",
+                  "verb": "viewport", "params": { "width": 375, "height": 812 } }
+            ]
+        }"#,
+        )
+        .unwrap();
+
+        let opts = RunOptions {
+            source: ScenarioSource::Path(jfile),
+            profile: None,
+            session_name: "vp".into(),
+            heal_from_run: None,
+            headed: false,
+            input_overrides: BTreeMap::new(),
+            dry_run: false,
+            no_sidecars: true,
+            quiet: false,
+            plain: false,
+            tag: None,
+            output_audit: None,
+        };
+        let summary = run(&opts).unwrap();
+        assert!(summary.ok);
+        let ab = fs::read_to_string(&log).unwrap();
+        assert!(
+            ab.contains("--session vp set viewport 375 812"),
+            "got: {ab}"
+        );
+        clear_fake_browser();
+    }
+
+    #[test]
     fn replay_invalid_scenario_errors_with_schema_messages() {
         let _g = lock_env();
         let work = TempDir::new().unwrap();

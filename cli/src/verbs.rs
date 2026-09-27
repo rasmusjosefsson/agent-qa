@@ -250,6 +250,36 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                 .map_err(|e| anyhow!("step '{id}' tab '{}': {e}", parts.join(" ")))?;
             Ok(None)
         }
+        Verb::Viewport => {
+            let p = params.ok_or_else(|| anyhow!("step '{id}' viewport: params required"))?;
+            let mut dim = |k: &str| -> Result<u64> {
+                let raw = p
+                    .get(k)
+                    .ok_or_else(|| anyhow!("step '{id}' viewport: params.{k} is required"))?;
+                let n =
+                    match raw {
+                        serde_json::Value::Number(n) => n.as_u64().ok_or_else(|| {
+                            anyhow!("step '{id}' viewport: params.{k} must be a positive integer")
+                        })?,
+                        serde_json::Value::String(s) => crate::value::substitute_scenario_vars(
+                            s, scope,
+                        )
+                        .parse::<u64>()
+                        .map_err(|_| {
+                            anyhow!("step '{id}' viewport: params.{k} must be a positive integer")
+                        })?,
+                        _ => bail!("step '{id}' viewport: params.{k} must be a positive integer"),
+                    };
+                if n == 0 {
+                    bail!("step '{id}' viewport: params.{k} must be a positive integer");
+                }
+                Ok(n)
+            };
+            let (w, h) = (dim("width")?, dim("height")?);
+            browser::set_viewport(ctx.session, w, h)
+                .map_err(|e| anyhow!("step '{id}' viewport {w}x{h}: {e}"))?;
+            Ok(None)
+        }
         Verb::Group => {
             bail!(
                 "step '{id}' verb=group should be flattened by the runner before dispatch_do is called"

@@ -370,6 +370,7 @@
             "download",
             "dblclick",
             "tab",
+            "viewport",
             "loop",
             "group",
             "useTemplate"
