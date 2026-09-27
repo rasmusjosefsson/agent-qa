@@ -2,9 +2,10 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::json;
+use std::collections::HashMap;
 
 use crate::recorder_state::RecorderState;
-use crate::scenario::{Scenario, Step};
+use crate::scenario::{Scenario, Step, StepContext, Value};
 
 pub fn run(args: &[String]) -> Result<u8> {
     if args.is_empty() || matches!(args[0].as_str(), "-h" | "--help" | "help") {
@@ -45,7 +46,8 @@ Usage:
 Insert appends a validated draft at <index> (use <len> to append), then
 edit replaces the step at <index> with a re-validated draft (same shape as
 `record-step`, minus id/kind — the step keeps its id and position; its kind
-may not change). Insert, delete, and move reassign dense s0, s1, ... ids. Load
+may not change). Insert, delete, and move reassign dense s0, s1, ... ids; step
+references (from=step stepId, opensFromStepId) are rewired to match. Load
 pulls a saved scenario's steps into the buffer for editing (`flush` writes
 them back to the same sid, preserving fields the buffer doesn't model —
 inputs, templates, env.close). Check runs the `scenario check` verifier
@@ -61,8 +63,84 @@ fn parse_index(value: &str, label: &str) -> Result<usize> {
 }
 
 fn normalize_ids(steps: &mut [Step]) {
+    // Rewire `{"from":"step","stepId":…}` values and `opensFromStepId`
+    // before renumbering so references keep pointing at the same step.
+    // References to a step that no longer exists keep their old id.
+    let renames: HashMap<String, String> = steps
+        .iter()
+        .enumerate()
+        .map(|(index, step)| (step.id().to_string(), format!("s{index}")))
+        .filter(|(old, new)| old != new)
+        .collect();
+    if !renames.is_empty() {
+        for step in steps.iter_mut() {
+            rewrite_step_refs(step, &renames);
+        }
+    }
     for (index, step) in steps.iter_mut().enumerate() {
         step.set_id(format!("s{index}"));
+    }
+}
+
+fn rewrite_step_refs(step: &mut Step, renames: &HashMap<String, String>) {
+    match step {
+        Step::Do {
+            value,
+            params,
+            context,
+            ..
+        } => {
+            if let Some(Value::Step { step_id, .. }) = value {
+                if let Some(new) = renames.get(step_id.as_str()) {
+                    *step_id = new.clone();
+                }
+            }
+            if let Some(params) = params {
+                for item in params.values_mut() {
+                    rewrite_step_refs_json(item, renames);
+                }
+            }
+            rewrite_context_refs(context, renames);
+        }
+        Step::Check { claim, context, .. } => {
+            if let Some(value) = &mut claim.value {
+                rewrite_step_refs_json(value, renames);
+            }
+            rewrite_context_refs(context, renames);
+        }
+    }
+}
+
+fn rewrite_context_refs(context: &mut Option<StepContext>, renames: &HashMap<String, String>) {
+    if let Some(tab) = context.as_mut().and_then(|c| c.tab.as_mut()) {
+        if let Some(id) = &mut tab.opens_from_step_id {
+            if let Some(new) = renames.get(id.as_str()) {
+                *id = new.clone();
+            }
+        }
+    }
+}
+
+fn rewrite_step_refs_json(v: &mut serde_json::Value, renames: &HashMap<String, String>) {
+    match v {
+        serde_json::Value::Object(map) => {
+            if map.get("from").and_then(|f| f.as_str()) == Some("step") {
+                if let Some(serde_json::Value::String(step_id)) = map.get_mut("stepId") {
+                    if let Some(new) = renames.get(step_id.as_str()) {
+                        *step_id = new.clone();
+                    }
+                }
+            }
+            for item in map.values_mut() {
+                rewrite_step_refs_json(item, renames);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items.iter_mut() {
+                rewrite_step_refs_json(item, renames);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -353,6 +431,58 @@ mod tests {
         let state = RecorderState::load_active().unwrap();
         assert_eq!(state.steps.len(), 1);
         assert_eq!(state.steps[0].id(), "s0");
+        std::env::remove_var(crate::paths::RECORD_DIR_ENV);
+    }
+
+    #[test]
+    fn move_rewires_step_refs() {
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var(crate::paths::RECORD_DIR_ENV, tmp.path());
+        let mut state = state();
+        state.steps = serde_json::from_value(serde_json::json!([
+            {"id":"s0","intent":"produce","kind":"do","verb":"reload"},
+            {"id":"s1","intent":"consume","kind":"do","verb":"type",
+             "on":{"raw":{"kind":"css","value":"#x"},"reason":"test"},
+             "value":{"from":"step","stepId":"s0","path":"data.id"}},
+            {"id":"s2","intent":"assert","kind":"check",
+             "claim":{"subject":{"url":true},"predicate":"contains",
+                      "value":{"from":"step","stepId":"s1"}},
+             "context":{"tab":{"opensFromStepId":"s1"}}}
+        ]))
+        .unwrap();
+        state.save().unwrap();
+        // Move last → first: old ids s2,s0,s1 become s0,s1,s2.
+        cmd_move(&["2".into(), "0".into()]).unwrap();
+        let steps = RecorderState::load_active().unwrap().steps;
+        let check = serde_json::to_value(&steps[0]).unwrap();
+        assert_eq!(check["claim"]["value"]["stepId"], "s2"); // old s1 → new s2
+        assert_eq!(check["context"]["tab"]["opensFromStepId"], "s2");
+        let last = serde_json::to_value(&steps[2]).unwrap();
+        assert_eq!(last["value"]["stepId"], "s1"); // old s0 → new s1
+        std::env::remove_var(crate::paths::RECORD_DIR_ENV);
+    }
+
+    #[test]
+    fn delete_rewires_refs_to_survivors() {
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var(crate::paths::RECORD_DIR_ENV, tmp.path());
+        let mut state = state();
+        state.steps = serde_json::from_value(serde_json::json!([
+            {"id":"s0","intent":"drop","kind":"do","verb":"reload"},
+            {"id":"s1","intent":"keep","kind":"do","verb":"reload"},
+            {"id":"s2","intent":"assert","kind":"check",
+             "claim":{"subject":{"url":true},"predicate":"contains",
+                      "value":{"from":"step","stepId":"s1"}}}
+        ]))
+        .unwrap();
+        state.save().unwrap();
+        cmd_delete(&["0".into()]).unwrap();
+        let steps = RecorderState::load_active().unwrap().steps;
+        assert_eq!(steps.len(), 2);
+        let check = serde_json::to_value(&steps[1]).unwrap();
+        assert_eq!(check["claim"]["value"]["stepId"], "s0"); // old s1 → new s0
         std::env::remove_var(crate::paths::RECORD_DIR_ENV);
     }
 

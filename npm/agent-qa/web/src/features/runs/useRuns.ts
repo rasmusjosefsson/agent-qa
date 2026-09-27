@@ -42,6 +42,7 @@ export interface RunsApi {
   startCompare: (runA?: string) => Promise<void>
   clearCompare: () => void
   runDefSteps: { sid: string | null; steps: ScenarioStep[] }
+  reloadDef: (sid: string) => Promise<void>
   live: boolean
   setLive: (v: boolean) => void
   toggleScenario: (sid: string) => Promise<void>
@@ -308,6 +309,20 @@ export function useRuns(): RunsApi {
     if (selRef.current.sid && selRef.current.runId) refreshRun().catch(() => {})
   }, [loadScenarios, refreshRun])
 
+  // Force-refetch a scenario's saved def (refreshRun caches it per sid, so an
+  // in-place edit like `scenario insert` needs this explicit reload).
+  const reloadDef = useCallback(async (sid: string) => {
+    try {
+      const d = await getScenarioDef(sid)
+      setRunDefSteps({ sid, steps: d.scenario?.steps || [] })
+      if (selRef.current.sid === sid && !selRef.current.runId) {
+        setScenarioDef(d.scenario ?? null)
+      }
+    } catch {
+      /* best-effort */
+    }
+  }, [])
+
   // Boot + 1.5s live poll (mirrors app.js pollTick).
   // Deep-link: `/?sid=<sid>[&run=<runId>]` (used by the plan dashboard to
   // open a member case's live/last run). Honors the explicit sid over the
@@ -389,5 +404,6 @@ export function useRuns(): RunsApi {
     selectTab,
     replay,
     refresh,
+    reloadDef,
   }
 }
