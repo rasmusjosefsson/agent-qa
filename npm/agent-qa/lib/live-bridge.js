@@ -821,16 +821,6 @@ function createLiveBridge({
               finalizeFill()
                 .then(() => emitRecord('do', { intent: 'press Enter', verb: 'press', value: { from: 'literal', literal: 'Enter' } }))
                 .catch(() => {});
-<<<<<<< HEAD
-            } else {
-              // Tab/Escape/arrows/etc. — record an honest `press <key>` step
-              // (a pending fill commits first so field content lands before
-              // the focus change).
-              finalizeFill()
-                .then(() => emitRecord('do', { intent: `press ${keyName}`, verb: 'press', value: { from: 'literal', literal: keyName } }))
-                .catch(() => {});
-||||||| 30fcdd1
-=======
             } else {
               // Tab/Escape/arrows/etc. — record an honest `press <key>` step
               // (a pending fill commits first so field content lands before
@@ -838,7 +828,6 @@ function createLiveBridge({
               finalizeFill()
                 .then(() => emitRecord('do', { intent: `press ${evt.key}`, verb: 'press', value: { from: 'literal', literal: evt.key } }))
                 .catch(() => {});
->>>>>>> origin/main
             }
           }
           return true;

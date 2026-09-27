@@ -19,11 +19,36 @@ const TONE: Record<string, string> = {
   pass: 'bg-emerald-500/15 text-emerald-400',
   fail: 'bg-destructive/15 text-destructive',
   running: 'bg-amber-500/15 text-amber-400',
+  flaky: 'bg-amber-500/15 text-amber-400',
+  slow: 'bg-sky-500/15 text-sky-400',
+  chronic: 'bg-violet-500/15 text-violet-400',
+}
+
+function HealthBadges({ sid, runs }: { sid: string; runs: RunsApi }) {
+  const h = runs.healthBySid[sid]
+  if (!h) return null
+  const pills: Array<{ tone: string; label: string; steps: string[] }> = [
+    { tone: 'flaky', label: 'flaky', steps: h.flaky },
+    { tone: 'slow', label: 'slow', steps: h.slow },
+    { tone: 'chronic', label: 'chronic', steps: h.chronic },
+  ].filter((p) => p.steps.length > 0)
+  if (!pills.length) return null
+  return (
+    <>
+      {pills.map((p) => (
+        <span key={p.tone} title={`audit ${p.label === 'chronic' ? 'heal-chronic' : p.label}: ${p.steps.join(', ')}`}>
+          <Badge tone={p.tone}>
+            {p.steps.length} {p.label}
+          </Badge>
+        </span>
+      ))}
+    </>
+  )
 }
 
 function Badge({ tone, children }: { tone: string; children: React.ReactNode }) {
   return (
-    <span className={cn('rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide', TONE[tone] || 'bg-muted text-muted-foreground')}>
+    <span className={cn('shrink-0 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide', TONE[tone] || 'bg-muted text-muted-foreground')}>
       {children}
     </span>
   )
@@ -69,6 +94,7 @@ export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
                   <div className="flex items-center gap-2">
                     <span className="truncate text-[13px] font-medium leading-tight">{sc.intent || sc.scenarioId || sc.sid}</span>
                     {verdict && <Badge tone={verdict}>{verdict}</Badge>}
+                    <HealthBadges sid={sc.sid} runs={runs} />
                   </div>
                   <div className="tnum mt-0.5 truncate text-[11px] text-muted-foreground/80" title={fmtRunTime(sc.sid)}>
                     {relRunTime(sc.sid)}
