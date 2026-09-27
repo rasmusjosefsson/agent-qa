@@ -78,6 +78,24 @@ export async function deleteScenario(sid: string): Promise<{ ok: boolean; error?
   return { ok: false, error: j.error || String(res.status) }
 }
 
+// Splice a step into a saved scenario.json (delegates to `scenario insert`
+// on the CLI). `after` is a step id; omit both to append.
+export async function insertStep(
+  sid: string,
+  kind: 'do' | 'check',
+  draft: Record<string, unknown>,
+  pos?: { after?: string; at?: number }
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch(`/api/scenarios/${encodeURIComponent(sid)}/insert-step`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ kind, draft, ...(pos || {}) }),
+  })
+  const j = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string }
+  if (res.ok && j.ok !== false) return { ok: true }
+  return { ok: false, error: j.error || `insert failed (${res.status})` }
+}
+
 // POST .../runs/:runId/shot-accept — promote this run's screenshot for
 // stepId to the checked-in baseline (the web-side `agent-qa shot-accept`).
 export async function acceptShot(
