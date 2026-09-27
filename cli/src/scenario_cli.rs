@@ -997,7 +997,7 @@ fn scenario_navigates(j: &Scenario) -> bool {
         })
 }
 
-fn lint(
+pub(crate) fn lint(
     path: &Path,
     format: LintFormat,
     strict: bool,

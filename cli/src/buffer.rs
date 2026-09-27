@@ -198,7 +198,12 @@ fn cmd_check(args: &[String]) -> Result<u8> {
     let mut tmp = tempfile::NamedTempFile::new().context("open buffer-check tempfile")?;
     use std::io::Write;
     tmp.write_all(serde_json::to_string_pretty(&scenario_json)?.as_bytes())?;
-    crate::scenario_cli::check(tmp.path(), strict, format)
+    let code = crate::scenario_cli::check(tmp.path(), strict, format)?;
+    // The compact text report stops at counts — print the findings too.
+    if code != 0 && format == crate::scenario_cli::LintFormat::Text {
+        crate::scenario_cli::lint(tmp.path(), format, strict, None, None)?;
+    }
+    Ok(code)
 }
 
 fn cmd_clear() -> Result<u8> {
