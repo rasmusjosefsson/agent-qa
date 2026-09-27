@@ -1,6 +1,6 @@
 // web/src/lib/runs-api.ts
 // Typed wrappers for the read-only /api/scenarios/* endpoints.
-import type { RunDetail, RunSummary, ScenarioDef, ScenarioSummary } from '@/features/runs/types'
+import type { RunDetail, RunSummary, ScenarioDef, ScenarioHealth, ScenarioSummary } from '@/features/runs/types'
 
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(path, { headers: { accept: 'application/json' } })
@@ -10,6 +10,13 @@ async function getJson<T>(path: string): Promise<T> {
 
 export function getScenarios(): Promise<{ scenariosRoot: string; scenarios: ScenarioSummary[] }> {
   return getJson('/api/scenarios')
+}
+
+// Silent-degradation rollup: per-scenario step ids flagged by audit
+// flaky / slow / heal-chronic. Empty array when the suite is quiet or
+// the CLI is unavailable.
+export function getHealth(): Promise<{ health: ScenarioHealth[] }> {
+  return getJson('/api/health')
 }
 
 export function getScenarioDef(sid: string): Promise<{ sid: string; scenario: ScenarioDef }> {

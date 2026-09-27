@@ -374,6 +374,56 @@ test('report viewer endpoints', async (t) => {
     assert.equal(sc.latestRun.ok, false);
   });
 
+  await t.test('GET /api/health passes through audit health --json', async () => {
+    const seen = [];
+    const { server: hSrv, base: hBase } = await boot(fx.root, {
+      runCli: async (args) => {
+        seen.push(args.join(' '));
+        return {
+          stdout:
+            JSON.stringify([
+              { scenarioId: fx.sid, flaky: ['s1'], slow: [], chronic: ['s2'] },
+            ]) + '\n',
+        };
+      },
+    });
+    try {
+      const res = await fetch(`${hBase}/api/health`);
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.deepEqual(seen, ['audit health --json']);
+      assert.equal(body.health.length, 1);
+      assert.equal(body.health[0].scenarioId, fx.sid);
+      assert.deepEqual(body.health[0].flaky, ['s1']);
+      assert.deepEqual(body.health[0].chronic, ['s2']);
+    } finally {
+      hSrv.close();
+    }
+  });
+
+  await t.test('GET /api/health degrades to [] when the CLI is absent or errors', async () => {
+    const { server: nSrv, base: nBase } = await boot(fx.root);
+    try {
+      const res = await fetch(`${nBase}/api/health`);
+      assert.equal(res.status, 200);
+      assert.deepEqual((await res.json()).health, []);
+    } finally {
+      nSrv.close();
+    }
+    const { server: eSrv, base: eBase } = await boot(fx.root, {
+      runCli: async () => {
+        throw new Error('cli exploded');
+      },
+    });
+    try {
+      const res = await fetch(`${eBase}/api/health`);
+      assert.equal(res.status, 200);
+      assert.deepEqual((await res.json()).health, []);
+    } finally {
+      eSrv.close();
+    }
+  });
+
   await t.test('GET /runs returns replay history', async () => {
     const res = await fetch(`${base}/api/scenarios/${fx.sid}/runs`);
     const body = await res.json();

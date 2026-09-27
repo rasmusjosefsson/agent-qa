@@ -17,6 +17,16 @@ export interface RunSummary {
   healed?: number | null
 }
 
+// One row of `audit health --json` — step ids flagged by each silent-
+// degradation detector (flaky = outcome churn, slow = duration regression,
+// chronic = self-healing locator debt).
+export interface ScenarioHealth {
+  scenarioId: string
+  flaky: string[]
+  slow: string[]
+  chronic: string[]
+}
+
 export interface ScenarioSummary {
   sid: string
   dir: string

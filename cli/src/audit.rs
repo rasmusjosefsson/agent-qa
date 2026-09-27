@@ -259,8 +259,9 @@ pub fn run(args: &[String]) -> Result<u8> {
         "duration" => duration(&positionals),
         "flaky" => flaky(&positionals, json_out, min_flips, min_runs),
         "slow" => slow(&positionals, json_out, slow_pct, slow_min_ms, recent_n, min_runs),
+        "health" => health(json_out),
         other => bail!(
-            "unknown audit subverb {other:?} (try: show | list | stats | stats-all | diff | summary | exit-code | field | count | duration | flaky | slow)"
+            "unknown audit subverb {other:?} (try: show | list | stats | stats-all | diff | summary | exit-code | field | count | duration | flaky | slow | health)"
         ),
     }
 }
@@ -1319,6 +1320,103 @@ fn slow(
     Ok(0)
 }
 
+/// `audit health` — cross-scenario rollup of the three silent-degradation
+/// detectors: `flaky` (outcome churn), `slow` (duration regression), and
+/// `heal-chronic` (locator churn). One filesystem walk per scenario at each
+/// detector's defaults; a scenario only appears when it has at least one
+/// flag, so an empty table means the whole suite is quiet. The workbench
+/// calls this with --json to badge scenario rows.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HealthRow {
+    scenario_id: String,
+    flaky: Vec<String>,
+    slow: Vec<String>,
+    chronic: Vec<String>,
+}
+
+fn collect_health(root: &std::path::Path) -> Vec<HealthRow> {
+    let mut sids: Vec<(String, PathBuf)> = match fs::read_dir(root) {
+        Ok(it) => it
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .filter_map(|p| {
+                let sid = p.file_name()?.to_string_lossy().into_owned();
+                p.join("replays").is_dir().then_some((sid, p))
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    sids.sort_by(|a, b| a.0.cmp(&b.0));
+
+    sids.into_iter()
+        .filter_map(|(sid, dir)| {
+            let flaky = collect_flaky(&dir, 2, 3)
+                .into_iter()
+                .map(|f| f.step_id)
+                .collect::<Vec<_>>();
+            let slow = collect_slow(&dir, 50.0, 250, 2, 3)
+                .into_iter()
+                .map(|s| s.step_id)
+                .collect::<Vec<_>>();
+            let chronic = crate::heal_chronic::collect_dir(&dir, 2, &sid)
+                .into_iter()
+                .map(|c| c.step_id)
+                .collect::<Vec<_>>();
+            if flaky.is_empty() && slow.is_empty() && chronic.is_empty() {
+                return None;
+            }
+            Some(HealthRow {
+                scenario_id: sid,
+                flaky,
+                slow,
+                chronic,
+            })
+        })
+        .collect()
+}
+
+fn health(json_out: bool) -> Result<u8> {
+    let out = collect_health(&paths::scenarios_root());
+    if json_out {
+        // Compact single-line output: the workbench's lastJsonLine parser
+        // (and shell pipes) expect one JSON value per line.
+        println!("{}", serde_json::to_string(&out)?);
+        return Ok(0);
+    }
+    if out.is_empty() {
+        println!("(all quiet — no flaky, slow, or chronic-heal steps across any scenario)");
+        return Ok(0);
+    }
+    println!(
+        "{:<24} {:>6} {:>6} {:>8}  steps",
+        "scenario", "flaky", "slow", "chronic"
+    );
+    println!("{}", "-".repeat(80));
+    for r in &out {
+        let mut steps: Vec<String> = Vec::new();
+        for id in &r.flaky {
+            steps.push(format!("{id} (flaky)"));
+        }
+        for id in &r.slow {
+            steps.push(format!("{id} (slow)"));
+        }
+        for id in &r.chronic {
+            steps.push(format!("{id} (chronic)"));
+        }
+        println!(
+            "{:<24} {:>6} {:>6} {:>8}  {}",
+            r.scenario_id,
+            r.flaky.len(),
+            r.slow.len(),
+            r.chronic.len(),
+            steps.join(", ")
+        );
+    }
+    Ok(0)
+}
+
 fn flaky(positionals: &[String], json_out: bool, min_flips: usize, min_runs: usize) -> Result<u8> {
     let sid = positionals
         .get(1)
@@ -1443,7 +1541,9 @@ fn render_text(path: &std::path::Path, audit: &Value) {
 
 fn print_help() {
     println!(
-                "agent-qa audit \u{2014} inspect a replay's audit.json\n\nUsage:\n  agent-qa audit show <sid> <runId | latest> [--json | --format text|json|github]\n  agent-qa audit list <sid>                    Table view: every run's\n                                               summary / exit / profile / tag\n  agent-qa audit list <sid> --json             Structured rows on stdout\n  agent-qa audit list <sid> [--passed | --failed] [--tag <pat>] [--profile <pat>] [--limit N] [--slow <secs>] [--sort duration|runId-desc] [--since <iso-ts>] [--until <iso-ts>] [--format text|json|github]\n                                               Filters: case-insensitive substring\n                                               --passed/--failed are exit-code partitions\n  agent-qa audit stats <sid> [--since <iso-ts>] [--until <iso-ts>]\n                                               Pass/fail/tag rollup for one scenario\n  agent-qa audit stats <sid> --json            Structured rollup on stdout\n  agent-qa audit stats-all                     Per-scenario + overall pass/fail rollup\n  agent-qa audit stats-all --json              Structured rollup on stdout\n  agent-qa audit stats-all [--since <iso-ts>] [--until <iso-ts>]\n                                               Constrain to a date window\n  agent-qa audit diff <sid> <runIdA> <runIdB>  Unified diff between two replays'\n                                               audit.json (canonicalised JSON;\n                                               'latest' accepted for either side;\n                                               exit 1 on difference)\n  agent-qa audit summary <sid> <runId | latest>\n                                               Print just the summary line (one line out)\n  agent-qa audit exit-code <sid> <runId | latest>\n                                               Print just the run's exitCode (-1 if missing)\n  agent-qa audit field <sid> <runId | latest> <fieldName>\n                                               Print any top-level audit field. String/\n                                               number/bool print verbatim; null prints\n                                               empty; object/array prints compact JSON.\n  agent-qa audit count <sid>                   Print the number of runs under <sid>\n  agent-qa audit duration <sid> <runId | latest>\n                                               Print the run's duration in seconds\n                                               (finishedAt - startedAt, 3 decimals)\n  agent-qa audit flaky <sid> [--min-flips N] [--min-runs N] [--json]\n                                               Flag steps whose outcome interleaves\n                                               pass/fail across runs (outcome churn;\n                                               heal-chronic covers locator churn)\n  agent-qa audit slow <sid> [--pct N] [--min-ms N] [--recent N] [--min-runs N] [--json]\n                                               Flag steps whose recent pass median\n                                               regressed vs their earlier-run median\n                                               (default: last 2 runs >50% and >250ms\n                                               over baseline)\n\n'latest' resolves to <sid>/replays/latest.txt if present, otherwise the\nhighest lex-sorted run directory (run_id is timestamp-prefixed)."
+                "agent-qa audit \u{2014} inspect a replay's audit.json\n\nUsage:\n  agent-qa audit show <sid> <runId | latest> [--json | --format text|json|github]\n  agent-qa audit list <sid>                    Table view: every run's\n                                               summary / exit / profile / tag\n  agent-qa audit list <sid> --json             Structured rows on stdout\n  agent-qa audit list <sid> [--passed | --failed] [--tag <pat>] [--profile <pat>] [--limit N] [--slow <secs>] [--sort duration|runId-desc] [--since <iso-ts>] [--until <iso-ts>] [--format text|json|github]\n                                               Filters: case-insensitive substring\n                                               --passed/--failed are exit-code partitions\n  agent-qa audit stats <sid> [--since <iso-ts>] [--until <iso-ts>]\n                                               Pass/fail/tag rollup for one scenario\n  agent-qa audit stats <sid> --json            Structured rollup on stdout\n  agent-qa audit stats-all                     Per-scenario + overall pass/fail rollup\n  agent-qa audit stats-all --json              Structured rollup on stdout\n  agent-qa audit stats-all [--since <iso-ts>] [--until <iso-ts>]\n                                               Constrain to a date window\n  agent-qa audit diff <sid> <runIdA> <runIdB>  Unified diff between two replays'\n                                               audit.json (canonicalised JSON;\n                                               'latest' accepted for either side;\n                                               exit 1 on difference)\n  agent-qa audit summary <sid> <runId | latest>\n                                               Print just the summary line (one line out)\n  agent-qa audit exit-code <sid> <runId | latest>\n                                               Print just the run's exitCode (-1 if missing)\n  agent-qa audit field <sid> <runId | latest> <fieldName>\n                                               Print any top-level audit field. String/\n                                               number/bool print verbatim; null prints\n                                               empty; object/array prints compact JSON.\n  agent-qa audit count <sid>                   Print the number of runs under <sid>\n  agent-qa audit duration <sid> <runId | latest>\n                                               Print the run's duration in seconds\n                                               (finishedAt - startedAt, 3 decimals)\n  agent-qa audit flaky <sid> [--min-flips N] [--min-runs N] [--json]\n                                               Flag steps whose outcome interleaves\n                                               pass/fail across runs (outcome churn;\n                                               heal-chronic covers locator churn)\n  agent-qa audit slow <sid> [--pct N] [--min-ms N] [--recent N] [--min-runs N] [--json]\n                                               Flag steps whose recent pass median\n                                               regressed vs their earlier-run median\n                                               (default: last 2 runs >50% and >250ms\n                                               over baseline)\n  agent-qa audit health [--json]           Cross-scenario rollup of flaky + slow +
+                                               heal-chronic — one row per scenario
+                                               that has silent degradation\n\n'latest' resolves to <sid>/replays/latest.txt if present, otherwise the\nhighest lex-sorted run directory (run_id is timestamp-prefixed)."
     );
 }
 
@@ -2065,5 +2165,43 @@ mod tests {
         assert!(collect_slow(&jdir, 80.0, 250, 2, 3).is_empty());
         // Raise the absolute floor past the 300ms delta → nothing flags.
         assert!(collect_slow(&jdir, 50.0, 400, 2, 3).is_empty());
+    }
+
+    #[test]
+    fn health_rolls_up_the_three_detectors() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        // sid-a: flaky s1 (P-F-P) + chronic s2 (healed in 2 runs).
+        let a = tmp.path().join("sid-a");
+        write_events(&a, "r1", &[("s1", "pass"), ("s2", "pass")]);
+        write_events(&a, "r2", &[("s1", "fail"), ("s2", "pass")]);
+        write_events(&a, "r3", &[("s1", "pass"), ("s2", "pass")]);
+        for r in ["r1", "r2"] {
+            std::fs::write(
+                a.join("replays").join(r).join("heal.jsonl"),
+                "{\"stepId\":\"s2\",\"mode\":\"locator-correction\"}\n",
+            )
+            .unwrap();
+        }
+        // sid-b: clean runs — must not appear.
+        let b = tmp.path().join("sid-b");
+        write_events(&b, "r1", &[("s1", "pass")]);
+        write_events(&b, "r2", &[("s1", "pass")]);
+        write_events(&b, "r3", &[("s1", "pass")]);
+        // sid-c: slow s9 (400 → 900/1000 in the last two runs).
+        let c = tmp.path().join("sid-c");
+        write_events_ms(&c, "r1", &[("s9", "pass", 400)]);
+        write_events_ms(&c, "r2", &[("s9", "pass", 400)]);
+        write_events_ms(&c, "r3", &[("s9", "pass", 900)]);
+        write_events_ms(&c, "r4", &[("s9", "pass", 1000)]);
+        let out = collect_health(tmp.path());
+        assert_eq!(out.len(), 2);
+        let a_row = out.iter().find(|r| r.scenario_id == "sid-a").unwrap();
+        assert_eq!(a_row.flaky, vec!["s1"]);
+        assert_eq!(a_row.chronic, vec!["s2"]);
+        assert!(a_row.slow.is_empty());
+        let c_row = out.iter().find(|r| r.scenario_id == "sid-c").unwrap();
+        assert_eq!(c_row.slow, vec!["s9"]);
+        assert!(c_row.flaky.is_empty() && c_row.chronic.is_empty());
     }
 }
