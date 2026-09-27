@@ -492,7 +492,8 @@ const fileUploadDetailedCases: DetailedCase[] = [
     `Navigate to ${fileUploadUrl} at a 375px-wide mobile viewport and locate the download section.`,
     "Assert the download button is visible and tappable without horizontal scroll.",
     "Trigger the download and assert it initiates.",
-    "Replay the scenario successfully, or report the viewport/download support gap.",
+    "Use the `do/viewport` verb (params: width/height) to resize mid-scenario; `bun run golden:file-upload:download:tc09` covers this end-to-end on the bundled fixture.",
+    "Replay the scenario successfully.",
   ]),
   fileUploadDetailedCase("Download", "10", "Verify multiple downloads can occur sequentially", [
     `Navigate to ${fileUploadUrl} and locate the download section.`,
