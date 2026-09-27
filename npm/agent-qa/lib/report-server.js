@@ -2327,6 +2327,9 @@ async function readBuffer(deps) {
     session: parsed.session || null,
     baseline: parsed.baseline || null,
     paused: !!parsed.paused,
+    // true when the buffer was seeded by `buffer load` — flush writes back
+    // to the loaded scenario instead of minting a fresh one.
+    editing: !!parsed.editing,
     rows: Array.isArray(parsed.rows) ? parsed.rows : [],
     spawnError: r.spawnError ? String(r.spawnError.message || r.spawnError) : null,
   };
@@ -2426,6 +2429,17 @@ async function handleEdit(req, res, deps, seg) {
     case 'pause':
     case 'resume': {
       const r = await deps.runCli(['record', route]);
+      return sendCliResult(res, r);
+    }
+    case 'load': {
+      // Pull a saved scenario into the buffer for editing; flush seals it
+      // back over the same sid. The CLI refuses to clobber a non-empty
+      // buffer — the UI confirms with the user first and passes force.
+      const sid = typeof body.sid === 'string' ? body.sid : '';
+      if (!isSafeSegment(sid)) return badRequest(res, 'sid (safe segment) is required');
+      const args = ['buffer', 'load', sid];
+      if (body.force === true) args.push('--force');
+      const r = await deps.runCli(args);
       return sendCliResult(res, r);
     }
     case 'clear': {
