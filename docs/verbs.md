@@ -44,6 +44,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `audit diff <sid> <runIdA> <runIdB>` | Unified diff between two replays' audit.json. `latest` accepted for either side. |
 | `audit flaky <sid>` | Flag steps whose outcome interleaves pass/fail across runs — the flake signature (vs `heal-chronic`, which flags locator churn). Flags: `--min-flips N` (default 2), `--min-runs N` (default 3), `--json` |
 | `audit slow <sid>` | Flag steps whose duration regressed — every one of the last `--recent` pass runs (default 2) exceeds the earlier-run median by `+--pct%` (default 50) and `--min-ms` (default 250). Pass rows only; a fail's `ms` is the timeout budget, not step cost. |
+| `audit health` | Cross-scenario rollup of `flaky` + `slow` + `heal-chronic` at their defaults — one row per scenario with silent degradation, none when the suite is quiet. `--json` emits one compact line (the workbench consumes it to badge scenario rows). |
 
 ## Heal
 
@@ -94,6 +95,7 @@ Size changes fail outright — re-mint with `shot-accept` when the change is leg
 | `scenario summary <file>` | Per-step summary. Flags: `--filter <substr>`, `--json`. |
 | `scenario inputs <file>` | List declared inputs. `--json`. |
 | `scenario new <file>` | Scaffold a minimal valid scenario. Flags: `--force`, `--url`, `--intent`. |
+| `scenario insert <file> <do\|check> <draft-json>` | Splice a validated step into a saved scenario. `--after <stepId>` or `--at <index>` sets the position (default: append); the new step's id is the first free `s<n>`. |
 | `scenario diff <a> <b>` | Unified diff between two scenario JSONs |
 | `scenario hash <file>` | SHA-256 of scenario bytes (rebase-guard hash) |
 | `scenario id <file>` | Print the scenario's id field on one line |
