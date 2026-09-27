@@ -317,6 +317,46 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
             browser::download(ctx.session, &selector, &dest)?;
             Ok(None)
         }
+        Verb::FileChooser => {
+            let p = params.ok_or_else(|| anyhow!("step '{id}' fileChooser: params required"))?;
+            let raw = p
+                .get("files")
+                .ok_or_else(|| anyhow!("step '{id}' fileChooser: params.files is required"))?;
+            let files = match raw {
+                serde_json::Value::Array(items) => items,
+                other => bail!(
+                    "step '{id}' fileChooser: params.files must be an array (got {})",
+                    json_kind(other)
+                ),
+            };
+            let mut entries = Vec::with_capacity(files.len());
+            for (i, item) in files.iter().enumerate() {
+                let s = item.as_str().ok_or_else(|| {
+                    anyhow!("step '{id}' fileChooser: params.files[{i}] must be a string path")
+                })?;
+                let s = crate::value::substitute_scenario_vars(s, scope);
+                let path = resolve_upload_file(&s, ctx.scenario_dir)
+                    .map_err(|e| anyhow!("step '{id}' fileChooser: {e}"))?;
+                let bytes = std::fs::read(&path)
+                    .map_err(|e| anyhow!("step '{id}' fileChooser: cannot read {path}: {e}"))?;
+                let name = std::path::Path::new(&path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("file")
+                    .to_string();
+                entries.push(crate::file_chooser::file_entry(
+                    &name,
+                    guess_mime(&path),
+                    &bytes,
+                ));
+            }
+            let payload = serde_json::to_string(&entries)?;
+            browser::eval_expression(ctx.session, &crate::file_chooser::build_install_hook())
+                .map_err(|e| anyhow!("step '{id}' fileChooser install: {e}"))?;
+            browser::eval_expression(ctx.session, &crate::file_chooser::build_arm(&payload))
+                .map_err(|e| anyhow!("step '{id}' fileChooser arm: {e}"))?;
+            Ok(None)
+        }
     }
 }
 
@@ -653,6 +693,26 @@ fn upload_files_from_value(v: &serde_json::Value, scenario_dir: &Path) -> Result
         .into_iter()
         .map(|file| resolve_upload_file(&file, scenario_dir))
         .collect()
+}
+
+fn guess_mime(path: &str) -> &'static str {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "txt" => "text/plain",
+        "csv" => "text/csv",
+        "json" => "application/json",
+        "pdf" => "application/pdf",
+        _ => "application/octet-stream",
+    }
 }
 
 fn resolve_upload_file(file: &str, scenario_dir: &Path) -> Result<String> {

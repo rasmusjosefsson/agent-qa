@@ -1777,6 +1777,60 @@ mod tests {
     }
 
     #[test]
+    fn replay_file_chooser_step_arms_hook_with_payload() {
+        let _g = lock_env();
+        let work = TempDir::new().unwrap();
+        let log = work.path().join("ab.log");
+        install_fake_browser(work.path(), &log);
+
+        let jdir = work.path().join("sid");
+        fs::create_dir_all(&jdir).unwrap();
+        fs::write(jdir.join("note.txt"), "hi").unwrap();
+        let jfile = jdir.join("scenario.json");
+        fs::write(
+            &jfile,
+            r#"{
+            "schema": "scenario/2",
+            "id": "chooser-smoke",
+            "intent": "arm chooser then click",
+            "env": {
+                "open": [
+                    { "kind": "nav", "url": "https://example.com/", "intent": "land" }
+                ]
+            },
+            "steps": [
+                { "id": "s1", "intent": "arm", "kind": "do",
+                  "verb": "fileChooser", "params": { "files": ["note.txt"] } }
+            ]
+        }"#,
+        )
+        .unwrap();
+
+        let opts = RunOptions {
+            source: ScenarioSource::Path(jfile),
+            profile: None,
+            session_name: "fc".into(),
+            heal_from_run: None,
+            headed: false,
+            input_overrides: BTreeMap::new(),
+            dry_run: false,
+            no_sidecars: true,
+            quiet: false,
+            plain: false,
+            tag: None,
+            output_audit: None,
+        };
+        let summary = run(&opts).unwrap();
+        assert!(summary.ok);
+        let ab = fs::read_to_string(&log).unwrap();
+        assert!(ab.contains("--session fc eval"), "got: {ab}");
+        assert!(ab.contains("__aqFileChooser"), "got: {ab}");
+        // base64("hi") = "aGk=" in the armed payload
+        assert!(ab.contains("aGk="), "got: {ab}");
+        clear_fake_browser();
+    }
+
+    #[test]
     fn replay_invalid_scenario_errors_with_schema_messages() {
         let _g = lock_env();
         let work = TempDir::new().unwrap();
