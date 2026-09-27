@@ -1544,6 +1544,9 @@ struct CoverageCounts {
     check_steps: usize,
     do_followed_by_check: usize,
     bare_do: usize,
+    /// do-steps whose following check is a `{"shot": <that do's id>}` claim —
+    /// the fraction of the flow covered by a pixel-diffed baseline.
+    shot_covered: usize,
 }
 
 impl CoverageCounts {
@@ -1554,32 +1557,43 @@ impl CoverageCounts {
             self.do_followed_by_check as f64 / self.do_steps as f64
         }
     }
+    fn shot_ratio(&self) -> f64 {
+        if self.do_steps == 0 {
+            1.0
+        } else {
+            self.shot_covered as f64 / self.do_steps as f64
+        }
+    }
 }
 
 fn coverage_counts(steps: &[crate::scenario::Step]) -> CoverageCounts {
-    use crate::scenario::Step;
+    use crate::scenario::{ClaimSubject, Step};
     let mut c = CoverageCounts::default();
-    let mut prev_was_do = false;
+    let mut prev_do_id: Option<&str> = None;
     for step in steps {
         c.total += 1;
         match step {
-            Step::Do { .. } => {
-                if prev_was_do {
+            Step::Do { id, .. } => {
+                if prev_do_id.is_some() {
                     c.bare_do += 1;
                 }
                 c.do_steps += 1;
-                prev_was_do = true;
+                prev_do_id = Some(id.as_str());
             }
-            Step::Check { .. } => {
+            Step::Check { claim, .. } => {
                 c.check_steps += 1;
-                if prev_was_do {
+                if let Some(did) = prev_do_id.take() {
                     c.do_followed_by_check += 1;
-                    prev_was_do = false;
+                    if let ClaimSubject::Shot { shot } = &claim.subject {
+                        if shot == did {
+                            c.shot_covered += 1;
+                        }
+                    }
                 }
             }
         }
     }
-    if prev_was_do {
+    if prev_do_id.is_some() {
         c.bare_do += 1;
     }
     c
@@ -1609,6 +1623,8 @@ fn coverage(path: &Path, json_out: bool) -> Result<u8> {
             do_followed_by_check: usize,
             bare_do_steps: usize,
             coverage_ratio: f64,
+            shot_covered_steps: usize,
+            shot_coverage_ratio: f64,
         }
         let report = Report {
             id: &j.id,
@@ -1618,6 +1634,8 @@ fn coverage(path: &Path, json_out: bool) -> Result<u8> {
             do_followed_by_check,
             bare_do_steps: bare_do,
             coverage_ratio: ratio,
+            shot_covered_steps: c.shot_covered,
+            shot_coverage_ratio: c.shot_ratio(),
         };
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
@@ -1627,6 +1645,11 @@ fn coverage(path: &Path, json_out: bool) -> Result<u8> {
         println!("  do → check       : {do_followed_by_check}");
         println!("  bare do steps   : {bare_do}");
         println!("  coverage ratio  : {:.0}%", ratio * 100.0);
+        println!(
+            "  visual (shot)   : {} covered, {:.0}%",
+            c.shot_covered,
+            c.shot_ratio() * 100.0
+        );
     }
     Ok(0)
 }
@@ -1675,6 +1698,7 @@ fn coverage_all(filter: Option<&str>, json_out: bool) -> Result<u8> {
         agg.check_steps += c.check_steps;
         agg.do_followed_by_check += c.do_followed_by_check;
         agg.bare_do += c.bare_do;
+        agg.shot_covered += c.shot_covered;
     }
 
     if json_out {
@@ -1688,6 +1712,8 @@ fn coverage_all(filter: Option<&str>, json_out: bool) -> Result<u8> {
             do_followed_by_check: usize,
             bare_do_steps: usize,
             coverage_ratio: f64,
+            shot_covered_steps: usize,
+            shot_coverage_ratio: f64,
         }
         #[derive(serde::Serialize)]
         #[serde(rename_all = "camelCase")]
@@ -1700,6 +1726,8 @@ fn coverage_all(filter: Option<&str>, json_out: bool) -> Result<u8> {
             do_followed_by_check: usize,
             bare_do_steps: usize,
             coverage_ratio: f64,
+            shot_covered_steps: usize,
+            shot_coverage_ratio: f64,
             rows: Vec<Row<'a>>,
         }
         let report = Report {
@@ -1711,6 +1739,8 @@ fn coverage_all(filter: Option<&str>, json_out: bool) -> Result<u8> {
             do_followed_by_check: agg.do_followed_by_check,
             bare_do_steps: agg.bare_do,
             coverage_ratio: agg.ratio(),
+            shot_covered_steps: agg.shot_covered,
+            shot_coverage_ratio: agg.shot_ratio(),
             rows: rows
                 .iter()
                 .map(|(sid, intent, c)| Row {
@@ -1721,6 +1751,8 @@ fn coverage_all(filter: Option<&str>, json_out: bool) -> Result<u8> {
                     do_followed_by_check: c.do_followed_by_check,
                     bare_do_steps: c.bare_do,
                     coverage_ratio: c.ratio(),
+                    shot_covered_steps: c.shot_covered,
+                    shot_coverage_ratio: c.shot_ratio(),
                 })
                 .collect(),
         };
@@ -1737,28 +1769,30 @@ fn coverage_all(filter: Option<&str>, json_out: bool) -> Result<u8> {
         return Ok(0);
     }
     println!(
-        "{:<24} {:>5} {:>5} {:>7} {:>5}  {:<5} intent",
-        "sid", "steps", "do", "do→ck", "bare", "ratio"
+        "{:<24} {:>5} {:>5} {:>7} {:>5}  {:<5} {:<6} intent",
+        "sid", "steps", "do", "do→ck", "bare", "ratio", "shot%"
     );
     for (sid, intent, c) in &rows {
         println!(
-            "{:<24} {:>5} {:>5} {:>7} {:>5}  {:>4.0}% {}",
+            "{:<24} {:>5} {:>5} {:>7} {:>5}  {:>4.0}% {:>4.0}% {}",
             sid,
             c.total,
             c.do_steps,
             c.do_followed_by_check,
             c.bare_do,
             c.ratio() * 100.0,
+            c.shot_ratio() * 100.0,
             intent.chars().take(40).collect::<String>()
         );
     }
     println!(
-        "\nOVERALL: scenarios={} do={} do→check={} bare={} ratio={:.0}%",
+        "\nOVERALL: scenarios={} do={} do→check={} bare={} ratio={:.0}% shot={:.0}%",
         rows.len(),
         agg.do_steps,
         agg.do_followed_by_check,
         agg.bare_do,
-        agg.ratio() * 100.0
+        agg.ratio() * 100.0,
+        agg.shot_ratio() * 100.0
     );
     Ok(0)
 }
@@ -3072,6 +3106,32 @@ mod tests {
         assert_eq!(c.do_followed_by_check, 1);
         assert_eq!(c.bare_do, 1);
         assert!((c.ratio() - 0.5).abs() < 1e-9);
+        assert_eq!(c.shot_covered, 0);
+    }
+
+    #[test]
+    fn coverage_counts_shot_claims_on_the_following_check() {
+        // do,shot-check(s0) + do,bare → shot_covered=1, do→check=1.
+        let tmp = TempDir::new().unwrap();
+        let p = write(
+            tmp.path(),
+            r#"{
+              "schema": "scenario/2", "id": "x", "intent": "y",
+              "steps": [
+                { "id": "s0", "intent": "a", "kind": "do", "verb": "reload" },
+                { "id": "s1", "intent": "looks right", "kind": "check",
+                  "claim": { "subject": { "shot": "s0" }, "predicate": "matches" } },
+                { "id": "s2", "intent": "b", "kind": "do", "verb": "reload" }
+              ]
+            }"#,
+        );
+        let j = load_scenario(&p).unwrap();
+        let c = coverage_counts(&j.steps);
+        assert_eq!(c.do_steps, 2);
+        assert_eq!(c.do_followed_by_check, 1);
+        assert_eq!(c.bare_do, 1);
+        assert_eq!(c.shot_covered, 1);
+        assert!((c.shot_ratio() - 0.5).abs() < 1e-9);
     }
 
     #[test]
