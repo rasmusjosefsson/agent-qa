@@ -39,6 +39,7 @@ The on-disk tree for one scenario:
 │           ├── screenshot.png                #     full-page screenshot at refusal time
 │           ├── probe.json                    #     DOM probe at refusal time
 │           └── network.json                  #     recent network calls at refusal time
+├── baselines/<stepId>.png                    # known-good screenshots minted by `shot-accept` ({"shot"} claims)
 ├── failed/                                   # store of truncate operations (see § failed/truncate-/ below)
 │   └── truncate-<isoTs>[-<archive-tag>]/     #   one directory per `truncate` call
 │       ├── snapshots/
@@ -59,6 +60,7 @@ The on-disk tree for one scenario:
         ├── diffs/<stepId>.patch.json          #   suggested-diff promoted via `heal-promote`
         ├── snapshots/<stepId>.txt
         ├── screenshots/<stepId>.png
+        ├── shots-diff/<stepId>.diff.png     #   red delta map when a {"shot"} claim misses its baseline
         ├── network/<stepId>.json
         ├── probes/<stepId>.json
         └── perf/<stepId>.json

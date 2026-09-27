@@ -53,6 +53,15 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `heal-apply <sid>` | Mark a heal-response as consumed |
 | `heal-list <sid>` | List heal-responses. Flags: `--run <runId>`, `--mode value-correction\|reject`, `--applied`, `--unapplied`, `--json` |
 | `heal-chronic <sid>` | Flag steps that auto-healed in ≥ `--min-runs` distinct runs (default 2) — silent locator debt. Prints the `heal-promote` command per step. Flags: `--min-runs N`, `--json` |
+| `shot-accept <sid>` | Mint screenshot baselines for `{"shot"}` claims: copies the run's per-step PNGs into `<sid>/baselines/`. Flags: `--run <runId>` (default `latest.txt`), `--steps <csv>` (default every captured shot), `--json` |
+
+### `{"shot"}` claims — visual diff vs a baseline
+
+A check step `{"check": {"shot": "<stepId>"}, "predicate": "matches"}` pixel-compares
+the current run's `screenshots/<stepId>.png` against `<sid>/baselines/<stepId>.png`.
+It passes when the differing-pixel fraction ≤ `tolerance.pixels` (default `0.01` = 1%);
+on a miss the claim fails and a red delta map lands at `<run>/shots-diff/<stepId>.diff.png`.
+Size changes fail outright — re-mint with `shot-accept` when the change is legitimate.
 
 ## Profiles
 
