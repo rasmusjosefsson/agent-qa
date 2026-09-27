@@ -27,6 +27,7 @@ mod fill_unique;
 mod flush;
 mod global_config;
 mod heal_apply;
+mod heal_chronic;
 mod heal_list;
 mod heal_promote;
 mod heal_respond;
@@ -122,9 +123,10 @@ fn main() -> ExitCode {
         "heal-promote" => heal_promote::run(rest),
         "heal-apply" => heal_apply::run(rest),
         "heal-list" => heal_list::run(rest),
+        "heal-chronic" => heal_chronic::run(rest),
         _ => {
             eprintln!(
-                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, design, audit, start, browser, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list."
+                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, design, audit, start, browser, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic."
             );
             eprintln!("Run `agent-qa --help` for usage.");
             Ok(2)
@@ -237,6 +239,7 @@ Verbs:
   heal-promote <sid> [--run <id>] [--steps <…>] [--apply]   Promote replay-side patches
   heal-apply <sid> --step <id> [--target-step <…>] [--dry-run]   Patch buffer in place
   heal-list <sid> [--run <id>] [--json]    List heal-responses + applied state
+  heal-chronic <sid> [--min-runs N] [--json]  Flag steps that self-heal across runs
 
 Step dispatch covers `do` verbs and `check` claims."
     );
