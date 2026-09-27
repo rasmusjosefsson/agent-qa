@@ -213,3 +213,21 @@ export const editChatRecordingStep = (cid: string, index: number, payload: Recor
   postRecording(cid, 'step-edit', { index, payload });
 export const deleteChatRecordingStep = (cid: string, index: number) =>
   postRecording(cid, 'step-delete', { index });
+
+// Validate the chat's recording buffer the way `flush` would write it.
+// Unlike the other controls, the report text is the payload: surface
+// stdout on success and the server's `error` field on a failing check.
+export async function checkChatRecording(cid: string): Promise<{ ok: boolean; report: string }> {
+  try {
+    const r = await fetch(`${chatBase(cid)}/recording/check`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    const data = (await r.json().catch(() => ({}))) as { stdout?: string; error?: string };
+    const report = ((data.stdout || '') + (data.error ? `\n${data.error}` : '')).trim();
+    return { ok: r.ok, report: report || (r.ok ? 'check passed' : 'check failed') };
+  } catch (e) {
+    return { ok: false, report: String((e as Error)?.message || e) };
+  }
+}
