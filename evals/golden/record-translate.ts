@@ -187,6 +187,13 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
             verb: "click",
             on: css(`${args[0]} [role="option"]:nth-child(${args[1]})`),
           });
+        case "setViewport":
+          // args[0] = width px, args[1] = height px — do/viewport resizes the
+          // live browser so breakpoint-gated content can be asserted.
+          return doStep(intent, {
+            verb: "viewport",
+            params: { width: args[0], height: args[1] },
+          });
         default:
           throw new Error(`record-step translate: unknown action method ${String(p.method)}`);
       }

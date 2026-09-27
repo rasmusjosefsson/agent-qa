@@ -56,6 +56,7 @@ export interface FileUploadGolden extends GoldenContext {
   waitText(selector: string, text: string, intent: string): Promise<void>;
   assertUrlEquals(url: string, intent: string): Promise<void>;
   assertElementVisible(selector: string, intent: string): Promise<void>;
+  setViewport(width: number, height: number, intent: string): Promise<void>;
 }
 
 function createContext(tc: string, intent: string): GoldenContext {
@@ -196,6 +197,7 @@ export async function runFileUploadGolden(
     async assertFileSizeGt(scenarioRelPath, bytes, stepIntent) {
       await record(ctx, "assert", { kind: "fileSizeGt", args: [scenarioRelPath, bytes], intent: stepIntent });
     },
+<<<<<<< HEAD
     async assertFileContent(scenarioRelPath, needle, stepIntent) {
       await record(ctx, "assert", { kind: "fileContent", args: [scenarioRelPath, needle], intent: stepIntent });
     },
@@ -235,6 +237,11 @@ export async function runFileUploadGolden(
     },
     async assertElementVisible(selector, stepIntent) {
       await record(ctx, "assert", { kind: "elementPresent", args: [selector], intent: stepIntent });
+    },
+    async setViewport(width, height, stepIntent) {
+      // Record-side only — the do/viewport verb resizes the browser via CDP
+      // at replay; agent-browser exposes no live resize command.
+      await record(ctx, "action", { method: "setViewport", args: [width, height], intent: stepIntent });
     },
   };
 

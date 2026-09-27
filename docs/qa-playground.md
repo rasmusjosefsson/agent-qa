@@ -30,7 +30,7 @@ Golden runners prove:
 | Forms | `/practice/forms` | page-load + TC01-TC15 | complete | Golden TC01-TC15 pass. The page hosts 5 forms (F01 login, F02 personal, F03 address, F04 interests, F05 account setup); TC07's terms error has no testid so it's scoped via `#registrationForm` text. |
 | Dropdowns | `/practice/dropdowns` | page-load + TC01-TC10 | complete | Golden TC01-TC10 pass; keep them green. |
 | Alerts & Dialogs | `/practice/alerts-dialogs` | page-load + TC01-TC10 | complete | Golden TC01-TC10 pass. TC01-TC06 drive native alert/confirm/prompt via the bundled `evals/fixtures/dialogs.html` (the live page has none); TC07-TC09 cover DOM dialogs. |
-| File Upload | `/practice/file-upload` | page-load + Upload TC01-TC02 + Upload TC06-TC15 + Download TC01-TC14 | deep | Golden Upload TC01-TC02, TC06-TC08, TC10, TC11, TC15 pass; downloads covered by `download:tc01` on the bundled fixture (the live page ships no download widget). Gaps: TC09 (no cancel control), TC12 (viewport), TC13 (native file dialog), TC14 (inputs lack accessible names). |
+| File Upload | `/practice/file-upload` | page-load + Upload TC01-TC02 + Upload TC06-TC15 + Download TC01-TC14 | deep | Golden Upload TC01-TC02, TC06-TC08, TC10, TC11, TC15 pass; downloads covered by `download:tc01` + `download:tc09` (mobile viewport) on the bundled fixture (the live page ships no download widget). Gaps: TC09 (no cancel control), TC12 (viewport), TC13 (native file dialog), TC14 (inputs lack accessible names). |
 | Input Fields | `/practice/input-fields` | page-load + TC01-TC12 | complete | Golden TC01-TC12 pass. The `result-s02` echo only updates on real keystrokes, so fill-replayed values must be asserted on the `value` property, not the echo. |
 | Buttons | `/practice/buttons` | page-load + TC01-TC15 | complete | Golden TC01-TC04, TC06-TC07, TC09, TC12-TC13, TC15 pass. `dblclick` replays TC04's double-click; TC09 uses `focus` + `press Enter`; TC12 reloads and re-reads the echo. Gaps: TC05 (right-click — no agent-browser verb), TC08 (viewport), TC10 (screen-reader), TC11 (hover visual), TC14 (design spec). |
 | Data Table | `/practice/data-table` | page-load + TC01-TC06 | complete | Golden TC01-TC06 pass. `row-count` text + `book-row` testids make row assertions deterministic; search filters live via `#table-search-input`. |
@@ -57,14 +57,14 @@ Golden runners prove:
 - Fixtures live in `evals/fixtures/`.
 - Upload TC03-TC05 are intentionally not cataloged. They require an upload submit button/progress/success flow, but the live widget exposes only `#file-upload`; the visible `Download Image/PDF/Excel/Word` buttons belong to Download test cases.
 - The live page actually exposes 8 upload widgets (`fu-single-input`, `fu-multi-input`, `fu-filename-input`/`fu-filename-display`, `fu-drop-zone`, `fu-type-input`, `fu-size-input`, `fu-hidden-zone`, `fu-progress-file`+`fu-upload-btn`), each writing to a `result-sNN` holder.
-- Upload TC09 is a page gap: `#fu-upload-btn` disables after select and no cancel control exists. TC12 needs a viewport verb (framework boundary). TC13 hits the native OS file dialog (framework boundary). TC14 is a page gap: no upload input has an accessible name.
-- Download TC01-TC14 have no live widget to drive — download semantics are proven on `evals/fixtures/downloads.html` via `do/download` (click a download trigger, save the file into the scenario dir) and `{"file": "..."}` claims (`exists`, name predicates, `gt` size in bytes, `attribute: "content"` for UTF-8 text). TC08 needs multi-browser replay (framework boundary); TC09 needs a mobile-viewport verb (framework boundary).
+- Upload TC09 is a page gap: `#fu-upload-btn` disables after select and no cancel control exists. TC12 is now implementable via `do/viewport` (unblocked since the verb landed). TC13 hits the native OS file dialog (partially unblocked by `do/fileChooser` interception). TC14 is a page gap: no upload input has an accessible name.
+- Download TC01-TC14 have no live widget to drive — download semantics are proven on `evals/fixtures/downloads.html` via `do/download` (click a download trigger, save the file into the scenario dir) and `{"file": "..."}` claims (`exists`, name predicates, `gt` size in bytes, `attribute: "content"` for UTF-8 text). TC09 additionally resizes to a mobile viewport first via `do/viewport`. TC08 needs multi-browser replay (framework boundary).
 
 Passing proof:
 
 - Upload TC01: `do/upload` + filename display replay passes.
 - Upload TC02, TC06-TC08, TC10, TC11, TC15: `bun run golden:file-upload:upload:tcNN` pass.
-- Download TC01-TC07 and TC10-TC14: `bun run golden:file-upload:download:tcNN` pass (fixture-based).
+- Download TC01-TC07, TC09 and TC10-TC14: `bun run golden:file-upload:download:tcNN` pass (fixture-based). TC09 resizes to a 375×812 viewport via `do/viewport` first.
 
 ## Runbook
 
