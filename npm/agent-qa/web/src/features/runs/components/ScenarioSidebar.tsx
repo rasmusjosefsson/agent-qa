@@ -48,7 +48,7 @@ function HealthBadges({ sid, runs }: { sid: string; runs: RunsApi }) {
 
 function Badge({ tone, children }: { tone: string; children: React.ReactNode }) {
   return (
-    <span className={cn('rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide', TONE[tone] || 'bg-muted text-muted-foreground')}>
+    <span className={cn('shrink-0 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide', TONE[tone] || 'bg-muted text-muted-foreground')}>
       {children}
     </span>
   )
