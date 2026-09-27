@@ -49,8 +49,6 @@ references (from=step stepId, opensFromStepId) are rewired to match. Load
 pulls a saved scenario's steps into the buffer for editing (`flush` writes
 them back to the same sid, preserving fields the buffer doesn't model —
 inputs, templates, env.close). Discard removes the active recording."
-
-
     );
 }
 
