@@ -17,7 +17,8 @@
     "postinstall": "node bin/postinstall.js",
     "test": "node --test test/*.test.js",
     "build:web": "npm --prefix web ci && npm --prefix web run build",
-    "build:cli": "node ../../scripts/build-local-cli.js"
+    "build:cli": "node ../../scripts/build-local-cli.js",
+    "prepack": "npm run build:web"
   },
   "files": [
     "bin/",
