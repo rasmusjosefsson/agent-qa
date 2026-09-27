@@ -45,6 +45,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `audit flaky <sid>` | Flag steps whose outcome interleaves pass/fail across runs — the flake signature (vs `heal-chronic`, which flags locator churn). Flags: `--min-flips N` (default 2), `--min-runs N` (default 3), `--json` |
 | `audit slow <sid>` | Flag steps whose duration regressed — every one of the last `--recent` pass runs (default 2) exceeds the earlier-run median by `+--pct%` (default 50) and `--min-ms` (default 250). Pass rows only; a fail's `ms` is the timeout budget, not step cost. |
 | `audit health` | Cross-scenario rollup of `flaky` + `slow` + `heal-chronic` at their defaults — one row per scenario with silent degradation, none when the suite is quiet. `--json` emits one compact line (the workbench consumes it to badge scenario rows). |
+| `audit cluster` | Group step failures across every scenario's runs by normalized error signature (quoted literals + digit runs stripped) — one root cause across N runs reads as one cluster with its member list. `--min-size N` (default 2) hides lone failures; `--json` for the structured list. |
 
 ## Heal
 
