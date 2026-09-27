@@ -2337,6 +2337,30 @@ async function buildRealHub(config) {
   return mod.createChatBackend(config);
 }
 
+// Unavailable-state payload for /api/chat/state: which backend was selected
+// (or would be), the failure reason, and the install command the nudge shows.
+async function chatUnavailableFields(reason) {
+  const fields = { available: false, reason };
+  try {
+    const url = pathToFileURL(path.join(__dirname, 'chat-agent.mjs')).href;
+    const mod = await import(url);
+    const det = mod.detectChatBackends();
+    const explicit = process.env.AGENT_QA_CHAT_BACKEND;
+    const backend =
+      explicit ||
+      (det.pi.available ? 'pi' : det.opencode.available ? 'opencode' : null) ||
+      // Nothing runnable: nudge toward whichever is closest to working —
+      // opencode SDK present but no CLI → install the CLI; else pi.
+      (det.opencode.sdkAvailable ? 'opencode' : 'pi');
+    fields.backend = backend;
+    fields.install = (det[backend] && det[backend].install) || null;
+  } catch {
+    fields.backend = 'pi';
+    fields.install = 'npm i -g @earendil-works/pi-coding-agent';
+  }
+  return fields;
+}
+
 // Metadata for one chat (safe to serialize to the frontend).
 function chatMeta(e) {
   return { id: e.id, title: e.title, createdAt: e.createdAt, session: e.browser.name };
@@ -2905,17 +2929,19 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
     hub = await entry.getHub();
   } catch (err) {
     const reason = String((err && err.message) || err);
+    const fields = await chatUnavailableFields(reason);
     if (sub === 'state' && req.method === 'GET') {
-      return sendJson(res, 200, { available: false, reason });
+      return sendJson(res, 200, fields);
     }
     return sendJson(res, 503, { error: `chat unavailable: ${reason}` });
   }
 
   if (!hub) {
+    const fields = await chatUnavailableFields('no chat backend configured');
     if (sub === 'state' && req.method === 'GET') {
-      return sendJson(res, 200, { available: false, reason: 'pi SDK not configured' });
+      return sendJson(res, 200, fields);
     }
-    return sendJson(res, 503, { error: 'chat unavailable: pi SDK not configured' });
+    return sendJson(res, 503, { error: `chat unavailable: ${fields.reason}` });
   }
 
   if (sub === 'state' && req.method === 'GET') {
@@ -3655,6 +3681,7 @@ function start(opts = {}) {
     deps.chat = {
       config: {
         cwd: opts.cwd || process.cwd(),
+        backend: opts.chatBackend || process.env.AGENT_QA_CHAT_BACKEND || undefined,
         sdkPath: opts.piSdkPath || process.env.AGENT_QA_PI_SDK || undefined,
         agentDir: opts.agentDir || undefined,
         tools: Array.isArray(opts.chatTools) ? opts.chatTools : undefined,

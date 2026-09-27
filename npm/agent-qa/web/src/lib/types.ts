@@ -79,4 +79,8 @@ export interface ChatState {
   thinkingLevels?: string[];
   sessionId?: string;
   reason?: string;
+  // Which chat backend the server selected ('pi' | 'opencode') and, when
+  // unavailable, the install command the setup nudge offers to copy.
+  backend?: string;
+  install?: string;
 }

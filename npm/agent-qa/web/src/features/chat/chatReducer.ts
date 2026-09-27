@@ -22,6 +22,10 @@ export interface ChatUIState {
   // so it never flashes while a freshly-mounted chat is still hydrating.
   hydrated: boolean;
   reason?: string;
+  // Chat backend id ('pi' | 'opencode') + the install command the setup
+  // nudge copies when the backend can't run.
+  backend?: string;
+  install?: string;
   streaming: boolean;
   items: ChatItem[];
   model?: ModelInfo;
@@ -383,6 +387,8 @@ export function rehydrate(payload: ChatState): ChatUIState {
     available: !!payload.available,
     hydrated: true,
     reason: payload.reason,
+    backend: payload.backend,
+    install: payload.install,
     model: payload.model,
     models: payload.models || [],
     thinkingLevel: payload.thinkingLevel,
@@ -412,6 +418,8 @@ export function reducer(state: ChatUIState, action: Action): ChatUIState {
         thinkingLevel: p.thinkingLevel ?? state.thinkingLevel,
         thinkingLevels: p.thinkingLevels ?? state.thinkingLevels,
         reason: p.reason ?? state.reason,
+        backend: p.backend ?? state.backend,
+        install: p.install ?? state.install,
       };
     }
 

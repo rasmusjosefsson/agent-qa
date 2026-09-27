@@ -20,8 +20,12 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 import { existsSync, statSync, realpathSync, readFileSync } from 'node:fs';
 import { dirname, join, delimiter } from 'node:path';
 import { homedir } from 'node:os';
+import { spawn } from 'node:child_process';
+import { createServer as createNetServer } from 'node:net';
 
 const PI_PKG = '@earendil-works/pi-coding-agent';
+const OPENCODE_PKG = '@opencode-ai/sdk';
+const OPENCODE_BIN = 'opencode';
 
 // 15 minutes of no chat activity tears the session down. A chat must survive
 // SSE reconnects (the session holds conversation state), so this is the one
@@ -765,9 +769,496 @@ function makeSessionFactory(sdk, config = {}, shared = {}) {
   };
 }
 
+// -------- opencode backend (v2 SDK over `opencode serve`) --------
+//
+// Unlike pi (in-process AgentSession), opencode runs an HTTP server: the chat
+// spawns `opencode serve` once per chat, talks to it via @opencode-ai/sdk's v2
+// client, and adapts the client to the pi-shaped session contract createChatHub
+// already speaks (subscribe/prompt/abort/messages/model/dispose). Events come
+// from one SSE stream per server (client.event.subscribe()); we filter to our
+// sessionID and map session.next.* events onto the pi event vocabulary the Chat
+// tab's reducer renders.
+
+/** file:// URL for @opencode-ai/sdk — same resolution ladder as the pi SDK. */
+export function resolveOpencodeSdkUrl({ sdkPath, env = process.env, moduleUrl = import.meta.url } = {}) {
+  const candidates = [];
+  const explicit = sdkPath || env.AGENT_QA_OPENCODE_SDK;
+  if (explicit) candidates.push(explicit);
+  candidates.push(findNodeModulesPackageEntry(moduleUrl, OPENCODE_PKG));
+  try {
+    const require = createRequire(moduleUrl);
+    candidates.push(require.resolve(OPENCODE_PKG));
+  } catch {
+    /* package may export only the ESM import condition */
+  }
+  for (const c of candidates) {
+    const entry = toExistingEntry(c);
+    if (entry) return pathToFileURL(entry).href;
+  }
+  throw new Error(
+    `opencode SDK (${OPENCODE_PKG}) not found. Install it, or set ` +
+      `AGENT_QA_OPENCODE_SDK to its dist/index.js (or package dir).`,
+  );
+}
+
+export async function loadOpencodeSdk(config = {}) {
+  const url = resolveOpencodeSdkUrl(config);
+  const sdk = await import(url);
+  return { sdk, url };
+}
+
 /**
- * Resolve + import the pi SDK, then return a ready chat hub.
+ * Which chat backends can actually run right now. `available` means the code
+ * path resolves AND any external binary the backend needs is on PATH (pi runs
+ * in-process, opencode needs the `opencode` CLI for `opencode serve`).
+ */
+export function detectChatBackends({ env = process.env, moduleUrl = import.meta.url } = {}) {
+  let pi = false;
+  try {
+    resolvePiSdkUrl({ env, moduleUrl });
+    pi = true;
+  } catch {
+    pi = false;
+  }
+  let opencodeSdk = false;
+  try {
+    resolveOpencodeSdkUrl({ env, moduleUrl });
+    opencodeSdk = true;
+  } catch {
+    opencodeSdk = false;
+  }
+  const opencodeBin = whichOnPath(OPENCODE_BIN, env);
+  return {
+    pi: { id: 'pi', available: pi, install: 'npm i -g @earendil-works/pi-coding-agent' },
+    opencode: {
+      id: 'opencode',
+      available: opencodeSdk && !!opencodeBin,
+      sdkAvailable: opencodeSdk,
+      binary: opencodeBin,
+      install: 'npm i -g opencode-ai',
+    },
+  };
+}
+
+// Map a v2 SSE event onto the pi-shaped agent events chatReducer consumes.
+// Global-stream events carry their payload in `properties`; the durable
+// per-session stream calls the same field `data` — take either.
+// Returns null for events with no UI mapping.
+export function mapOpencodeEvent(ev) {
+  const data = ev && typeof ev === 'object' ? (ev.properties ?? ev.data ?? {}) : {};
+  switch (ev && ev.type) {
+    case 'session.next.prompt.admitted':
+      return { type: 'agent_start' };
+    case 'session.next.step.started':
+      return { type: 'turn_start' };
+    case 'session.next.step.ended':
+      return { type: 'turn_end' };
+    case 'session.next.text.started':
+      return { type: 'message_update', assistantMessageEvent: { type: 'text_start' } };
+    case 'session.next.text.delta':
+      return {
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', delta: data.delta || '' },
+      };
+    case 'session.next.text.ended':
+      return { type: 'message_end' };
+    case 'session.next.reasoning.delta':
+      return {
+        type: 'message_update',
+        assistantMessageEvent: { type: 'thinking_delta', delta: data.delta || '' },
+      };
+    case 'session.next.tool.called':
+      return {
+        type: 'tool_execution_start',
+        toolCallId: data.callID,
+        toolName: data.tool,
+        args: data.input,
+      };
+    case 'session.next.tool.progress':
+      return {
+        type: 'tool_execution_update',
+        toolCallId: data.callID,
+        partialResult: data.output ?? data.result,
+      };
+    case 'session.next.tool.success':
+      return {
+        type: 'tool_execution_end',
+        toolCallId: data.callID,
+        toolName: data.tool,
+        isError: false,
+        result: data.result ?? data.content,
+      };
+    case 'session.next.tool.failed':
+      return {
+        type: 'tool_execution_end',
+        toolCallId: data.callID,
+        toolName: data.tool,
+        isError: true,
+        result: data.error ?? data.result,
+      };
+    case 'session.error': {
+      const err = data.error;
+      const msg =
+        (err && (err.message || err.errorMessage || err.name)) ||
+        (typeof err === 'string' ? err : null) ||
+        'agent error';
+      return { type: 'error', message: msg };
+    }
+    case 'session.idle':
+      return { type: 'agent_end' };
+    default:
+      return null;
+  }
+}
+
+// SessionMessage projection (session.messages) → pi-shaped {role, content}
+// rows the reducer's rehydrate path renders. Returns an array because one
+// assistant message can carry tool results that pi models as separate rows.
+export function mapOpencodeMessage(m) {
+  if (!m || typeof m !== 'object') return [];
+  if (m.type === 'user') {
+    return [{ role: 'user', content: [{ type: 'text', text: m.text || '' }] }];
+  }
+  if (m.type !== 'assistant') return [];
+  const content = [];
+  const results = [];
+  for (const part of m.content || []) {
+    if (!part) continue;
+    if (part.type === 'text' && part.text) {
+      content.push({ type: 'text', text: part.text });
+    } else if (part.type === 'reasoning' && part.text) {
+      content.push({ type: 'thinking', thinking: part.text });
+    } else if (part.type === 'tool') {
+      const st = part.state || {};
+      content.push({
+        type: 'toolCall',
+        id: part.id,
+        name: part.name,
+        arguments: st.input,
+      });
+      if (st.status === 'completed' || st.status === 'error') {
+        const errMsg = st.error && (st.error.message || String(st.error));
+        results.push({
+          role: 'toolResult',
+          toolCallId: part.id,
+          toolName: part.name,
+          isError: st.status === 'error',
+          content: st.status === 'error' ? errMsg || 'tool failed' : (st.result ?? st.content ?? ''),
+        });
+      }
+    }
+  }
+  return [{ role: 'assistant', content }, ...results];
+}
+
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const srv = createNetServer();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const { port } = srv.address();
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+// Spawn `opencode serve` ourselves rather than via the SDK's createOpencode():
+// the SDK pins the process env at spawn time, while each chat needs its own
+// env (AGENT_BROWSER_SESSION et al. reach the agent's bash tool through the
+// server process). Resolves with { url, close } once the server reports ready.
+function spawnOpencodeServer({ cwd, env = process.env, extraEnv = {}, timeoutMs = 15000, logger = () => {} } = {}) {
+  return (async () => {
+    const bin = whichOnPath(OPENCODE_BIN, env);
+    if (!bin) {
+      throw new Error(`opencode CLI not found on PATH — install with ${'npm i -g opencode-ai'}`);
+    }
+    const port = await freePort();
+    const proc = spawn(bin, ['serve', `--hostname=127.0.0.1`, `--port=${port}`], {
+      cwd,
+      env: { ...env, ...extraEnv },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let output = '';
+    const url = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        proc.kill();
+        reject(new Error(`opencode serve did not start within ${timeoutMs}ms`));
+      }, timeoutMs);
+      if (typeof timer.unref === 'function') timer.unref();
+      const onData = (chunk) => {
+        output += chunk;
+        const m = /on\s+(https?:\/\/\S+)/.exec(output);
+        if (m) {
+          clearTimeout(timer);
+          resolve(m[1]);
+        }
+      };
+      proc.stdout.on('data', onData);
+      proc.stderr.on('data', onData);
+      proc.once('exit', (code) => {
+        clearTimeout(timer);
+        reject(new Error(`opencode serve exited ${code}: ${output.trim()}`));
+      });
+      proc.once('error', (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+    logger(`opencode serve up at ${url}`);
+    return {
+      url,
+      close() {
+        try {
+          proc.kill();
+        } catch {
+          /* already gone */
+        }
+      },
+    };
+  })();
+}
+
+// Adapt one opencode session to the pi-session contract createChatHub speaks.
+function makeOpencodeSessionAdapter({ client, sessionID, models, cwd }) {
+  const subscribers = new Set();
+  let pump = null;
+  let disposed = false;
+  let streaming = false;
+  let messages = [];
+  let messagesFetched = false;
+  let model = null;
+  let onSessionEvent = () => {};
+
+  const adapter = {
+    sessionId: sessionID,
+    agent: { state: {} },
+    // A minimal modelRegistry shim for the hub's setModel path.
+    modelRegistry: {
+      find: (provider, id) =>
+        (models() || []).find((m) => m.id === id && (!provider || m.provider === provider)) || null,
+      getAvailable: () => models() || [],
+    },
+    subscribe(cb) {
+      subscribers.add(cb);
+      ensurePump();
+      return () => subscribers.delete(cb);
+    },
+    async prompt(text, opts = {}) {
+      const res = await client.session.prompt({
+        sessionID,
+        prompt: { text },
+        ...(streaming || opts.streamingBehavior === 'steer' ? { delivery: 'steer' } : {}),
+      });
+      if (res && res.error) throw new Error(res.error.message || JSON.stringify(res.error));
+      refreshMessages();
+    },
+    async abort() {
+      try {
+        await client.session.interrupt({ sessionID });
+      } catch {
+        /* idle interruption is a no-op server-side */
+      }
+    },
+    async setModel(m) {
+      if (!m || !m.id) throw new Error('model id is required');
+      const res = await client.session.switchModel({
+        sessionID,
+        model: { providerID: m.provider, id: m.id },
+      });
+      if (res && res.error) throw new Error(res.error.message || JSON.stringify(res.error));
+      model = { provider: m.provider, id: m.id, label: m.label || m.id };
+    },
+    setThinkingLevel() {
+      /* opencode has no thinking-level control */
+    },
+    getAvailableThinkingLevels: () => [],
+    dispose() {
+      disposed = true;
+      subscribers.clear();
+      if (pump) {
+        pump.cancelled = true;
+        pump = null;
+      }
+    },
+  };
+
+  Object.defineProperty(adapter, 'isStreaming', { get: () => streaming });
+  Object.defineProperty(adapter, 'messages', { get: () => messages });
+  Object.defineProperty(adapter, 'model', { get: () => model });
+
+  function emit(ev) {
+    if (!ev) return;
+    for (const cb of subscribers) {
+      try {
+        cb(ev);
+      } catch {
+        /* subscriber threw */
+      }
+    }
+  }
+
+  async function refreshMessages() {
+    try {
+      const res = await client.session.messages({ sessionID, order: 'asc' });
+      const rows = (res && (res.data?.data ?? res.data)) || [];
+      const out = [];
+      for (const m of rows) out.push(...mapOpencodeMessage(m));
+      messages = out;
+      messagesFetched = true;
+    } catch {
+      /* keep last snapshot */
+    }
+  }
+
+  function ensurePump() {
+    if (pump || disposed) return;
+    const pumpState = { cancelled: false };
+    pump = pumpState;
+    (async () => {
+      try {
+        // The GLOBAL stream (/api/event) — not session.events — carries
+        // session.idle / session.status / session.error alongside every
+        // session.next.* durable event, so one subscription covers the whole
+        // lifecycle. Payload fields live under `properties` here.
+        const sub = await client.event.subscribe();
+        for await (const ev of sub.stream) {
+          if (pumpState.cancelled || disposed) break;
+          if (!ev || typeof ev !== 'object') continue;
+          const d = ev.properties ?? ev.data ?? {};
+          // Events belonging to another session on this server are noise.
+          if (d.sessionID && d.sessionID !== sessionID) continue;
+          if (ev.type === 'session.status') {
+            if (d.status && d.status.type === 'busy') streaming = true;
+            if (d.status && d.status.type === 'idle') streaming = false;
+          }
+          if (ev.type === 'session.idle') streaming = false;
+          if (
+            ev.type === 'session.next.prompt.admitted' ||
+            ev.type === 'session.next.tool.called' ||
+            ev.type === 'session.next.step.started'
+          ) {
+            streaming = true;
+          }
+          if (ev.type === 'message.updated' || ev.type === 'session.idle') refreshMessages();
+          onSessionEvent(ev);
+          emit(mapOpencodeEvent(ev));
+        }
+      } catch (err) {
+        if (!disposed && !pumpState.cancelled) {
+          emit({ type: 'error', message: `opencode event stream: ${(err && err.message) || err}` });
+        }
+      }
+    })();
+  }
+
+  // Seed the initial model + history when the session is created.
+  adapter.init = async () => {
+    try {
+      const res = await client.session.get({ sessionID });
+      const info = res && (res.data ?? res);
+      if (info && info.model) {
+        model = { provider: info.model.providerID, id: info.model.id, label: info.model.id };
+      }
+    } catch {
+      /* model picker still works via setModel */
+    }
+    await refreshMessages();
+  };
+  adapter.__onEvent = (cb) => {
+    onSessionEvent = cb || (() => {});
+  };
+  adapter.__setStreamingForTests = (v) => {
+    streaming = v;
+  };
+  void cwd;
+  void messagesFetched;
+
+  return adapter;
+}
+
+/**
+ * Build a chat hub on the opencode v2 stack: `opencode serve` subprocess +
+ * @opencode-ai/sdk client. The CLI binary must be on PATH; the SDK resolves
+ * like the pi SDK (node_modules chain, AGENT_QA_OPENCODE_SDK, or sdkPath).
+ * @param {object} config  Same knobs as createChatBackend plus
+ *   config.bashEnv — env merged into the `opencode serve` process so the
+ *   agent's bash tool sees this chat's AGENT_BROWSER_SESSION et al.
+ */
+export async function createOpencodeBackend(config = {}) {
+  const { sdk } = await loadOpencodeSdk(config);
+  if (typeof sdk.createOpencodeClient !== 'function') {
+    throw new Error(`${OPENCODE_PKG} resolved but exports no createOpencodeClient (v2 SDK required)`);
+  }
+  const cwd = config.cwd || process.cwd();
+  const bashEnv = typeof config.bashEnv === 'function' ? config.bashEnv() || {} : {};
+  const server = await spawnOpencodeServer({
+    cwd,
+    env: config.env || process.env,
+    extraEnv: bashEnv,
+    logger: config.logger,
+  });
+  const client = sdk.createOpencodeClient({ baseUrl: server.url, directory: cwd });
+
+  // Model catalog for the picker (client.model.list → ModelV2Info[]).
+  let modelCache = null;
+  const listModels = async () => {
+    try {
+      const res = await client.model.list({ location: { directory: cwd } });
+      const rows = (res && (res.data?.data ?? res.data)) || [];
+      const out = [];
+      for (const m of Array.isArray(rows) ? rows : []) {
+        if (!m || !m.id || !m.providerID) continue;
+        out.push({ provider: m.providerID, id: m.id, label: m.name || m.id });
+      }
+      modelCache = out;
+      return out;
+    } catch {
+      return modelCache || [];
+    }
+  };
+  // Warm once so the picker isn't empty on first open; refresh failures are
+  // non-fatal (opencode can also pick a default model server-side).
+  await listModels();
+
+  const createSession = async () => {
+    const res = await client.session.create({ location: { directory: cwd } });
+    const info = res && (res.data ?? res);
+    const sessionID = info && (info.id || info.sessionID);
+    if (!sessionID) throw new Error('opencode session.create returned no session id');
+    const adapter = makeOpencodeSessionAdapter({
+      client,
+      sessionID,
+      models: () => modelCache,
+      cwd,
+    });
+    await adapter.init();
+    return adapter;
+  };
+
+  const hub = createChatHub({
+    createSession,
+    listModels: () => modelCache || [],
+    idleMs: config.idleMs,
+    logger: config.logger,
+  });
+  // Closing the hub also stops the `opencode serve` child.
+  const dispose = hub.dispose;
+  hub.dispose = () => {
+    try {
+      server.close();
+    } finally {
+      dispose();
+    }
+  };
+  return hub;
+}
+
+/**
+ * Resolve the configured chat backend and return a ready chat hub.
  * @param {object} config
+ * @param {string} [config.backend]    'pi' | 'opencode' — defaults to
+ *   $AGENT_QA_CHAT_BACKEND, then 'pi' when its SDK resolves, else 'opencode'
+ *   when usable. An explicit value is honored strictly (errors surface).
  * @param {string} [config.cwd]        cwd for skill/extension discovery (repo root).
  * @param {string} [config.agentDir]   global config dir (~/.pi/agent by default).
  * @param {string} [config.sdkPath]    explicit SDK path override.
@@ -776,6 +1267,25 @@ function makeSessionFactory(sdk, config = {}, shared = {}) {
  * @param {(msg:string)=>void} [config.logger]
  */
 export async function createChatBackend(config = {}) {
+  const env = config.env || process.env;
+  let backend = config.backend || env.AGENT_QA_CHAT_BACKEND || null;
+  if (!backend) {
+    const det = detectChatBackends({ env });
+    backend = det.pi.available ? 'pi' : det.opencode.available ? 'opencode' : 'pi';
+  }
+  if (backend !== 'opencode' && backend !== 'pi') {
+    throw new Error(`unknown chat backend "${backend}" — expected pi or opencode`);
+  }
+  const hub = backend === 'opencode' ? await createOpencodeBackend(config) : await createPiBackend(config);
+  // Stamp the backend id into /api/chat/state so the UI can label it.
+  const getState = hub.getState;
+  if (typeof getState === 'function') {
+    hub.getState = async () => ({ backend, ...(await getState.call(hub)) });
+  }
+  return hub;
+}
+
+async function createPiBackend(config = {}) {
   const { sdk } = await loadPiSdk(config);
   const { AuthStorage, ModelRegistry } = sdk;
   // One registry, shared between the session factory and the model picker.
@@ -807,4 +1317,7 @@ export const __internal = {
   whichOnPath,
   resolveAgentQaSkillDirs,
   AGENT_QA_PRIMER,
+  spawnOpencodeServer,
+  makeOpencodeSessionAdapter,
+  freePort,
 };

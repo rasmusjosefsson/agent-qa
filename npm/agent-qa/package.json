@@ -30,6 +30,7 @@
   },
   "optionalDependencies": {
     "@earendil-works/pi-coding-agent": "0.80.2",
+    "@opencode-ai/sdk": "1.18.31",
     "@rasmusjosefsson/agent-qa-darwin-arm64": "0.0.0",
     "@rasmusjosefsson/agent-qa-darwin-x64": "0.0.0",
     "@rasmusjosefsson/agent-qa-linux-x64": "0.0.0",
