@@ -4,6 +4,7 @@
 //!   scenario validate <file>      Validate against the embedded schema.
 //!   scenario summary <file>       One-line per-step summary.
 //!   scenario inputs <file>        List declared inputs (--json optional).
+//!   scenario insert <file> ...    Splice a validated step into a saved scenario.
 
 use std::fs;
 use std::path::Path;
@@ -170,6 +171,28 @@ pub fn run(args: &[String]) -> Result<u8> {
                 .ok_or_else(|| anyhow!("usage: scenario coverage <file> [--json]"))?;
             let json_out = args.iter().any(|a| a == "--json");
             coverage(Path::new(file), json_out)
+        }
+        Some("coverage-all") => {
+            let mut filter: Option<String> = None;
+            let mut json_out = false;
+            let mut it = args.iter().skip(1).peekable();
+            while let Some(a) = it.next() {
+                match a.as_str() {
+                    "--json" => json_out = true,
+                    "--filter" => {
+                        filter = Some(
+                            it.next()
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--filter requires a substring"))?,
+                        )
+                    }
+                    s if s.starts_with("--filter=") => {
+                        filter = Some(s["--filter=".len()..].to_string())
+                    }
+                    other => bail!("unknown flag {other:?}"),
+                }
+            }
+            coverage_all(filter.as_deref(), json_out)
         }
         Some("check") => {
             let file = args.get(1).ok_or_else(|| {
@@ -450,6 +473,64 @@ pub fn run(args: &[String]) -> Result<u8> {
             let json_out = args.iter().any(|a| a == "--json");
             inputs(Path::new(file), json_out)
         }
+        Some("insert") => {
+            let mut file: Option<&str> = None;
+            let mut kind: Option<&str> = None;
+            let mut draft: Option<&str> = None;
+            let mut after: Option<String> = None;
+            let mut at: Option<usize> = None;
+            let mut it = args[1..].iter();
+            while let Some(a) = it.next() {
+                match a.as_str() {
+                    "--after" => {
+                        after = Some(
+                            it.next()
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--after requires a step id"))?,
+                        )
+                    }
+                    s if s.starts_with("--after=") => {
+                        after = Some(s["--after=".len()..].to_string())
+                    }
+                    "--at" => {
+                        let v = it
+                            .next()
+                            .cloned()
+                            .ok_or_else(|| anyhow!("--at requires an index"))?;
+                        at = Some(
+                            v.parse()
+                                .map_err(|_| anyhow!("--at must be a non-negative integer"))?,
+                        )
+                    }
+                    s if s.starts_with("--at=") => {
+                        at = Some(
+                            s["--at=".len()..]
+                                .parse()
+                                .map_err(|_| anyhow!("--at must be a non-negative integer"))?,
+                        )
+                    }
+                    other if other.starts_with("--") => bail!("unknown flag {other:?}"),
+                    other => {
+                        if file.is_none() {
+                            file = Some(other);
+                        } else if kind.is_none() {
+                            kind = Some(other);
+                        } else if draft.is_none() {
+                            draft = Some(other);
+                        } else {
+                            bail!("unexpected positional {other:?}");
+                        }
+                    }
+                }
+            }
+            let (file, kind, draft) = match (file, kind, draft) {
+                (Some(f), Some(k), Some(d)) => (f, k, d),
+                _ => bail!(
+                    "usage: scenario insert <file> <do|check> <draft-json> [--after <stepId> | --at <index>]"
+                ),
+            };
+            insert(Path::new(file), kind, draft, after.as_deref(), at)
+        }
         Some("new") => {
             let mut file: Option<&str> = None;
             let mut force = false;
@@ -491,14 +572,18 @@ pub fn run(args: &[String]) -> Result<u8> {
             Ok(0)
         }
         Some(other) => bail!(
-            "unknown subverb {other:?}. Try: validate <file> | summary <file> | inputs <file> [--json] | new <file>"
+            "unknown subverb {other:?}. Try: validate <file> | summary <file> | inputs <file> [--json] | new <file> | insert <file> <do|check> <draft-json>"
         ),
     }
 }
 
 fn help() {
     println!(
-        "agent-qa scenario — operations on a scenario JSON\n\nUsage:\n  agent-qa scenario validate <file> [--json | --format text|json|github]\n                                            Schema-validate the scenario (use '-' for stdin)\n  agent-qa scenario check <file> [--strict]  Schema-validate AND lint in one pass\n                                            (combined exit code: 0 iff both pass).\n                                            (use '-' for stdin)\n  agent-qa scenario check-all [--strict]     Same combo across every scenario under the\n                                            scenarios root; exit 1 iff any fail.\n  agent-qa scenario validate-all [--json | --format text|json|github]\n                                            Schema-validate every scenario under the\n                                            scenarios root; exit 1 iff any fail\n  agent-qa scenario ls [--filter <substr>] [--json]\n                                            Print every sid under the scenarios root,\n                                            one per line (lex sort).\n  agent-qa scenario latest [--filter <substr>]\n                                            Print the sid whose scenario.json was most\n                                            recently modified.\n  agent-qa scenario count [--filter <substr>] [--json]\n                                            Print the number of scenarios under the root.\n                                            --filter narrows to sids containing <substr>.\n                                            --json wraps the count + filter in a JSON object.\n  agent-qa scenario summary  <file> [--filter <substr>] [--json]\n                                            Per-step summary (id, kind, verb/claim).\n                                            (use '-' for stdin)\n                                            --filter: case-insensitive substring\n                                            matched against id/intent/verb.\n  agent-qa scenario inputs   <file> [--json] List declared inputs (type/default/sensitive)\n  agent-qa scenario new      <file>          Scaffold a minimal valid scenario.json\n                                            (--force to overwrite, --url, --intent)\n  agent-qa scenario diff <a> <b>             Unified diff between two scenario.json files\n                                            (canonicalised JSON; exit 1 on difference)\n  agent-qa scenario hash <file>              SHA-256 of scenario.json bytes (same algorithm\n                                            replay + heal-promote use for the rebase guard)\n  agent-qa scenario id <file>                Print the scenario's id field (one line)\n  agent-qa scenario intent <file>            Print the scenario's intent field (one line)\n  agent-qa scenario step-ids <file>          Print every step id, one per line\n  agent-qa scenario field <file> <name>      Print any top-level scenario field (id, intent,\n                                            schema, etc.); object/array → compact JSON.\n  agent-qa scenario coverage <file> [--json] Per-step check coverage: how many do steps are\n                                            followed by a check claim, and how many are bare.\n  agent-qa scenario lint <file> [--json] [--strict] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run common lints (use '-' for stdin)\n                                            (duplicate ids, empty intent, bare do,\n                                            undeclared/unused inputs). Exit 1 iff\n                                            any errors are reported (--strict treats\n                                            warnings as errors). --rule narrows to specific\n                                            codes; --exclude-rule subtracts (both repeatable).\n                                            --format github emits GitHub Actions annotations.\n  agent-qa scenario lint --list-rules [--json]\n                                            Enumerate the lint rules + their severities.\n  agent-qa scenario lint-all [--json] [--strict] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run lints against every scenario under the\n                                            scenarios root; exit 1 iff any errors are reported\n                                            (--strict treats warnings as errors). --rule\n                                            narrows to specific codes; --exclude-rule\n                                            subtracts (both repeatable).\n  agent-qa scenario rename <sid> <new-sid>   Rename a scenario: patches scenario.json's id\n                                            field, then moves the directory under the\n                                            scenarios root. (refuses to overwrite).\n  agent-qa scenario copy <sid> <new-sid>     Copy a scenario (scenario.json with id patched);\n                                            replays are NOT copied. Refuses to overwrite.\n  agent-qa scenario delete <sid> [--yes/-y]  Remove a scenario directory + all its replays.\n                                            Dry-run by default; --yes confirms.\n  agent-qa scenario prune-replays <sid> --keep N [--yes] [--keep-failed]\n                                            Keep the N most recent replays under\n                                            <sid>/replays/; dry-run by default.\n                                            --keep-failed preserves all non-zero-exit\n                                            runs regardless of N.\n  agent-qa scenario prune-all --keep N [--yes] [--keep-failed]\n                                            Like prune-replays but across every scenario\n                                            under the scenarios root. --keep-failed\n                                            preserves failed runs per scenario."
+        "agent-qa scenario — operations on a scenario JSON\n\nUsage:\n  agent-qa scenario validate <file> [--json | --format text|json|github]\n                                            Schema-validate the scenario (use '-' for stdin)\n  agent-qa scenario check <file> [--strict]  Schema-validate AND lint in one pass\n                                            (combined exit code: 0 iff both pass).\n                                            (use '-' for stdin)\n  agent-qa scenario check-all [--strict]     Same combo across every scenario under the\n                                            scenarios root; exit 1 iff any fail.\n  agent-qa scenario validate-all [--json | --format text|json|github]\n                                            Schema-validate every scenario under the\n                                            scenarios root; exit 1 iff any fail\n  agent-qa scenario ls [--filter <substr>] [--json]\n                                            Print every sid under the scenarios root,\n                                            one per line (lex sort).\n  agent-qa scenario latest [--filter <substr>]\n                                            Print the sid whose scenario.json was most\n                                            recently modified.\n  agent-qa scenario count [--filter <substr>] [--json]\n                                            Print the number of scenarios under the root.\n                                            --filter narrows to sids containing <substr>.\n                                            --json wraps the count + filter in a JSON object.\n  agent-qa scenario summary  <file> [--filter <substr>] [--json]\n                                            Per-step summary (id, kind, verb/claim).\n                                            (use '-' for stdin)\n                                            --filter: case-insensitive substring\n                                            matched against id/intent/verb.\n  agent-qa scenario inputs   <file> [--json] List declared inputs (type/default/sensitive)\n  agent-qa scenario new      <file>          Scaffold a minimal valid scenario.json\n                                            (--force to overwrite, --url, --intent)\n  agent-qa scenario insert <file> <do|check> <draft-json> [--after <stepId> | --at <index>]
+                                            Splice a validated step into a saved scenario.
+                                            Draft shape matches record-step (id/kind
+                                            omitted); position defaults to the end.
+  agent-qa scenario diff <a> <b>             Unified diff between two scenario.json files\n                                            (canonicalised JSON; exit 1 on difference)\n  agent-qa scenario hash <file>              SHA-256 of scenario.json bytes (same algorithm\n                                            replay + heal-promote use for the rebase guard)\n  agent-qa scenario id <file>                Print the scenario's id field (one line)\n  agent-qa scenario intent <file>            Print the scenario's intent field (one line)\n  agent-qa scenario step-ids <file>          Print every step id, one per line\n  agent-qa scenario field <file> <name>      Print any top-level scenario field (id, intent,\n                                            schema, etc.); object/array → compact JSON.\n  agent-qa scenario coverage <file> [--json] Per-step check coverage: how many do steps are\n                                            followed by a check claim, and how many are bare.\n  agent-qa scenario coverage-all [--filter <substr>] [--json]\n                                            The same ratio rolled up across every scenario under\n                                            the root — per-scenario rows sorted worst-first plus\n                                            an OVERALL rollup.\n  agent-qa scenario lint <file> [--json] [--strict] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run common lints (use '-' for stdin)\n                                            (duplicate ids, empty intent, bare do,\n                                            undeclared/unused inputs). Exit 1 iff\n                                            any errors are reported (--strict treats\n                                            warnings as errors). --rule narrows to specific\n                                            codes; --exclude-rule subtracts (both repeatable).\n                                            --format github emits GitHub Actions annotations.\n  agent-qa scenario lint --list-rules [--json]\n                                            Enumerate the lint rules + their severities.\n  agent-qa scenario lint-all [--json] [--strict] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run lints against every scenario under the\n                                            scenarios root; exit 1 iff any errors are reported\n                                            (--strict treats warnings as errors). --rule\n                                            narrows to specific codes; --exclude-rule\n                                            subtracts (both repeatable).\n  agent-qa scenario rename <sid> <new-sid>   Rename a scenario: patches scenario.json's id\n                                            field, then moves the directory under the\n                                            scenarios root. (refuses to overwrite).\n  agent-qa scenario copy <sid> <new-sid>     Copy a scenario (scenario.json with id patched);\n                                            replays are NOT copied. Refuses to overwrite.\n  agent-qa scenario delete <sid> [--yes/-y]  Remove a scenario directory + all its replays.\n                                            Dry-run by default; --yes confirms.\n  agent-qa scenario prune-replays <sid> --keep N [--yes] [--keep-failed]\n                                            Keep the N most recent replays under\n                                            <sid>/replays/; dry-run by default.\n                                            --keep-failed preserves all non-zero-exit\n                                            runs regardless of N.\n  agent-qa scenario prune-all --keep N [--yes] [--keep-failed]\n                                            Like prune-replays but across every scenario\n                                            under the scenarios root. --keep-failed\n                                            preserves failed runs per scenario."
     );
 }
 
@@ -546,6 +631,67 @@ fn new(path: &Path, force: bool, url: &str, intent: &str) -> Result<u8> {
     bytes.push(b'\n');
     fs::write(path, &bytes).with_context(|| format!("write {}", path.display()))?;
     println!("wrote {} ({} bytes)", path.display(), bytes.len());
+    Ok(0)
+}
+
+/// `scenario insert <file> <do|check> <draft-json> [--after <stepId> | --at
+/// <index>]` splices a validated step into a saved scenario. The draft uses
+/// the same shape as `record-step` (id/kind omitted — kind comes from the
+/// arg, id is minted as the first free `s<n>`). Position defaults to the
+/// end; `--after` resolves a step id to the slot right behind it, `--at`
+/// takes a raw index.
+fn insert(
+    path: &Path,
+    kind_arg: &str,
+    draft_json: &str,
+    after: Option<&str>,
+    at: Option<usize>,
+) -> Result<u8> {
+    if after.is_some() && at.is_some() {
+        bail!("pass --after or --at, not both");
+    }
+    let mut sc = load_scenario(path)?;
+    let kind = crate::record_step::StepKind::parse(kind_arg)?;
+    let pos = match (after, at) {
+        (Some(id), None) => {
+            let idx = sc
+                .steps
+                .iter()
+                .position(|s| s.id() == id)
+                .ok_or_else(|| anyhow!("no step with id {id:?}"))?;
+            idx + 1
+        }
+        (None, Some(i)) => {
+            if i > sc.steps.len() {
+                bail!("--at {i} out of range ({} steps)", sc.steps.len());
+            }
+            i
+        }
+        (None, None) => sc.steps.len(),
+        (Some(_), Some(_)) => unreachable!(),
+    };
+    let mut n = sc.steps.len();
+    let step_id = loop {
+        let candidate = format!("s{n}");
+        if sc.steps.iter().all(|s| s.id() != candidate) {
+            break candidate;
+        }
+        n += 1;
+    };
+    let payload: serde_json::Value =
+        serde_json::from_str(draft_json).context("draft must be a JSON object")?;
+    let step = crate::record_step::parse_draft(kind, &payload, &step_id)?;
+    sc.steps.insert(pos, step);
+    let body = serde_json::to_value(&sc)?;
+    schema::validate_value(&body)
+        .context("scenario with the inserted step failed schema validation")?;
+    let mut bytes = serde_json::to_string_pretty(&body)?.into_bytes();
+    bytes.push(b'\n');
+    fs::write(path, &bytes).with_context(|| format!("write {}", path.display()))?;
+    println!(
+        "inserted {kind_arg} step at {pos} (id={step_id}); {} step(s)",
+        sc.steps.len()
+    );
     Ok(0)
 }
 
@@ -1388,46 +1534,70 @@ fn collect_step_refs(v: &serde_json::Value, out: &mut std::collections::HashSet<
     }
 }
 
-fn coverage(path: &Path, json_out: bool) -> Result<u8> {
-    let _guard = crate::io::stdin_or_path(path)?;
-    let path = _guard.path();
-    let j = load_scenario(path)?;
+/// The do→check coverage heuristic shared by `coverage` + `coverage-all`:
+/// a `do` step is covered iff the step immediately after it is a `check`;
+/// consecutive dos leave every earlier one bare, and a trailing do is bare.
+#[derive(Debug, Default, Clone, Copy)]
+struct CoverageCounts {
+    total: usize,
+    do_steps: usize,
+    check_steps: usize,
+    do_followed_by_check: usize,
+    bare_do: usize,
+}
+
+impl CoverageCounts {
+    fn ratio(&self) -> f64 {
+        if self.do_steps == 0 {
+            1.0
+        } else {
+            self.do_followed_by_check as f64 / self.do_steps as f64
+        }
+    }
+}
+
+fn coverage_counts(steps: &[crate::scenario::Step]) -> CoverageCounts {
     use crate::scenario::Step;
-    let mut total = 0usize;
-    let mut do_steps = 0usize;
-    let mut check_steps = 0usize;
-    let mut do_followed_by_check = 0usize;
-    let mut bare_do = 0usize;
+    let mut c = CoverageCounts::default();
     let mut prev_was_do = false;
-    for step in &j.steps {
-        total += 1;
+    for step in steps {
+        c.total += 1;
         match step {
             Step::Do { .. } => {
                 if prev_was_do {
-                    // Previous do had no check after it.
-                    bare_do += 1;
+                    c.bare_do += 1;
                 }
-                do_steps += 1;
+                c.do_steps += 1;
                 prev_was_do = true;
             }
             Step::Check { .. } => {
-                check_steps += 1;
+                c.check_steps += 1;
                 if prev_was_do {
-                    do_followed_by_check += 1;
+                    c.do_followed_by_check += 1;
                     prev_was_do = false;
                 }
             }
         }
     }
     if prev_was_do {
-        // Trailing do with no check after it.
-        bare_do += 1;
+        c.bare_do += 1;
     }
-    let ratio = if do_steps == 0 {
-        1.0
-    } else {
-        do_followed_by_check as f64 / do_steps as f64
-    };
+    c
+}
+
+fn coverage(path: &Path, json_out: bool) -> Result<u8> {
+    let _guard = crate::io::stdin_or_path(path)?;
+    let path = _guard.path();
+    let j = load_scenario(path)?;
+    let c = coverage_counts(&j.steps);
+    let (total, do_steps, check_steps, do_followed_by_check, bare_do, ratio) = (
+        c.total,
+        c.do_steps,
+        c.check_steps,
+        c.do_followed_by_check,
+        c.bare_do,
+        c.ratio(),
+    );
     if json_out {
         #[derive(serde::Serialize)]
         #[serde(rename_all = "camelCase")]
@@ -1458,6 +1628,138 @@ fn coverage(path: &Path, json_out: bool) -> Result<u8> {
         println!("  bare do steps   : {bare_do}");
         println!("  coverage ratio  : {:.0}%", ratio * 100.0);
     }
+    Ok(0)
+}
+
+/// `scenario coverage-all` — the same do→check ratio rolled up across every
+/// scenario under the root. Per-file `coverage` answers "is this scenario
+/// thin?"; this answers "where does the suite leave do steps unchecked" —
+/// rows sort worst-first so gaps surface at the top.
+fn coverage_all(filter: Option<&str>, json_out: bool) -> Result<u8> {
+    let root = crate::paths::scenarios_root();
+    let needle = filter.map(|s| s.to_ascii_lowercase());
+    let mut rows: Vec<(String, String, CoverageCounts)> = Vec::new(); // sid, intent, counts
+    if let Ok(entries) = fs::read_dir(&root) {
+        for entry in entries.flatten() {
+            let dir = entry.path();
+            let sid = match dir.file_name().map(|s| s.to_string_lossy().into_owned()) {
+                Some(s) => s,
+                None => continue,
+            };
+            if !dir.is_dir() || !dir.join("scenario.json").is_file() {
+                continue;
+            }
+            if let Some(n) = &needle {
+                if !sid.to_ascii_lowercase().contains(n) {
+                    continue;
+                }
+            }
+            let j = match load_scenario(&dir.join("scenario.json")) {
+                Ok(j) => j,
+                Err(_) => continue,
+            };
+            rows.push((sid, j.intent.clone(), coverage_counts(&j.steps)));
+        }
+    }
+    rows.sort_by(|a, b| {
+        a.2.ratio()
+            .partial_cmp(&b.2.ratio())
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.0.cmp(&b.0))
+    });
+
+    let mut agg = CoverageCounts::default();
+    for (_, _, c) in &rows {
+        agg.total += c.total;
+        agg.do_steps += c.do_steps;
+        agg.check_steps += c.check_steps;
+        agg.do_followed_by_check += c.do_followed_by_check;
+        agg.bare_do += c.bare_do;
+    }
+
+    if json_out {
+        #[derive(serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Row<'a> {
+            sid: &'a str,
+            intent: &'a str,
+            total_steps: usize,
+            do_steps: usize,
+            do_followed_by_check: usize,
+            bare_do_steps: usize,
+            coverage_ratio: f64,
+        }
+        #[derive(serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Report<'a> {
+            scenarios_root: String,
+            scenarios: usize,
+            total_steps: usize,
+            do_steps: usize,
+            check_steps: usize,
+            do_followed_by_check: usize,
+            bare_do_steps: usize,
+            coverage_ratio: f64,
+            rows: Vec<Row<'a>>,
+        }
+        let report = Report {
+            scenarios_root: root.display().to_string(),
+            scenarios: rows.len(),
+            total_steps: agg.total,
+            do_steps: agg.do_steps,
+            check_steps: agg.check_steps,
+            do_followed_by_check: agg.do_followed_by_check,
+            bare_do_steps: agg.bare_do,
+            coverage_ratio: agg.ratio(),
+            rows: rows
+                .iter()
+                .map(|(sid, intent, c)| Row {
+                    sid,
+                    intent,
+                    total_steps: c.total,
+                    do_steps: c.do_steps,
+                    do_followed_by_check: c.do_followed_by_check,
+                    bare_do_steps: c.bare_do,
+                    coverage_ratio: c.ratio(),
+                })
+                .collect(),
+        };
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(0);
+    }
+
+    println!(
+        "coverage-all: {} ({} scenario(s))",
+        root.display(),
+        rows.len()
+    );
+    if rows.is_empty() {
+        return Ok(0);
+    }
+    println!(
+        "{:<24} {:>5} {:>5} {:>7} {:>5}  {:<5} intent",
+        "sid", "steps", "do", "do→ck", "bare", "ratio"
+    );
+    for (sid, intent, c) in &rows {
+        println!(
+            "{:<24} {:>5} {:>5} {:>7} {:>5}  {:>4.0}% {}",
+            sid,
+            c.total,
+            c.do_steps,
+            c.do_followed_by_check,
+            c.bare_do,
+            c.ratio() * 100.0,
+            intent.chars().take(40).collect::<String>()
+        );
+    }
+    println!(
+        "\nOVERALL: scenarios={} do={} do→check={} bare={} ratio={:.0}%",
+        rows.len(),
+        agg.do_steps,
+        agg.do_followed_by_check,
+        agg.bare_do,
+        agg.ratio() * 100.0
+    );
     Ok(0)
 }
 
@@ -2406,6 +2708,69 @@ mod tests {
     }
 
     #[test]
+    fn insert_splices_a_validated_step_and_mints_a_free_id() {
+        let tmp = TempDir::new().unwrap();
+        let p = write(
+            tmp.path(),
+            r#"{
+              "schema": "scenario/2", "id": "demo", "intent": "smoke",
+              "steps": [
+                { "id": "s0", "intent": "go", "kind": "do", "verb": "reload" },
+                { "id": "s1", "intent": "url ok", "kind": "check",
+                  "claim": { "subject": { "url": true }, "predicate": "exists" } }
+              ]
+            }"#,
+        );
+        insert(
+            &p,
+            "check",
+            r#"{"intent":"looks right","claim":{"subject":{"url":true},"predicate":"contains","value":"/done"}}"#,
+            Some("s0"),
+            None,
+        )
+        .unwrap();
+        let sc = load_scenario(&p).unwrap();
+        assert_eq!(sc.steps.len(), 3);
+        assert_eq!(sc.steps[1].id(), "s2");
+        assert_eq!(sc.steps[1].intent(), "looks right");
+        // --at 0 prepends; default appends.
+        insert(
+            &p,
+            "do",
+            r#"{"intent":"top","verb":"reload"}"#,
+            None,
+            Some(0),
+        )
+        .unwrap();
+        insert(&p, "do", r#"{"intent":"tail","verb":"wait"}"#, None, None).unwrap();
+        let sc = load_scenario(&p).unwrap();
+        assert_eq!(sc.steps.len(), 5);
+        assert_eq!(sc.steps[0].intent(), "top");
+        assert_eq!(sc.steps[4].intent(), "tail");
+        // Unknown --after id and out-of-range --at are errors, not writes.
+        assert!(insert(
+            &p,
+            "do",
+            r#"{"intent":"x","verb":"wait"}"#,
+            Some("nope"),
+            None
+        )
+        .is_err());
+        assert!(insert(&p, "do", r#"{"intent":"x","verb":"wait"}"#, None, Some(99)).is_err());
+        // An invalid draft leaves the file untouched.
+        let before = fs::read_to_string(&p).unwrap();
+        assert!(insert(
+            &p,
+            "check",
+            r#"{"claim":{"subject":{"url":true},"predicate":"exists"}}"#,
+            None,
+            None
+        )
+        .is_err());
+        assert_eq!(fs::read_to_string(&p).unwrap(), before);
+    }
+
+    #[test]
     fn inputs_prints_table() {
         let tmp = TempDir::new().unwrap();
         let p = write(
@@ -2638,6 +3003,75 @@ mod tests {
         );
         assert_eq!(coverage(&p, false).unwrap(), 0);
         assert_eq!(coverage(&p, true).unwrap(), 0);
+    }
+
+    #[test]
+    fn coverage_all_rolls_up_and_sorts_worst_first() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        // thin: 2 do, 0 checks → 0%; full: 1 do + 1 check → 100%.
+        let thin = tmp.path().join("thin");
+        std::fs::create_dir_all(&thin).unwrap();
+        fs::write(
+            thin.join("scenario.json"),
+            r#"{
+              "schema": "scenario/2", "id": "thin", "intent": "thin one",
+              "steps": [
+                { "id": "s0", "intent": "a", "kind": "do", "verb": "reload" },
+                { "id": "s1", "intent": "b", "kind": "do", "verb": "reload" }
+              ]
+            }"#,
+        )
+        .unwrap();
+        let full = tmp.path().join("full");
+        std::fs::create_dir_all(&full).unwrap();
+        fs::write(
+            full.join("scenario.json"),
+            r#"{
+              "schema": "scenario/2", "id": "full", "intent": "full one",
+              "steps": [
+                { "id": "s0", "intent": "a", "kind": "do", "verb": "reload" },
+                { "id": "s1", "intent": "b", "kind": "check",
+                  "claim": { "subject": { "url": true }, "predicate": "exists" } }
+              ]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(coverage_all(None, false).unwrap(), 0);
+        assert_eq!(coverage_all(None, true).unwrap(), 0);
+        // --filter narrows the rollup
+        assert_eq!(coverage_all(Some("full"), true).unwrap(), 0);
+        match prev {
+            Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    #[test]
+    fn coverage_counts_shared_heuristic() {
+        // Direct unit coverage of the shared counter: do,do,check → 1 bare.
+        let tmp = TempDir::new().unwrap();
+        let p = write(
+            tmp.path(),
+            r#"{
+              "schema": "scenario/2", "id": "x", "intent": "y",
+              "steps": [
+                { "id": "s0", "intent": "a", "kind": "do", "verb": "reload" },
+                { "id": "s1", "intent": "b", "kind": "do", "verb": "reload" },
+                { "id": "s2", "intent": "c", "kind": "check",
+                  "claim": { "subject": { "url": true }, "predicate": "exists" } }
+              ]
+            }"#,
+        );
+        let j = load_scenario(&p).unwrap();
+        let c = coverage_counts(&j.steps);
+        assert_eq!(c.total, 3);
+        assert_eq!(c.do_steps, 2);
+        assert_eq!(c.do_followed_by_check, 1);
+        assert_eq!(c.bare_do, 1);
+        assert!((c.ratio() - 0.5).abs() < 1e-9);
     }
 
     #[test]

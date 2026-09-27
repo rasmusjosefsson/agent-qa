@@ -4,7 +4,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::json;
 
 use crate::recorder_state::RecorderState;
-use crate::scenario::Step;
+use crate::scenario::{Scenario, Step};
 
 pub fn run(args: &[String]) -> Result<u8> {
     if args.is_empty() || matches!(args[0].as_str(), "-h" | "--help" | "help") {
@@ -16,11 +16,12 @@ pub fn run(args: &[String]) -> Result<u8> {
         "delete" | "rm" => cmd_delete(&args[1..]),
         "move" | "mv" => cmd_move(&args[1..]),
         "edit" => cmd_edit(&args[1..]),
+        "load" => cmd_load(&args[1..]),
         "check" => cmd_check(&args[1..]),
         "clear" => cmd_clear(),
         "discard" => cmd_discard(),
         other => {
-            bail!("buffer: unknown subcommand {other:?}; try list|delete|move|edit|check|clear|discard")
+            bail!("buffer: unknown subcommand {other:?}; try list|delete|move|edit|load|check|clear|discard")
         }
     }
 }
@@ -34,15 +35,20 @@ Usage:
   agent-qa buffer delete <index>
   agent-qa buffer move <from> <to>
   agent-qa buffer edit <index> <draft-json>
+  agent-qa buffer load <sid> [--force]
   agent-qa buffer check [--strict] [--format text|json|github]
   agent-qa buffer clear
   agent-qa buffer discard
 
 Edit replaces the step at <index> with a re-validated draft (same shape as
 `record-step`, minus id/kind — the step keeps its id and position; its kind
-may not change). Delete and move reassign dense s0, s1, ... ids. Check
-runs the `scenario check` verifier (schema + lint) on the scenario flush
-would write, without writing it. Discard removes the active recording."
+may not change). Delete and move reassign dense s0, s1, ... ids. Load pulls a
+saved scenario's steps into the buffer for editing (`flush` writes them back
+to the same sid, preserving fields the buffer doesn't model — inputs,
+templates, env.close). Check runs the `scenario check` verifier (schema +
+lint) on the scenario flush would write, without writing it. Discard removes
+the active recording."
+
     );
 }
 
@@ -86,6 +92,7 @@ fn cmd_list(args: &[String]) -> Result<u8> {
                 "session": state.session,
                 "baseline": state.baseline,
                 "paused": state.paused,
+                "editing": state.original.is_some(),
                 "rows": rows,
             }))?
         );
@@ -217,6 +224,67 @@ fn cmd_clear() -> Result<u8> {
 fn cmd_discard() -> Result<u8> {
     RecorderState::clear()?;
     println!("recording discarded");
+    Ok(0)
+}
+
+/// `buffer load <sid> [--force]` pulls a saved scenario's steps into the
+/// buffer so the buffer ops (edit/move/delete) apply to it; `flush` seals
+/// it back over the same sid. Refuses to clobber a non-empty buffer unless
+/// --force. The original document rides along on the state so `flush` can
+/// hand back the fields it doesn't model.
+fn cmd_load(args: &[String]) -> Result<u8> {
+    let mut sid: Option<&str> = None;
+    let mut force = false;
+    for a in args {
+        match a.as_str() {
+            "--force" => force = true,
+            other if other.starts_with("--") => bail!("unknown flag {other:?}"),
+            other => {
+                if sid.is_some() {
+                    bail!("unexpected positional {other:?}; usage: buffer load <sid> [--force]");
+                }
+                sid = Some(other);
+            }
+        }
+    }
+    let sid = sid.ok_or_else(|| anyhow!("usage: buffer load <sid> [--force]"))?;
+    if let Some(existing) = RecorderState::try_load_active()? {
+        if !existing.steps.is_empty() && !force {
+            bail!(
+                "buffer already holds {} step(s) for sid {:?} — flush or discard first (or --force)",
+                existing.steps.len(),
+                existing.sid,
+            );
+        }
+    }
+    let scenario_file = crate::paths::scenario_dir(sid)?.join("scenario.json");
+    let bytes = std::fs::read(&scenario_file)
+        .with_context(|| format!("read {}", scenario_file.display()))?;
+    let value = crate::schema::validate_bytes(&bytes)
+        .with_context(|| format!("validate {}", scenario_file.display()))?;
+    let sc: Scenario = serde_json::from_value(value.clone())
+        .with_context(|| format!("parse {} as Scenario", scenario_file.display()))?;
+    let mut state = RecorderState::new(
+        sid.to_string(),
+        sc.intent.clone(),
+        "default".into(),
+        crate::recorder_state::RecorderBaseline::KeepSession,
+        Some(format!("scenario:{sid}")),
+        crate::browser::BrowserConnection::default(),
+    );
+    state.env_open = sc
+        .env
+        .as_ref()
+        .and_then(|e| e.open.clone())
+        .unwrap_or_default();
+    state.steps = sc.steps.clone();
+    if let Some(recorded_at) = sc.produced_by.as_ref().and_then(|p| p.recorded_at.clone()) {
+        state.started_at = recorded_at;
+    }
+    state.original = Some(value);
+    let steps = state.steps.len();
+    state.save()?;
+    println!("loaded {sid} into the buffer ({steps} step(s))");
     Ok(0)
 }
 

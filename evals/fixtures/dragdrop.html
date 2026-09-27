@@ -1,0 +1,23 @@
+<!doctype html>
+<html><body>
+<ul role="list" aria-label="Todo" id="todo" style="min-height:60px">
+  <li role="listitem" draggable="true" id="a">Card A</li>
+  <li role="listitem" draggable="true" id="b">Card B</li>
+</ul>
+<ul role="list" aria-label="Done" id="done" style="min-height:60px"></ul>
+<div id="log">no drop</div>
+<script>
+document.querySelectorAll('[draggable]').forEach((el) => {
+  el.addEventListener('dragstart', (e) => e.dataTransfer.setData('text/plain', el.id));
+});
+document.querySelectorAll('ul').forEach((list) => {
+  list.addEventListener('dragover', (e) => e.preventDefault());
+  list.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const id = e.dataTransfer.getData('text/plain');
+    const it = document.getElementById(id);
+    if (it) { list.appendChild(it); document.getElementById('log').textContent = 'dropped ' + id + ' into ' + list.id; }
+  });
+});
+</script>
+</body></html>

@@ -36,7 +36,11 @@ function makeFixture() {
       schema: 'scenario/2',
       id: 'demo-scenario',
       intent: 'open example.com and click a missing button',
-      steps: [{ id: 'navHome' }, { id: 'headingVisible' }, { id: 'clickMissingLogin' }],
+      steps: [
+        { id: 'navHome', kind: 'do' },
+        { id: 'headingVisible', kind: 'check' },
+        { id: 'clickMissingLogin', kind: 'do' },
+      ],
     }),
   );
 
@@ -372,6 +376,58 @@ test('report viewer endpoints', async (t) => {
     assert.equal(sc.latestRun.summary, 'SUMMARY: 2/3 (FAIL)');
     assert.equal(sc.latestRun.state, 'done');
     assert.equal(sc.latestRun.ok, false);
+    // do→check coverage: navHome covered by headingVisible; clickMissingLogin bare.
+    assert.deepEqual(sc.coverage, { doSteps: 2, checked: 1, bare: 1, ratio: 0.5 });
+  });
+
+  await t.test('GET /api/health passes through audit health --json', async () => {
+    const seen = [];
+    const { server: hSrv, base: hBase } = await boot(fx.root, {
+      runCli: async (args) => {
+        seen.push(args.join(' '));
+        return {
+          stdout:
+            JSON.stringify([
+              { scenarioId: fx.sid, flaky: ['s1'], slow: [], chronic: ['s2'] },
+            ]) + '\n',
+        };
+      },
+    });
+    try {
+      const res = await fetch(`${hBase}/api/health`);
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.deepEqual(seen, ['audit health --json']);
+      assert.equal(body.health.length, 1);
+      assert.equal(body.health[0].scenarioId, fx.sid);
+      assert.deepEqual(body.health[0].flaky, ['s1']);
+      assert.deepEqual(body.health[0].chronic, ['s2']);
+    } finally {
+      hSrv.close();
+    }
+  });
+
+  await t.test('GET /api/health degrades to [] when the CLI is absent or errors', async () => {
+    const { server: nSrv, base: nBase } = await boot(fx.root);
+    try {
+      const res = await fetch(`${nBase}/api/health`);
+      assert.equal(res.status, 200);
+      assert.deepEqual((await res.json()).health, []);
+    } finally {
+      nSrv.close();
+    }
+    const { server: eSrv, base: eBase } = await boot(fx.root, {
+      runCli: async () => {
+        throw new Error('cli exploded');
+      },
+    });
+    try {
+      const res = await fetch(`${eBase}/api/health`);
+      assert.equal(res.status, 200);
+      assert.deepEqual((await res.json()).health, []);
+    } finally {
+      eSrv.close();
+    }
   });
 
   await t.test('GET /runs returns replay history', async () => {
@@ -464,6 +520,90 @@ test('report viewer endpoints', async (t) => {
     const html = await res.text();
     assert.match(html, /<title>agent-qa<\/title>/);
     assert.match(html, /\/assets\/[A-Za-z0-9._-]+\.js/);
+  });
+
+  await t.test('POST /compare shells the CLI and returns the parsed report', async () => {
+    // The route runs `agent-qa compare <sid> <a> <b>` then reads back the
+    // newest <sid>/compare/<ts>__<a>-vs-<b>/ dir. Stub the CLI, pre-write the
+    // report dir it would have produced.
+    const cdir = path.join(fx.root, fx.sid, 'compare', '2099-01-01T00-00-00-000Z__a1-vs-b2');
+    fs.mkdirSync(path.join(cdir, 'snapshots'), { recursive: true });
+    fs.mkdirSync(path.join(cdir, 'screenshots'), { recursive: true });
+    fs.writeFileSync(
+      path.join(cdir, 'compare.md'),
+      [
+        '# compare runA1 vs runB2',
+        '',
+        '## snapshots',
+        '',
+        '| step | outcome |',
+        '|---|---|',
+        '| navHome | SAME |',
+        '| headingVisible | CHANGED |',
+        '| extraStep | ONLY-B |',
+        '',
+        '## screenshots',
+        '',
+        '| step | outcome | differing pixels |',
+        '|---|---|---|',
+        '| navHome | SAME | - |',
+        '| headingVisible | CHANGED | 0.0312 |',
+        '',
+      ].join('\n'),
+    );
+    fs.writeFileSync(
+      path.join(cdir, 'snapshots', 'headingVisible.diff'),
+      '--- a\n+++ b\n@@ -1 +1 @@\n- old\n+ new\n',
+    );
+    fs.writeFileSync(path.join(cdir, 'screenshots', 'headingVisible.diff.png'), 'PNGX');
+    let failNext = false;
+    const calls = [];
+    const { server: cserver, base: cbase } = await boot(fx.root, {
+      runCli: async (args) => {
+        calls.push(args);
+        return failNext ? { code: 1, stdout: '', stderr: 'boom' } : { code: 0, stdout: '', stderr: '' };
+      },
+    });
+    try {
+      const res = await fetch(`${cbase}/api/scenarios/${fx.sid}/compare`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ runA: 'runA1', runB: 'runB2' }),
+      });
+      assert.equal(res.status, 200);
+      const j = await res.json();
+      assert.deepEqual(calls, [['compare', fx.sid, 'runA1', 'runB2']]);
+      assert.equal(j.runA, 'runA1');
+      assert.equal(j.runB, 'runB2');
+      assert.equal(j.snapshots.length, 3);
+      assert.equal(j.snapshots[0].outcome, 'SAME');
+      assert.equal(j.snapshots[0].diff, undefined);
+      assert.equal(j.snapshots[1].outcome, 'CHANGED');
+      assert.match(j.snapshots[1].diff, /\+ new/);
+      assert.equal(j.snapshots[2].outcome, 'ONLY-B');
+      assert.equal(j.screenshots.length, 2);
+      assert.equal(j.screenshots[1].outcome, 'CHANGED');
+      assert.equal(j.screenshots[1].differingPixels, 0.0312);
+      assert.equal(j.screenshots[1].hasDiffPng, true);
+      // The pixel-diff png is served back via the shots route.
+      const shot = await fetch(`${cbase}/api/scenarios/${fx.sid}/compare/${j.folder}/shots/headingVisible`);
+      assert.equal(shot.status, 200);
+      assert.equal(shot.headers.get('content-type'), 'image/png');
+      assert.equal(await shot.text(), 'PNGX');
+      const miss = await fetch(`${cbase}/api/scenarios/${fx.sid}/compare/${j.folder}/shots/nope`);
+      assert.equal(miss.status, 404);
+      // A nonzero CLI exit surfaces as 422 with the stderr text.
+      failNext = true;
+      const bad = await fetch(`${cbase}/api/scenarios/${fx.sid}/compare`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      assert.equal(bad.status, 422);
+      assert.match((await bad.json()).error, /boom/);
+    } finally {
+      cserver.close();
+    }
   });
 
   await t.test('GET /scenario returns the recorded definition', async () => {
@@ -1547,6 +1687,29 @@ test('chat recording controls run buffer verbs in the chat record dir', async (t
   const bad = await j('POST', `/api/chat/c/${chat.id}/recording/step-delete`, { index: -1 });
   assert.equal(bad.status, 400);
   assert.equal(calls.length, before);
+});
+
+test('POST /api/edit/load delegates to buffer load with a safe sid', async (t) => {
+  const fx = makeFixture();
+  const calls = [];
+  const deps = { runCli: async (args) => (calls.push(args), { code: 0, stdout: 'ok', stderr: '' }) };
+  const { server, base } = await boot(fx.root, deps);
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  let res = await j('POST', '/api/edit/load', { sid: 'flow' });
+  assert.equal(res.status, 200);
+  assert.deepEqual(calls.at(-1), ['buffer', 'load', 'flow']);
+
+  res = await j('POST', '/api/edit/load', { sid: 'flow', force: true });
+  assert.equal(res.status, 200);
+  assert.deepEqual(calls.at(-1), ['buffer', 'load', 'flow', '--force']);
+
+  res = await j('POST', '/api/edit/load', { sid: '../escape' });
+  assert.equal(res.status, 400);
+  res = await j('POST', '/api/edit/load', {});
+  assert.equal(res.status, 400);
 });
 
 test('autoConnectDefault is a no-op when no persona/environment is configured', async (t) => {

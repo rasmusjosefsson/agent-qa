@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getRoot } from '@/lib/api'
 import * as api from '@/lib/editor-api'
+import { getScenarios } from '@/lib/runs-api'
 import type {
   AriaNode,
   BufferState,
@@ -29,6 +30,7 @@ export function useEditor() {
   const [available, setAvailable] = useState(true)
   const [scenariosRoot, setScenariosRoot] = useState('')
   const [buffer, setBuffer] = useState<BufferState>({ sid: null, intent: null, rows: [] })
+  const [scenarioSids, setScenarioSids] = useState<string[]>([])
   const [ariaNodes, setAriaNodes] = useState<AriaNode[]>([])
   const [interactiveOnly, setInteractiveOnlyState] = useState(true)
   const [liveStatus, setLiveStatus] = useState<LiveStatus>({ text: 'idle', tone: 'idle' })
@@ -50,8 +52,11 @@ export function useEditor() {
   interactiveRef.current = interactiveOnly
 
   const refreshBuffer = useCallback(async () => {
-    const b = await api.getBuffer()
+    const [b, s] = await Promise.all([api.getBuffer(), getScenarios().catch(() => null)])
     setBuffer(b)
+    setScenarioSids(
+      s?.scenarios.filter((x) => x.hasScenario).map((x) => x.sid) ?? []
+    )
     return b
   }, [])
 
@@ -231,6 +236,21 @@ export function useEditor() {
     await refreshBuffer()
   }, [flash, refreshBuffer])
 
+  // Open a saved scenario's steps in the buffer; `flush` writes them back to
+  // the same sid. Only offered on the empty-buffer state, so no --force.
+  const loadScenario = useCallback(
+    async (sid: string) => {
+      const { ok, body } = await api.loadBuffer(sid)
+      if (!ok) {
+        flash(body.error || 'load failed', true)
+        return
+      }
+      flash(`editing ${sid} — flush writes back to the saved scenario`)
+      await refreshBuffer()
+    },
+    [flash, refreshBuffer]
+  )
+
   const moveRow = useCallback(
     async (from: number, to: number) => {
       if (to < 0) return
@@ -357,6 +377,7 @@ export function useEditor() {
     available,
     scenariosRoot,
     buffer,
+    scenarioSids,
     ariaNodes,
     interactiveOnly,
     liveStatus,
@@ -374,6 +395,7 @@ export function useEditor() {
     checkRunning,
     setCheckReport,
     cancelScenario,
+    loadScenario,
     moveRow,
     deleteRow,
     editRow,

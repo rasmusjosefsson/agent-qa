@@ -269,6 +269,15 @@
         },
         {
           "type": "object",
+          "required": ["shot"],
+          "additionalProperties": false,
+          "properties": {
+            "shot": { "type": "string", "minLength": 1 }
+          },
+          "$comment": "shot subject — visual diff: compares <run>/screenshots/<stepId>.png against <scenario>/baselines/<stepId>.png. Only predicate is 'matches'; pass when the differing-pixel fraction <= tolerance.pixels (default 0.01). Diff maps write to <run>/shots-diff/. Mint baselines with shot-accept."
+        },
+        {
+          "type": "object",
           "required": ["kind", "name"],
           "additionalProperties": false,
           "properties": {
@@ -375,6 +384,7 @@
             "tab",
             "viewport",
             "fileChooser",
+            "drag",
             "loop",
             "group",
             "useTemplate"
