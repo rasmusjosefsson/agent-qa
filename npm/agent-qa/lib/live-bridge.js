@@ -58,7 +58,60 @@ const KEYMAP = {
   ArrowRight: { code: 'ArrowRight', windowsVirtualKeyCode: 39 },
   ArrowDown: { code: 'ArrowDown', windowsVirtualKeyCode: 40 },
   Escape: { code: 'Escape', windowsVirtualKeyCode: 27 },
+  Delete: { code: 'Delete', windowsVirtualKeyCode: 46 },
+  Home: { code: 'Home', windowsVirtualKeyCode: 36 },
+  End: { code: 'End', windowsVirtualKeyCode: 35 },
+  PageUp: { code: 'PageUp', windowsVirtualKeyCode: 33 },
+  PageDown: { code: 'PageDown', windowsVirtualKeyCode: 34 },
+  F1: { code: 'F1', windowsVirtualKeyCode: 112 },
+  F2: { code: 'F2', windowsVirtualKeyCode: 113 },
+  F3: { code: 'F3', windowsVirtualKeyCode: 114 },
+  F4: { code: 'F4', windowsVirtualKeyCode: 115 },
+  F5: { code: 'F5', windowsVirtualKeyCode: 116 },
+  F6: { code: 'F6', windowsVirtualKeyCode: 117 },
+  F7: { code: 'F7', windowsVirtualKeyCode: 118 },
+  F8: { code: 'F8', windowsVirtualKeyCode: 119 },
+  F9: { code: 'F9', windowsVirtualKeyCode: 120 },
+  F10: { code: 'F10', windowsVirtualKeyCode: 121 },
+  F11: { code: 'F11', windowsVirtualKeyCode: 122 },
+  F12: { code: 'F12', windowsVirtualKeyCode: 123 },
 };
+
+// keydown events for the modifier keys themselves — a lone modifier press
+// does nothing, so it is neither dispatched nor recorded.
+const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta']);
+
+// CDP Input.dispatchKeyEvent modifier bitmask (Alt=1 Ctrl=2 Meta=4 Shift=8)
+// and the canonical `press` chord spelling (agent-browser order: Control,
+// Alt, Shift, Meta). ctrl→Control ordering differs between the two maps on
+// purpose: CDP wants a number, the verb wants a readable literal.
+const MOD_BITS = { alt: 1, ctrl: 2, meta: 4, shift: 8 };
+const MOD_ORDER = ['ctrl', 'alt', 'shift', 'meta'];
+const MOD_LABEL = { ctrl: 'Control', alt: 'Alt', shift: 'Shift', meta: 'Meta' };
+
+function modsMask(mods) {
+  if (!mods) return 0;
+  let bits = 0;
+  for (const k of Object.keys(MOD_BITS)) if (mods[k]) bits |= MOD_BITS[k];
+  return bits;
+}
+
+// `press` literal for a chorded key: Control+a, Shift+Tab, Control+Shift+s.
+// Printable keys are lowercased to match agent-browser's examples.
+function chordName(key, mods) {
+  const parts = MOD_ORDER.filter((k) => mods && mods[k]).map((k) => MOD_LABEL[k]);
+  parts.push(key.length === 1 ? key.toLowerCase() : key);
+  return parts.join('+');
+}
+
+// code/vk for a printable key when modifiers turn it into a chord
+// (a-z → KeyA/65, 0-9 → Digit0/48, else best-effort).
+function charCodes(ch) {
+  const up = ch.toUpperCase();
+  if (up >= 'A' && up <= 'Z') return { code: `Key${up}`, windowsVirtualKeyCode: up.charCodeAt(0) };
+  if (up >= '0' && up <= '9') return { code: `Digit${up}`, windowsVirtualKeyCode: up.charCodeAt(0) };
+  return { code: '', windowsVirtualKeyCode: up.charCodeAt(0) };
+}
 
 function createLiveBridge({
   getCdpUrl,
@@ -103,6 +156,48 @@ function createLiveBridge({
     const value = (el.value != null ? el.value : el.innerText) || '';
     return { name, value };
   })()`;
+
+  // Change events the input stream can't see: a <select> commits through a
+  // native popup (no DOM click), and a checkbox/radio's meaningful action is
+  // check/uncheck, not click. Installed into every document (auto-injected for
+  // new navigations + evaluated once for the current page); idempotent.
+  const RECORD_LISTENER_JS = `(() => {
+    if (window.__aqRecInstalled) return;
+    window.__aqRecInstalled = true;
+    const aqName = (t) => {
+      const lbl = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+      const aria = lbl(t.getAttribute('aria-label'));
+      if (aria) return aria;
+      const by = t.getAttribute('aria-labelledby');
+      if (by) {
+        const txt = lbl(by.split(/\\s+/).map((id) => {
+          const e = document.getElementById(id);
+          return e ? e.textContent : '';
+        }).join(' '));
+        if (txt) return txt;
+      }
+      if (t.labels && t.labels.length) { const s = lbl(t.labels[0].textContent); if (s) return s; }
+      return lbl(t.getAttribute('placeholder') || t.getAttribute('name') || t.getAttribute('id'));
+    };
+    document.addEventListener('change', (ev) => {
+      const t = ev.target;
+      if (!(t instanceof HTMLElement)) return;
+      let rec = null;
+      if (t.tagName === 'SELECT') {
+        const labels = Array.from(t.selectedOptions || [])
+          .map((o) => (o.textContent || o.value || '').trim())
+          .filter(Boolean);
+        rec = { kind: 'select', name: aqName(t), value: labels.join(',') };
+      } else if (t.tagName === 'INPUT' && (t.type === 'checkbox' || t.type === 'radio')) {
+        rec = { kind: t.checked ? 'check' : 'uncheck', name: aqName(t), role: t.type };
+      }
+      if (rec) { try { __aqRecord(JSON.stringify(rec)); } catch (e) { /* binding absent */ } }
+    }, true);
+  })()`;
+
+  // Clicks on these roles are dispatched but NOT recorded as 'click' — the
+  // page's change listener emits the honest verb (check/uncheck) instead.
+  const CHANGE_DRIVEN_ROLES = new Set(['checkbox', 'radio']);
 
   async function findPage(cdpUrl) {
     const u = new URL(cdpUrl);
@@ -271,6 +366,12 @@ function createLiveBridge({
       broadcastEvent('loaded', {});
       return;
     }
+    // Page-side record events (select / check / uncheck) raised by the
+    // injected listener via the __aqRecord binding.
+    if (msg.method === 'Runtime.bindingCalled' && msg.params && msg.params.name === '__aqRecord') {
+      handlePageRecord(msg.params.payload);
+      return;
+    }
     if (!msg.id) return;
     if (calls.has(msg.id)) {
       const { resolve, reject } = calls.get(msg.id);
@@ -309,6 +410,13 @@ function createLiveBridge({
           send('Page.enable');
           send('DOM.enable');
           send('Accessibility.enable');
+          // Auto-record needs the page's change events (select popups and
+          // check/uncheck produce none of the input events this bridge sees).
+          // Runtime.enable is required for bindingCalled to be delivered.
+          send('Runtime.enable');
+          send('Runtime.addBinding', { name: '__aqRecord' });
+          send('Page.addScriptToEvaluateOnNewDocument', { source: RECORD_LISTENER_JS });
+          send('Runtime.evaluate', { expression: RECORD_LISTENER_JS });
           requestMetrics();
           requestFrame(); // instant first frame
           startPolling();
@@ -425,6 +533,36 @@ function createLiveBridge({
     emitRecord('do', { intent: `fill ${info.name}`, verb: 'type', on: { role: 'textbox', name: info.name }, value: { from: 'literal', literal: info.value } });
   }
 
+  // Translate a __aqRecord binding payload ({kind, name, value, role}) into a
+  // recorded step. name '' → record-skip, same UX as an unnamed click.
+  function handlePageRecord(payload) {
+    let rec;
+    try {
+      rec = JSON.parse(payload);
+    } catch {
+      return;
+    }
+    if (!rec || typeof rec !== 'object') return;
+    if (!rec.name) {
+      broadcastEvent('record-skip', { reason: `${rec.kind} target has no accessible name` });
+      return;
+    }
+    if (rec.kind === 'select') {
+      emitRecord('do', {
+        intent: `select ${rec.value} in ${rec.name}`,
+        verb: 'select',
+        on: { role: 'combobox', name: rec.name },
+        value: { from: 'literal', literal: rec.value },
+      });
+    } else if (rec.kind === 'check' || rec.kind === 'uncheck') {
+      emitRecord('do', {
+        intent: `${rec.kind} ${rec.name}`,
+        verb: rec.kind,
+        on: { role: rec.role, name: rec.name },
+      });
+    }
+  }
+
   function bumpTyping() {
     typingDirty = true;
     if (typingTimer) clearTimeout(typingTimer);
@@ -449,7 +587,10 @@ function createLiveBridge({
     }
     dispatchClick(x, y); // now actually click
     if (el && CLICKABLE_ROLES.has(el.role)) {
-      if (el.name) {
+      if (CHANGE_DRIVEN_ROLES.has(el.role)) {
+        // The injected change listener records check/uncheck — a bare click
+        // here would double-record (and hide whether it set or cleared).
+      } else if (el.name) {
         emitRecord('do', { intent: `click ${el.name}`, verb: 'click', on: { role: el.role, name: el.name } });
       } else {
         broadcastEvent('record-skip', { reason: `${el.role} has no accessible name` });
@@ -462,6 +603,111 @@ function createLiveBridge({
     send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, buttons: 0 });
     send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 });
     send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 });
+  }
+
+  // The same drag gesture `do/drag` emits, run directly on the resolved nodes.
+  // CDP's dispatched mouse presses never initiate native HTML5 dnd, so the
+  // bridge performs the DOM-level chain itself: pointerdown/mousedown on the
+  // source, a shared-DataTransfer dragstart→enter/over→drop→dragend chain on
+  // the endpoints, pointerup/mouseup on the target. Element-targeted (not
+  // coordinate-targeted), so overlay interception can't swallow the drop and
+  // the gesture replays identically.
+  const DRAG_GESTURE_FN = `function (dst) {
+    const src = this;
+    const ctr = (el) => { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; };
+    const s = ctr(src), d = ctr(dst);
+    const o = (x, y, up) => ({ bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y, button: 0, buttons: up ? 0 : 1 });
+    src.dispatchEvent(new PointerEvent('pointerdown', o(s.x, s.y)));
+    src.dispatchEvent(new MouseEvent('mousedown', o(s.x, s.y)));
+    try {
+      const dt = new DataTransfer();
+      src.dispatchEvent(new DragEvent('dragstart', Object.assign(o(s.x, s.y), { dataTransfer: dt })));
+      document.dispatchEvent(new MouseEvent('mousemove', o(d.x, d.y)));
+      dst.dispatchEvent(new PointerEvent('pointermove', o(d.x, d.y)));
+      dst.dispatchEvent(new DragEvent('dragenter', Object.assign(o(d.x, d.y), { dataTransfer: dt })));
+      dst.dispatchEvent(new DragEvent('dragover', Object.assign(o(d.x, d.y), { dataTransfer: dt })));
+      dst.dispatchEvent(new DragEvent('drop', Object.assign(o(d.x, d.y), { dataTransfer: dt })));
+      src.dispatchEvent(new DragEvent('dragend', Object.assign(o(d.x, d.y), { dataTransfer: dt })));
+    } catch (e) {
+      document.dispatchEvent(new MouseEvent('mousemove', o(d.x, d.y)));
+      dst.dispatchEvent(new PointerEvent('pointermove', o(d.x, d.y)));
+    }
+    dst.dispatchEvent(new PointerEvent('pointerup', o(d.x, d.y, true)));
+    dst.dispatchEvent(new MouseEvent('mouseup', o(d.x, d.y, true)));
+    return true;
+  }`;
+
+  async function dispatchDragOn(srcBackendId, dstBackendId) {
+    const s = await call('DOM.resolveNode', { backendNodeId: srcBackendId });
+    const d = await call('DOM.resolveNode', { backendNodeId: dstBackendId });
+    const srcObj = s && s.object && s.object.objectId;
+    const dstObj = d && d.object && d.object.objectId;
+    if (!srcObj || !dstObj) throw new Error('drag endpoint not resolvable');
+    await call('Runtime.callFunctionOn', {
+      objectId: srcObj,
+      functionDeclaration: DRAG_GESTURE_FN,
+      arguments: [{ objectId: dstObj }],
+      returnByValue: true,
+    });
+  }
+
+  async function backendNodeAt(nx, ny) {
+    if (!css.width) return 0;
+    const x = Math.round((Number(nx) || 0) * css.width);
+    const y = Math.round((Number(ny) || 0) * css.height);
+    const r = await call('DOM.getNodeForLocation', { x, y, includeUserAgentShadowDOM: false });
+    return (r && r.backendNodeId) || 0;
+  }
+
+  async function dispatchDrag(nx0, ny0, nx1, ny1) {
+    const s = await backendNodeAt(nx0, ny0);
+    const d = await backendNodeAt(nx1, ny1);
+    if (!s || !d) return;
+    try {
+      await dispatchDragOn(s, d);
+    } catch {
+      /* gesture failed — drop just doesn't happen */
+    }
+  }
+
+  // Resolve both endpoints to role+name BEFORE dispatching the gesture — a
+  // drop often reorders or rebuilds the list, after which a pick at the
+  // original point would resolve the element that slid into place.
+  // Then run the DOM-level drag gesture on the picked nodes and emit a
+  // recordable `drag` step. Nameless endpoints can't be replayed — same
+  // contract as click.
+  async function recordAndDrag(nx0, ny0, nx1, ny1) {
+    await finalizeFill();
+    let src = null;
+    let dst = null;
+    try {
+      src = await pick(nx0, ny0);
+      dst = await pick(nx1, ny1);
+    } catch {
+      /* unpickable endpoint */
+    }
+    if (!src || !dst || !src.backendNodeId || !dst.backendNodeId) {
+      broadcastEvent('record-skip', { reason: 'drag endpoint not resolvable' });
+      return;
+    }
+    try {
+      await dispatchDragOn(src.backendNodeId, dst.backendNodeId);
+    } catch {
+      /* gesture failed — still emit the step so the recorder can retry */
+    }
+    if (!src.name || !dst.name) {
+      broadcastEvent('record-skip', {
+        reason: `drag ${src.name ? 'target' : 'source'} has no accessible name`,
+      });
+      return;
+    }
+    emitRecord('do', {
+      intent: `drag ${src.name} onto ${dst.name}`,
+      verb: 'drag',
+      on: { role: src.role, name: src.name },
+      params: { to: { role: dst.role, name: dst.name } },
+    });
+    lastFill = null;
   }
 
   // Normalized input -> CSS-pixel CDP events. Returns false if not connected.
@@ -483,6 +729,19 @@ function createLiveBridge({
         }
         return true;
       }
+      case 'drag': {
+        if (!css.width) return false;
+        const nx0 = Number(evt.nx0) || 0;
+        const ny0 = Number(evt.ny0) || 0;
+        const nx1 = Number(evt.nx1) || 0;
+        const ny1 = Number(evt.ny1) || 0;
+        if (evt.record) {
+          recordAndDrag(nx0, ny0, nx1, ny1);
+        } else {
+          dispatchDrag(nx0, ny0, nx1, ny1);
+        }
+        return true;
+      }
       case 'move': {
         if (!css.width) return false;
         const { x, y } = px();
@@ -490,6 +749,8 @@ function createLiveBridge({
         return true;
       }
       case 'scroll': {
+        // Never recorded: no replay verb models a raw wheel delta (scrollTo
+        // scrolls an element into view — a different contract).
         const { x, y } = px();
         send('Input.dispatchMouseEvent', {
           type: 'mouseWheel',
@@ -520,22 +781,64 @@ function createLiveBridge({
         return true;
       }
       case 'key': {
-        if (typeof evt.text === 'string' && evt.text.length === 1) {
-          send('Input.dispatchKeyEvent', { type: 'char', text: evt.text, key: evt.text });
+        if (MODIFIER_KEYS.has(evt.key)) return true; // lone modifier = no-op
+
+        const keyName = typeof evt.text === 'string' && evt.text.length === 1 ? evt.text : evt.key;
+        const isChar = keyName.length === 1;
+        // Printable keys chorded with Ctrl/Alt/Meta are shortcuts, not typing
+        // (Shift stays on the typing path — Shift+a is just 'A'). Named keys
+        // chord with any modifier (Shift+Tab, Control+Enter, …).
+        const chorded = modsMask(evt.mods) !== 0 && (isChar ? evt.mods.ctrl || evt.mods.alt || evt.mods.meta : true);
+
+        if (chorded) {
+          const modifiers = modsMask(evt.mods);
+          const codes = isChar ? charCodes(keyName) : (KEYMAP[keyName] || charCodes(keyName));
+          const base = { key: keyName, modifiers, ...codes };
+          send('Input.dispatchKeyEvent', { type: 'keyDown', ...base });
+          send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+          if (evt.record) {
+            const literal = chordName(keyName, evt.mods);
+            finalizeFill()
+              .then(() => emitRecord('do', { intent: `press ${literal}`, verb: 'press', value: { from: 'literal', literal } }))
+              .catch(() => {});
+          }
+          return true;
+        }
+
+        if (isChar) {
+          send('Input.dispatchKeyEvent', { type: 'char', text: keyName, key: keyName });
           if (evt.record) bumpTyping();
           return true;
         }
-        const m = KEYMAP[evt.key];
+        const m = KEYMAP[keyName];
         if (m) {
-          send('Input.dispatchKeyEvent', { type: 'keyDown', key: evt.key, ...m });
-          send('Input.dispatchKeyEvent', { type: 'keyUp', key: evt.key, ...m });
+          send('Input.dispatchKeyEvent', { type: 'keyDown', key: keyName, ...m });
+          send('Input.dispatchKeyEvent', { type: 'keyUp', key: keyName, ...m });
           if (evt.record) {
-            if (evt.key === 'Backspace') {
+            if (keyName === 'Backspace') {
               bumpTyping();
-            } else if (evt.key === 'Enter') {
+            } else if (keyName === 'Enter') {
               finalizeFill()
                 .then(() => emitRecord('do', { intent: 'press Enter', verb: 'press', value: { from: 'literal', literal: 'Enter' } }))
                 .catch(() => {});
+<<<<<<< HEAD
+            } else {
+              // Tab/Escape/arrows/etc. — record an honest `press <key>` step
+              // (a pending fill commits first so field content lands before
+              // the focus change).
+              finalizeFill()
+                .then(() => emitRecord('do', { intent: `press ${keyName}`, verb: 'press', value: { from: 'literal', literal: keyName } }))
+                .catch(() => {});
+||||||| 30fcdd1
+=======
+            } else {
+              // Tab/Escape/arrows/etc. — record an honest `press <key>` step
+              // (a pending fill commits first so field content lands before
+              // the focus change).
+              finalizeFill()
+                .then(() => emitRecord('do', { intent: `press ${evt.key}`, verb: 'press', value: { from: 'literal', literal: evt.key } }))
+                .catch(() => {});
+>>>>>>> origin/main
             }
           }
           return true;
@@ -585,6 +888,7 @@ function createLiveBridge({
         role = (node.role && node.role.value) || '';
         name = (node.name && node.name.value) || '';
       }
+      if (!name && backendNodeId) name = await textName(backendNodeId);
     } catch {
       /* a11y lookup failed — return coords only */
     }
@@ -611,7 +915,28 @@ function createLiveBridge({
     } catch {
       /* no box model — highlight just won't draw */
     }
-    return { role, name, x, y, box, interactive: INTERACTIVE_ROLES.has(role) };
+    return { role, name, x, y, box, interactive: INTERACTIVE_ROLES.has(role), backendNodeId };
+  }
+
+  // Content-derived name fallback for elements whose accessible name the AX
+  // tree leaves empty (plain listitems, generic containers). Replay's name
+  // ladder matches innerText/textContent alongside accName, so a text-derived
+  // name records a locator that replays.
+  async function textName(backendNodeId) {
+    try {
+      const r = await call('DOM.resolveNode', { backendNodeId });
+      const oid = r && r.object && r.object.objectId;
+      if (!oid) return '';
+      const res = await call('Runtime.callFunctionOn', {
+        objectId: oid,
+        functionDeclaration:
+          'function () { return ((this.innerText || this.textContent || "").trim()).slice(0, 80); }',
+        returnByValue: true,
+      });
+      return (res && res.result && res.result.value) || '';
+    } catch {
+      return '';
+    }
   }
 
   function stop() {

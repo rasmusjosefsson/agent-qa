@@ -34,6 +34,9 @@ export interface ScenarioSummary {
   hasScenario: boolean
   intent: string | null
   steps: number | null
+  // do→check coverage (same heuristic as `scenario coverage`): null when no
+  // scenario.json exists yet.
+  coverage: { doSteps: number; checked: number; bare: number; ratio: number } | null
   latestRunId: string | null
   activeRunId: string | null
   latestRun: RunSummary | null
@@ -103,6 +106,30 @@ export interface RunDetail {
 }
 
 export type DetailTab = 'step' | 'scenario' | 'context' | 'network' | 'html' | 'console'
+
+// Compare report returned by POST /api/scenarios/:sid/compare — mirrors the
+// `agent-qa compare` CLI output (compare.md + per-step diff files).
+export interface CompareEntry {
+  stepId: string
+  outcome: 'SAME' | 'CHANGED' | 'ONLY-A' | 'ONLY-B' | string
+  diff?: string | null
+}
+
+export interface CompareShot {
+  stepId: string
+  outcome: string
+  differingPixels: number | null
+  hasDiffPng: boolean
+}
+
+export interface CompareReport {
+  sid: string
+  folder: string
+  runA: string | null
+  runB: string | null
+  snapshots: CompareEntry[]
+  screenshots: CompareShot[]
+}
 
 export interface Selection {
   sid: string | null
