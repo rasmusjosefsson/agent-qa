@@ -50,6 +50,7 @@ const NOT_RECORDABLE: Record<string, string> = {
   loop: "structural — scenarios iterate via the loop step, not a recorded action",
   group: "structural — groupings are authored, not recorded",
   useTemplate: "structural — template application is authored",
+  drag: "recorded natively by the workbench live pane (endpoint pick + emit), not via agent-browser actions",
 };
 
 const action = (method: string, args: unknown[] = [], intent = "t") =>
