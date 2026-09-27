@@ -1,6 +1,7 @@
 // web/src/features/runs/useRuns.ts
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  compareRuns as apiCompareRuns,
   deleteRun as apiDeleteRun,
   deleteScenario as apiDeleteScenario,
   getRunDetail,
@@ -12,7 +13,15 @@ import {
 } from '@/lib/runs-api'
 import { isRunLive } from './rows'
 import { useRoute } from '@/router'
-import type { RunDetail, RunSummary, ScenarioDef, ScenarioStep, ScenarioSummary, Selection } from './types'
+import type {
+  CompareReport,
+  RunDetail,
+  RunSummary,
+  ScenarioDef,
+  ScenarioStep,
+  ScenarioSummary,
+  Selection,
+} from './types'
 
 const EMPTY_SEL: Selection = { sid: null, runId: null, stepIdx: null, tab: 'step' }
 
@@ -24,6 +33,11 @@ export interface RunsApi {
   sel: Selection
   detail: RunDetail | null
   scenarioDef: ScenarioDef | null
+  compare: CompareReport | null
+  compareBusy: boolean
+  compareErr: string | null
+  startCompare: (runA?: string) => Promise<void>
+  clearCompare: () => void
   runDefSteps: { sid: string | null; steps: ScenarioStep[] }
   live: boolean
   setLive: (v: boolean) => void
@@ -46,6 +60,9 @@ export function useRuns(): RunsApi {
   const [detail, setDetail] = useState<RunDetail | null>(null)
   const [scenarioDef, setScenarioDef] = useState<ScenarioDef | null>(null)
   const [runDefSteps, setRunDefSteps] = useState<{ sid: string | null; steps: ScenarioStep[] }>({ sid: null, steps: [] })
+  const [compare, setCompare] = useState<CompareReport | null>(null)
+  const [compareBusy, setCompareBusy] = useState(false)
+  const [compareErr, setCompareErr] = useState<string | null>(null)
   const [live, setLive] = useState(true)
 
   // Refs that mirror state so the poll loop / async actions read fresh values.
@@ -96,6 +113,8 @@ export function useRuns(): RunsApi {
     async (sid: string, runId: string, manual = true) => {
       if (manual) autoFollow.current = false
       setScenarioDef(null)
+      setCompare(null)
+      setCompareErr(null)
       setSel({ sid, runId, stepIdx: null, tab: 'step' })
       await refreshRun(sid, runId)
     },
@@ -127,6 +146,8 @@ export function useRuns(): RunsApi {
 
   const selectScenario = useCallback(async (sid: string) => {
     autoFollow.current = false
+    setCompare(null)
+    setCompareErr(null)
     setSel({ sid, runId: null, stepIdx: null, tab: 'step' })
     setDetail(null)
     try {
@@ -228,6 +249,32 @@ export function useRuns(): RunsApi {
     [loadRuns, selectRun]
   )
 
+  // Compare the selected run (B) against a baseline run (A). Omitting runA
+  // lets the CLI pick (it defaults to the two latest runs).
+  const startCompare = useCallback(async (runA?: string) => {
+    const { sid, runId } = selRef.current
+    if (!sid || !runId) return
+    setCompareBusy(true)
+    setCompareErr(null)
+    try {
+      const res = await apiCompareRuns(sid, runA, runId)
+      if (!res.ok || !res.report) {
+        setCompareErr(res.error || 'compare failed')
+        return
+      }
+      setCompare(res.report)
+    } catch (e) {
+      setCompareErr(e instanceof Error ? e.message : 'compare failed')
+    } finally {
+      setCompareBusy(false)
+    }
+  }, [])
+
+  const clearCompare = useCallback(() => {
+    setCompare(null)
+    setCompareErr(null)
+  }, [])
+
   const refresh = useCallback(() => {
     loadScenarios().catch(() => {})
     if (selRef.current.sid && selRef.current.runId) refreshRun().catch(() => {})
@@ -297,6 +344,11 @@ export function useRuns(): RunsApi {
     sel,
     detail,
     scenarioDef,
+    compare,
+    compareBusy,
+    compareErr,
+    startCompare,
+    clearCompare,
     runDefSteps,
     live,
     setLive,
