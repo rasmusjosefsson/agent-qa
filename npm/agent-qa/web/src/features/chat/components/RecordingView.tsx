@@ -30,22 +30,7 @@ function shortTime(iso?: string | null): string {
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString(undefined, { hour12: false })
 }
 
-// The editable draft of a step is its JSON minus the recorder-assigned
-// id/kind — same contract as `record-step` / `buffer edit`.
-function draftOf(step: RecordingStep): string {
-  const { id: _id, kind: _kind, ...rest } = step.payload as Record<string, unknown>
-  return JSON.stringify(rest, null, 2)
-}
-
-export function RecordingView({
-  cid,
-  rec,
-  onChanged,
-}: {
-  cid: string
-  rec: RecordingState | null
-  onChanged?: () => void
-}) {
+export function RecordingView({ cid, rec }: { cid: string; rec: RecordingState | null }) {
   const [openStep, setOpenStep] = useState<string | null>(null)
   const [noShot, setNoShot] = useState<Set<string>>(() => new Set())
   const [busy, setBusy] = useState(false)
@@ -67,38 +52,6 @@ export function RecordingView({
   }, [steps.length])
 
   if (!rec || !rec.sid) return <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground"><ImageIcon className="size-6 opacity-40" /><div>No recording yet.</div></div>
-
-  // Editing is only meaningful on the live buffer — a flushed scenario is
-  // sealed (edit it in the Editor tab instead).
-  const editable = rec.recording && !rec.flushed
-
-  const run = async (fn: () => Promise<{ ok: boolean; error?: string }>) => {
-    setBusy(true)
-    setError('')
-    try {
-      const r = await fn()
-      if (!r.ok) setError(r.error || 'recording command failed')
-      onChanged?.()
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const saveEdit = (step: RecordingStep) =>
-    run(async () => {
-      let parsed: Record<string, unknown>
-      try {
-        parsed = JSON.parse(draft)
-      } catch {
-        return { ok: false, error: 'not valid JSON' }
-      }
-      if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        return { ok: false, error: 'draft must be a JSON object' }
-      }
-      const r = await editChatRecordingStep(cid, step.stepIndex, parsed)
-      if (r.ok) setEditing(null)
-      return r
-    })
 
   return <div className="flex h-full min-h-0 flex-col">
     <div className="flex items-start justify-between gap-2 border-b border-border px-3 py-2">

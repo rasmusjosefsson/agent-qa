@@ -7,6 +7,10 @@ export interface ChatMeta {
   title: string;
   createdAt: number;
   session: string;
+  /** An agent session exists for this chat. */
+  live?: boolean;
+  /** The chat's agent is streaming a reply right now. */
+  busy?: boolean;
 }
 
 export async function getRoot(): Promise<RootInfo> {

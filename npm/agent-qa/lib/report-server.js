@@ -2391,7 +2391,16 @@ async function chatUnavailableFields(reason) {
 
 // Metadata for one chat (safe to serialize to the frontend).
 function chatMeta(e) {
-  return { id: e.id, title: e.title, createdAt: e.createdAt, session: e.browser.name };
+  return {
+    id: e.id,
+    title: e.title,
+    createdAt: e.createdAt,
+    session: e.browser.name,
+    // 'live' = an agent session exists; 'busy' = it is streaming a reply right
+    // now. Cheap sync reads off the resolved hub — no hub construction.
+    live: e.isLive(),
+    busy: e.isBusy(),
+  };
 }
 
 // Read the chat's active recorder state, or its last sealed scenario.
@@ -2571,6 +2580,8 @@ function createChatManager(deps, root) {
       // Per-chat record scratch dir so concurrent recordings don't collide and
       // the chat's pane can detect its own active recording.
       recordDir: () => (recordRoot ? path.join(recordRoot, browser.name) : null),
+      isLive: () => resolvedHub != null,
+      isBusy: () => !!(resolvedHub && resolvedHub.isStreaming),
       getHub() {
         if (!chat) return Promise.resolve(null);
         if (chat.hub) {
