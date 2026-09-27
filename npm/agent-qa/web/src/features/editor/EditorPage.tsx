@@ -88,6 +88,10 @@ export function EditorPage() {
             onFlush={() => void ed.flushScenario()}
             onCancel={() => void ed.cancelScenario()}
             onTogglePause={() => void ed.togglePause()}
+            onCheck={() => void ed.checkScenario()}
+            checkRunning={ed.checkRunning}
+            checkReport={ed.checkReport}
+            onDismissCheckReport={() => ed.setCheckReport(null)}
           />
           <div className="border-b border-border p-3">
             <div className="mb-1 flex items-center justify-between px-1">

@@ -47,8 +47,9 @@ struct Summary {
     scenario_file: std::path::PathBuf,
 }
 
-fn flush() -> Result<Summary> {
-    let state = RecorderState::load_active()?;
+/// Assemble the scenario.json document `flush` would write for this
+/// recorder state — also used by `buffer check` to validate pre-flush.
+pub(crate) fn assemble_scenario(state: &RecorderState) -> Result<serde_json::Value> {
     let scenario = Scenario {
         schema: "scenario/2".to_string(),
         id: state.sid.clone(),
@@ -68,8 +69,8 @@ fn flush() -> Result<Summary> {
                     .format("%Y-%m-%dT%H:%M:%S%.3fZ")
                     .to_string(),
             ),
-            recorded_at: Some(state.started_at),
-            source_ref: state.source_ref,
+            recorded_at: Some(state.started_at.clone()),
+            source_ref: state.source_ref.clone(),
         }),
     };
     let mut scenario_json = serde_json::to_value(&scenario)?;
@@ -106,6 +107,12 @@ fn flush() -> Result<Summary> {
     }
     schema::validate_value(&scenario_json)
         .context("assembled scenario failed schema validation")?;
+    Ok(scenario_json)
+}
+
+fn flush() -> Result<Summary> {
+    let state = RecorderState::load_active()?;
+    let scenario_json = assemble_scenario(&state)?;
 
     let scenario_dir = paths::scenario_dir(&state.sid)?;
     fs::create_dir_all(&scenario_dir)
@@ -118,7 +125,7 @@ fn flush() -> Result<Summary> {
 
     Ok(Summary {
         sid: state.sid,
-        steps: scenario.steps.len(),
+        steps: state.steps.len(),
         scenario_file,
     })
 }

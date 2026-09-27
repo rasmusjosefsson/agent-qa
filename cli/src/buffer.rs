@@ -19,10 +19,11 @@ pub fn run(args: &[String]) -> Result<u8> {
         "move" | "mv" => cmd_move(&args[1..]),
         "edit" => cmd_edit(&args[1..]),
         "load" => cmd_load(&args[1..]),
+        "check" => cmd_check(&args[1..]),
         "clear" => cmd_clear(),
         "discard" => cmd_discard(),
         other => {
-            bail!("buffer: unknown subcommand {other:?}; try list|insert|delete|move|edit|load|clear|discard")
+            bail!("buffer: unknown subcommand {other:?}; try list|insert|delete|move|edit|load|check|clear|discard")
         }
     }
 }
@@ -38,6 +39,7 @@ Usage:
   agent-qa buffer move <from> <to>
   agent-qa buffer edit <index> <draft-json>
   agent-qa buffer load <sid> [--force]
+  agent-qa buffer check [--strict] [--format text|json|github]
   agent-qa buffer clear
   agent-qa buffer discard
 
@@ -48,9 +50,9 @@ may not change). Insert, delete, and move reassign dense s0, s1, ... ids; step
 references (from=step stepId, opensFromStepId) are rewired to match. Load
 pulls a saved scenario's steps into the buffer for editing (`flush` writes
 them back to the same sid, preserving fields the buffer doesn't model —
-inputs, templates, env.close). Discard removes the active recording."
-
-
+inputs, templates, env.close). Check runs the `scenario check` verifier
+(schema + lint) on the scenario flush would write, without writing it.
+Discard removes the active recording."
     );
 }
 
@@ -283,6 +285,42 @@ fn cmd_insert(args: &[String]) -> Result<u8> {
     Ok(0)
 }
 
+fn cmd_check(args: &[String]) -> Result<u8> {
+    let strict = args.iter().any(|a| a == "--strict");
+    let mut format = crate::scenario_cli::LintFormat::Text;
+    let mut it = args.iter().peekable();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--strict" => {}
+            "--format" => {
+                let v = it
+                    .next()
+                    .ok_or_else(|| anyhow!("--format requires a value"))?;
+                format = crate::scenario_cli::parse_lint_format(v)?;
+            }
+            "--json" => format = crate::scenario_cli::LintFormat::Json,
+            _ => {
+                if let Some(v) = a.strip_prefix("--format=") {
+                    format = crate::scenario_cli::parse_lint_format(v)?;
+                } else {
+                    bail!("usage: buffer check [--strict] [--format text|json|github]");
+                }
+            }
+        }
+    }
+    let state = RecorderState::load_active()?;
+    let scenario_json = crate::flush::assemble_scenario(&state)?;
+    let mut tmp = tempfile::NamedTempFile::new().context("open buffer-check tempfile")?;
+    use std::io::Write;
+    tmp.write_all(serde_json::to_string_pretty(&scenario_json)?.as_bytes())?;
+    let code = crate::scenario_cli::check(tmp.path(), strict, format)?;
+    // The compact text report stops at counts — print the findings too.
+    if code != 0 && format == crate::scenario_cli::LintFormat::Text {
+        crate::scenario_cli::lint(tmp.path(), format, strict, None, None)?;
+    }
+    Ok(code)
+}
+
 fn cmd_clear() -> Result<u8> {
     let mut state = RecorderState::load_active()?;
     state.steps.clear();
@@ -470,6 +508,32 @@ mod tests {
         assert!(cmd_insert(&["9".into(), "check".into(), "{}".into()]).is_err());
         assert!(cmd_insert(&["0".into(), "nope".into(), "{}".into()]).is_err());
         assert_eq!(RecorderState::load_active().unwrap().steps.len(), 3);
+        std::env::remove_var(crate::paths::RECORD_DIR_ENV);
+    }
+
+    #[test]
+    fn check_runs_schema_and_lint_on_flush_doc() {
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var(crate::paths::RECORD_DIR_ENV, tmp.path());
+        // A do/click with no locator → lint error → check exits 1.
+        let mut state = state();
+        state.steps = serde_json::from_value(serde_json::json!([
+            {"id":"s0","intent":"click without locator","kind":"do","verb":"click"},
+        ]))
+        .unwrap();
+        state.save().unwrap();
+        assert_eq!(cmd_check(&["--json".into()]).unwrap(), 1);
+        // Fix the buffer → check exits 0.
+        state.steps = serde_json::from_value(serde_json::json!([
+            {"id":"s0","intent":"click it","kind":"do","verb":"click",
+             "on":{"raw":{"kind":"css","value":"#x"},"reason":"test"}},
+            {"id":"s1","intent":"it worked","kind":"check",
+             "claim":{"subject":{"url":true},"predicate":"exists"}}
+        ]))
+        .unwrap();
+        state.save().unwrap();
+        assert_eq!(cmd_check(&["--json".into()]).unwrap(), 0);
         std::env::remove_var(crate::paths::RECORD_DIR_ENV);
     }
 

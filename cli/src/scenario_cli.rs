@@ -1012,13 +1012,13 @@ fn prune_replays(sid: &str, keep: usize, confirmed: bool, keep_failed: bool) -> 
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LintFormat {
+pub(crate) enum LintFormat {
     Text,
     Json,
     Github,
 }
 
-fn parse_lint_format(s: &str) -> Result<LintFormat> {
+pub(crate) fn parse_lint_format(s: &str) -> Result<LintFormat> {
     match s {
         "text" => Ok(LintFormat::Text),
         "json" => Ok(LintFormat::Json),
@@ -1143,7 +1143,7 @@ fn scenario_navigates(j: &Scenario) -> bool {
         })
 }
 
-fn lint(
+pub(crate) fn lint(
     path: &Path,
     format: LintFormat,
     strict: bool,
@@ -2432,7 +2432,7 @@ fn check_all(strict: bool, format: LintFormat) -> Result<u8> {
     Ok(if total_fails == 0 { 0 } else { 1 })
 }
 
-fn check(path: &Path, strict: bool, format: LintFormat) -> Result<u8> {
+pub(crate) fn check(path: &Path, strict: bool, format: LintFormat) -> Result<u8> {
     // For stdin ('-'), buffer once into a tempfile so the rest of
     // this function (and the validate/lint helpers it calls in text
     // mode) get a filesystem path to work with.
