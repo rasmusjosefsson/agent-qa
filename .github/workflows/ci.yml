@@ -72,6 +72,9 @@ jobs:
       - name: launcher install
         working-directory: npm/agent-qa
         run: npm install --no-audit --no-fund
+      - name: web bundle (lib/public is built, not committed)
+        working-directory: npm/agent-qa
+        run: npm run build:web
       - name: launcher tests
         working-directory: npm/agent-qa
         run: node --test test/*.test.js
