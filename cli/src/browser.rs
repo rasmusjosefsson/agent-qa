@@ -721,6 +721,52 @@ pub fn eval_expression(session: &str, expression: &str) -> Result<String, AgentB
     Ok(r.stdout)
 }
 
+/// Poll the Resource Timing API until an entry URL matches `pattern`
+/// (substring, `*` = wildcard) — i.e. the request has completed — or
+/// `timeout_ms` elapses (error). For "request fired but still in flight"
+/// semantics, `performance` entries only appear on completion, which is the
+/// deterministic point a scenario wants to proceed from anyway.
+pub fn wait_for_resource(
+    session: &str,
+    pattern: &str,
+    timeout_ms: u64,
+) -> Result<(), AgentBrowserError> {
+    // Compile the glob to a JS regex: escape specials, '*' → '.*'.
+    let mut re = String::new();
+    for ch in pattern.chars() {
+        match ch {
+            '*' => re.push_str(".*"),
+            c if "\\.^$+?()[]{}|".contains(c) => {
+                re.push('\\');
+                re.push(c);
+            }
+            c => re.push(c),
+        }
+    }
+    let expr = format!(
+        "(function(){{var re=new RegExp({});var es=performance.getEntriesByType('resource');for(var i=0;i<es.length;i++){{if(re.test(es[i].name))return '1';}}return '0';}})()",
+        serde_json::to_string(&re).unwrap_or_else(|_| "\"\"".into())
+    );
+    let start = std::time::Instant::now();
+    loop {
+        let hit = eval_expression(session, &expr)
+            .map(|s| s.trim().contains("\"1\"") || s.trim() == "1")
+            .unwrap_or(false);
+        if hit {
+            return Ok(());
+        }
+        if start.elapsed().as_millis() as u64 >= timeout_ms {
+            return Err(AgentBrowserError::NonZero {
+                verb: "wait-resource".to_string(),
+                exit_code: 1,
+                stderr: format!("no resource matching '{pattern}' completed within {timeout_ms}ms"),
+                hint: String::new(),
+            });
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+}
+
 /// The session tab's current top-level URL (`location.href`), or None on a
 /// blank/unavailable tab. `eval` returns the value JSON-encoded (quoted).
 pub fn current_url(session: &str) -> Option<String> {

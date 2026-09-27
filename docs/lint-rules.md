@@ -18,7 +18,7 @@ for the live table (this doc may lag the binary).
 | `no-navigation` | warning | The scenario never navigates — no `env.open` nav op and no `do`/`goto` step — so replay runs against whatever page the session is already on. Usually means the recording used `start --open <url>`, which drives the browser without recording anything. |
 | `no-checks` | warning | The scenario has steps but zero check claims; replay can only fail on browser errors, not assertions. |
 | `empty-steps` | warning | The scenario has zero steps; replay will only open env then close it. |
-| `wait-without-condition` | warning | A do/wait step has neither `params.timeoutMs` nor `params.locator`; will hang the replay until the global timeout fires. |
+| `wait-without-condition` | warning | A do/wait step has none of `params.ms`/`until`/`url`/`timeoutMs`/`locator`; it falls back to a `networkidle` wait that may not reflect the condition the author intended. |
 
 ## Severity → exit code
 

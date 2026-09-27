@@ -1104,7 +1104,7 @@ fn list_lint_rules(json_out: bool) -> Result<u8> {
         Rule {
             code: "wait-without-condition",
             severity: "warning",
-            description: "A do/wait step has neither params.timeoutMs nor params.locator; will hang the replay until the global timeout.",
+            description: "A do/wait step has none of params.ms/until/url/timeoutMs/locator; falls back to a networkidle wait that may miss the intended condition.",
         },
     ];
     if json_out {
@@ -1413,14 +1413,20 @@ pub(crate) fn lint(
         {
             let has_condition = params
                 .as_ref()
-                .map(|p| p.get("timeoutMs").is_some() || p.get("locator").is_some())
+                .map(|p| {
+                    p.get("ms").is_some()
+                        || p.get("until").is_some()
+                        || p.get("url").is_some()
+                        || p.get("timeoutMs").is_some()
+                        || p.get("locator").is_some()
+                })
                 .unwrap_or(false);
             if !has_condition {
                 findings.push(Finding {
                     severity: "warning",
                     code: "wait-without-condition",
                     message: format!(
-                        "step {id:?} verb=wait has neither params.timeoutMs nor params.locator; will hang the replay"
+                        "step {id:?} verb=wait has no wait condition (params.ms/until/url/timeoutMs/locator); falls back to networkidle"
                     ),
                 });
             }
@@ -2145,7 +2151,13 @@ fn lint_collect(
         {
             let has_condition = params
                 .as_ref()
-                .map(|p| p.get("timeoutMs").is_some() || p.get("locator").is_some())
+                .map(|p| {
+                    p.get("ms").is_some()
+                        || p.get("until").is_some()
+                        || p.get("url").is_some()
+                        || p.get("timeoutMs").is_some()
+                        || p.get("locator").is_some()
+                })
                 .unwrap_or(false);
             if !has_condition && active("wait-without-condition") {
                 warnings += 1;
