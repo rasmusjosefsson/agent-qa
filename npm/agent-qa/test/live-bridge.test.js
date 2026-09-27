@@ -370,3 +370,83 @@ test('a subscriber reconnects when the browser opens after the initial CDP miss'
   assert.ok(sock.sentMethod('Page.captureScreenshot'), 'the retry starts frame capture');
   bridge.stop();
 });
+
+test('input drag: resolves both endpoints, runs the DOM gesture on the nodes, records a drag step', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (kind, payload) => recorded.push({ kind, payload }));
+  const events = [];
+  const res = { write: (s) => events.push(s), end() {} };
+  const sock = await connect(bridge, res);
+  const metId = sock.sent.find((m) => m.method === 'Page.getLayoutMetrics').id;
+  sock.recv({ id: metId, result: { cssLayoutViewport: { clientWidth: 800, clientHeight: 600 } } });
+
+  bridge.input({ type: 'drag', nx0: 0.1, ny0: 0.1, nx1: 0.5, ny1: 0.6, record: true });
+  // Two endpoint picks run SEQUENTIALLY before the gesture dispatches —
+  // answer the first endpoint's calls before the second is even sent.
+  const answerPick = async (backendNodeId, role, name) => {
+    await flush();
+    const loc = sock.sent.filter((m) => m.method === 'DOM.getNodeForLocation').at(-1);
+    sock.recv({ id: loc.id, result: { backendNodeId } });
+    await flush();
+    const ax = sock.sent.filter((m) => m.method === 'Accessibility.getPartialAXTree').at(-1);
+    sock.recv({ id: ax.id, result: { nodes: [{ role: { value: role }, name: { value: name } }] } });
+    await flush();
+    const box = sock.sent.filter((m) => m.method === 'DOM.getBoxModel').at(-1);
+    if (box) sock.recv({ id: box.id, result: { model: { content: [0, 0, 10, 0, 10, 10, 0, 10] } } });
+    await flush();
+    return loc;
+  };
+  const loc0 = await answerPick(11, 'listitem', 'Card A');
+  const loc1 = await answerPick(22, 'list', 'Done');
+  assert.deepEqual([loc0.params.x, loc0.params.y], [80, 60]);
+  assert.deepEqual([loc1.params.x, loc1.params.y], [400, 360]);
+
+  // Then the gesture: each endpoint's backendNodeId resolves to a JS object,
+  // then one callFunctionOn runs the drag chain on src with dst as argument.
+  for (const backendNodeId of [11, 22]) {
+    const rs = sock.sent.filter((m) => m.method === 'DOM.resolveNode').at(-1);
+    assert.equal(rs.params.backendNodeId, backendNodeId);
+    sock.recv({ id: rs.id, result: { object: { objectId: `obj-${backendNodeId}` } } });
+    await flush();
+  }
+  const fn = sock.sent.filter((m) => m.method === 'Runtime.callFunctionOn').at(-1);
+  assert.equal(fn.params.objectId, 'obj-11');
+  assert.equal(fn.params.arguments[0].objectId, 'obj-22');
+  assert.match(fn.params.functionDeclaration, /dragstart|drop/);
+  sock.recv({ id: fn.id, result: { result: { value: true } } });
+
+  await flush();
+  assert.equal(recorded.length, 1);
+  assert.deepEqual(recorded[0].payload.verb, 'drag');
+  assert.deepEqual(recorded[0].payload.on, { role: 'listitem', name: 'Card A' });
+  assert.deepEqual(recorded[0].payload.params.to, { role: 'list', name: 'Done' });
+});
+
+test('input drag without record dispatches the DOM gesture on the endpoint nodes', async () => {
+  const bridge = makeBridge();
+  const sock = await connect(bridge, { write() {}, end() {} });
+  const metId = sock.sent.find((m) => m.method === 'Page.getLayoutMetrics').id;
+  sock.recv({ id: metId, result: { cssLayoutViewport: { clientWidth: 800, clientHeight: 600 } } });
+  assert.equal(bridge.input({ type: 'drag', nx0: 0.2, ny0: 0.2, nx1: 0.6, ny1: 0.6 }), true);
+  await flush();
+  const locs = sock.sent.filter((m) => m.method === 'DOM.getNodeForLocation');
+  assert.equal(locs.length, 1, 'hit-tests the source point first');
+  sock.recv({ id: locs[0].id, result: { backendNodeId: 31 } });
+  await flush();
+  const loc2 = sock.sent.filter((m) => m.method === 'DOM.getNodeForLocation').at(-1);
+  sock.recv({ id: loc2.id, result: { backendNodeId: 32 } });
+  await flush();
+  for (const backendNodeId of [31, 32]) {
+    const rs = sock.sent.filter((m) => m.method === 'DOM.resolveNode').at(-1);
+    assert.equal(rs.params.backendNodeId, backendNodeId);
+    sock.recv({ id: rs.id, result: { object: { objectId: `obj-${backendNodeId}` } } });
+    await flush();
+  }
+  const fn = sock.sent.filter((m) => m.method === 'Runtime.callFunctionOn').at(-1);
+  assert.equal(fn.params.objectId, 'obj-31');
+  assert.equal(fn.params.arguments[0].objectId, 'obj-32');
+  assert.ok(
+    !sock.sent.some((m) => m.method === 'Accessibility.getPartialAXTree'),
+    'no a11y lookup when not recording',
+  );
+});

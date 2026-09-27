@@ -136,6 +136,13 @@ export function LiveCanvas({
       })
     }
 
+    // Click vs drag is decided on mouseup: a press that stays within ~1% of
+    // the canvas is a click; a press that travels is a drag gesture (the
+    // remote input dispatches press → sweep → release, which the page sees as
+    // real HTML5/pointer drag).
+    let downAt: { nx: number; ny: number } | null = null
+    const DRAG_MIN = 0.01
+
     const onMouseDown = async (ev: MouseEvent) => {
       const c = norm(ev)
       if (!c) return
@@ -146,8 +153,25 @@ export function LiveCanvas({
         if (el && (el.role || el.name)) bag.current.onCanvasPick(el)
         return
       }
-      bag.current.sendInput({ type: 'click', ...c, ...(mode === 'record' ? { record: true } : {}) })
+      downAt = c
       cv.focus()
+    }
+
+    const onMouseUp = (ev: MouseEvent) => {
+      if (!downAt) return
+      const from = downAt
+      downAt = null
+      const mode = bag.current.clickMode
+      if (mode === 'pick') return
+      const c = norm(ev)
+      if (!c) return
+      const moved = Math.hypot(c.nx - from.nx, c.ny - from.ny)
+      const record = mode === 'record'
+      if (moved >= DRAG_MIN) {
+        bag.current.sendInput({ type: 'drag', nx0: from.nx, ny0: from.ny, nx1: c.nx, ny1: c.ny, ...(record ? { record: true } : {}) })
+      } else {
+        bag.current.sendInput({ type: 'click', ...from, ...(record ? { record: true } : {}) })
+      }
     }
 
     const onWheel = (ev: WheelEvent) => {
@@ -184,17 +208,24 @@ export function LiveCanvas({
       }, 90)
     }
 
+    const onMouseLeave = () => {
+      downAt = null
+      hideHover()
+    }
+
     cv.addEventListener('mousedown', onMouseDown)
+    cv.addEventListener('mouseup', onMouseUp)
     cv.addEventListener('wheel', onWheel, { passive: false })
     cv.addEventListener('keydown', onKeyDown)
     cv.addEventListener('mousemove', onMouseMove)
-    cv.addEventListener('mouseleave', hideHover)
+    cv.addEventListener('mouseleave', onMouseLeave)
     return () => {
       cv.removeEventListener('mousedown', onMouseDown)
+      cv.removeEventListener('mouseup', onMouseUp)
       cv.removeEventListener('wheel', onWheel)
       cv.removeEventListener('keydown', onKeyDown)
       cv.removeEventListener('mousemove', onMouseMove)
-      cv.removeEventListener('mouseleave', hideHover)
+      cv.removeEventListener('mouseleave', onMouseLeave)
       if (hoverTimer) clearTimeout(hoverTimer)
     }
   }, [])

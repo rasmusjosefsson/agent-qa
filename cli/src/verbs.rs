@@ -239,6 +239,32 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                 .map_err(|e| anyhow!("step '{id}' dblclick: {e}"))?;
             Ok(None)
         }
+        Verb::Drag => {
+            let src = drag_endpoint(on.unwrap(), scope, ctx.scenario_dir)
+                .map_err(|e| anyhow!("step '{id}' drag: {e}"))?;
+            let p = params.ok_or_else(|| anyhow!("step '{id}' drag: params required"))?;
+            let to_raw = p
+                .get("to")
+                .ok_or_else(|| anyhow!("step '{id}' drag: params.to is required"))?;
+            let to_loc: Locator = serde_json::from_value(to_raw.clone())
+                .map_err(|e| anyhow!("step '{id}' drag: params.to is not a locator: {e}"))?;
+            let dst = drag_endpoint(&to_loc, scope, ctx.scenario_dir)
+                .map_err(|e| anyhow!("step '{id}' drag.to: {e}"))?;
+            let out = browser::eval_expression(
+                ctx.session,
+                &crate::dom_activate::build_drag_js(&src, &dst),
+            )
+            .map_err(|e| anyhow!("step '{id}' drag: {e}"))?;
+            let trimmed = out.trim();
+            let code: String =
+                serde_json::from_str(trimmed).unwrap_or_else(|_| trimmed.to_string());
+            match code.as_str() {
+                "true" => Ok(None),
+                "src-miss" => bail!("step '{id}' drag: source element not found"),
+                "dst-miss" => bail!("step '{id}' drag: drop target not found"),
+                other => bail!("step '{id}' drag: unexpected result {other:?}"),
+            }
+        }
         Verb::Tab => {
             let v = resolve_literal_string(value, scope, "tab.value")?;
             let parts: Vec<String> = v.split_whitespace().map(str::to_string).collect();
@@ -1004,6 +1030,37 @@ pub(crate) fn resolve_name_match(
         }
         None => Ok(None),
     }
+}
+
+/// Lower a `Locator` to a drag endpoint: role locators keep role + resolved
+/// name + scope; raw locators become their selector form (testId → css).
+fn drag_endpoint(
+    loc: &Locator,
+    scope: &mut ValueScope,
+    scenario_dir: &std::path::Path,
+) -> Result<crate::dom_activate::DragEndpoint> {
+    use crate::dom_activate::DragEndpoint;
+    Ok(match loc {
+        Locator::Role(r) => DragEndpoint::Role {
+            role: r.role.clone(),
+            name: resolve_name_match(r.name.as_ref(), scope, scenario_dir)?.unwrap_or_default(),
+            scope: match r.scope.as_deref() {
+                Some(locs) => scope_steps(locs, scope, scenario_dir)?,
+                None => Vec::new(),
+            },
+        },
+        Locator::Raw(raw) => {
+            let v = crate::value::substitute_scenario_vars(&raw.raw.value, scope);
+            match raw.raw.kind {
+                RawLocatorKind::Css => DragEndpoint::Css(v),
+                RawLocatorKind::TestId => {
+                    DragEndpoint::Css(format!("[data-testid=\"{}\"]", v.replace('"', "\\\"")))
+                }
+                RawLocatorKind::Xpath => DragEndpoint::Xpath(v),
+                RawLocatorKind::Text => DragEndpoint::Text(v),
+            }
+        }
+    })
 }
 
 /// Convert a `locator.scope` chain to JS narrowing steps, resolving names

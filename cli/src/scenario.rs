@@ -160,6 +160,11 @@ pub enum Verb {
     /// click that would open the OS picker resolves with these files instead.
     /// An empty `files` array simulates cancelling the picker.
     FileChooser,
+    /// Drag `on` onto `params.to` — both locators. Dispatches the HTML5
+    /// `dragstart → dragenter/over → drop → dragend` chain with a real
+    /// `DataTransfer` plus the pointer/mouse sequence pointer-based
+    /// drag libraries listen for.
+    Drag,
     #[serde(rename = "loop")]
     Loop,
     Group,

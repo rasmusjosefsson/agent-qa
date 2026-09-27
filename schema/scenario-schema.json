@@ -375,6 +375,7 @@
             "tab",
             "viewport",
             "fileChooser",
+            "drag",
             "loop",
             "group",
             "useTemplate"
