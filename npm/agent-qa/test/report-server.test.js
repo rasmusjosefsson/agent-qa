@@ -433,6 +433,37 @@ test('report viewer endpoints', async (t) => {
     assert.equal(await res.text(), 'DIFFDATA-navHome');
   });
 
+  await t.test('POST shot-accept promotes the run screenshot to a baseline', async () => {
+    const res = await fetch(`${base}/api/scenarios/${fx.sid}/runs/${fx.runId}/shot-accept`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ stepId: 'navHome' }),
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.ok, true);
+    assert.deepEqual(body.minted, ['navHome']);
+    assert.equal(
+      fs.readFileSync(path.join(fx.root, fx.sid, 'baselines', 'navHome.png'), 'utf8'),
+      'PNGDATA-navHome',
+    );
+  });
+
+  await t.test('POST shot-accept rejects a missing stepId / absent screenshot', async () => {
+    const res1 = await fetch(`${base}/api/scenarios/${fx.sid}/runs/${fx.runId}/shot-accept`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res1.status, 400);
+    const res2 = await fetch(`${base}/api/scenarios/${fx.sid}/runs/${fx.runId}/shot-accept`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ stepId: 'nope' }),
+    });
+    assert.equal(res2.status, 404);
+  });
+
   await t.test('GET artifact streams a captured screenshot', async () => {
     const res = await fetch(
       `${base}/api/scenarios/${fx.sid}/runs/${fx.runId}/artifact/screenshots/navHome`,

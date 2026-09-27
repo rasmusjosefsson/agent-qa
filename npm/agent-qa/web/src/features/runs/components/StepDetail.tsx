@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { BugIcon, WrenchIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { artifactUrl, fetchArtifactText, getScenarioDef } from '@/lib/runs-api'
+import { acceptShot, artifactUrl, fetchArtifactText, getScenarioDef } from '@/lib/runs-api'
 import { collapseEvents, fmtMs, icon } from '../rows'
 import type { DetailTab, HealRow, RunEvent, ScenarioDef, ScenarioStep } from '../types'
 import type { RunsApi as Api } from '../useRuns'
@@ -310,7 +310,7 @@ function HealCard({ heal }: { heal: HealRow }) {
 }
 
 // The delta map a {"shot"} claim wrote when it missed its baseline — red over
-// a faded baseline. Re-mint with `shot-accept` when the change is legitimate.
+// a faded baseline. Re-mint in place when the change is legitimate.
 export function ShotDiffCard({
   sid,
   runId,
@@ -324,6 +324,12 @@ export function ShotDiffCard({
 }) {
   const url = artifactUrl(sid, runId, 'shots-diff', shotStep)
   const caption = `Visual diff · ${shotStep}`
+  const [accept, setAccept] = useState<'idle' | 'busy' | 'done' | 'error'>('idle')
+  const remint = async () => {
+    setAccept('busy')
+    const r = await acceptShot(sid, runId, shotStep)
+    setAccept(r.ok ? 'done' : 'error')
+  }
   return (
     <div className="mb-3 rounded-md border border-sky-500/30 bg-sky-500/10 p-2.5 text-xs">
       <div className="mb-1.5 flex items-center gap-1.5 font-medium text-sky-300">
@@ -333,8 +339,25 @@ export function ShotDiffCard({
       <button type="button" onClick={() => onLightbox(url, caption)} className="block w-full">
         <img src={url} alt={caption} loading="lazy" className="w-full rounded border border-border" />
       </button>
-      <div className="mt-1.5 text-muted-foreground">
-        Legitimate change? Re-mint with <span className="font-mono">shot-accept {sid} --steps {shotStep}</span>
+      <div className="mt-1.5 flex items-center gap-2 text-muted-foreground">
+        {accept === 'done' ? (
+          <span className="text-emerald-400">Baseline re-minted — re-run to confirm.</span>
+        ) : (
+          <>
+            <span>
+              Legitimate change?{' '}
+              <button
+                type="button"
+                onClick={remint}
+                disabled={accept === 'busy'}
+                className="rounded border border-sky-500/40 px-1.5 py-0.5 font-medium text-sky-300 transition-colors hover:bg-sky-500/20 disabled:opacity-50"
+              >
+                {accept === 'busy' ? 'Re-minting…' : 'Re-mint baseline'}
+              </button>
+            </span>
+            {accept === 'error' && <span className="text-destructive">re-mint failed</span>}
+          </>
+        )}
       </div>
     </div>
   )

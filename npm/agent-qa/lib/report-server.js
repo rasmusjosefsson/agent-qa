@@ -3535,6 +3535,36 @@ function createRequestHandler(root, deps, chat) {
         return sendJson(res, 200, { ok: true, sid, runId, deleted: true });
       }
 
+      // POST /api/scenarios/:sid/runs/:runId/shot-accept {stepId} — promote
+      // this run's screenshot to the checked-in baseline (the web-side
+      // `agent-qa shot-accept`).
+      if (
+        req.method === 'POST' &&
+        segAll[0] === 'api' &&
+        segAll[1] === 'scenarios' &&
+        segAll[3] === 'runs' &&
+        segAll[5] === 'shot-accept' &&
+        segAll.length === 6
+      ) {
+        const sid = decodeURIComponent(segAll[2]);
+        const runId = decodeURIComponent(segAll[4]);
+        if (!isSafeSegment(sid) || !isSafeSegment(runId)) return badRequest(res, 'unsafe id');
+        const body = await readJsonBody(req);
+        const stepId = typeof body.stepId === 'string' ? body.stepId : '';
+        if (!isSafeSegment(stepId)) return badRequest(res, 'stepId (safe segment) is required');
+        const runDir = path.join(root, sid, 'replays', runId);
+        const shot = path.join(runDir, 'screenshots', `${stepId}.png`);
+        try {
+          await fsp.stat(shot);
+        } catch {
+          return notFound(res, 'no screenshot for this step in this run');
+        }
+        const baselineDir = path.join(root, sid, 'baselines');
+        await fsp.mkdir(baselineDir, { recursive: true });
+        await fsp.copyFile(shot, path.join(baselineDir, `${stepId}.png`));
+        return sendJson(res, 200, { ok: true, minted: [stepId] });
+      }
+
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         return sendJson(res, 405, { error: 'method not allowed' });
       }
@@ -3606,6 +3636,7 @@ function createRequestHandler(root, deps, chat) {
             const stepId = decodeURIComponent(seg[7]);
             return serveArtifact(res, root, sid, runId, kind, stepId);
           }
+
         }
       }
 
