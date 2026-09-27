@@ -336,6 +336,15 @@ pub enum ClaimSubject {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         attribute: Option<String>,
     },
+    /// `{"shot": "<stepId>"}` — compare this run's screenshot for the named
+    /// do-step against the checked-in baseline at `<scenario>/baselines/
+    /// <stepId>.png`. Only predicate is `matches` — pass when the fraction of
+    /// differing pixels ≤ `tolerance.pixels` (default 0.01). On mismatch the
+    /// delta map lands at `<run>/shots-diff/<stepId>.diff.png` and the claim
+    /// fails with the diff ratio. Baselines are minted with `shot-accept`.
+    Shot {
+        shot: String,
+    },
     Var {
         kind: String, // always "var" — kept literal to disambiguate untagged
         name: String,

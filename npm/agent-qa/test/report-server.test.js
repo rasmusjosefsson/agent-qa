@@ -36,7 +36,11 @@ function makeFixture() {
       schema: 'scenario/2',
       id: 'demo-scenario',
       intent: 'open example.com and click a missing button',
-      steps: [{ id: 'navHome' }, { id: 'headingVisible' }, { id: 'clickMissingLogin' }],
+      steps: [
+        { id: 'navHome', kind: 'do' },
+        { id: 'headingVisible', kind: 'check' },
+        { id: 'clickMissingLogin', kind: 'do' },
+      ],
     }),
   );
 
@@ -372,6 +376,8 @@ test('report viewer endpoints', async (t) => {
     assert.equal(sc.latestRun.summary, 'SUMMARY: 2/3 (FAIL)');
     assert.equal(sc.latestRun.state, 'done');
     assert.equal(sc.latestRun.ok, false);
+    // do→check coverage: navHome covered by headingVisible; clickMissingLogin bare.
+    assert.deepEqual(sc.coverage, { doSteps: 2, checked: 1, bare: 1, ratio: 0.5 });
   });
 
   await t.test('GET /runs returns replay history', async () => {

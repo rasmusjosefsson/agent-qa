@@ -42,6 +42,11 @@ pub struct CheckContext<'a> {
     /// Scenario directory — `{"file": ...}` claim subjects resolve relative
     /// paths against it (download steps save there by default).
     pub scenario_dir: &'a Path,
+    /// Replay run directory — `{"shot": ...}` claims read the current
+    /// screenshot from `<run>/screenshots/<stepId>.png` and write the diff
+    /// map under `<run>/shots-diff/`. `None` outside a replay (run-step
+    /// debugging) — shot claims bail there.
+    pub run_dir: Option<&'a Path>,
 }
 
 pub fn dispatch_check(
@@ -98,6 +103,9 @@ pub fn dispatch_check(
         }
         ClaimSubject::Flag { flag } => {
             check_flag(flag, &claim.predicate, claim.value.as_ref(), ctx)
+        }
+        ClaimSubject::Shot { shot } => {
+            check_shot(shot, &claim.predicate, claim.tolerance.as_ref(), ctx)
         }
         ClaimSubject::Dialog { dialog } => {
             if !*dialog {
@@ -250,6 +258,71 @@ fn check_flag(
 }
 
 // ---------- file ----------
+
+/// `{"shot": "<stepId>"}` claims — pixel-compare the current run's
+/// screenshot for that step against `<scenario>/baselines/<stepId>.png`.
+/// Only `matches` is supported: pass when the differing-pixel fraction is
+/// within `tolerance.pixels` (default 1%). On a miss the delta map writes
+/// to `<run>/shots-diff/<stepId>.diff.png` before the claim fails, so the
+/// diff is inspectable in the run artifacts. A missing baseline bails with
+/// the `shot-accept` mint command rather than silently passing.
+fn check_shot(
+    shot: &str,
+    predicate: &Predicate,
+    tolerance: Option<&std::collections::BTreeMap<String, Json>>,
+    ctx: &CheckContext,
+) -> Result<()> {
+    if *predicate != Predicate::Matches {
+        bail!("shot subject only supports predicate 'matches', got '{predicate:?}'");
+    }
+    let run_dir = ctx
+        .run_dir
+        .ok_or_else(|| anyhow!("shot claim needs a replay run (not available via run-step)"))?;
+    let baseline = ctx
+        .scenario_dir
+        .join("baselines")
+        .join(format!("{shot}.png"));
+    if !baseline.is_file() {
+        bail!(
+            "no baseline for shot '{shot}' at {} — mint one with: agent-qa shot-accept <sid> --steps {shot}",
+            baseline.display()
+        );
+    }
+    let current = run_dir.join("screenshots").join(format!("{shot}.png"));
+    if !current.is_file() {
+        bail!(
+            "no screenshot for step '{shot}' in this run ({}) — check the step id and that sidecars are on",
+            current.display()
+        );
+    }
+    let tol = tolerance
+        .and_then(|t| t.get("pixels"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.01);
+    let a = crate::compare::screenshots::decode_png(&baseline)?;
+    let b = crate::compare::screenshots::decode_png(&current)?;
+    if a.dimensions() != b.dimensions() {
+        bail!(
+            "shot '{shot}' changed size — baseline {:?} vs current {:?}; re-mint with shot-accept if intentional",
+            a.dimensions(),
+            b.dimensions()
+        );
+    }
+    let (frac, diff_img) = crate::compare::screenshots::pixel_diff(&a, &b);
+    if frac <= tol {
+        return Ok(());
+    }
+    let diff_dir = run_dir.join("shots-diff");
+    std::fs::create_dir_all(&diff_dir).ok();
+    let diff_path = diff_dir.join(format!("{shot}.diff.png"));
+    let _ = diff_img.save(&diff_path);
+    bail!(
+        "shot '{shot}' differs from baseline: {:.2}% pixels changed (tolerance {:.2}%) — diff at {}",
+        frac * 100.0,
+        tol * 100.0,
+        diff_path.display()
+    )
+}
 
 /// `{"file": "<name-or-path>"}` claims: poll the filesystem so a check step
 /// right after `do/download` sees the file as soon as the browser flushes it.
@@ -884,6 +957,7 @@ mod tests {
         let ctx = CheckContext {
             session: "s",
             scenario_dir: Path::new("."),
+            run_dir: None,
         };
         dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
     }
@@ -903,6 +977,7 @@ mod tests {
         let ctx = CheckContext {
             session: "s",
             scenario_dir: Path::new("."),
+            run_dir: None,
         };
         dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
     }
@@ -933,6 +1008,7 @@ mod tests {
         let ctx = CheckContext {
             session: "s",
             scenario_dir: Path::new("."),
+            run_dir: None,
         };
         dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
 
@@ -951,6 +1027,7 @@ mod tests {
         let ctx = CheckContext {
             session: "s",
             scenario_dir: Path::new("."),
+            run_dir: None,
         };
         let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
         assert!(err.to_string().contains("not yet implemented"));
@@ -1004,6 +1081,7 @@ mod tests {
             let ctx = CheckContext {
                 session: "s",
                 scenario_dir: Path::new("."),
+                run_dir: None,
             };
             dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
             clear();
@@ -1024,6 +1102,7 @@ mod tests {
             let ctx = CheckContext {
                 session: "s",
                 scenario_dir: Path::new("."),
+                run_dir: None,
             };
             let err = dispatch_check(&claim, &ctx, &mut scope, None)
                 .unwrap_err()
@@ -1046,6 +1125,7 @@ mod tests {
             let ctx = CheckContext {
                 session: "s",
                 scenario_dir: Path::new("."),
+                run_dir: None,
             };
             dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
             clear();
@@ -1065,6 +1145,7 @@ mod tests {
             let ctx = CheckContext {
                 session: "s",
                 scenario_dir: Path::new("."),
+                run_dir: None,
             };
             dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
             clear();
@@ -1082,6 +1163,7 @@ mod tests {
             let ctx = CheckContext {
                 session: "s",
                 scenario_dir: tmp.path(),
+                run_dir: None,
             };
             let mut scope = ValueScope::default();
 
@@ -1116,6 +1198,7 @@ mod tests {
             let ctx = CheckContext {
                 session: "s",
                 scenario_dir: tmp.path(),
+                run_dir: None,
             };
             let mut scope = ValueScope::default();
 
@@ -1145,6 +1228,7 @@ mod tests {
             let ctx = CheckContext {
                 session: "s",
                 scenario_dir: tmp.path(),
+                run_dir: None,
             };
             let mut scope = ValueScope::default();
 
@@ -1172,6 +1256,7 @@ mod tests {
             let ctx = CheckContext {
                 session: "s",
                 scenario_dir: tmp.path(),
+                run_dir: None,
             };
             let mut scope = ValueScope::default();
             let claim: Claim = serde_json::from_value(json!({
@@ -1187,5 +1272,78 @@ mod tests {
                 "got: {err}"
             );
         }
+    }
+
+    #[test]
+    fn shot_claim_matches_identical_and_flags_drift() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let sid_dir = tmp.path().join("scenario");
+        let run_dir = tmp.path().join("run");
+        fs::create_dir_all(sid_dir.join("baselines")).unwrap();
+        fs::create_dir_all(run_dir.join("screenshots")).unwrap();
+
+        // 4x4 baseline: opaque white; current: same, then with 1 pixel red.
+        let a = image::RgbaImage::from_pixel(4, 4, image::Rgba([255, 255, 255, 255]));
+        a.save(sid_dir.join("baselines/s1.png")).unwrap();
+        a.save(run_dir.join("screenshots/s1.png")).unwrap();
+
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "shot": "s1" },
+            "predicate": "matches"
+        }))
+        .unwrap();
+        let mut scope = ValueScope::default();
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: &sid_dir,
+            run_dir: Some(&run_dir),
+        };
+        dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+
+        // Flip one pixel → 1/16 = 6.25% > default 1% → fail + diff png.
+        let mut b = a.clone();
+        b.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
+        b.save(run_dir.join("screenshots/s1.png")).unwrap();
+        let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
+        assert!(err.to_string().contains("pixels changed"), "got: {err}");
+        assert!(run_dir.join("shots-diff/s1.diff.png").is_file());
+
+        // tolerance.pixels=0.1 accepts the drift.
+        let claim2: Claim = serde_json::from_value(json!({
+            "subject": { "shot": "s1" },
+            "predicate": "matches",
+            "tolerance": { "pixels": 0.1 }
+        }))
+        .unwrap();
+        dispatch_check(&claim2, &ctx, &mut scope, None).unwrap();
+    }
+
+    #[test]
+    fn shot_claim_bails_without_baseline_or_run_dir() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let sid_dir = tmp.path().join("scenario");
+        fs::create_dir_all(&sid_dir).unwrap();
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "shot": "s1" },
+            "predicate": "matches"
+        }))
+        .unwrap();
+        let mut scope = ValueScope::default();
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: &sid_dir,
+            run_dir: None,
+        };
+        let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
+        assert!(err.to_string().contains("run-step"), "got: {err}");
+        let ctx2 = CheckContext {
+            session: "s",
+            scenario_dir: &sid_dir,
+            run_dir: Some(tmp.path()),
+        };
+        let err2 = dispatch_check(&claim, &ctx2, &mut scope, None).unwrap_err();
+        assert!(err2.to_string().contains("shot-accept"), "got: {err2}");
     }
 }
