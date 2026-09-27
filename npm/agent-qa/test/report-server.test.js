@@ -1973,3 +1973,35 @@ test('POST /api/edit/check runs buffer check with strict passthrough', async (t)
   assert.equal(bad.status, 422);
   assert.match((await bad.json()).error, /lint FAIL/);
 });
+
+test('GET/POST /api/config/settings round-trips and validates', async (t) => {
+  const fx = makeFixture();
+  const { server, base } = await boot(fx.root);
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  // defaults: no stored values, effective auto/headless
+  const d0 = await (await j('GET', '/api/config/settings')).json();
+  assert.equal(d0.effective.chatBackend, 'auto');
+  assert.equal(d0.effective.headedDefault, false);
+  assert.equal(d0.root, fx.root);
+
+  // write both fields → persisted file + effective flip
+  const d1 = await (await j('POST', '/api/config/settings', { chatBackend: 'opencode', headedDefault: true })).json();
+  assert.equal(d1.effective.chatBackend, 'opencode');
+  assert.equal(d1.effective.headedDefault, true);
+  const onDisk = JSON.parse(fs.readFileSync(path.join(fx.root, '_config', 'settings.json'), 'utf8'));
+  assert.equal(onDisk.schema, 'settings/1');
+  assert.equal(onDisk.chatBackend, 'opencode');
+
+  // 'auto' clears the stored backend
+  const d2 = await (await j('POST', '/api/config/settings', { chatBackend: 'auto' })).json();
+  assert.equal(d2.effective.chatBackend, 'auto');
+  assert.equal(d2.settings.chatBackend, undefined);
+
+  // validation: unknown key / bad enum / bad type → 400
+  assert.equal((await j('POST', '/api/config/settings', { nope: 1 })).status, 400);
+  assert.equal((await j('POST', '/api/config/settings', { chatBackend: 'wat' })).status, 400);
+  assert.equal((await j('POST', '/api/config/settings', { headedDefault: 'yes' })).status, 400);
+});

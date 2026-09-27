@@ -78,6 +78,8 @@ const STATIC_FILES = {
   '/environments.html': 'index.html',
   '/knowledge': 'index.html',
   '/knowledge.html': 'index.html',
+  '/settings': 'index.html',
+  '/settings.html': 'index.html',
   '/plugins': 'index.html',
   '/plugins.html': 'index.html',
 };
@@ -1332,6 +1334,79 @@ function pluginsEnv(paths) {
   return paths && paths.length ? { AGENT_QA_PLUGINS: paths.join(':') } : {};
 }
 
+// -------- workbench settings --------
+//
+// User preferences managed from the Settings tab, stored at <root>/_config/
+// settings.json. Env vars win over stored values — the API reports both so
+// the UI can show which fields are env-forced.
+const settingsFile = (root) => path.join(root, '_config', 'settings.json');
+const SETTINGS_KEYS = ['chatBackend', 'headedDefault'];
+
+async function readSettings(root) {
+  const rec = await readJson(settingsFile(root));
+  const out = {};
+  if (rec) {
+    if (rec.chatBackend === 'pi' || rec.chatBackend === 'opencode')
+      out.chatBackend = rec.chatBackend;
+    if (typeof rec.headedDefault === 'boolean') out.headedDefault = rec.headedDefault;
+  }
+  return out;
+}
+
+async function writeSettings(root, patch) {
+  for (const k of Object.keys(patch || {})) {
+    if (!SETTINGS_KEYS.includes(k)) throw new Error(`unknown setting "${k}"`);
+  }
+  const next = await readSettings(root);
+  if ('chatBackend' in patch) {
+    const v = patch.chatBackend;
+    if (v === null || v === '' || v === 'auto') delete next.chatBackend;
+    else if (v === 'pi' || v === 'opencode') next.chatBackend = v;
+    else throw new Error('chatBackend must be auto | pi | opencode');
+  }
+  if ('headedDefault' in patch) {
+    if (typeof patch.headedDefault !== 'boolean')
+      throw new Error('headedDefault must be a boolean');
+    next.headedDefault = patch.headedDefault;
+  }
+  await fsp.mkdir(path.join(root, '_config'), { recursive: true });
+  await fsp.writeFile(
+    settingsFile(root),
+    JSON.stringify({ schema: 'settings/1', ...next }, null, 2) + '\n'
+  );
+  return next;
+}
+
+// Sync variant for the sync `start()` boot path — reads the same file.
+function readSettingsSync(root) {
+  try {
+    const rec = JSON.parse(fs.readFileSync(settingsFile(root), 'utf8'));
+    const out = {};
+    if (rec.chatBackend === 'pi' || rec.chatBackend === 'opencode')
+      out.chatBackend = rec.chatBackend;
+    if (typeof rec.headedDefault === 'boolean') out.headedDefault = rec.headedDefault;
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+// The payload both GET and POST return: stored values, env overrides, and the
+// resolved value each consumer actually uses.
+async function settingsPayload(root) {
+  const settings = await readSettings(root);
+  const envBackend = process.env.AGENT_QA_CHAT_BACKEND || null;
+  return {
+    settings,
+    env: { chatBackend: envBackend },
+    effective: {
+      chatBackend: envBackend || settings.chatBackend || 'auto',
+      headedDefault: settings.headedDefault === true,
+    },
+    root,
+  };
+}
+
 // POST /api/personas/:id/connect { environmentId } — sign a persona in for an
 // environment via the downstream auth plugin: profile-add (register the profile
 // against the env's plugin) → profile-bootstrap (run the plugin's auth) →
@@ -2546,13 +2621,15 @@ async function buildRealHub(config) {
 
 // Unavailable-state payload for /api/chat/state: which backend was selected
 // (or would be), the failure reason, and the install command the nudge shows.
-async function chatUnavailableFields(reason) {
+async function chatUnavailableFields(reason, root) {
   const fields = { available: false, reason };
   try {
     const url = pathToFileURL(path.join(__dirname, 'chat-agent.mjs')).href;
     const mod = await import(url);
     const det = mod.detectChatBackends();
-    const explicit = process.env.AGENT_QA_CHAT_BACKEND;
+    const explicit =
+      process.env.AGENT_QA_CHAT_BACKEND ||
+      (root ? (await readSettings(root)).chatBackend : null);
     const backend =
       explicit ||
       (det.pi.available ? 'pi' : det.opencode.available ? 'opencode' : null) ||
@@ -3217,7 +3294,7 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
     hub = await entry.getHub();
   } catch (err) {
     const reason = String((err && err.message) || err);
-    const fields = await chatUnavailableFields(reason);
+    const fields = await chatUnavailableFields(reason, root);
     if (sub === 'state' && req.method === 'GET') {
       return sendJson(res, 200, fields);
     }
@@ -3225,7 +3302,7 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
   }
 
   if (!hub) {
-    const fields = await chatUnavailableFields('no chat backend configured');
+    const fields = await chatUnavailableFields('no chat backend configured', root);
     if (sub === 'state' && req.method === 'GET') {
       return sendJson(res, 200, fields);
     }
@@ -3630,6 +3707,25 @@ function createRequestHandler(root, deps, chat) {
             return badRequest(res, String((e && e.message) || e));
           }
           return sendJson(res, 200, { ok: true, paths: await writePluginPaths(root, body.paths) });
+        }
+        return sendJson(res, 405, { error: 'method not allowed' });
+      }
+
+      // Workbench settings (Settings tab): read/patch the flat store under
+      // <root>/_config/settings.json. Response reports env-forced values too.
+      if (segAll[0] === 'api' && segAll[1] === 'config' && segAll[2] === 'settings' && segAll.length === 3) {
+        if (req.method === 'GET') {
+          return sendJson(res, 200, await settingsPayload(root));
+        }
+        if (req.method === 'POST') {
+          let body;
+          try {
+            body = await readJsonBody(req);
+            await writeSettings(root, body);
+          } catch (e) {
+            return badRequest(res, String((e && e.message) || e));
+          }
+          return sendJson(res, 200, await settingsPayload(root));
         }
         return sendJson(res, 405, { error: 'method not allowed' });
       }
@@ -4076,7 +4172,11 @@ function start(opts = {}) {
     deps.chat = {
       config: {
         cwd: opts.cwd || process.cwd(),
-        backend: opts.chatBackend || process.env.AGENT_QA_CHAT_BACKEND || undefined,
+        backend:
+          opts.chatBackend ||
+          process.env.AGENT_QA_CHAT_BACKEND ||
+          readSettingsSync(root).chatBackend ||
+          undefined,
         sdkPath: opts.piSdkPath || process.env.AGENT_QA_PI_SDK || undefined,
         agentDir: opts.agentDir || undefined,
         tools: Array.isArray(opts.chatTools) ? opts.chatTools : undefined,

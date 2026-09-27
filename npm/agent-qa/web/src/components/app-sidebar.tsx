@@ -64,7 +64,7 @@ const SETUP: NavItem[] = [
   { label: "Extensions", icon: PlugIcon, tab: "plugins", href: "/plugins" },
 ]
 
-const WORKSPACE: NavItem[] = [{ label: "Settings", icon: Settings2Icon, soon: true }]
+const WORKSPACE: NavItem[] = [{ label: "Settings", icon: Settings2Icon, tab: "settings", href: "/settings" }]
 
 function NavRow({ item, tab }: { item: NavItem; tab: Tab }) {
   const Icon = item.icon

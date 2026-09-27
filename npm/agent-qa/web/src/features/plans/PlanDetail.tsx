@@ -26,6 +26,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { getCases } from '@/lib/cases-api'
+import { effectiveSettings } from '@/lib/settings-api'
 import { getSets } from '@/lib/sets-api'
 import { deletePlan, getPlan, runPlan, upsertPlan } from '@/lib/plans-api'
 import { startReplay } from '@/lib/runs-api'
@@ -89,6 +90,13 @@ export function PlanDetail({ id }: { id: string }) {
   const [personaId, setPersonaId] = useState('')
   const [envId, setEnvId] = useState('')
   const [headed, setHeaded] = useState(false)
+  // Seed from the workbench "headed by default" setting once it loads.
+  useEffect(() => {
+    void effectiveSettings()
+      .then((s) => setHeaded(s.effective.headedDefault))
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const [live, setLive] = useState(false)

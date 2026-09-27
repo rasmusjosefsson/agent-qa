@@ -10,6 +10,7 @@ import PersonasPage from "./features/personas/PersonasPage"
 import EnvironmentsPage from "./features/environments/EnvironmentsPage"
 import KnowledgePage from "./features/knowledge/KnowledgePage"
 import PluginsPage from "./features/plugins/PluginsPage"
+import { SettingsPage } from "./features/settings/SettingsPage"
 
 function tabForPath(pathname: string): Tab {
   switch (pathname) {
@@ -40,6 +41,9 @@ function tabForPath(pathname: string): Tab {
     case "/plugins":
     case "/plugins.html":
       return "plugins"
+    case "/settings":
+    case "/settings.html":
+      return "settings"
     case "/":
     case "/index.html":
     default:
@@ -67,7 +71,8 @@ export function App() {
         {tab === "personas" && <PersonasPage />}
         {tab === "environments" && <EnvironmentsPage />}
         {tab === "knowledge" && <KnowledgePage />}
-        {tab === "plugins" && <PluginsPage />}
+                {tab === "plugins" && <PluginsPage />}
+        {tab === "settings" && <SettingsPage />}
       </div>
     </AppShell>
   )

@@ -7,6 +7,7 @@ import { StepDetail } from './components/StepDetail'
 import { ReplayLive } from './components/ReplayLive'
 import { Lightbox } from './components/Lightbox'
 import { isRunLive } from './rows'
+import { effectiveSettings } from '@/lib/settings-api'
 import { Panel, PanelGroup } from 'react-resizable-panels'
 import { ResizeHandle } from '@/components/ResizeHandle'
 import { getPersonas, getEnvironments } from '@/lib/run-config-api'
@@ -26,6 +27,13 @@ export function RunsPage() {
   const [personaId, setPersonaId] = useState('')
   const [envId, setEnvId] = useState('')
   const [headed, setHeaded] = useState(false)
+  // Seed from the workbench "headed by default" setting once it loads.
+  useEffect(() => {
+    void effectiveSettings()
+      .then((s) => setHeaded(s.effective.headedDefault))
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     Promise.all([getPersonas(), getEnvironments()])
