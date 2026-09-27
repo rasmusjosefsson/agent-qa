@@ -1,0 +1,65 @@
+{
+  "schema": "scenario/2",
+  "id": "selftest-runs",
+  "intent": "Workbench runs pane renders",
+  "env": {
+    "open": [
+      {
+        "kind": "fresh"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "id": "s1",
+      "kind": "do",
+      "verb": "viewport",
+      "params": {
+        "width": 1280,
+        "height": 800
+      },
+      "intent": "pin viewport"
+    },
+    {
+      "id": "s2",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4899/"
+      },
+      "intent": "open / (runs tab)"
+    },
+    {
+      "id": "s3",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "header"
+            },
+            "reason": "selftest"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "app shell rendered"
+    },
+    {
+      "id": "s9",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s3"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "visual baseline"
+    }
+  ]
+}
