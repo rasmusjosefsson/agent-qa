@@ -163,7 +163,8 @@
     "golden:multi-select:tc05": "bun golden/multi-select-tc05.ts",
     "golden:tabs-windows:tc01": "bun golden/tabs-windows-tc01.ts",
     "golden:tabs-windows:tc03": "bun golden/tabs-windows-tc03.ts",
-    "golden:tabs-windows:tc04": "bun golden/tabs-windows-tc04.ts"
+    "golden:tabs-windows:tc04": "bun golden/tabs-windows-tc04.ts",
+    "golden:all": "bun golden-all.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"
