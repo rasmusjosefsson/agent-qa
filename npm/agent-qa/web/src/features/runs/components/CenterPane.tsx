@@ -1,7 +1,7 @@
 // web/src/features/runs/components/CenterPane.tsx
 import { BrowserModeToggle } from '@/components/browser-mode-toggle'
 import { cn } from '@/lib/utils'
-import { Loader2Icon, PlayIcon } from 'lucide-react'
+import { Loader2Icon, PlayIcon, WrenchIcon } from 'lucide-react'
 import {
   cleanSummary,
   collapseEvents,
@@ -201,6 +201,11 @@ export function CenterPane({
     const stepFail = !setupError
       ? (detail.events || []).find((e) => e.kind !== 'setup' && e.status === 'fail')
       : null
+    // Auto-heal trail for this run: locator corrections applied on retry, and
+    // classified value rejections surfaced for review (never retried).
+    const heals = detail.heals || []
+    const healByStep = new Map(heals.map((h) => [h.stepId, h]))
+    const healedCount = heals.filter((h) => h.mode === 'locator-correction').length
     const stepError = stepFail && stepFail.error
       ? stepFail.error.replace(/^.*?exited \d+:\s*/, '').replace(/^[✗✘x]\s*/, '').trim()
       : null
@@ -221,6 +226,15 @@ export function CenterPane({
               {cleanSummary(summary)}
             </span>
             {live && <span className="text-xs text-amber-400">● live</span>}
+            {healedCount > 0 && (
+              <span
+                className="flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-400"
+                title="Auto-heal corrected a drifting locator on these steps — review the diff in the step detail."
+              >
+                <WrenchIcon className="size-3" />
+                {healedCount} healed
+              </span>
+            )}
           </div>
           <div className="mt-0.5 text-xs text-muted-foreground">
             {fmtRunTime(detail.runId)} <span className="font-mono opacity-50">· {detail.runId}</span>
@@ -284,6 +298,25 @@ export function CenterPane({
                     {st.idx}/{st.total || rows.length}
                   </span>
                   <span className="truncate text-sm">{st.intent || st.id}</span>
+                  {(() => {
+                    const h = st.id ? healByStep.get(st.id) : undefined
+                    if (!h) return null
+                    return h.mode === 'value-rejection' ? (
+                      <span
+                        className="shrink-0 rounded bg-destructive/15 px-1 py-0.5 text-[10px] font-medium text-destructive"
+                        title="Auto-heal classified this step's failure as a value rejection (page refused the value) — evidence is in the step detail."
+                      >
+                        rejected
+                      </span>
+                    ) : (
+                      <span
+                        className="shrink-0 rounded bg-amber-500/15 px-1 py-0.5 text-[10px] font-medium text-amber-400"
+                        title={`Locator auto-healed via ${h.strategy || 'the name ladder'}: ${h.from || ''} → ${h.to || ''}`}
+                      >
+                        healed
+                      </span>
+                    )
+                  })()}
                   {st.kind && <span className="shrink-0 text-xs text-muted-foreground">({st.kind})</span>}
                   <span className="ml-auto shrink-0 text-xs text-muted-foreground">{pending ? '' : fmtMs(st.ms)}</span>
                 </button>

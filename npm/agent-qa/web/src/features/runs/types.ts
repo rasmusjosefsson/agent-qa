@@ -13,6 +13,8 @@ export interface RunSummary {
   ok: boolean | null
   profile?: string | null
   tag?: string | null
+  // Steps the auto-heal loop recovered in this run (from audit.autoHealed).
+  healed?: number | null
 }
 
 export interface ScenarioSummary {
@@ -61,13 +63,33 @@ export interface RunEvent {
   pending?: boolean
 }
 
+// One row of a run's heal.jsonl — a locator correction the auto-heal loop
+// applied, or a classified value rejection it refused to retry. `patch` is the
+// parsed diffs/<stepId>.patch.json for corrections (null otherwise).
+export interface HealRow {
+  stepId?: string
+  mode?: string // 'locator-correction' | 'value-rejection'
+  strategy?: string
+  from?: string
+  to?: string
+  rationale?: string
+  ts?: string
+  patch?: {
+    newLocator?: unknown
+    rationale?: string
+    [k: string]: unknown
+  } | null
+  [k: string]: unknown
+}
+
 export interface RunDetail {
   sid: string
   runId: string
   isLatest: boolean
-  audit: { summary?: string; exitCode?: number; [k: string]: unknown } | null
+  audit: { summary?: string; exitCode?: number; autoHealed?: string[]; [k: string]: unknown } | null
   status: { state?: string; currentIdx?: number; total?: number; ok?: boolean; [k: string]: unknown } | null
   events: RunEvent[]
+  heals?: HealRow[]
 }
 
 export type DetailTab = 'step' | 'scenario' | 'context' | 'network' | 'html' | 'console'

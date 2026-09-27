@@ -240,6 +240,10 @@ async function listRuns(scenarioDir) {
       // gains its final summary (audit.json is written empty-ish at start).
       state: status?.state ?? null,
       ok: status?.ok ?? null,
+      // Steps the auto-heal loop recovered (audit.autoHealed is a step-id list
+      // written by the runner) — surfaced so a healed run stands out even when
+      // it passed.
+      healed: Array.isArray(audit?.autoHealed) ? audit.autoHealed.length : 0,
     });
   }
   // Sort by runId — the timestamp prefix makes this chronological. We do
@@ -1503,12 +1507,25 @@ async function bindRecordingProfile(runCli, profile) {
 
 async function runDetail(root, sid, runId) {
   const runDir = path.join(root, sid, 'replays', runId);
-  const [audit, status, events, latest] = await Promise.all([
+  const [audit, status, events, latest, healRows] = await Promise.all([
     readJson(path.join(runDir, 'audit.json')),
     readJson(path.join(runDir, 'status.json')),
     readEvents(path.join(runDir, 'events.jsonl')),
     latestRunId(path.join(root, sid)),
+    readEvents(path.join(runDir, 'heal.jsonl')),
   ]);
+  // Join each heal row with its suggested patch (diffs/<stepId>.patch.json)
+  // so the UI can review the correction in place.
+  const heals = await Promise.all(
+    healRows.map(async (row) => {
+      const stepId = typeof row?.stepId === 'string' ? row.stepId : '';
+      const patch =
+        row?.mode === 'locator-correction' && isSafeSegment(stepId)
+          ? await readJson(path.join(runDir, 'diffs', `${stepId}.patch.json`))
+          : null;
+      return { ...row, patch };
+    })
+  );
   return {
     sid,
     runId,
@@ -1516,6 +1533,7 @@ async function runDetail(root, sid, runId) {
     audit,
     status,
     events,
+    heals,
   };
 }
 
