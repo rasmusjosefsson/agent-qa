@@ -127,6 +127,54 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           return doStep(intent, { verb: "dblclick", on: css(args[0]) });
         case "scrollToBySelector":
           return doStep(intent, { verb: "scrollTo", on: css(args[0]) });
+        case "scrollTop":
+          // scrollTo with no locator scrolls the page to the top.
+          return doStep(intent, { verb: "scrollTo" });
+        case "checkBySelector":
+          return doStep(intent, { verb: "check", on: css(args[0]) });
+        case "uncheckBySelector":
+          return doStep(intent, { verb: "uncheck", on: css(args[0]) });
+        case "setViewport":
+          // args[0] = width px, args[1] = height px — do/viewport resizes the
+          // live browser so breakpoint-gated content can be asserted.
+          return doStep(intent, {
+            verb: "viewport",
+            params: { width: args[0], height: args[1] },
+          });
+        case "fileChooserFiles":
+          // Arms native file-chooser interception: the NEXT click that would
+          // open the OS picker resolves with these files. args[0] may be a
+          // single path or an array of paths.
+          return doStep(intent, {
+            verb: "fileChooser",
+            params: { files: Array.isArray(args[0]) ? args[0] : [args[0]] },
+          });
+        case "readBySelector":
+          // args[1] (optional) names the saveAs binding the read text lands in.
+          return doStep(intent, {
+            verb: "read",
+            on: css(args[0]),
+            ...(args[1] === undefined ? {} : { saveAs: args[1] }),
+          });
+        case "goBack":
+          return doStep(intent, { verb: "back" });
+        case "goForward":
+          return doStep(intent, { verb: "forward" });
+        case "waitLoadState":
+          // args[0] = load state: "load" | "domcontentloaded" | "networkidle"
+          return doStep(intent, { verb: "wait", params: { until: args[0] } });
+        case "callGqlApi":
+          // args = [url, query, variables?, saveAs?] — the response binds to
+          // saveAs when given, for later {{steps.<id>}} claims.
+          return doStep(intent, {
+            verb: "callGql",
+            params: {
+              url: args[0],
+              query: args[1],
+              ...(args[2] === undefined ? {} : { variables: args[2] }),
+            },
+            ...(args[3] === undefined ? {} : { saveAs: args[3] }),
+          });
         case "reloadPage":
           return doStep(intent, { verb: "reload" });
         case "tabCommand":
@@ -175,6 +223,9 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           return checkStep(intent, { element: textLoc(c.text) }, "isVisible");
         case "url":
           return checkStep(intent, { url: true }, "contains", c.pattern);
+        case "loadState":
+          // c.state = "load" | "domcontentloaded" | "networkidle"
+          return doStep(intent, { verb: "wait", params: { until: c.state } });
         default:
           throw new Error(`record-step translate: unknown wait condition ${String(c.kind)}`);
       }
@@ -183,7 +234,9 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
       const args = Array.isArray(p.args) ? p.args : [];
       switch (p.kind) {
         case "url":
-          return checkStep(intent, { url: true }, "contains", args[0]);
+          // args[1] optionally overrides the predicate (equals/matches/
+          // startsWith/endsWith); default stays contains.
+          return checkStep(intent, { url: true }, args[1] ?? "contains", args[0]);
         case "present":
           return checkStep(intent, { element: roleLoc(args[0], args[1]) }, "isVisible");
         case "absent":
@@ -210,6 +263,8 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           return checkStep(intent, { file: args[0] }, "notExists");
         case "fileSizeGt":
           return checkStep(intent, { file: args[0] }, "gt", args[1]);
+        case "fileSizeLt":
+          return checkStep(intent, { file: args[0] }, "lt", args[1]);
         case "fileName":
           return checkStep(intent, { file: args[0] }, "equals", args[1]);
         case "dialogOpen":
@@ -218,6 +273,22 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           return checkStep(intent, { dialog: true }, "notExists");
         case "dialogText":
           return checkStep(intent, { dialog: true }, "contains", args[0]);
+        case "elementChecked":
+          // `checked` reads the live IDL property, not the attribute — so this
+          // sees the post-interaction state. args[1] flips to expect unchecked.
+          return checkStep(
+            intent,
+            { element: css(args[0]), attribute: "checked" },
+            "equals",
+            args[1] === false ? "false" : "true",
+          );
+        case "elementFocused":
+          return checkStep(
+            intent,
+            { element: css(args[0]), attribute: "focused" },
+            "equals",
+            "true",
+          );
         default:
           throw new Error(`record-step translate: unknown assert kind ${String(p.kind)}`);
       }

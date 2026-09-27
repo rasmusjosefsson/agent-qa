@@ -84,6 +84,10 @@ jobs:
       - name: web tests
         working-directory: npm/agent-qa/web
         run: npx vitest run
+      - uses: oven-sh/setup-bun@v2
+      - name: evals parity tests
+        working-directory: evals
+        run: bun test golden/
 
   audit:
     name: cargo audit
