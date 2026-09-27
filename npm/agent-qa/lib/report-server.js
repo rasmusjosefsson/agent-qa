@@ -278,6 +278,37 @@ async function findActiveRunId(scenarioDir) {
   return active;
 }
 
+// do→check coverage for a scenario's steps array — the same heuristic the
+// CLI's `scenario coverage` reports (consecutive/trailing dos are bare).
+function coverageOf(steps) {
+  if (!steps) return null;
+  let doSteps = 0;
+  let checked = 0;
+  let bare = 0;
+  let prevWasDo = false;
+  for (const s of steps) {
+    const isDo = s && s.kind === 'do';
+    const isCheck = s && s.kind === 'check';
+    if (isDo) {
+      if (prevWasDo) bare += 1;
+      doSteps += 1;
+      prevWasDo = true;
+    } else if (isCheck) {
+      if (prevWasDo) {
+        checked += 1;
+        prevWasDo = false;
+      }
+    }
+  }
+  if (prevWasDo) bare += 1;
+  return {
+    doSteps,
+    checked,
+    bare,
+    ratio: doSteps === 0 ? 1 : checked / doSteps,
+  };
+}
+
 async function scenarioSummary(root, sid) {
   const dir = path.join(root, sid);
   const scenario = await readJson(path.join(dir, 'scenario.json'));
@@ -315,6 +346,10 @@ async function scenarioSummary(root, sid) {
     hasScenario: !!scenario,
     intent: scenario?.intent ?? null,
     steps: Array.isArray(scenario?.steps) ? scenario.steps.length : null,
+    // Same do→check heuristic as `scenario coverage`/`coverage-all`: a do is
+    // covered iff the next step is a check. Lets case/plan dashboards flag
+    // thin scenarios without a CLI round-trip.
+    coverage: coverageOf(Array.isArray(scenario?.steps) ? scenario.steps : null),
     latestRunId: latest,
     activeRunId,
     latestRun,
