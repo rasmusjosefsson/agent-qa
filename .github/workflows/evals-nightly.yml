@@ -1,0 +1,56 @@
+name: evals-nightly
+# Nightly run of the deterministic golden suite against the live practice
+# sites — live-page drift fails loudly here instead of the next time someone
+# runs evals by hand. `golden:all` enumerates every golden:* script, so new
+# cases join automatically.
+on:
+  schedule:
+    - cron: "0 3 * * *" # 03:00 UTC
+  workflow_dispatch: {} # manual run for debugging
+
+permissions:
+  contents: read
+
+jobs:
+  golden:
+    name: golden suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+      - name: build cli
+        working-directory: cli
+        run: cargo build --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: launcher install (resolves agent-browser)
+        working-directory: npm/agent-qa
+        run: npm install --no-audit --no-fund
+      - name: browser install
+        working-directory: npm/agent-qa
+        env:
+          AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+        run: ./node_modules/.bin/agent-browser install
+      - uses: oven-sh/setup-bun@v2
+      - name: evals install
+        working-directory: evals
+        run: bun install
+      - name: golden suite
+        working-directory: evals
+        env:
+          AGENT_QA_EVAL_AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
+          AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
+          AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+        run: bun golden-all.ts
+      - name: upload golden results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-results
+          path: evals/results/
+          retention-days: 30
