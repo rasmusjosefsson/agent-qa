@@ -743,6 +743,15 @@ test('multi-chat: list / create / per-chat routes / delete', async (t) => {
   assert.equal(p.status, 202);
   assert.equal(hub.calls.prompt.at(-1).text, 'hi there');
 
+  // the list reports per-chat live/busy so the rail can badge each tab
+  list = await (await fetch(`${base}/api/chat/list`)).json();
+  assert.equal(list.chats[0].live, true);
+  assert.equal(list.chats[0].busy, false);
+  hub.isStreaming = true;
+  list = await (await fetch(`${base}/api/chat/list`)).json();
+  assert.equal(list.chats[0].busy, true);
+  hub.isStreaming = false;
+
   // unknown chat id → 404
   assert.equal((await fetch(`${base}/api/chat/c/deadbeef/active-session`)).status, 404);
 
