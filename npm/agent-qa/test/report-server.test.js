@@ -380,7 +380,14 @@ test('report viewer endpoints', async (t) => {
     assert.equal(sc.latestRun.state, 'done');
     assert.equal(sc.latestRun.ok, false);
     // do→check coverage: navHome covered by headingVisible; clickMissingLogin bare.
-    assert.deepEqual(sc.coverage, { doSteps: 2, checked: 1, bare: 1, ratio: 0.5 });
+    assert.deepEqual(sc.coverage, {
+      doSteps: 2,
+      checked: 1,
+      bare: 1,
+      ratio: 0.5,
+      shotCovered: 0,
+      shotRatio: 0,
+    });
   });
 
   await t.test('GET /api/health passes through audit health --json', async () => {

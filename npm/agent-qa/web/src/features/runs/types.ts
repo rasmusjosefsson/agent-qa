@@ -36,7 +36,14 @@ export interface ScenarioSummary {
   steps: number | null
   // do→check coverage (same heuristic as `scenario coverage`): null when no
   // scenario.json exists yet.
-  coverage: { doSteps: number; checked: number; bare: number; ratio: number } | null
+  coverage: {
+    doSteps: number
+    checked: number
+    bare: number
+    shotCovered: number
+    ratio: number
+    shotRatio: number
+  } | null
   latestRunId: string | null
   activeRunId: string | null
   latestRun: RunSummary | null
