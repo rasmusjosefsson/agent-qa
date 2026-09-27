@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils'
 import type { ClickMode, LiveInput, LiveStatus, PickedElement } from '../types'
 
 const PREVENT_KEYS = new Set(['Enter', 'Backspace', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'])
+const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta'])
 
 interface Overlay {
   hidden: boolean
@@ -160,10 +161,16 @@ export function LiveCanvas({
     const onKeyDown = (ev: KeyboardEvent) => {
       const mode = bag.current.clickMode
       if (mode === 'pick') return
+      // A lone modifier press does nothing — don't dispatch it, so chord
+      // recording sees only the completed chord (Control+a, Shift+Tab, …).
+      if (MODIFIER_KEYS.has(ev.key)) { ev.preventDefault(); return }
       const record = mode === 'record'
-      if (ev.key.length === 1) bag.current.sendInput({ type: 'key', text: ev.key, record })
-      else bag.current.sendInput({ type: 'key', key: ev.key, record })
-      if (PREVENT_KEYS.has(ev.key)) ev.preventDefault()
+      const mods = { ctrl: ev.ctrlKey, shift: ev.shiftKey, alt: ev.altKey, meta: ev.metaKey }
+      if (ev.key.length === 1) bag.current.sendInput({ type: 'key', text: ev.key, mods, record })
+      else bag.current.sendInput({ type: 'key', key: ev.key, mods, record })
+      // Chorded keys (ctrl/meta/alt) are page shortcuts — keep the browser
+      // chrome from also handling them while driving the live pane.
+      if (PREVENT_KEYS.has(ev.key) || ev.ctrlKey || ev.metaKey || ev.altKey) ev.preventDefault()
     }
 
     let hoverTimer: ReturnType<typeof setTimeout> | null = null

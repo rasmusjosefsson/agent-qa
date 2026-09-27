@@ -58,7 +58,60 @@ const KEYMAP = {
   ArrowRight: { code: 'ArrowRight', windowsVirtualKeyCode: 39 },
   ArrowDown: { code: 'ArrowDown', windowsVirtualKeyCode: 40 },
   Escape: { code: 'Escape', windowsVirtualKeyCode: 27 },
+  Delete: { code: 'Delete', windowsVirtualKeyCode: 46 },
+  Home: { code: 'Home', windowsVirtualKeyCode: 36 },
+  End: { code: 'End', windowsVirtualKeyCode: 35 },
+  PageUp: { code: 'PageUp', windowsVirtualKeyCode: 33 },
+  PageDown: { code: 'PageDown', windowsVirtualKeyCode: 34 },
+  F1: { code: 'F1', windowsVirtualKeyCode: 112 },
+  F2: { code: 'F2', windowsVirtualKeyCode: 113 },
+  F3: { code: 'F3', windowsVirtualKeyCode: 114 },
+  F4: { code: 'F4', windowsVirtualKeyCode: 115 },
+  F5: { code: 'F5', windowsVirtualKeyCode: 116 },
+  F6: { code: 'F6', windowsVirtualKeyCode: 117 },
+  F7: { code: 'F7', windowsVirtualKeyCode: 118 },
+  F8: { code: 'F8', windowsVirtualKeyCode: 119 },
+  F9: { code: 'F9', windowsVirtualKeyCode: 120 },
+  F10: { code: 'F10', windowsVirtualKeyCode: 121 },
+  F11: { code: 'F11', windowsVirtualKeyCode: 122 },
+  F12: { code: 'F12', windowsVirtualKeyCode: 123 },
 };
+
+// keydown events for the modifier keys themselves — a lone modifier press
+// does nothing, so it is neither dispatched nor recorded.
+const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta']);
+
+// CDP Input.dispatchKeyEvent modifier bitmask (Alt=1 Ctrl=2 Meta=4 Shift=8)
+// and the canonical `press` chord spelling (agent-browser order: Control,
+// Alt, Shift, Meta). ctrl→Control ordering differs between the two maps on
+// purpose: CDP wants a number, the verb wants a readable literal.
+const MOD_BITS = { alt: 1, ctrl: 2, meta: 4, shift: 8 };
+const MOD_ORDER = ['ctrl', 'alt', 'shift', 'meta'];
+const MOD_LABEL = { ctrl: 'Control', alt: 'Alt', shift: 'Shift', meta: 'Meta' };
+
+function modsMask(mods) {
+  if (!mods) return 0;
+  let bits = 0;
+  for (const k of Object.keys(MOD_BITS)) if (mods[k]) bits |= MOD_BITS[k];
+  return bits;
+}
+
+// `press` literal for a chorded key: Control+a, Shift+Tab, Control+Shift+s.
+// Printable keys are lowercased to match agent-browser's examples.
+function chordName(key, mods) {
+  const parts = MOD_ORDER.filter((k) => mods && mods[k]).map((k) => MOD_LABEL[k]);
+  parts.push(key.length === 1 ? key.toLowerCase() : key);
+  return parts.join('+');
+}
+
+// code/vk for a printable key when modifiers turn it into a chord
+// (a-z → KeyA/65, 0-9 → Digit0/48, else best-effort).
+function charCodes(ch) {
+  const up = ch.toUpperCase();
+  if (up >= 'A' && up <= 'Z') return { code: `Key${up}`, windowsVirtualKeyCode: up.charCodeAt(0) };
+  if (up >= '0' && up <= '9') return { code: `Digit${up}`, windowsVirtualKeyCode: up.charCodeAt(0) };
+  return { code: '', windowsVirtualKeyCode: up.charCodeAt(0) };
+}
 
 function createLiveBridge({
   getCdpUrl,
@@ -610,22 +663,56 @@ function createLiveBridge({
         return true;
       }
       case 'key': {
-        if (typeof evt.text === 'string' && evt.text.length === 1) {
-          send('Input.dispatchKeyEvent', { type: 'char', text: evt.text, key: evt.text });
+        if (MODIFIER_KEYS.has(evt.key)) return true; // lone modifier = no-op
+
+        const keyName = typeof evt.text === 'string' && evt.text.length === 1 ? evt.text : evt.key;
+        const isChar = keyName.length === 1;
+        // Printable keys chorded with Ctrl/Alt/Meta are shortcuts, not typing
+        // (Shift stays on the typing path — Shift+a is just 'A'). Named keys
+        // chord with any modifier (Shift+Tab, Control+Enter, …).
+        const chorded = modsMask(evt.mods) !== 0 && (isChar ? evt.mods.ctrl || evt.mods.alt || evt.mods.meta : true);
+
+        if (chorded) {
+          const modifiers = modsMask(evt.mods);
+          const codes = isChar ? charCodes(keyName) : (KEYMAP[keyName] || charCodes(keyName));
+          const base = { key: keyName, modifiers, ...codes };
+          send('Input.dispatchKeyEvent', { type: 'keyDown', ...base });
+          send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+          if (evt.record) {
+            const literal = chordName(keyName, evt.mods);
+            finalizeFill()
+              .then(() => emitRecord('do', { intent: `press ${literal}`, verb: 'press', value: { from: 'literal', literal } }))
+              .catch(() => {});
+          }
+          return true;
+        }
+
+        if (isChar) {
+          send('Input.dispatchKeyEvent', { type: 'char', text: keyName, key: keyName });
           if (evt.record) bumpTyping();
           return true;
         }
-        const m = KEYMAP[evt.key];
+        const m = KEYMAP[keyName];
         if (m) {
-          send('Input.dispatchKeyEvent', { type: 'keyDown', key: evt.key, ...m });
-          send('Input.dispatchKeyEvent', { type: 'keyUp', key: evt.key, ...m });
+          send('Input.dispatchKeyEvent', { type: 'keyDown', key: keyName, ...m });
+          send('Input.dispatchKeyEvent', { type: 'keyUp', key: keyName, ...m });
           if (evt.record) {
-            if (evt.key === 'Backspace') {
+            if (keyName === 'Backspace') {
               bumpTyping();
-            } else if (evt.key === 'Enter') {
+            } else if (keyName === 'Enter') {
               finalizeFill()
                 .then(() => emitRecord('do', { intent: 'press Enter', verb: 'press', value: { from: 'literal', literal: 'Enter' } }))
                 .catch(() => {});
+<<<<<<< HEAD
+            } else {
+              // Tab/Escape/arrows/etc. — record an honest `press <key>` step
+              // (a pending fill commits first so field content lands before
+              // the focus change).
+              finalizeFill()
+                .then(() => emitRecord('do', { intent: `press ${keyName}`, verb: 'press', value: { from: 'literal', literal: keyName } }))
+                .catch(() => {});
+||||||| 30fcdd1
+=======
             } else {
               // Tab/Escape/arrows/etc. — record an honest `press <key>` step
               // (a pending fill commits first so field content lands before
@@ -633,6 +720,7 @@ function createLiveBridge({
               finalizeFill()
                 .then(() => emitRecord('do', { intent: `press ${evt.key}`, verb: 'press', value: { from: 'literal', literal: evt.key } }))
                 .catch(() => {});
+>>>>>>> origin/main
             }
           }
           return true;

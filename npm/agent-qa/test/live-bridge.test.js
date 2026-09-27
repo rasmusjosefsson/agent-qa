@@ -315,6 +315,7 @@ test('the address bar tracks the page: initial url + frameNavigated', async () =
   assert.ok(frames.some((f) => f.includes('next.example')));
 });
 
+<<<<<<< HEAD
 test('auto-record installs the page change-listener binding at connect', async () => {
   const bridge = makeBridge();
   const sock = await connect(bridge, { write() {}, end() {} });
@@ -425,6 +426,174 @@ test('auto-record turns named keys (Tab/Escape/arrows) into press steps', async 
   assert.deepEqual(keys, ['Tab', 'Escape', 'ArrowDown']);
 });
 
+test('chorded keys dispatch with the modifiers bitmask and record press chords', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+
+  bridge.input({ type: 'key', text: 'a', mods: { ctrl: true }, record: true });
+  bridge.input({ type: 'key', key: 'Tab', mods: { shift: true }, record: true });
+  bridge.input({ type: 'key', key: 's', mods: { ctrl: true, shift: true }, record: true });
+  // Bare modifier keydowns dispatch nothing and record nothing.
+  bridge.input({ type: 'key', key: 'Control', record: true });
+  // Shift+char is typing, not a chord.
+  bridge.input({ type: 'key', text: 'A', mods: { shift: true }, record: true });
+  for (let i = 0; i < 6; i++) {
+    await flush();
+    const ev = sock.sent.filter((m) => m.method === 'Runtime.evaluate').at(-1);
+    if (ev) sock.recv({ id: ev.id, result: { result: { value: null } } });
+  }
+  await flush();
+  await flush();
+
+  const downs = sock.sent.filter((m) => m.method === 'Input.dispatchKeyEvent' && m.params.type === 'keyDown');
+  const ctrlA = downs.find((m) => m.params.key === 'a');
+  assert.equal(ctrlA.params.modifiers, 2);
+  assert.equal(ctrlA.params.code, 'KeyA');
+  const shiftTab = downs.find((m) => m.params.key === 'Tab');
+  assert.equal(shiftTab.params.modifiers, 8);
+  assert.equal(shiftTab.params.code, 'Tab');
+  assert.ok(!downs.some((m) => m.params.key === 'Control'), 'bare Control not dispatched');
+  // 'A' with shift goes down the char path, not keyDown.
+  const chars = sock.sent.filter((m) => m.method === 'Input.dispatchKeyEvent' && m.params.type === 'char');
+  assert.ok(chars.some((m) => m.params.text === 'A'), 'shifted char still types');
+
+  const presses = recorded.filter((r) => r.payload.verb === 'press').map((r) => r.payload.value.literal);
+  assert.deepEqual(presses, ['Control+a', 'Shift+Tab', 'Control+Shift+s']);
+});
+
+test('previously unmapped named keys (Delete/F-keys) dispatch and record', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  bridge.input({ type: 'key', key: 'Delete', record: true });
+  bridge.input({ type: 'key', key: 'F5', record: true });
+  for (let i = 0; i < 4; i++) {
+    await flush();
+    const ev = sock.sent.filter((m) => m.method === 'Runtime.evaluate').at(-1);
+    if (ev) sock.recv({ id: ev.id, result: { result: { value: null } } });
+  }
+  await flush();
+  await flush();
+  const downs = sock.sent.filter((m) => m.method === 'Input.dispatchKeyEvent' && m.params.type === 'keyDown');
+  assert.ok(downs.some((m) => m.params.key === 'Delete' && m.params.windowsVirtualKeyCode === 46));
+  assert.ok(downs.some((m) => m.params.key === 'F5' && m.params.windowsVirtualKeyCode === 116));
+  assert.deepEqual(recorded.map((r) => r.payload.value.literal), ['Delete', 'F5']);
+});
+
+||||||| 30fcdd1
+=======
+test('auto-record installs the page change-listener binding at connect', async () => {
+  const bridge = makeBridge();
+  const sock = await connect(bridge, { write() {}, end() {} });
+  assert.equal(sock.sentMethod('Runtime.enable') !== undefined, true);
+  const bind = sock.sentMethod('Runtime.addBinding');
+  assert.equal(bind.params.name, '__aqRecord');
+  const inject = sock.sentMethod('Page.addScriptToEvaluateOnNewDocument');
+  assert.ok(inject.params.source.includes('__aqRecInstalled'), 'idempotent listener injected');
+  const evald = sock.sentMethod('Runtime.evaluate');
+  assert.ok(evald.params.expression.includes('addEventListener'), 'current page gets the listener too');
+});
+
+test('auto-record maps a select change to a select step', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  sock.recv({
+    method: 'Runtime.bindingCalled',
+    params: { name: '__aqRecord', payload: JSON.stringify({ kind: 'select', name: 'Country', value: 'Sweden' }) },
+  });
+  await flush();
+  assert.equal(recorded.length, 1);
+  assert.deepEqual(recorded[0].payload, {
+    intent: 'select Sweden in Country',
+    verb: 'select',
+    on: { role: 'combobox', name: 'Country' },
+    value: { from: 'literal', literal: 'Sweden' },
+  });
+});
+
+test('auto-record maps checkbox toggles to check/uncheck, not click', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  sock.recv({
+    method: 'Runtime.bindingCalled',
+    params: { name: '__aqRecord', payload: JSON.stringify({ kind: 'check', name: 'Agree', role: 'checkbox' }) },
+  });
+  sock.recv({
+    method: 'Runtime.bindingCalled',
+    params: { name: '__aqRecord', payload: JSON.stringify({ kind: 'uncheck', name: 'Agree', role: 'checkbox' }) },
+  });
+  await flush();
+  assert.equal(recorded.length, 2);
+  assert.equal(recorded[0].payload.verb, 'check');
+  assert.equal(recorded[1].payload.verb, 'uncheck');
+  assert.deepEqual(recorded[0].payload.on, { role: 'checkbox', name: 'Agree' });
+});
+
+test('auto-record reports a record-skip for a nameless change target', async () => {
+  const bridge = makeBridge();
+  const events = [];
+  const res = { write: (s) => events.push(s), end() {} };
+  const sock = await connect(bridge, res);
+  sock.recv({
+    method: 'Runtime.bindingCalled',
+    params: { name: '__aqRecord', payload: JSON.stringify({ kind: 'select', name: '', value: 'x' }) },
+  });
+  await flush();
+  const skip = events.find((e) => e.includes('event: record-skip'));
+  assert.ok(skip, 'record-skip broadcast');
+  assert.ok(!events.some((e) => e.includes('event: recordable')));
+});
+
+test('a checkbox click dispatches but is not click-recorded (change drives it)', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  const metId = sock.sent.find((m) => m.method === 'Page.getLayoutMetrics').id;
+  sock.recv({ id: metId, result: { cssLayoutViewport: { clientWidth: 800, clientHeight: 600 } } });
+
+  bridge.input({ type: 'click', nx: 0.5, ny: 0.5, record: true });
+  await flush();
+  const loc = sock.sent.find((m) => m.method === 'DOM.getNodeForLocation');
+  sock.recv({ id: loc.id, result: { backendNodeId: 5 } });
+  await flush();
+  const ax = sock.sent.find((m) => m.method === 'Accessibility.getPartialAXTree');
+  sock.recv({ id: ax.id, result: { nodes: [{ role: { value: 'checkbox' }, name: { value: 'Agree' } }] } });
+  await flush();
+  const box = sock.sent.find((m) => m.method === 'DOM.getBoxModel');
+  if (box) sock.recv({ id: box.id, result: { model: { content: [0, 0, 10, 0, 10, 10, 0, 10] } } });
+  await flush();
+
+  assert.ok(sock.sent.some((m) => m.method === 'Input.dispatchMouseEvent'), 'click dispatched');
+  assert.equal(recorded.length, 0, 'no click record — the change event emits check/uncheck');
+});
+
+test('auto-record turns named keys (Tab/Escape/arrows) into press steps', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+
+  bridge.input({ type: 'key', key: 'Tab', record: true });
+  bridge.input({ type: 'key', key: 'Escape', record: true });
+  bridge.input({ type: 'key', key: 'ArrowDown', record: true });
+  // finalizeFill → Runtime.evaluate for the active field — answer each.
+  for (let i = 0; i < 3; i++) {
+    await flush();
+    const ev = sock.sent.filter((m) => m.method === 'Runtime.evaluate').at(-1);
+    if (ev) sock.recv({ id: ev.id, result: { result: { value: null } } });
+  }
+  await flush();
+  await flush();
+
+  const verbs = recorded.map((r) => r.payload.verb);
+  const keys = recorded.map((r) => r.payload.value && r.payload.value.literal);
+  assert.deepEqual(verbs, ['press', 'press', 'press']);
+  assert.deepEqual(keys, ['Tab', 'Escape', 'ArrowDown']);
+});
+
+>>>>>>> origin/main
 test('last unsubscribe closes the CDP socket', async () => {
   const bridge = makeBridge();
   const res = { write() {}, end() {} };
