@@ -2554,6 +2554,14 @@ async function handleEdit(req, res, deps, seg) {
       const r = await deps.runCli(['buffer', 'clear']);
       return sendCliResult(res, r);
     }
+    case 'check': {
+      // Validate the buffer as the scenario flush would write it —
+      // `buffer check` prints the scenario-check text report on stdout.
+      const args = ['buffer', 'check'];
+      if (body && body.strict === true) args.push('--strict');
+      const r = await deps.runCli(args);
+      return sendCliResult(res, r);
+    }
     case 'cancel': {
       // Discard the in-progress recording entirely: empty the buffer (via the
       // Rust clears the only active recorder state. The empty scenario directory
