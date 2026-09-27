@@ -3298,7 +3298,7 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
     hub = await entry.getHub();
   } catch (err) {
     const reason = String((err && err.message) || err);
-    const fields = await chatUnavailableFields(reason, root);
+    const fields = await chatUnavailableFields(reason, scenariosRoot);
     if (sub === 'state' && req.method === 'GET') {
       return sendJson(res, 200, fields);
     }
@@ -3306,7 +3306,7 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
   }
 
   if (!hub) {
-    const fields = await chatUnavailableFields('no chat backend configured', root);
+    const fields = await chatUnavailableFields('no chat backend configured', scenariosRoot);
     if (sub === 'state' && req.method === 'GET') {
       return sendJson(res, 200, fields);
     }
