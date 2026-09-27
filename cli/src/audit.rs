@@ -258,21 +258,10 @@ pub fn run(args: &[String]) -> Result<u8> {
         "count" => count(&positionals),
         "duration" => duration(&positionals),
         "flaky" => flaky(&positionals, json_out, min_flips, min_runs),
-<<<<<<< HEAD
         "slow" => slow(&positionals, json_out, slow_pct, slow_min_ms, recent_n, min_runs),
         "health" => health(json_out),
-||||||| c150a75
-=======
-        "slow" => slow(&positionals, json_out, slow_pct, slow_min_ms, recent_n, min_runs),
->>>>>>> origin/main
         other => bail!(
-<<<<<<< HEAD
             "unknown audit subverb {other:?} (try: show | list | stats | stats-all | diff | summary | exit-code | field | count | duration | flaky | slow | health)"
-||||||| c150a75
-            "unknown audit subverb {other:?} (try: show | list | stats | stats-all | diff | summary | exit-code | field | count | duration | flaky)"
-=======
-            "unknown audit subverb {other:?} (try: show | list | stats | stats-all | diff | summary | exit-code | field | count | duration | flaky | slow)"
->>>>>>> origin/main
         ),
     }
 }
@@ -1160,7 +1149,6 @@ fn collect_flaky(dir: &std::path::Path, min_flips: usize, min_runs: usize) -> Ve
     out
 }
 
-<<<<<<< HEAD
 /// `audit slow <sid>` — flag steps whose duration regressed across runs.
 ///
 /// Per run, the step's last terminal `events.jsonl` row carries `ms`. A step
@@ -1429,180 +1417,6 @@ fn health(json_out: bool) -> Result<u8> {
     Ok(0)
 }
 
-||||||| c150a75
-=======
-/// `audit slow <sid>` — flag steps whose duration regressed across runs.
-///
-/// Per run, the step's last terminal `events.jsonl` row carries `ms`. A step
-/// is slow when EVERY one of its last `--recent` pass observations (default 2)
-/// exceeds its earlier-run median by at least `--pct` percent (default 50)
-/// AND `--min-ms` milliseconds (default 250) — min-of-window keeps a single
-/// outlier run from flagging, and the absolute floor keeps jittery 40ms steps
-/// quiet. Failed steps contribute no observation (a locator-timeout `ms` is
-/// the timeout budget, not the step's cost); a run where the step never
-/// reached a terminal row contributes nothing. Requires `--min-runs` pass
-/// observations plus at least 2 baseline runs on top of the recent window.
-#[derive(Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SlowStep {
-    step_id: String,
-    base_ms: f64,
-    recent_ms: f64,
-    pct_delta: f64,
-    seen: usize,
-    fails: usize,
-}
-
-fn median_ms(v: &[u64]) -> f64 {
-    if v.is_empty() {
-        return 0.0;
-    }
-    let mut s = v.to_vec();
-    s.sort_unstable();
-    let mid = s.len() / 2;
-    if s.len() % 2 == 1 {
-        s[mid] as f64
-    } else {
-        (s[mid - 1] as f64 + s[mid] as f64) / 2.0
-    }
-}
-
-fn collect_slow(
-    dir: &std::path::Path,
-    pct: f64,
-    min_ms: u64,
-    recent_n: usize,
-    min_runs: usize,
-) -> Vec<SlowStep> {
-    let replays_dir = dir.join("replays");
-    let mut runs: Vec<PathBuf> = match fs::read_dir(&replays_dir) {
-        Ok(it) => it
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.is_dir())
-            .collect(),
-        Err(_) => Vec::new(),
-    };
-    runs.sort();
-
-    // Per step: chronological pass-ms observations + a fail count for context.
-    #[derive(Default)]
-    struct Acc {
-        ms_seq: Vec<u64>,
-        fails: usize,
-    }
-    let mut by_step: std::collections::BTreeMap<String, Acc> = Default::default();
-
-    for run in &runs {
-        let mut terminal: std::collections::BTreeMap<String, (bool, Option<u64>)> =
-            Default::default();
-        if let Ok(body) = fs::read_to_string(run.join("events.jsonl")) {
-            for line in body.lines() {
-                let v: Value = match serde_json::from_str(line.trim()) {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
-                let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("");
-                if status != "pass" && status != "fail" {
-                    continue;
-                }
-                let id = match v.get("id").and_then(|s| s.as_str()) {
-                    Some(s) => s.to_string(),
-                    None => continue,
-                };
-                let ms = v.get("ms").and_then(|m| m.as_u64());
-                terminal.insert(id, (status == "pass", ms));
-            }
-        }
-        for (id, (passed, ms)) in terminal {
-            let acc = by_step.entry(id).or_default();
-            if !passed {
-                acc.fails += 1;
-                continue;
-            }
-            if let Some(ms) = ms {
-                acc.ms_seq.push(ms);
-            }
-        }
-    }
-
-    let mut out: Vec<SlowStep> = by_step
-        .into_iter()
-        .filter_map(|(step_id, acc)| {
-            let n = acc.ms_seq.len();
-            // Need the recent window plus at least two baseline observations.
-            if n < min_runs || n < recent_n + 2 {
-                return None;
-            }
-            let base = median_ms(&acc.ms_seq[..n - recent_n]);
-            let recent_min = *acc.ms_seq[n - recent_n..].iter().min().unwrap() as f64;
-            let delta = recent_min - base;
-            if base <= 0.0 || delta < min_ms as f64 || recent_min < base * (1.0 + pct / 100.0) {
-                return None;
-            }
-            Some(SlowStep {
-                step_id,
-                base_ms: base,
-                recent_ms: recent_min,
-                pct_delta: (delta / base) * 100.0,
-                seen: n,
-                fails: acc.fails,
-            })
-        })
-        .collect();
-    out.sort_by(|a, b| {
-        b.pct_delta
-            .partial_cmp(&a.pct_delta)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.step_id.cmp(&b.step_id))
-    });
-    out
-}
-
-fn slow(
-    positionals: &[String],
-    json_out: bool,
-    pct: f64,
-    min_ms: u64,
-    recent_n: usize,
-    min_runs: usize,
-) -> Result<u8> {
-    let sid = positionals.get(1).ok_or_else(|| {
-        anyhow!("usage: audit slow <sid> [--pct N] [--min-ms N] [--recent N] [--min-runs N]")
-    })?;
-    let dir = paths::scenario_dir(sid)?;
-    let out = collect_slow(&dir, pct, min_ms, recent_n, min_runs);
-
-    if json_out {
-        println!("{}", serde_json::to_string_pretty(&out)?);
-        return Ok(0);
-    }
-    if out.is_empty() {
-        println!(
-            "(no slow steps — pct={pct:.0} min-ms={min_ms} recent={recent_n} min-runs={min_runs})"
-        );
-        return Ok(0);
-    }
-    println!(
-        "{:<10} {:>9} {:>9} {:>7} {:>6} {:>6}",
-        "stepId", "baseMs", "worstMs", "+", "seen", "fails"
-    );
-    println!("{}", "-".repeat(60));
-    for e in &out {
-        println!(
-            "{:<10} {:>9.0} {:>9.0} {:>6.0}% {:>6} {:>6}",
-            e.step_id, e.base_ms, e.recent_ms, e.pct_delta, e.seen, e.fails
-        );
-    }
-    println!();
-    println!(
-        "{} step(s) slowed >{pct:.0}% in their last {recent_n} run(s) — check for added waits or heavier pages.",
-        out.len()
-    );
-    Ok(0)
-}
-
->>>>>>> origin/main
 fn flaky(positionals: &[String], json_out: bool, min_flips: usize, min_runs: usize) -> Result<u8> {
     let sid = positionals
         .get(1)
@@ -1727,15 +1541,9 @@ fn render_text(path: &std::path::Path, audit: &Value) {
 
 fn print_help() {
     println!(
-<<<<<<< HEAD
                 "agent-qa audit \u{2014} inspect a replay's audit.json\n\nUsage:\n  agent-qa audit show <sid> <runId | latest> [--json | --format text|json|github]\n  agent-qa audit list <sid>                    Table view: every run's\n                                               summary / exit / profile / tag\n  agent-qa audit list <sid> --json             Structured rows on stdout\n  agent-qa audit list <sid> [--passed | --failed] [--tag <pat>] [--profile <pat>] [--limit N] [--slow <secs>] [--sort duration|runId-desc] [--since <iso-ts>] [--until <iso-ts>] [--format text|json|github]\n                                               Filters: case-insensitive substring\n                                               --passed/--failed are exit-code partitions\n  agent-qa audit stats <sid> [--since <iso-ts>] [--until <iso-ts>]\n                                               Pass/fail/tag rollup for one scenario\n  agent-qa audit stats <sid> --json            Structured rollup on stdout\n  agent-qa audit stats-all                     Per-scenario + overall pass/fail rollup\n  agent-qa audit stats-all --json              Structured rollup on stdout\n  agent-qa audit stats-all [--since <iso-ts>] [--until <iso-ts>]\n                                               Constrain to a date window\n  agent-qa audit diff <sid> <runIdA> <runIdB>  Unified diff between two replays'\n                                               audit.json (canonicalised JSON;\n                                               'latest' accepted for either side;\n                                               exit 1 on difference)\n  agent-qa audit summary <sid> <runId | latest>\n                                               Print just the summary line (one line out)\n  agent-qa audit exit-code <sid> <runId | latest>\n                                               Print just the run's exitCode (-1 if missing)\n  agent-qa audit field <sid> <runId | latest> <fieldName>\n                                               Print any top-level audit field. String/\n                                               number/bool print verbatim; null prints\n                                               empty; object/array prints compact JSON.\n  agent-qa audit count <sid>                   Print the number of runs under <sid>\n  agent-qa audit duration <sid> <runId | latest>\n                                               Print the run's duration in seconds\n                                               (finishedAt - startedAt, 3 decimals)\n  agent-qa audit flaky <sid> [--min-flips N] [--min-runs N] [--json]\n                                               Flag steps whose outcome interleaves\n                                               pass/fail across runs (outcome churn;\n                                               heal-chronic covers locator churn)\n  agent-qa audit slow <sid> [--pct N] [--min-ms N] [--recent N] [--min-runs N] [--json]\n                                               Flag steps whose recent pass median\n                                               regressed vs their earlier-run median\n                                               (default: last 2 runs >50% and >250ms\n                                               over baseline)\n  agent-qa audit health [--json]           Cross-scenario rollup of flaky + slow +
                                                heal-chronic — one row per scenario
                                                that has silent degradation\n\n'latest' resolves to <sid>/replays/latest.txt if present, otherwise the\nhighest lex-sorted run directory (run_id is timestamp-prefixed)."
-||||||| c150a75
-                "agent-qa audit \u{2014} inspect a replay's audit.json\n\nUsage:\n  agent-qa audit show <sid> <runId | latest> [--json | --format text|json|github]\n  agent-qa audit list <sid>                    Table view: every run's\n                                               summary / exit / profile / tag\n  agent-qa audit list <sid> --json             Structured rows on stdout\n  agent-qa audit list <sid> [--passed | --failed] [--tag <pat>] [--profile <pat>] [--limit N] [--slow <secs>] [--sort duration|runId-desc] [--since <iso-ts>] [--until <iso-ts>] [--format text|json|github]\n                                               Filters: case-insensitive substring\n                                               --passed/--failed are exit-code partitions\n  agent-qa audit stats <sid> [--since <iso-ts>] [--until <iso-ts>]\n                                               Pass/fail/tag rollup for one scenario\n  agent-qa audit stats <sid> --json            Structured rollup on stdout\n  agent-qa audit stats-all                     Per-scenario + overall pass/fail rollup\n  agent-qa audit stats-all --json              Structured rollup on stdout\n  agent-qa audit stats-all [--since <iso-ts>] [--until <iso-ts>]\n                                               Constrain to a date window\n  agent-qa audit diff <sid> <runIdA> <runIdB>  Unified diff between two replays'\n                                               audit.json (canonicalised JSON;\n                                               'latest' accepted for either side;\n                                               exit 1 on difference)\n  agent-qa audit summary <sid> <runId | latest>\n                                               Print just the summary line (one line out)\n  agent-qa audit exit-code <sid> <runId | latest>\n                                               Print just the run's exitCode (-1 if missing)\n  agent-qa audit field <sid> <runId | latest> <fieldName>\n                                               Print any top-level audit field. String/\n                                               number/bool print verbatim; null prints\n                                               empty; object/array prints compact JSON.\n  agent-qa audit count <sid>                   Print the number of runs under <sid>\n  agent-qa audit duration <sid> <runId | latest>\n                                               Print the run's duration in seconds\n                                               (finishedAt - startedAt, 3 decimals)\n  agent-qa audit flaky <sid> [--min-flips N] [--min-runs N] [--json]\n                                               Flag steps whose outcome interleaves\n                                               pass/fail across runs (outcome churn;\n                                               heal-chronic covers locator churn)\n\n'latest' resolves to <sid>/replays/latest.txt if present, otherwise the\nhighest lex-sorted run directory (run_id is timestamp-prefixed)."
-=======
-                "agent-qa audit \u{2014} inspect a replay's audit.json\n\nUsage:\n  agent-qa audit show <sid> <runId | latest> [--json | --format text|json|github]\n  agent-qa audit list <sid>                    Table view: every run's\n                                               summary / exit / profile / tag\n  agent-qa audit list <sid> --json             Structured rows on stdout\n  agent-qa audit list <sid> [--passed | --failed] [--tag <pat>] [--profile <pat>] [--limit N] [--slow <secs>] [--sort duration|runId-desc] [--since <iso-ts>] [--until <iso-ts>] [--format text|json|github]\n                                               Filters: case-insensitive substring\n                                               --passed/--failed are exit-code partitions\n  agent-qa audit stats <sid> [--since <iso-ts>] [--until <iso-ts>]\n                                               Pass/fail/tag rollup for one scenario\n  agent-qa audit stats <sid> --json            Structured rollup on stdout\n  agent-qa audit stats-all                     Per-scenario + overall pass/fail rollup\n  agent-qa audit stats-all --json              Structured rollup on stdout\n  agent-qa audit stats-all [--since <iso-ts>] [--until <iso-ts>]\n                                               Constrain to a date window\n  agent-qa audit diff <sid> <runIdA> <runIdB>  Unified diff between two replays'\n                                               audit.json (canonicalised JSON;\n                                               'latest' accepted for either side;\n                                               exit 1 on difference)\n  agent-qa audit summary <sid> <runId | latest>\n                                               Print just the summary line (one line out)\n  agent-qa audit exit-code <sid> <runId | latest>\n                                               Print just the run's exitCode (-1 if missing)\n  agent-qa audit field <sid> <runId | latest> <fieldName>\n                                               Print any top-level audit field. String/\n                                               number/bool print verbatim; null prints\n                                               empty; object/array prints compact JSON.\n  agent-qa audit count <sid>                   Print the number of runs under <sid>\n  agent-qa audit duration <sid> <runId | latest>\n                                               Print the run's duration in seconds\n                                               (finishedAt - startedAt, 3 decimals)\n  agent-qa audit flaky <sid> [--min-flips N] [--min-runs N] [--json]\n                                               Flag steps whose outcome interleaves\n                                               pass/fail across runs (outcome churn;\n                                               heal-chronic covers locator churn)\n  agent-qa audit slow <sid> [--pct N] [--min-ms N] [--recent N] [--min-runs N] [--json]\n                                               Flag steps whose recent pass median\n                                               regressed vs their earlier-run median\n                                               (default: last 2 runs >50% and >250ms\n                                               over baseline)\n\n'latest' resolves to <sid>/replays/latest.txt if present, otherwise the\nhighest lex-sorted run directory (run_id is timestamp-prefixed)."
->>>>>>> origin/main
     );
 }
 
@@ -2261,7 +2069,6 @@ mod tests {
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
         }
     }
-<<<<<<< HEAD
 
     fn write_events_ms(dir: &std::path::Path, run_id: &str, rows: &[(&str, &str, u64)]) {
         let run_dir = dir.join("replays").join(run_id);
@@ -2397,104 +2204,4 @@ mod tests {
         assert_eq!(c_row.slow, vec!["s9"]);
         assert!(c_row.flaky.is_empty() && c_row.chronic.is_empty());
     }
-||||||| c150a75
-=======
-
-    fn write_events_ms(dir: &std::path::Path, run_id: &str, rows: &[(&str, &str, u64)]) {
-        let run_dir = dir.join("replays").join(run_id);
-        std::fs::create_dir_all(&run_dir).unwrap();
-        let mut body = String::new();
-        for (i, (id, status, ms)) in rows.iter().enumerate() {
-            body.push_str(&format!(
-                r#"{{"idx":{},"total":{},"id":"{}","intent":"x","kind":"do:click","status":"{}","ms":{}}}"#,
-                i + 1,
-                rows.len(),
-                id,
-                status,
-                ms
-            ));
-            body.push('\n');
-        }
-        std::fs::write(run_dir.join("events.jsonl"), body).unwrap();
-    }
-
-    #[test]
-    fn slow_flags_duration_regression() {
-        let _g = crate::test_util::lock_env();
-        let tmp = TempDir::new().unwrap();
-        let jdir = tmp.path().join("sid");
-        // s1 regresses 400 → 900/1000ms in the last 2 runs (>50%, >250ms);
-        // s2 stays steady; s3 jumps under the absolute floor (60 → 95ms).
-        write_events_ms(
-            &jdir,
-            "r1",
-            &[("s1", "pass", 400), ("s2", "pass", 500), ("s3", "pass", 60)],
-        );
-        write_events_ms(
-            &jdir,
-            "r2",
-            &[("s1", "pass", 400), ("s2", "pass", 520), ("s3", "pass", 60)],
-        );
-        write_events_ms(
-            &jdir,
-            "r3",
-            &[("s1", "pass", 900), ("s2", "pass", 500), ("s3", "pass", 95)],
-        );
-        write_events_ms(
-            &jdir,
-            "r4",
-            &[
-                ("s1", "pass", 1000),
-                ("s2", "pass", 510),
-                ("s3", "pass", 95),
-            ],
-        );
-        let out = collect_slow(&jdir, 50.0, 250, 2, 3);
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].step_id, "s1");
-        assert_eq!(out[0].base_ms, 400.0);
-        assert_eq!(out[0].recent_ms, 900.0);
-        assert!(out[0].pct_delta > 100.0);
-        assert_eq!(out[0].seen, 4);
-    }
-
-    #[test]
-    fn slow_ignores_fail_rows_and_short_history() {
-        let _g = crate::test_util::lock_env();
-        let tmp = TempDir::new().unwrap();
-        let jdir = tmp.path().join("sid");
-        // s1's "slow" run is a fail (locator timeout 5000ms is the timeout
-        // budget, not the step's cost) — pass-only history never regresses.
-        write_events_ms(&jdir, "r1", &[("s1", "pass", 400)]);
-        write_events_ms(&jdir, "r2", &[("s1", "pass", 400)]);
-        write_events_ms(&jdir, "r3", &[("s1", "fail", 5000)]);
-        write_events_ms(&jdir, "r4", &[("s1", "pass", 420)]);
-        assert!(collect_slow(&jdir, 50.0, 250, 2, 3).is_empty());
-        // A single slow pass can't self-flag (recent=2 window needs 2 rows).
-        write_events_ms(&jdir, "r5", &[("s1", "pass", 2000)]);
-        assert!(collect_slow(&jdir, 50.0, 250, 2, 3).is_empty());
-        // …but two consecutive slow passes do.
-        write_events_ms(&jdir, "r6", &[("s1", "pass", 2100)]);
-        let out = collect_slow(&jdir, 50.0, 250, 2, 3);
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].fails, 1);
-    }
-
-    #[test]
-    fn slow_respects_pct_and_min_ms_thresholds() {
-        let _g = crate::test_util::lock_env();
-        let tmp = TempDir::new().unwrap();
-        let jdir = tmp.path().join("sid");
-        write_events_ms(&jdir, "r1", &[("s1", "pass", 400)]);
-        write_events_ms(&jdir, "r2", &[("s1", "pass", 400)]);
-        write_events_ms(&jdir, "r3", &[("s1", "pass", 700)]);
-        write_events_ms(&jdir, "r4", &[("s1", "pass", 700)]);
-        // +75% > default 50% but the 300ms delta clears min-ms too.
-        assert_eq!(collect_slow(&jdir, 50.0, 250, 2, 3).len(), 1);
-        // Raise the pct bar past +75% → nothing flags.
-        assert!(collect_slow(&jdir, 80.0, 250, 2, 3).is_empty());
-        // Raise the absolute floor past the 300ms delta → nothing flags.
-        assert!(collect_slow(&jdir, 50.0, 400, 2, 3).is_empty());
-    }
->>>>>>> origin/main
 }
