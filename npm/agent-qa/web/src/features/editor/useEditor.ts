@@ -39,6 +39,8 @@ export function useEditor() {
   )
   const [liveUrl, setLiveUrl] = useState('')
   const [flashMsg, setFlashMsg] = useState<FlashMsg | null>(null)
+  const [checkReport, setCheckReport] = useState<string | null>(null)
+  const [checkRunning, setCheckRunning] = useState(false)
 
   const esRef = useRef<EventSource | null>(null)
   const connectedRef = useRef(false)
@@ -211,6 +213,18 @@ export function useEditor() {
     flash(`flushed → ${body.scenarioFile || body.sid || 'scenario.json'}`)
     await refreshBuffer()
   }, [flash, refreshBuffer])
+
+  const checkScenario = useCallback(async () => {
+    setCheckRunning(true)
+    try {
+      const { ok, body } = await api.checkBuffer()
+      const report = (body.stdout || '').trim() || body.error || ''
+      setCheckReport(report || (ok ? 'check passed' : 'check failed'))
+      flash(ok ? 'buffer check passed' : 'buffer check found issues', !ok)
+    } finally {
+      setCheckRunning(false)
+    }
+  }, [flash])
 
   const cancelScenario = useCallback(async () => {
     const { ok, body } = await api.cancel()
@@ -394,6 +408,10 @@ export function useEditor() {
     setInteractiveOnly,
     startSession,
     flushScenario,
+    checkScenario,
+    checkReport,
+    checkRunning,
+    setCheckReport,
     cancelScenario,
     loadScenario,
     moveRow,
