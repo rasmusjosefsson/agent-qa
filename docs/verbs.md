@@ -50,6 +50,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `heal-promote <sid>` | Apply replay-side patches into `scenario.json` (rebase-guarded) |
 | `heal-apply <sid>` | Mark a heal-response as consumed |
 | `heal-list <sid>` | List heal-responses. Flags: `--run <runId>`, `--mode value-correction\|reject`, `--applied`, `--unapplied`, `--json` |
+| `heal-chronic <sid>` | Flag steps that auto-healed in ≥ `--min-runs` distinct runs (default 2) — silent locator debt. Prints the `heal-promote` command per step. Flags: `--min-runs N`, `--json` |
 
 ## Profiles
 
