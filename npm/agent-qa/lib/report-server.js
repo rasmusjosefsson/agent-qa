@@ -3712,6 +3712,22 @@ function createRequestHandler(root, deps, chat) {
         });
       }
 
+      // /api/health → per-scenario silent-degradation rollup from the CLI's
+      // `audit health` (flaky + slow + heal-chronic step ids). One CLI call
+      // for the whole suite; empty when nothing flags or the CLI is absent.
+      if (p === '/api/health') {
+        if (!deps || typeof deps.runCli !== 'function') {
+          return sendJson(res, 200, { health: [] });
+        }
+        try {
+          const r = await deps.runCli(['audit', 'health', '--json']);
+          const parsed = lastJsonLine(r.stdout);
+          return sendJson(res, 200, { health: Array.isArray(parsed) ? parsed : [] });
+        } catch {
+          return sendJson(res, 200, { health: [] });
+        }
+      }
+
       // /api/scenarios/:sid/runs[/:runId[/artifact/:kind/:stepId]]
       const seg = segAll; // e.g. ['api','scenarios',sid,'runs',...]
       if (seg[0] === 'api' && seg[1] === 'scenarios' && seg.length >= 4) {
