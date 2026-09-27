@@ -21,12 +21,20 @@ export function SessionBox({
   onFlush,
   onCancel,
   onTogglePause,
+  onCheck,
+  checkRunning,
+  checkReport,
+  onDismissCheckReport,
 }: {
   buffer: BufferState
   onStart: (intent: string, url: string) => void
   onFlush: () => void
   onCancel: () => void
   onTogglePause: () => void
+  onCheck: () => void
+  checkRunning: boolean
+  checkReport: string | null
+  onDismissCheckReport: () => void
 }) {
   const [intent, setIntent] = useState('')
   const [url, setUrl] = useState('')
@@ -48,6 +56,15 @@ export function SessionBox({
         <div className="flex items-center gap-2">
           <Button size="sm" onClick={onFlush}>
             Flush → scenario.json
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onCheck}
+            disabled={checkRunning}
+            title="Validate the buffer as the scenario flush would write (schema + lint)"
+          >
+            {checkRunning ? 'Checking…' : 'Check'}
           </Button>
           <Button
             size="sm"
@@ -86,6 +103,21 @@ export function SessionBox({
             </AlertDialogContent>
           </AlertDialog>
         </div>
+        {checkReport && (
+          <div className="relative rounded border border-border bg-muted/40 px-2 py-1.5">
+            <button
+              type="button"
+              aria-label="Dismiss check report"
+              onClick={onDismissCheckReport}
+              className="absolute right-1 top-1 grid h-4 w-4 place-items-center rounded text-muted-foreground hover:text-foreground"
+            >
+              ×
+            </button>
+            <pre className="max-h-44 overflow-auto whitespace-pre-wrap pr-4 font-mono text-[11px] leading-snug text-foreground">
+              {checkReport}
+            </pre>
+          </div>
+        )}
       </div>
     )
   }

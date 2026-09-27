@@ -73,6 +73,10 @@ export function resumeRecording() {
   return postJson('/api/edit/resume', {});
 }
 
+export function checkBuffer() {
+  return postJson('/api/edit/check', {});
+}
+
 export function flush() {
   return postJson('/api/edit/flush', {});
 }

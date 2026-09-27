@@ -1685,3 +1685,34 @@ test('POST /api/config/plugins/import saves, chmods, and registers a plugin file
   // bad input rejected
   assert.equal((await j('POST', '/api/config/plugins/import', { filename: 'x' })).status, 400);
 });
+
+test('POST /api/edit/check runs buffer check with strict passthrough', async (t) => {
+  const fx = makeFixture();
+  const calls = [];
+  let fail = false;
+  const deps = {
+    runCli: async (args) => (
+      calls.push(args),
+      fail ? { code: 1, stdout: 'lint FAIL (1 error)', stderr: '' } : { code: 0, stdout: 'lint OK', stderr: '' }
+    ),
+  };
+  const { server, base } = await boot(fx.root, deps);
+  t.after(() => server.close());
+  const j = (p, b) =>
+    fetch(`${base}${p}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b || {}) });
+
+  const r = await j('/api/edit/check', {});
+  assert.equal(r.status, 200);
+  assert.deepEqual(calls.at(-1), ['buffer', 'check']);
+  const body = await r.json();
+  assert.match(body.stdout, /lint OK/);
+
+  await j('/api/edit/check', { strict: true });
+  assert.deepEqual(calls.at(-1), ['buffer', 'check', '--strict']);
+
+  // A failing check surfaces the report text as `error` with 422.
+  fail = true;
+  const bad = await j('/api/edit/check', {});
+  assert.equal(bad.status, 422);
+  assert.match((await bad.json()).error, /lint FAIL/);
+});
