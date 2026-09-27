@@ -12,7 +12,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `record pause \| resume \| status` | Freeze capture while you set up page state — record append paths (`record-step`, `smart-click`, `fill-unique`, the editor's auto-record) drop steps while paused instead of writing them. `status --json` emits `{sid, intent, session, paused, steps, startedAt}`. |
 | `run-step <do|check> <draft-json>` | Dispatch ONE trigger payload against the live session for author-time feedback, without recording. Same direct draft shapes as `record-step`; prints a `{ok,…}` JSON line. `--session`. |
 | `aria-snapshot` | Dump the live page's accessibility tree as structured picker rows (a thin adapter over `agent-browser snapshot`). Flags: `--interactive`, `--session`. |
-| `cdp-url [--session] [--json]` | Print the live session's CDP WebSocket endpoint. Powers the editor's inline live-browser pane (screencast + click-to-record). Read-only. |
+| `cdp-url [--session] [--json]` | Print the live session's CDP WebSocket endpoint. Powers the editor's inline live-browser pane (screencast + drive-to-record: clicks, typing, select commits, checkbox/radio toggles, and named-key presses all land as steps). Read-only. |
 | `buffer list \| delete <i> \| move <from> <to> \| edit <i> <draft-json> \| clear` | Inspect / reorder / rewrite / delete rows in the in-flight buffer; delete + move re-index `s0,s1,…` so `flush` stays clean. `edit` re-validates the draft and preserves the step's id/kind. `list --json` (includes `paused`). |
 | `fill-unique` | Locator-uniqueness helper for `type`/`fill` style do steps |
 | `smart-click` | High-level click that resolves a label to a unique locator |
