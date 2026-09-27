@@ -19,6 +19,7 @@ export type Tab =
   | "environments"
   | "knowledge"
   | "plugins"
+  | "settings"
 
 const LABELS: Record<Tab, string> = {
   cases: "Test Cases",
@@ -31,6 +32,7 @@ const LABELS: Record<Tab, string> = {
   environments: "Environments",
   knowledge: "Knowledge",
   plugins: "Extensions",
+  settings: "Settings",
 }
 
 // App shell: collapsible sidebar (shadcn sidebar-07) + a thin topbar, mounted
