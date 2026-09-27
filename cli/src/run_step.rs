@@ -115,6 +115,7 @@ fn run_step(opts: &Opts) -> Result<Outcome> {
             &CheckContext {
                 session: &session,
                 scenario_dir: &scenario_dir,
+                run_dir: None,
             },
             &mut scope,
             None,

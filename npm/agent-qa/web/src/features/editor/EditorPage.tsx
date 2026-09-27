@@ -82,7 +82,9 @@ export function EditorPage() {
           <div className="flex h-full min-h-0 flex-col overflow-auto">
           <SessionBox
             buffer={ed.buffer}
+            scenarios={ed.scenarioSids}
             onStart={(intent, url) => void ed.startSession(intent, url)}
+            onOpen={(sid) => void ed.loadScenario(sid)}
             onFlush={() => void ed.flushScenario()}
             onCancel={() => void ed.cancelScenario()}
             onTogglePause={() => void ed.togglePause()}
@@ -104,7 +106,16 @@ export function EditorPage() {
                 <RefreshCwIcon className="size-3.5" />
               </button>
             </div>
-            <StepList rows={ed.buffer.rows} onMove={ed.moveRow} onDelete={ed.deleteRow} onEdit={ed.editRow} />
+            <StepList
+              rows={ed.buffer.rows}
+              onMove={ed.moveRow}
+              onDelete={ed.deleteRow}
+              onEdit={ed.editRow}
+              onRun={(row) => {
+                const { id: _id, kind: _k, ...draft } = row.step as Record<string, unknown>
+                void ed.runStep(row.step.kind ?? 'do', draft).then(setRunResult)
+              }}
+            />
           </div>
           <Composer
             form={form}

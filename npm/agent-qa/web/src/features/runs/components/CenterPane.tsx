@@ -1,7 +1,9 @@
 // web/src/features/runs/components/CenterPane.tsx
+import { useState } from 'react'
 import { BrowserModeToggle } from '@/components/browser-mode-toggle'
 import { cn } from '@/lib/utils'
-import { Loader2Icon, PlayIcon, WrenchIcon } from 'lucide-react'
+import { GitCompareIcon, Loader2Icon, PlayIcon, WrenchIcon } from 'lucide-react'
+import { CompareView } from './CompareView'
 import {
   cleanSummary,
   collapseEvents,
@@ -72,6 +74,9 @@ export function CenterPane({
   runConfig?: RunConfig
 }) {
   const { detail, scenarioDef, sel, runDefSteps, runsBySid } = runs
+  // Baseline runId for the compare picker ("" → the run before the selected
+  // one, computed below).
+  const [baseline, setBaseline] = useState('')
 
   // Mode A — a recorded scenario is previewed (no run selected).
   if (scenarioDef && !detail) {
@@ -201,6 +206,14 @@ export function CenterPane({
     const stepFail = !setupError
       ? (detail.events || []).find((e) => e.kind !== 'setup' && e.status === 'fail')
       : null
+    // Other finished runs of this scenario, newest first — the baseline
+    // choices the Compare picker offers.
+    const otherRuns = ((sel.sid && runsBySid[sel.sid]) || [])
+      .filter((r) => r.runId !== detail.runId && r.state !== 'running')
+      .sort((a, b) => (a.runId < b.runId ? 1 : -1))
+    const baseRun = otherRuns.some((r) => r.runId === baseline)
+      ? baseline
+      : (otherRuns[0]?.runId ?? '')
     // Auto-heal trail for this run: locator corrections applied on retry, and
     // classified value rejections surfaced for review (never retried).
     const heals = detail.heals || []
@@ -233,6 +246,38 @@ export function CenterPane({
               >
                 <WrenchIcon className="size-3" />
                 {healedCount} healed
+              </span>
+            )}
+            {!live && otherRuns.length > 0 && (
+              <span className="ml-auto flex items-center gap-1.5">
+                <select
+                  value={baseRun}
+                  onChange={(e) => setBaseline(e.target.value)}
+                  disabled={runs.compareBusy}
+                  title="Baseline run to compare against"
+                  className="max-w-[10rem] rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-foreground outline-none focus-visible:border-ring disabled:opacity-50"
+                >
+                  {otherRuns.map((r) => (
+                    <option key={r.runId} value={r.runId}>
+                      {relRunTime(r.runId)}
+                      {r.summary ? ` · ${cleanSummary(r.summary)}` : ''}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => void runs.startCompare(baseRun)}
+                  disabled={runs.compareBusy || !baseRun}
+                  title="Diff this run's snapshots and screenshots against the baseline"
+                  className="flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                >
+                  {runs.compareBusy ? (
+                    <Loader2Icon className="size-3 animate-spin" />
+                  ) : (
+                    <GitCompareIcon className="size-3" />
+                  )}
+                  Compare
+                </button>
               </span>
             )}
           </div>
@@ -272,7 +317,15 @@ export function CenterPane({
               )}
             </div>
           )}
+          {runs.compareErr && (
+            <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-xs text-destructive">
+              {runs.compareErr}
+            </div>
+          )}
         </div>
+        {runs.compare ? (
+          <CompareView runs={runs} />
+        ) : (
         <ol className="min-h-0 flex-1 overflow-auto p-2">
           {rows.map((st) => {
             const selected = sel.stepIdx === st.idx
@@ -329,6 +382,7 @@ export function CenterPane({
             </li>
           )}
         </ol>
+        )}
       </Pane>
     )
   }

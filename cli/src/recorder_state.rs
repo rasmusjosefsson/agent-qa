@@ -64,6 +64,12 @@ pub(crate) struct RecorderState {
     /// writing them. Missing on state files written before this field existed.
     #[serde(default)]
     pub(crate) paused: bool,
+    /// Set by `buffer load`: the scenario document the steps were loaded
+    /// from. `flush` merges the fields it doesn't own (id, tags, inputs,
+    /// templates, env.close) back so a load → flush round-trip doesn't drop
+    /// them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) original: Option<serde_json::Value>,
 }
 
 impl RecorderState {
@@ -89,6 +95,7 @@ impl RecorderState {
             browser,
             steps: Vec::new(),
             paused: false,
+            original: None,
         }
     }
 

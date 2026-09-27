@@ -28,7 +28,7 @@ use similar::TextDiff;
 
 use crate::paths;
 
-mod screenshots;
+pub(crate) mod screenshots;
 
 pub fn run(args: &[String]) -> Result<u8> {
     let mut positional: Vec<String> = Vec::new();

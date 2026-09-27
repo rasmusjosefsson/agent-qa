@@ -98,7 +98,7 @@ The full verb set ships, plus a few inspection verbs.
 | Group | Verbs |
 | --- | --- |
 | Recording | `start`, `record-step`, `fill-unique`, `smart-click`, `truncate`, `flush`, `verify` |
-| Replay | `replay` (`--profile`/`--session`/`--param`/`--heal-from-run`/`--dry-run`/`--no-sidecars`/`--runs`/`--quiet`/`--tag`/`--output-audit`), `list` (`--json`/`--filter`/`--limit`), `compare` (alias `diff`), `audit` (`show`/`list`/`stats`/`stats-all`/`diff`/`summary`/`exit-code`/`field`/`count`/`duration`) |
+| Replay | `replay` (`--profile`/`--session`/`--param`/`--heal-from-run`/`--dry-run`/`--no-sidecars`/`--runs`/`--quiet`/`--tag`/`--output-audit`/`--from`/`--until`), `list` (`--json`/`--filter`/`--limit`), `compare` (alias `diff`), `audit` (`show`/`list`/`stats`/`stats-all`/`diff`/`summary`/`exit-code`/`field`/`count`/`duration`) |
 | Heal | `heal-respond`, `heal-promote`, `heal-apply`, `heal-list` (`--mode`/`--applied`/`--unapplied`) |
 | Profiles | `profile-add`, `profile-status`, `profile-bootstrap`, `profile-list` |
 | Diagnostics | `doctor`, `info`, `config show`, `byo-doctor`, `perf-snapshot` |

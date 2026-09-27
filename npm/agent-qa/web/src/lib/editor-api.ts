@@ -31,6 +31,7 @@ export async function getBuffer(): Promise<BufferState> {
     session: body.session ?? null,
     baseline: body.baseline ?? null,
     paused: !!body.paused,
+    editing: !!body.editing,
     rows: Array.isArray(body.rows) ? body.rows : [],
   };
 }
@@ -43,6 +44,12 @@ export async function getSnapshot(interactive: boolean): Promise<{ ok: boolean; 
 
 export function startSession(intent: string, url: string) {
   return postJson('/api/edit/start', { intent, url });
+}
+
+// Pull a saved scenario's steps into the buffer for editing (flush writes
+// back to the same sid). The server refuses to clobber a non-empty buffer.
+export function loadBuffer(sid: string) {
+  return postJson('/api/edit/load', { sid });
 }
 
 export function recordStep(kind: EditKind, payload: Json) {

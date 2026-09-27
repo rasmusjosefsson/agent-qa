@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils'
 import type { ClickMode, LiveInput, LiveStatus, PickedElement } from '../types'
 
 const PREVENT_KEYS = new Set(['Enter', 'Backspace', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'])
+const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta'])
 
 interface Overlay {
   hidden: boolean
@@ -136,6 +137,13 @@ export function LiveCanvas({
       })
     }
 
+    // Click vs drag is decided on mouseup: a press that stays within ~1% of
+    // the canvas is a click; a press that travels is a drag gesture (the
+    // remote input dispatches press → sweep → release, which the page sees as
+    // real HTML5/pointer drag).
+    let downAt: { nx: number; ny: number } | null = null
+    const DRAG_MIN = 0.01
+
     const onMouseDown = async (ev: MouseEvent) => {
       const c = norm(ev)
       if (!c) return
@@ -146,8 +154,25 @@ export function LiveCanvas({
         if (el && (el.role || el.name)) bag.current.onCanvasPick(el)
         return
       }
-      bag.current.sendInput({ type: 'click', ...c, ...(mode === 'record' ? { record: true } : {}) })
+      downAt = c
       cv.focus()
+    }
+
+    const onMouseUp = (ev: MouseEvent) => {
+      if (!downAt) return
+      const from = downAt
+      downAt = null
+      const mode = bag.current.clickMode
+      if (mode === 'pick') return
+      const c = norm(ev)
+      if (!c) return
+      const moved = Math.hypot(c.nx - from.nx, c.ny - from.ny)
+      const record = mode === 'record'
+      if (moved >= DRAG_MIN) {
+        bag.current.sendInput({ type: 'drag', nx0: from.nx, ny0: from.ny, nx1: c.nx, ny1: c.ny, ...(record ? { record: true } : {}) })
+      } else {
+        bag.current.sendInput({ type: 'click', ...from, ...(record ? { record: true } : {}) })
+      }
     }
 
     const onWheel = (ev: WheelEvent) => {
@@ -160,10 +185,16 @@ export function LiveCanvas({
     const onKeyDown = (ev: KeyboardEvent) => {
       const mode = bag.current.clickMode
       if (mode === 'pick') return
+      // A lone modifier press does nothing — don't dispatch it, so chord
+      // recording sees only the completed chord (Control+a, Shift+Tab, …).
+      if (MODIFIER_KEYS.has(ev.key)) { ev.preventDefault(); return }
       const record = mode === 'record'
-      if (ev.key.length === 1) bag.current.sendInput({ type: 'key', text: ev.key, record })
-      else bag.current.sendInput({ type: 'key', key: ev.key, record })
-      if (PREVENT_KEYS.has(ev.key)) ev.preventDefault()
+      const mods = { ctrl: ev.ctrlKey, shift: ev.shiftKey, alt: ev.altKey, meta: ev.metaKey }
+      if (ev.key.length === 1) bag.current.sendInput({ type: 'key', text: ev.key, mods, record })
+      else bag.current.sendInput({ type: 'key', key: ev.key, mods, record })
+      // Chorded keys (ctrl/meta/alt) are page shortcuts — keep the browser
+      // chrome from also handling them while driving the live pane.
+      if (PREVENT_KEYS.has(ev.key) || ev.ctrlKey || ev.metaKey || ev.altKey) ev.preventDefault()
     }
 
     let hoverTimer: ReturnType<typeof setTimeout> | null = null
@@ -184,17 +215,24 @@ export function LiveCanvas({
       }, 90)
     }
 
+    const onMouseLeave = () => {
+      downAt = null
+      hideHover()
+    }
+
     cv.addEventListener('mousedown', onMouseDown)
+    cv.addEventListener('mouseup', onMouseUp)
     cv.addEventListener('wheel', onWheel, { passive: false })
     cv.addEventListener('keydown', onKeyDown)
     cv.addEventListener('mousemove', onMouseMove)
-    cv.addEventListener('mouseleave', hideHover)
+    cv.addEventListener('mouseleave', onMouseLeave)
     return () => {
       cv.removeEventListener('mousedown', onMouseDown)
+      cv.removeEventListener('mouseup', onMouseUp)
       cv.removeEventListener('wheel', onWheel)
       cv.removeEventListener('keydown', onKeyDown)
       cv.removeEventListener('mousemove', onMouseMove)
-      cv.removeEventListener('mouseleave', hideHover)
+      cv.removeEventListener('mouseleave', onMouseLeave)
       if (hoverTimer) clearTimeout(hoverTimer)
     }
   }, [])
