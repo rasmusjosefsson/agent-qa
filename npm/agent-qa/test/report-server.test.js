@@ -505,6 +505,34 @@ test('report viewer endpoints', async (t) => {
     );
   });
 
+  await t.test('POST shot-accept {all:true} promotes every run screenshot', async () => {
+    // Seed a second screenshot so all-mode has more than one mint candidate.
+    const extra = path.join(fx.root, fx.sid, 'replays', fx.runId, 'screenshots', 'aSecond.png');
+    fs.writeFileSync(extra, Buffer.from('PNGDATA-aSecond'));
+    const res = await fetch(`${base}/api/scenarios/${fx.sid}/runs/${fx.runId}/shot-accept`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ all: true }),
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.ok, true);
+    assert.deepEqual(body.minted, ['aSecond', 'navHome']);
+    assert.equal(
+      fs.readFileSync(path.join(fx.root, fx.sid, 'baselines', 'aSecond.png'), 'utf8'),
+      'PNGDATA-aSecond',
+    );
+  });
+
+  await t.test('POST shot-accept {all:true} 404s when the run has no screenshots', async () => {
+    const res = await fetch(`${base}/api/scenarios/${fx.sid}/runs/noShots/shot-accept`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ all: true }),
+    });
+    assert.equal(res.status, 404);
+  });
+
   await t.test('POST shot-accept rejects a missing stepId / absent screenshot', async () => {
     const res1 = await fetch(`${base}/api/scenarios/${fx.sid}/runs/${fx.runId}/shot-accept`, {
       method: 'POST',
@@ -518,6 +546,36 @@ test('report viewer endpoints', async (t) => {
       body: JSON.stringify({ stepId: 'nope' }),
     });
     assert.equal(res2.status, 404);
+  });
+
+  await t.test('POST /api/scenarios/crawl spawns the crawl verb with flags', async () => {
+    const calls = [];
+    const { server: cSrv, base: cBase } = await boot(fx.root, {
+      runCli: async (args) => {
+        calls.push(args);
+        return { code: 0, stdout: 'crawl: crawl-app — 3 route(s)\n', stderr: '' };
+      },
+    });
+    try {
+      const res = await fetch(`${cBase}/api/scenarios/crawl`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ url: 'https://app.example.com/', sid: 'crawl-app', max: 5 }),
+      });
+      assert.equal(res.status, 200);
+      const j = await res.json();
+      assert.equal(j.ok, true);
+      assert.match(j.stdout, /3 route/);
+      assert.deepEqual(calls, [['crawl', 'https://app.example.com/', '--sid', 'crawl-app', '--max', '5']]);
+      const bad = await fetch(`${cBase}/api/scenarios/crawl`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ url: 'notaurl' }),
+      });
+      assert.equal(bad.status, 400);
+    } finally {
+      cSrv.close();
+    }
   });
 
   await t.test('GET artifact streams a captured screenshot', async () => {
