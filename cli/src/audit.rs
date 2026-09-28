@@ -1505,7 +1505,9 @@ fn trend(positionals: &[String], json_out: bool, limit: Option<usize>) -> Result
     let out = collect_trend(&dir, sid, limit);
 
     if json_out {
-        println!("{}", serde_json::to_string_pretty(&out)?);
+        // Compact single-line output: the workbench's lastJsonLine parser
+        // (and shell pipes) expect one JSON value per line.
+        println!("{}", serde_json::to_string(&out)?);
         return Ok(0);
     }
     if out.runs.is_empty() {
