@@ -490,6 +490,9 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     let mut applied_overrides: Vec<String> = Vec::new();
     // stepIds that self-healed via an inline locator correction (auto-heal).
     let mut healed_steps: Vec<String> = Vec::new();
+    // Ids of steps the --from/--until window excluded — surfaced to --junit
+    // as <skipped/> cases so CI sees the full scenario, not just the slice.
+    let mut skipped_step_ids: Vec<String> = Vec::new();
     let mut summary = RunSummary {
         passed: 0,
         total: 0,
@@ -530,7 +533,9 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             }
         };
         // `--from`/`--until` narrow the dispatch window. Steps outside
-        // the window never dispatch — no events, no summary rows.
+        // the window never dispatch — no events, no summary rows — but
+        // their ids are remembered so `--junit` can emit <skipped/>.
+        let flat_all_ids: Vec<String> = flat.iter().map(|s| s.id().to_string()).collect();
         let flat: Vec<Step> =
             match apply_step_window(flat, opts.from_step.as_ref(), opts.until_step.as_ref()) {
                 Ok(v) => v,
@@ -540,6 +545,15 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                     Vec::new()
                 }
             };
+        skipped_step_ids = if opts.from_step.is_some() || opts.until_step.is_some() {
+            let kept: std::collections::BTreeSet<&str> = flat.iter().map(|s| s.id()).collect();
+            flat_all_ids
+                .into_iter()
+                .filter(|id| !kept.contains(id.as_str()))
+                .collect()
+        } else {
+            Vec::new()
+        };
         if opts.from_step.is_some() || opts.until_step.is_some() {
             eprintln!(
                 "[v2-replay] step window: {}..{} — dispatching {} step(s)",
@@ -954,7 +968,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     // (that's the case CI actually needs to render).
     if let Some(dest) = &opts.junit {
         let dest = crate::junit::resolve_dest(&run.run_root, dest);
-        match crate::junit::write(&run.run_root, &scenario.id, &dest) {
+        match crate::junit::write(&run.run_root, &scenario.id, &dest, &skipped_step_ids) {
             Ok((t, f)) => eprintln!(
                 "[v2-replay] junit → {} ({t} tests, {f} failures)",
                 dest.display()

@@ -3,13 +3,16 @@
 //! Reads `<run>/events.jsonl`, keeps each step's last terminal row
 //! (`pass`/`fail`), and emits one `<testcase>` per step so CI's standard
 //! test-result ingestion (Jenkins/GitLab/Azure reporters, GitHub test
-//! reporters, dashboards) renders a replay like a unit-test run.
+//! reporters, dashboards) renders a replay like a unit-test run. Steps
+//! excluded by a `--from`/`--until` window emit `<skipped/>` cases so the
+//! report reflects the whole scenario, not just the slice that ran.
 //!
 //! ```xml
-//! <testsuite name="<sid>" tests="3" failures="1" time="4.2">
+//! <testsuite name="<sid>" tests="4" failures="1" skipped="1" time="4.2">
 //!   <testcase classname="<sid>" name="s3 — submit the form" time="0.8">
 //!     <failure message="locator timed out">…</failure>
 //!   </testcase>
+//!   <testcase classname="<sid>" name="s4" time="0"><skipped/></testcase>
 //! </testsuite>
 //! ```
 
@@ -33,8 +36,10 @@ struct Case {
 }
 
 /// Write `<dest>` (absolute) as JUnit XML for the run at `run_dir`.
+/// `skipped` lists scenario step ids that never dispatched (a --from/--until
+/// window) — emitted as `<skipped/>` cases so CI sees the whole scenario.
 /// Returns (tests, failures).
-pub fn write(run_dir: &Path, sid: &str, dest: &Path) -> Result<(usize, usize)> {
+pub fn write(run_dir: &Path, sid: &str, dest: &Path, skipped: &[String]) -> Result<(usize, usize)> {
     let body = fs::read_to_string(run_dir.join("events.jsonl")).unwrap_or_default();
     // Last terminal row per step id, in first-seen order.
     let mut order: Vec<String> = Vec::new();
@@ -79,7 +84,7 @@ pub fn write(run_dir: &Path, sid: &str, dest: &Path) -> Result<(usize, usize)> {
         }
         cases.insert(id, c);
     }
-    let tests = cases.len();
+    let tests = cases.len() + skipped.len();
     let failures = cases.values().filter(|c| c.error.is_some()).count();
     let total_s: f64 = cases
         .values()
@@ -88,10 +93,11 @@ pub fn write(run_dir: &Path, sid: &str, dest: &Path) -> Result<(usize, usize)> {
 
     let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     xml.push_str(&format!(
-        "<testsuite name=\"{}\" tests=\"{}\" failures=\"{}\" time=\"{:.3}\">\n",
+        "<testsuite name=\"{}\" tests=\"{}\" failures=\"{}\" skipped=\"{}\" time=\"{:.3}\">\n",
         esc(sid),
         tests,
         failures,
+        skipped.len(),
         total_s
     ));
     for id in &order {
@@ -115,6 +121,13 @@ pub fn write(run_dir: &Path, sid: &str, dest: &Path) -> Result<(usize, usize)> {
             )),
             None => xml.push_str("</testcase>\n"),
         }
+    }
+    for id in skipped.iter().filter(|id| !cases.contains_key(*id)) {
+        xml.push_str(&format!(
+            "  <testcase classname=\"{}\" name=\"{}\" time=\"0.000\"><skipped/></testcase>\n",
+            esc(sid),
+            esc(id)
+        ));
     }
     xml.push_str("</testsuite>\n");
 
@@ -156,7 +169,7 @@ mod tests {
         )
         .unwrap();
         let dest = resolve_dest(&run, Path::new(""));
-        let (tests, fails) = write(&run, "demo", &dest).unwrap();
+        let (tests, fails) = write(&run, "demo", &dest, &[]).unwrap();
         assert_eq!((tests, fails), (2, 1));
         let xml = fs::read_to_string(&dest).unwrap();
         assert!(xml.contains("testsuite name=\"demo\" tests=\"2\" failures=\"1\""));
@@ -164,6 +177,33 @@ mod tests {
         assert!(xml.contains("<failure message=\"nope &amp; &lt;bad&gt;\">"));
         // running row produces no testcase
         assert_eq!(xml.matches("<testcase").count(), 2);
+    }
+
+    #[test]
+    fn junit_marks_window_skipped_steps() {
+        let t = TempDir::new().unwrap();
+        let run = t.path().join("r1");
+        fs::create_dir_all(&run).unwrap();
+        fs::write(
+            run.join("events.jsonl"),
+            "{\"id\":\"s2\",\"intent\":\"mid\",\"kind\":\"do\",\"status\":\"pass\",\"ms\":10}\n",
+        )
+        .unwrap();
+        let dest = run.join("j.xml");
+        let skipped = vec!["s1".to_string(), "s3".to_string()];
+        let (tests, fails) = write(&run, "demo", &dest, &skipped).unwrap();
+        assert_eq!((tests, fails), (3, 0));
+        let xml = fs::read_to_string(&dest).unwrap();
+        assert!(xml.contains("tests=\"3\""), "{xml}");
+        assert!(xml.contains("skipped=\"2\""), "{xml}");
+        assert_eq!(xml.matches("<skipped/>").count(), 2);
+        assert!(xml.contains("name=\"s1\""));
+        // A skipped id that somehow already has a terminal row isn't doubled.
+        let skipped = vec!["s2".to_string()];
+        write(&run, "demo", &dest, &skipped).unwrap();
+        let xml = fs::read_to_string(&dest).unwrap();
+        assert_eq!(xml.matches("<testcase").count(), 1);
+        assert!(!xml.contains("<skipped/>"));
     }
 
     #[test]
