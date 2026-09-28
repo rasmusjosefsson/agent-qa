@@ -242,6 +242,11 @@ URL the page fetched gets its recorded status+body back — no backend
 needed. Seeded rules install as a page init script on a fresh session,
 covering even the page's load-time fetches.
 
+Add `--offline` for the strict form: any fetch/XHR that matches NO rule
+rejects with a network error instead of reaching the real backend —
+with `--mock-from`, only the recorded traffic replays; alone, every
+request is stubbed (static pages replay with zero network).
+
 ### Console claims
 
 Assert on messages the page logged this session with the `{"console"}`
