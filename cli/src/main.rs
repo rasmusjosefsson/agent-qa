@@ -37,6 +37,7 @@ mod info;
 mod init;
 mod io;
 mod list;
+mod mock;
 mod netlog;
 mod paths;
 mod perf_snapshot;
@@ -234,7 +235,9 @@ Verbs:
                                 is ok or accepted against current design bytes
   design verdict <sid> --step <id> (--ok | --accepted --reason <t> | --fail --reason <t> | --ask)
                                 Record a design decision in designs/verdicts.json
-  init [dir] [--force]          Bootstrap a dir: agent-qa.toml + scenarios/hello + .gitignore
+  init [dir] [--force] [--ci]   Bootstrap a dir: toml + scenarios/hello + .gitignore (+ --ci PR gate)
+||||||| 7a8edfd
+
   start \"<intent>\"             Begin a new recording session
   browser <args...>             Passthrough exec of the pinned agent-browser
                                 binary (same one every other verb uses) —

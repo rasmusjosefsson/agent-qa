@@ -7,7 +7,9 @@ The full set of CLI verbs at a glance. Every verb also responds to
 
 | Verb | What it does |
 | --- | --- |
+| `init [dir] [--force] [--ci]` | Bootstrap a directory: `agent-qa.toml` (`scenarios_root = ./scenarios`), a `scenarios/hello` smoke scenario, `.gitignore` for run artifacts. `--ci` also writes `.github/workflows/agent-qa.yml` (a PR gate running `replay --all`). Idempotent. |
 | `init [dir] [--force]` | Bootstrap a directory: `agent-qa.toml` (`scenarios_root = ./scenarios`), a `scenarios/hello` smoke scenario, `.gitignore` for run artifacts. Idempotent. |
+
 | `start` | Mint a new scenario directory + skeleton `scenario.json` |
 | `record-step` | Append one step to the in-flight scenario via the recorder |
 | `record pause \| resume \| status` | Freeze capture while you set up page state — record append paths (`record-step`, `smart-click`, `fill-unique`, the editor's auto-record) drop steps while paused instead of writing them. `status --json` emits `{sid, intent, session, paused, steps, startedAt}`. |
@@ -31,7 +33,9 @@ The full set of CLI verbs at a glance. Every verb also responds to
 
 | Verb | What it does |
 | --- | --- |
-| `replay <sid \| path>` | Run a scenario. Flags: `--profile`, `--session`, `--param name=value`, `--heal-from-run <runId>`, `--dry-run`, `--no-sidecars`, `--runs <N>`, `--quiet`/`-q`, `--tag <label>`, `--output-audit <path>`, `--from <stepId>` (skip earlier steps — needs a warm session at that state), `--until <stepId>` (stop after it, inclusive) |
+| `replay <sid \| path>` | Run a scenario. Flags: `--profile`, `--session`, `--param name=value`, `--heal-from-run <runId>`, `--dry-run`, `--no-sidecars`, `--runs <N>`, `--quiet`/`-q`, `--tag <label>`, `--output-audit <path>`, `--from <stepId>` (skip earlier steps — needs a warm session at that state), `--until <stepId>` (stop after it, inclusive). With `--all`: replay every scenario under the root — `--shard k/n` splits the sorted sid list for CI matrices, `--filter <substr>` narrows it, `--tags <a,b>` keeps scenarios declaring any of the named `tags` |
+| `replay <sid \| path>` | Run a scenario. Flags: `--profile`, `--session`, `--param name=value`, `--heal-from-run <runId>`, `--dry-run`, `--no-sidecars`, `--runs <N>`, `--quiet`/`-q`, `--tag <label>`, `--output-audit <path>`, `--from <stepId>` (skip earlier steps — needs a warm session at that state), `--until <stepId>` (stop after it, inclusive). With `--all`: replay every scenario under the root — `--shard k/n` splits the sorted sid list for CI matrices, `--filter <substr>` narrows it, `--report <path>` writes a markdown verdict table for a PR comment |
+
 | `list` | Enumerate scenarios (root mode) or one scenario's replays. Flags: `--json`, `--filter <substr>`, `--limit <N>` |
 | `compare <a> <b>` | Diff two replay run directories. Alias `diff`. |
 | `crawl <url>` | Coverage scaffolding — enumerate same-origin links + interactive elements and write a draft scenario (goto + shot claim per route) to `<scenarios_root>/crawl-<host>/` plus a `crawl-report.json` authoring inventory. Flags: `--session`, `--out`, `--max`, `--sid`. |
@@ -49,8 +53,12 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `audit slow <sid>` | Flag steps whose duration regressed — every one of the last `--recent` pass runs (default 2) exceeds the earlier-run median by `+--pct%` (default 50) and `--min-ms` (default 250). Pass rows only; a fail's `ms` is the timeout budget, not step cost. |
 | `audit health` | Cross-scenario rollup of `flaky` + `slow` + `heal-chronic` at their defaults — one row per scenario with silent degradation, none when the suite is quiet. `--json` emits one compact line (the workbench consumes it to badge scenario rows). |
 | `audit trend <sid>` | Outcome + duration trend over the scenario's runs — pass%, median secs, a `✓/✗` outcome line, and a duration sparkline. `--limit N` (default: all runs) windows to the latest N; `--json` emits the same data structured. |
+| `audit trend --all` | Suite board: one trend row per scenario that has replays (sid, pass%, run count, median, outcomes, sparkline). `--limit N` windows each row to the latest N runs; `--json` emits the rows array. |
+| `audit trend <sid>` | Outcome + duration trend over the scenario's runs — pass%, median secs, a `✓/✗` outcome line, and a duration sparkline. `--limit N` (default: all runs) windows to the latest N; `--json` emits the same data structured. |
+
 | `audit cluster` | Group step failures across every scenario's runs by normalized error signature (quoted literals + digit runs stripped) — one root cause across N runs reads as one cluster with its member list. `--min-size N` (default 2) hides lone failures; `--json` for the structured list. |
 | `audit verdict <sid> <runId \| latest>` | One-word triage for the run: `PASS` (exit 0) green and clean, `FIX` (exit 2) green but self-corrected (auto-heals or value-rejections — review heal.jsonl + promote), `BLOCK` (exit 1) failed. `--json` for the structured verdict incl. the offending stepIds. |
+
 
 
 ## Plans
@@ -62,6 +70,7 @@ Plans/cases/sets are the workbench's run-scope records under `<root>/_plans`, `_
 | `plan list` | Every plan with its resolved member count. `--json` emits one compact line. |
 | `plan cases <planId>` | Resolved member cases (caseId → scenario sid → title), in run order. `--json`. |
 | `plan run <planId>` | Replay every member case's linked scenario and roll up pass/fail/skip — the PR/CI gate entrypoint (`plan run regression --json`). Cases with no recorded scenario or a missing scenario dir are `SKIP`ped. Flags: `--profile <p>`, `--param k=v` (repeatable), `--headed`/`--headless`, `--dry-run`, `--no-sidecars`, `--json` (single-line rollup as the last line). Exit 0 iff every started run passed. |
+
 
 
 
