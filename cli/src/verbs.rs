@@ -340,6 +340,12 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                 .map_err(|e| anyhow!("step '{id}' viewport {w}x{h}: {e}"))?;
             Ok(None)
         }
+        Verb::Emulate => {
+            let p = params.ok_or_else(|| anyhow!("step '{id}' emulate: params required"))?;
+            emulate_apply(ctx.session, p, scope)
+                .map_err(|e| anyhow!("step '{id}' emulate: {e}"))?;
+            Ok(None)
+        }
         Verb::Mock => {
             let p = params.ok_or_else(|| anyhow!("step '{id}' mock: params required"))?;
             crate::mock::apply_mock(ctx.session, p)
@@ -809,6 +815,122 @@ fn state_apply(
     }
     let expr = format!("(() => {{ {body} }})()");
     browser::eval_expression(session, &expr)?;
+    Ok(())
+}
+
+/// `do/emulate` — translate `params` into `agent-browser set …` calls.
+/// Order is fixed: device first (it resets UA + viewport), then headers,
+/// credentials, geo, offline, media — so a scenario listing several keys
+/// doesn't depend on map iteration order.
+fn emulate_apply(
+    session: &str,
+    params: &std::collections::BTreeMap<String, Json>,
+    scope: &mut ValueScope,
+) -> Result<()> {
+    const KEYS: &[&str] = &[
+        "device",
+        "geo",
+        "offline",
+        "colorScheme",
+        "reducedMotion",
+        "headers",
+        "credentials",
+    ];
+    for k in params.keys() {
+        if !KEYS.contains(&k.as_str()) {
+            bail!("unknown emulate key {k:?} (known: {})", KEYS.join(", "));
+        }
+    }
+    if params.is_empty() {
+        bail!("params has no emulation to apply");
+    }
+    let subst = |v: &Json, scope: &mut ValueScope| -> Result<String> {
+        let s = value_to_string(v);
+        Ok(crate::value::substitute_scenario_vars(&s, scope))
+    };
+
+    if let Some(v) = params.get("device") {
+        let name = subst(v, scope)?;
+        browser::set_emulation(session, &["device".into(), name])
+            .map_err(|e| anyhow!("set device: {e}"))?;
+    }
+    if let Some(v) = params.get("headers") {
+        let map = v
+            .as_object()
+            .ok_or_else(|| anyhow!("params.headers must be an object of name→value"))?;
+        let mut out = serde_json::Map::new();
+        for (k, hv) in map {
+            out.insert(k.clone(), Json::String(subst(hv, scope)?));
+        }
+        browser::set_emulation(session, &["headers".into(), Json::Object(out).to_string()])
+            .map_err(|e| anyhow!("set headers: {e}"))?;
+    }
+    if let Some(v) = params.get("credentials") {
+        let user = v
+            .get("user")
+            .ok_or_else(|| anyhow!("params.credentials.user is required"))?;
+        let pass = v
+            .get("pass")
+            .ok_or_else(|| anyhow!("params.credentials.pass is required"))?;
+        browser::set_emulation(
+            session,
+            &[
+                "credentials".into(),
+                subst(user, scope)?,
+                subst(pass, scope)?,
+            ],
+        )
+        .map_err(|e| anyhow!("set credentials: {e}"))?;
+    }
+    if let Some(v) = params.get("geo") {
+        let mut f = |k: &str| -> Result<String> {
+            let n = v
+                .get(k)
+                .ok_or_else(|| anyhow!("params.geo.{k} is required"))?;
+            match n {
+                Json::Number(n) => Ok(n.to_string()),
+                Json::String(_) => Ok(subst(n, scope)?),
+                _ => bail!("params.geo.{k} must be a number"),
+            }
+        };
+        browser::set_emulation(session, &["geo".into(), f("lat")?, f("lng")?])
+            .map_err(|e| anyhow!("set geo: {e}"))?;
+    }
+    if let Some(v) = params.get("offline") {
+        let on = v
+            .as_bool()
+            .ok_or_else(|| anyhow!("params.offline must be a boolean"))?;
+        browser::set_emulation(
+            session,
+            &["offline".into(), if on { "on" } else { "off" }.into()],
+        )
+        .map_err(|e| anyhow!("set offline: {e}"))?;
+    }
+    {
+        let scheme = params
+            .get("colorScheme")
+            .map(|v| subst(v, scope))
+            .transpose()?
+            .map(|s| match s.as_str() {
+                "dark" | "light" => Ok(s),
+                other => bail!("params.colorScheme must be \"dark\" or \"light\", got {other:?}"),
+            })
+            .transpose()?;
+        let rm = params
+            .get("reducedMotion")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if scheme.is_some() || rm {
+            let mut args = vec!["media".to_string()];
+            if let Some(s) = scheme {
+                args.push(s);
+            }
+            if rm {
+                args.push("reduced-motion".into());
+            }
+            browser::set_emulation(session, &args).map_err(|e| anyhow!("set media: {e}"))?;
+        }
+    }
     Ok(())
 }
 
