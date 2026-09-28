@@ -28,13 +28,14 @@ pub fn run(args: &[String]) -> Result<u8> {
     let mut max_links = MAX_DEFAULT;
     let mut sid_override: Option<String> = None;
     let mut console_checks = true;
+    let mut mint_baselines = false;
 
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
         match a.as_str() {
             "-h" | "--help" | "help" => {
                 println!(
-                    "agent-qa crawl — draft a coverage scenario from a live page\n\nUsage:\n  agent-qa crawl <url> [options]\n\nOptions:\n  --session <name>   Browser session to drive (default: default)\n  --out <dir>        Output dir for scenario.json + crawl-report.json\n                     (default: <scenarios_root>/crawl-<host>)\n  --max <N>          Max same-origin links to cover (default {MAX_DEFAULT})\n  --sid <name>       Scenario id (default: crawl-<host>)\n  --no-console-checks\n                     Skip the per-page 'no console errors' claims\n                     (on by default — a page that crashes JS isn't green).\n\nThe draft is a goto + shot claim + console check per discovered route —\nrun `replay`, then `shot-accept` to mint baselines."
+                    "agent-qa crawl — draft a coverage scenario from a live page\n\nUsage:\n  agent-qa crawl <url> [options]\n\nOptions:\n  --session <name>   Browser session to drive (default: default)\n  --out <dir>        Output dir for scenario.json + crawl-report.json\n                     (default: <scenarios_root>/crawl-<host>)\n  --max <N>          Max same-origin links to cover (default {MAX_DEFAULT})\n  --sid <name>       Scenario id (default: crawl-<host>)\n  --no-console-checks\n                     Skip the per-page 'no console errors' claims\n                     (on by default — a page that crashes JS isn't green).\n\nThe draft is a goto + shot claim + console check per discovered route —\nrun `replay`, then `shot-accept` to mint baselines.\n\n  --mint-baselines\n                     After writing the draft, visit every covered route\n                     and capture baselines/<gotoStepId>.png — the draft\n                     replays green immediately, no shot-accept pass."
                 );
                 return Ok(0);
             }
@@ -65,6 +66,7 @@ pub fn run(args: &[String]) -> Result<u8> {
                 );
             }
             "--no-console-checks" => console_checks = false,
+            "--mint-baselines" => mint_baselines = true,
             other if other.starts_with("--") => bail!("unknown flag {other:?}"),
             other => url = Some(other.to_string()),
         }
@@ -108,15 +110,21 @@ pub fn run(args: &[String]) -> Result<u8> {
     links.truncate(max_links);
 
     let mut steps: Vec<Value> = Vec::new();
+    // (link, shot-subject step id) per covered route — the shot claim on
+    // the goto step is where `baselines/<id>.png` must land.
+    let mut shot_targets: Vec<(String, String)> = Vec::new();
     // One coverage unit: goto + shot claim (+ optional console-error check).
     let cover = |steps: &mut Vec<Value>,
                  i: &mut usize,
                  label: &str,
                  link: &str,
-                 console_checks: bool| {
+                 console_checks: bool,
+                 shot_targets: &mut Vec<(String, String)>| {
         *i += 1;
-        steps.push(json!({"id":format!("s{}",*i),"intent":format!("open {link}"),"kind":"do","verb":"goto","value":{"from":"literal","literal":link}}));
+        let goto_id = format!("s{}", *i);
+        steps.push(json!({"id":goto_id,"intent":format!("open {link}"),"kind":"do","verb":"goto","value":{"from":"literal","literal":link}}));
         let n = *i;
+        shot_targets.push((link.to_string(), format!("s{n}")));
         *i += 1;
         steps.push(json!({"id":format!("s{}",*i),"intent":format!("{label} renders"),"kind":"check","claim":{"subject":{"shot":format!("s{n}")},"predicate":"matches"}}));
         if console_checks {
@@ -126,7 +134,14 @@ pub fn run(args: &[String]) -> Result<u8> {
     };
 
     let mut idx = 0usize;
-    cover(&mut steps, &mut idx, "entry page", &url, console_checks);
+    cover(
+        &mut steps,
+        &mut idx,
+        "entry page",
+        &url,
+        console_checks,
+        &mut shot_targets,
+    );
 
     let mut covered = 0usize;
     for link in &links {
@@ -137,7 +152,14 @@ pub fn run(args: &[String]) -> Result<u8> {
         if link.contains('#') || pathish.contains('.') && !pathish.ends_with(".html") {
             continue;
         }
-        cover(&mut steps, &mut idx, link, link, console_checks);
+        cover(
+            &mut steps,
+            &mut idx,
+            link,
+            link,
+            console_checks,
+            &mut shot_targets,
+        );
         covered += 1;
     }
 
@@ -167,6 +189,25 @@ pub fn run(args: &[String]) -> Result<u8> {
     )
     .with_context(|| format!("crawl: write {}", report_path.display()))?;
 
+    if mint_baselines {
+        let baselines = dir.join("baselines");
+        fs::create_dir_all(&baselines).ok();
+        let mut minted = 0usize;
+        for (link, shot_id) in &shot_targets {
+            if browser::open(&session, link).is_err() {
+                eprintln!("crawl: mint {shot_id} skipped — {link} failed to open");
+                continue;
+            }
+            browser::wait_for_load_capped(&session, "networkidle", 5000).ok();
+            let dest = baselines.join(format!("{shot_id}.png"));
+            match browser::screenshot(&session, &dest, true, Some(10_000)) {
+                Ok(true) => minted += 1,
+                _ => eprintln!("crawl: mint {shot_id} skipped — screenshot failed"),
+            }
+        }
+        println!("crawl: minted {minted}/{} baseline(s)", shot_targets.len());
+    }
+
     println!(
         "crawl: {sid} — {covered} route(s) + entry, {} shot claim(s){}",
         steps.len() / if console_checks { 3 } else { 2 },
@@ -185,7 +226,11 @@ pub fn run(args: &[String]) -> Result<u8> {
             .map(|a| a.len())
             .unwrap_or(0)
     );
-    println!("  next:     agent-qa replay {sid} && agent-qa shot-accept {sid}");
+    if mint_baselines {
+        println!("  next:     agent-qa replay {sid}   (baselines already minted)");
+    } else {
+        println!("  next:     agent-qa replay {sid} && agent-qa shot-accept {sid}");
+    }
     Ok(0)
 }
 

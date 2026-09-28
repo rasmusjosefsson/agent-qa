@@ -2,34 +2,73 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/rasmusjosefsson/agent-qa/schemas/scenario/2.json",
   "title": "Scenario",
-  "description": "scenario/2 — author-and-runner contract. The artifact is a contract, not a log: every field is author input. Audit data (recorded snapshots, network, heal records, replay candidates) lives in a sibling sidecar tree addressed by step id. The sidecar path convention is documented in docs/specs/scenario-sidecar-tree.md. DO NOT add audit-only fields to this schema; `additionalProperties: false` enforces it.",
+  "description": "scenario/2 \u2014 author-and-runner contract. The artifact is a contract, not a log: every field is author input. Audit data (recorded snapshots, network, heal records, replay candidates) lives in a sibling sidecar tree addressed by step id. The sidecar path convention is documented in docs/specs/scenario-sidecar-tree.md. DO NOT add audit-only fields to this schema; `additionalProperties: false` enforces it.",
   "type": "object",
-  "required": ["schema", "id", "intent", "steps"],
+  "required": [
+    "schema",
+    "id",
+    "intent",
+    "steps"
+  ],
   "additionalProperties": false,
   "properties": {
-    "schema": { "const": "scenario/2" },
-    "id": { "type": "string", "minLength": 1 },
-    "intent": { "type": "string", "minLength": 1 },
-    "tags": { "type": "array", "items": { "type": "string" } },
+    "schema": {
+      "const": "scenario/2"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "intent": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "inputs": {
       "type": "object",
-      "additionalProperties": { "$ref": "#/$defs/InputDecl" }
+      "additionalProperties": {
+        "$ref": "#/$defs/InputDecl"
+      }
     },
     "env": {
       "type": "object",
       "additionalProperties": false,
       "$comment": "Environmental preconditions (open[]) and cleanup (close[]) that bracket the steps.",
       "properties": {
-        "open": { "type": "array", "items": { "$ref": "#/$defs/EnvOp" } },
-        "close": { "type": "array", "items": { "$ref": "#/$defs/EnvOp" } }
+        "open": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EnvOp"
+          }
+        },
+        "close": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EnvOp"
+          }
+        }
       }
     },
-    "steps": { "type": "array", "items": { "$ref": "#/$defs/Step" } },
+    "steps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Step"
+      }
+    },
     "templates": {
       "type": "object",
-      "additionalProperties": { "$ref": "#/$defs/Template" }
+      "additionalProperties": {
+        "$ref": "#/$defs/Template"
+      }
     },
-    "producedBy": { "$ref": "#/$defs/Provenance" }
+    "producedBy": {
+      "$ref": "#/$defs/Provenance"
+    }
   },
   "$defs": {
     "Name": {
@@ -39,49 +78,97 @@
     },
     "InputDecl": {
       "type": "object",
-      "required": ["type"],
+      "required": [
+        "type"
+      ],
       "additionalProperties": false,
       "properties": {
-        "type": { "enum": ["string", "number", "boolean", "array", "object"] },
+        "type": {
+          "enum": [
+            "string",
+            "number",
+            "boolean",
+            "array",
+            "object"
+          ]
+        },
         "default": {},
-        "sensitive": { "type": "boolean" },
-        "items": { "type": "object" },
-        "properties": { "type": "object" },
-        "description": { "type": "string" }
+        "sensitive": {
+          "type": "boolean"
+        },
+        "items": {
+          "type": "object"
+        },
+        "properties": {
+          "type": "object"
+        },
+        "description": {
+          "type": "string"
+        }
       }
     },
     "Locator": {
       "oneOf": [
         {
           "type": "object",
-          "required": ["role"],
+          "required": [
+            "role"
+          ],
           "additionalProperties": false,
           "properties": {
-            "role": { "type": "string", "minLength": 1 },
-            "name": { "$ref": "#/$defs/NameMatch" },
+            "role": {
+              "type": "string",
+              "minLength": 1
+            },
+            "name": {
+              "$ref": "#/$defs/NameMatch"
+            },
             "scope": {
               "type": "array",
-              "items": { "$ref": "#/$defs/Locator" }
+              "items": {
+                "$ref": "#/$defs/Locator"
+              }
             },
-            "tolerate": { "$ref": "#/$defs/LocatorTolerance" }
+            "tolerate": {
+              "$ref": "#/$defs/LocatorTolerance"
+            }
           },
           "$comment": "Note: `nth` is deliberately absent. Disambiguate via `scope` or a more specific `name`. Multiple structural matches at replay time mean the locator is wrong, not that nth is missing."
         },
         {
           "type": "object",
-          "required": ["raw", "reason"],
+          "required": [
+            "raw",
+            "reason"
+          ],
           "additionalProperties": false,
           "properties": {
             "raw": {
               "type": "object",
-              "required": ["kind", "value"],
+              "required": [
+                "kind",
+                "value"
+              ],
               "additionalProperties": false,
               "properties": {
-                "kind": { "enum": ["css", "xpath", "testId", "text"] },
-                "value": { "type": "string", "minLength": 1 }
+                "kind": {
+                  "enum": [
+                    "css",
+                    "xpath",
+                    "testId",
+                    "text"
+                  ]
+                },
+                "value": {
+                  "type": "string",
+                  "minLength": 1
+                }
               }
             },
-            "reason": { "type": "string", "minLength": 1 }
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            }
           },
           "$comment": "Named-and-shamed escape hatch. `reason` is required so PR review sees why we fell off the accessible-name + role rails."
         }
@@ -90,11 +177,40 @@
     "LocatorTolerance": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["reason"],
+      "required": [
+        "reason"
+      ],
       "anyOf": [
-        { "required": ["digits"], "properties": { "digits": { "const": true } } },
-        { "required": ["generatedSuffix"], "properties": { "generatedSuffix": { "const": true } } },
-        { "required": ["selectionAugmentedLabel"], "properties": { "selectionAugmentedLabel": { "const": true } } }
+        {
+          "required": [
+            "digits"
+          ],
+          "properties": {
+            "digits": {
+              "const": true
+            }
+          }
+        },
+        {
+          "required": [
+            "generatedSuffix"
+          ],
+          "properties": {
+            "generatedSuffix": {
+              "const": true
+            }
+          }
+        },
+        {
+          "required": [
+            "selectionAugmentedLabel"
+          ],
+          "properties": {
+            "selectionAugmentedLabel": {
+              "const": true
+            }
+          }
+        }
       ],
       "properties": {
         "digits": {
@@ -119,22 +235,41 @@
     },
     "NameMatch": {
       "oneOf": [
-        { "type": "string" },
+        {
+          "type": "string"
+        },
         {
           "type": "object",
-          "required": ["pattern"],
+          "required": [
+            "pattern"
+          ],
           "additionalProperties": false,
           "properties": {
-            "pattern": { "type": "string", "minLength": 1 },
-            "match": { "enum": ["exact", "contains", "regex"], "default": "exact" }
+            "pattern": {
+              "type": "string",
+              "minLength": 1
+            },
+            "match": {
+              "enum": [
+                "exact",
+                "contains",
+                "regex"
+              ],
+              "default": "exact"
+            }
           }
         },
         {
           "type": "object",
-          "required": ["i18nKey"],
+          "required": [
+            "i18nKey"
+          ],
           "additionalProperties": false,
           "properties": {
-            "i18nKey": { "type": "string", "minLength": 1 }
+            "i18nKey": {
+              "type": "string",
+              "minLength": 1
+            }
           }
         }
       ]
@@ -143,56 +278,102 @@
       "oneOf": [
         {
           "type": "object",
-          "required": ["from", "literal"],
+          "required": [
+            "from",
+            "literal"
+          ],
           "additionalProperties": false,
           "properties": {
-            "from": { "const": "literal" },
+            "from": {
+              "const": "literal"
+            },
             "literal": {}
           }
         },
         {
           "type": "object",
-          "required": ["from", "input"],
+          "required": [
+            "from",
+            "input"
+          ],
           "additionalProperties": false,
           "properties": {
-            "from": { "const": "input" },
-            "input": { "$ref": "#/$defs/Name" }
+            "from": {
+              "const": "input"
+            },
+            "input": {
+              "$ref": "#/$defs/Name"
+            }
           }
         },
         {
           "type": "object",
-          "required": ["from", "stepId"],
+          "required": [
+            "from",
+            "stepId"
+          ],
           "additionalProperties": false,
           "properties": {
-            "from": { "const": "step" },
-            "stepId": { "type": "string", "minLength": 1 },
-            "path": { "type": "string" }
+            "from": {
+              "const": "step"
+            },
+            "stepId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "path": {
+              "type": "string"
+            }
           }
         },
         {
           "type": "object",
-          "required": ["from", "mint"],
+          "required": [
+            "from",
+            "mint"
+          ],
           "additionalProperties": false,
           "properties": {
-            "from": { "const": "mint" },
+            "from": {
+              "const": "mint"
+            },
             "mint": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["template"],
+              "required": [
+                "template"
+              ],
               "properties": {
-                "template": { "type": "string", "minLength": 1 },
-                "scope": { "enum": ["scenario", "loop", "template"] }
+                "template": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "scope": {
+                  "enum": [
+                    "scenario",
+                    "loop",
+                    "template"
+                  ]
+                }
               }
             }
           }
         },
         {
           "type": "object",
-          "required": ["from", "loopVar"],
+          "required": [
+            "from",
+            "loopVar"
+          ],
           "additionalProperties": false,
           "properties": {
-            "from": { "const": "loop" },
-            "loopVar": { "type": "string", "minLength": 1 }
+            "from": {
+              "const": "loop"
+            },
+            "loopVar": {
+              "type": "string",
+              "minLength": 1
+            }
           }
         }
       ]
@@ -201,104 +382,238 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "urlMatches": { "type": "string" },
-        "operationName": { "type": "string" },
-        "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"] }
+        "urlMatches": {
+          "type": "string"
+        },
+        "operationName": {
+          "type": "string"
+        },
+        "method": {
+          "enum": [
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE",
+            "HEAD"
+          ]
+        }
       },
-      "anyOf": [{ "required": ["urlMatches"] }, { "required": ["operationName"] }]
+      "anyOf": [
+        {
+          "required": [
+            "urlMatches"
+          ]
+        },
+        {
+          "required": [
+            "operationName"
+          ]
+        }
+      ]
     },
     "ClaimSubject": {
       "oneOf": [
         {
           "type": "object",
-          "required": ["element"],
+          "required": [
+            "element"
+          ],
           "additionalProperties": false,
           "properties": {
-            "element": { "$ref": "#/$defs/Locator" },
-            "attribute": { "type": "string" },
-            "ofKind": { "enum": ["text", "value", "count", "attribute"] }
+            "element": {
+              "$ref": "#/$defs/Locator"
+            },
+            "attribute": {
+              "type": "string"
+            },
+            "ofKind": {
+              "enum": [
+                "text",
+                "value",
+                "count",
+                "attribute"
+              ]
+            }
           }
         },
         {
           "type": "object",
-          "required": ["url"],
-          "additionalProperties": false,
-          "properties": { "url": { "const": true } }
-        },
-        {
-          "type": "object",
-          "required": ["network"],
+          "required": [
+            "url"
+          ],
           "additionalProperties": false,
           "properties": {
-            "network": { "$ref": "#/$defs/NetworkMatcher" },
-            "ofKind": { "enum": ["status", "responseJsonPath", "fired"] },
-            "path": { "type": "string" }
+            "url": {
+              "const": true
+            }
           }
         },
         {
           "type": "object",
-          "required": ["data"],
+          "required": [
+            "network"
+          ],
           "additionalProperties": false,
           "properties": {
-            "data": { "$ref": "#/$defs/Name" },
-            "path": { "type": "string" }
+            "network": {
+              "$ref": "#/$defs/NetworkMatcher"
+            },
+            "ofKind": {
+              "enum": [
+                "status",
+                "responseJsonPath",
+                "fired"
+              ]
+            },
+            "path": {
+              "type": "string"
+            }
           }
         },
         {
           "type": "object",
-          "required": ["flag"],
-          "additionalProperties": false,
-          "properties": { "flag": { "type": "string", "minLength": 1 } }
-        },
-        {
-          "type": "object",
-          "required": ["dialog"],
-          "additionalProperties": false,
-          "properties": { "dialog": { "const": true } },
-          "$comment": "native dialog subject — exists/notExists for presence, text predicates match the dialog's message."
-        },
-        {
-          "type": "object",
-          "required": ["file"],
+          "required": [
+            "data"
+          ],
           "additionalProperties": false,
           "properties": {
-            "file": { "type": "string", "minLength": 1 },
-            "attribute": { "enum": ["name", "content"] }
-          },
-          "$comment": "file subject — exists/notExists for presence, gt/gte/lt/lte compare size in bytes, string predicates match the file name (or the file's UTF-8 text with attribute=content). Relative paths resolve against the scenario dir."
+            "data": {
+              "$ref": "#/$defs/Name"
+            },
+            "path": {
+              "type": "string"
+            }
+          }
         },
         {
           "type": "object",
-          "required": ["shot"],
+          "required": [
+            "flag"
+          ],
           "additionalProperties": false,
           "properties": {
-            "shot": { "type": "string", "minLength": 1 },
-            "mask": {
-              "type": "array",
-              "items": { "type": "string", "minLength": 1 }
+            "flag": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "dialog"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "dialog": {
+              "const": true
             }
           },
-          "$comment": "shot subject — visual diff: compares <run>/screenshots/<stepId>.png against <scenario>/baselines/<stepId>.png. Only predicate is 'matches'; pass when the differing-pixel fraction <= tolerance.pixels (default 0.01). Diff maps write to <run>/shots-diff/. Mint baselines with shot-accept. 'mask' lists CSS selectors hidden (visibility:hidden) around every step screenshot — ignore regions for volatile UI (timestamps, live badges). Masks union across all shot claims in the scenario."
+          "$comment": "native dialog subject \u2014 exists/notExists for presence, text predicates match the dialog's message."
         },
         {
           "type": "object",
-          "required": ["kind", "name"],
+          "required": [
+            "file"
+          ],
           "additionalProperties": false,
           "properties": {
-            "kind": { "const": "var" },
-            "name": { "$ref": "#/$defs/Name" },
-            "path": { "type": "string" }
+            "file": {
+              "type": "string",
+              "minLength": 1
+            },
+            "attribute": {
+              "enum": [
+                "name",
+                "content"
+              ]
+            }
           },
-          "$comment": "assertVar via ClaimSubject extension — judges 2 + 3 flagged this as the missing assertion shape (assert a previously-saved variable equals a literal). Lands as a ClaimSubject arm rather than a new step type."
+          "$comment": "file subject \u2014 exists/notExists for presence, gt/gte/lt/lte compare size in bytes, string predicates match the file name (or the file's UTF-8 text with attribute=content). Relative paths resolve against the scenario dir."
+        },
+        {
+          "type": "object",
+          "required": [
+            "shot"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "shot": {
+              "type": "string",
+              "minLength": 1
+            },
+            "mask": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "$comment": "shot subject \u2014 visual diff: compares <run>/screenshots/<stepId>.png against <scenario>/baselines/<stepId>.png. Only predicate is 'matches'; pass when the differing-pixel fraction <= tolerance.pixels (default 0.01). Diff maps write to <run>/shots-diff/. Mint baselines with shot-accept. 'mask' lists CSS selectors hidden (visibility:hidden) around every step screenshot \u2014 ignore regions for volatile UI (timestamps, live badges). Masks union across all shot claims in the scenario."
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "name"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "var"
+            },
+            "name": {
+              "$ref": "#/$defs/Name"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "$comment": "assertVar via ClaimSubject extension \u2014 judges 2 + 3 flagged this as the missing assertion shape (assert a previously-saved variable equals a literal). Lands as a ClaimSubject arm rather than a new step type."
+        },
+        {
+          "type": "object",
+          "required": [
+            "console"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "console": {
+              "oneOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "type": {
+                      "type": "string"
+                    },
+                    "text": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            }
+          }
         }
       ]
     },
     "Claim": {
       "type": "object",
-      "required": ["subject", "predicate"],
+      "required": [
+        "subject",
+        "predicate"
+      ],
       "additionalProperties": false,
       "properties": {
-        "subject": { "$ref": "#/$defs/ClaimSubject" },
+        "subject": {
+          "$ref": "#/$defs/ClaimSubject"
+        },
         "predicate": {
           "enum": [
             "isVisible",
@@ -322,45 +637,100 @@
           ]
         },
         "value": {},
-        "tolerance": { "type": "object" }
+        "tolerance": {
+          "type": "object"
+        }
       }
     },
     "StepContext": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "timeoutMs": { "type": "integer", "minimum": 0 },
-        "onFailure": { "enum": ["abort", "continue", "ignore"] },
-        "runAs": { "type": "string" },
-        "runFor": { "type": "array", "items": { "type": "string" } },
-        "skipFor": { "type": "array", "items": { "type": "string" } },
-        "expectFailFor": { "type": "array", "items": { "type": "string" } },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "onFailure": {
+          "enum": [
+            "abort",
+            "continue",
+            "ignore"
+          ]
+        },
+        "runAs": {
+          "type": "string"
+        },
+        "runFor": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skipFor": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "expectFailFor": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "tab": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "matchUrl": { "type": "string" },
-            "matchTitle": { "type": "string" },
-            "opensFromStepId": { "type": "string" }
+            "matchUrl": {
+              "type": "string"
+            },
+            "matchTitle": {
+              "type": "string"
+            },
+            "opensFromStepId": {
+              "type": "string"
+            }
           }
         }
       }
     },
     "VerbShapeRules": {
-      "$comment": "Cross-field shape rules per verb (e.g. `goto` requires a Value, `click` requires `on`, `loop` requires `params.over`/`params.as`/`params.do`, `useTemplate` requires `params.template`). Left as a structural placeholder — full per-verb gating is enforced by the runner. Today the broad StepDo shape is permissive within additionalProperties: false on its declared keys.",
+      "$comment": "Cross-field shape rules per verb (e.g. `goto` requires a Value, `click` requires `on`, `loop` requires `params.over`/`params.as`/`params.do`, `useTemplate` requires `params.template`). Left as a structural placeholder \u2014 full per-verb gating is enforced by the runner. Today the broad StepDo shape is permissive within additionalProperties: false on its declared keys.",
       "type": "object"
     },
     "Step": {
-      "oneOf": [{ "$ref": "#/$defs/StepDo" }, { "$ref": "#/$defs/StepCheck" }]
+      "oneOf": [
+        {
+          "$ref": "#/$defs/StepDo"
+        },
+        {
+          "$ref": "#/$defs/StepCheck"
+        }
+      ]
     },
     "StepDo": {
       "type": "object",
-      "required": ["id", "intent", "kind", "verb"],
+      "required": [
+        "id",
+        "intent",
+        "kind",
+        "verb"
+      ],
       "additionalProperties": false,
       "properties": {
-        "id": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$", "minLength": 1 },
-        "intent": { "type": "string", "minLength": 1 },
-        "kind": { "const": "do" },
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+$",
+          "minLength": 1
+        },
+        "intent": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "do"
+        },
         "verb": {
           "enum": [
             "goto",
@@ -394,114 +764,242 @@
             "useTemplate"
           ]
         },
-        "on": { "$ref": "#/$defs/Locator" },
-        "value": { "$ref": "#/$defs/Value" },
-        "saveAs": { "$ref": "#/$defs/Name" },
-        "params": { "type": "object" },
-        "context": { "$ref": "#/$defs/StepContext" }
+        "on": {
+          "$ref": "#/$defs/Locator"
+        },
+        "value": {
+          "$ref": "#/$defs/Value"
+        },
+        "saveAs": {
+          "$ref": "#/$defs/Name"
+        },
+        "params": {
+          "type": "object"
+        },
+        "context": {
+          "$ref": "#/$defs/StepContext"
+        }
       },
-      "allOf": [{ "$ref": "#/$defs/VerbShapeRules" }]
+      "allOf": [
+        {
+          "$ref": "#/$defs/VerbShapeRules"
+        }
+      ]
     },
     "StepCheck": {
       "type": "object",
-      "required": ["id", "intent", "kind", "claim"],
+      "required": [
+        "id",
+        "intent",
+        "kind",
+        "claim"
+      ],
       "additionalProperties": false,
       "properties": {
-        "id": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$", "minLength": 1 },
-        "intent": { "type": "string", "minLength": 1 },
-        "kind": { "const": "check" },
-        "claim": { "$ref": "#/$defs/Claim" },
-        "context": { "$ref": "#/$defs/StepContext" }
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+$",
+          "minLength": 1
+        },
+        "intent": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "check"
+        },
+        "claim": {
+          "$ref": "#/$defs/Claim"
+        },
+        "context": {
+          "$ref": "#/$defs/StepContext"
+        }
       }
     },
     "EnvOp": {
       "oneOf": [
         {
           "type": "object",
-          "required": ["kind"],
+          "required": [
+            "kind"
+          ],
           "additionalProperties": false,
           "properties": {
-            "kind": { "const": "fresh" },
-            "intent": { "type": "string" },
-            "policy": { "$ref": "#/$defs/EnvOpPolicy" }
+            "kind": {
+              "const": "fresh"
+            },
+            "intent": {
+              "type": "string"
+            },
+            "policy": {
+              "$ref": "#/$defs/EnvOpPolicy"
+            }
           },
           "$comment": "Reset browser state for the active session: clear cookies + localStorage + sessionStorage before step 0. Default baseline for anonymous recordings."
         },
         {
           "type": "object",
-          "required": ["kind", "name"],
+          "required": [
+            "kind",
+            "name"
+          ],
           "additionalProperties": false,
           "properties": {
-            "kind": { "const": "useProfile" },
-            "intent": { "type": "string" },
-            "name": { "type": "string", "minLength": 1 },
-            "policy": { "$ref": "#/$defs/EnvOpPolicy" }
+            "kind": {
+              "const": "useProfile"
+            },
+            "intent": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "policy": {
+              "$ref": "#/$defs/EnvOpPolicy"
+            }
           },
           "$comment": "Re-bootstrap a named profile so replay reaches the same authenticated baseline regardless of leftover cookies. Idempotent."
         },
         {
           "type": "object",
-          "required": ["kind"],
+          "required": [
+            "kind"
+          ],
           "additionalProperties": false,
           "properties": {
-            "kind": { "const": "nav" },
-            "intent": { "type": "string" },
-            "url": { "type": "string", "format": "uri" },
-            "policy": { "$ref": "#/$defs/EnvOpPolicy" }
+            "kind": {
+              "const": "nav"
+            },
+            "intent": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string",
+              "format": "uri"
+            },
+            "policy": {
+              "$ref": "#/$defs/EnvOpPolicy"
+            }
           }
         },
         {
           "type": "object",
-          "required": ["kind"],
+          "required": [
+            "kind"
+          ],
           "additionalProperties": false,
           "properties": {
-            "kind": { "const": "cookie" },
-            "intent": { "type": "string" },
-            "name": { "type": "string" },
-            "value": { "type": "string" },
-            "domain": { "type": "string" },
-            "path": { "type": "string" },
-            "policy": { "$ref": "#/$defs/EnvOpPolicy" }
+            "kind": {
+              "const": "cookie"
+            },
+            "intent": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            },
+            "domain": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "policy": {
+              "$ref": "#/$defs/EnvOpPolicy"
+            }
           }
         },
         {
           "type": "object",
-          "required": ["kind"],
+          "required": [
+            "kind"
+          ],
           "additionalProperties": false,
           "properties": {
-            "kind": { "const": "localStorage" },
-            "intent": { "type": "string" },
-            "key": { "type": "string" },
-            "value": { "type": "string" },
-            "policy": { "$ref": "#/$defs/EnvOpPolicy" }
+            "kind": {
+              "const": "localStorage"
+            },
+            "intent": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            },
+            "policy": {
+              "$ref": "#/$defs/EnvOpPolicy"
+            }
           }
         },
         {
           "type": "object",
-          "required": ["kind", "url", "query"],
+          "required": [
+            "kind",
+            "url",
+            "query"
+          ],
           "additionalProperties": false,
           "properties": {
-            "kind": { "const": "gql" },
-            "intent": { "type": "string" },
-            "url": { "type": "string", "format": "uri" },
-            "query": { "type": "string", "minLength": 1 },
-            "variables": { "type": "object" },
-            "forEach": { "$ref": "#/$defs/Value" },
-            "saveAs": { "$ref": "#/$defs/Name" },
-            "policy": { "$ref": "#/$defs/EnvOpPolicy" }
+            "kind": {
+              "const": "gql"
+            },
+            "intent": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string",
+              "format": "uri"
+            },
+            "query": {
+              "type": "string",
+              "minLength": 1
+            },
+            "variables": {
+              "type": "object"
+            },
+            "forEach": {
+              "$ref": "#/$defs/Value"
+            },
+            "saveAs": {
+              "$ref": "#/$defs/Name"
+            },
+            "policy": {
+              "$ref": "#/$defs/EnvOpPolicy"
+            }
           },
-          "$comment": "`forEach` is a Value (typically from: \"step\" with a JSONPath into a previously-saved list). `variables` values may be (a) any JSON literal, (b) a `{{item}}` / `{{item.x}}` string template (resolved per forEach iteration), or (c) a single-key wrapper `{\"$value\": <Value>}` that resolves via the scenario's Value channel (literal / input / step / mint / loop). The `$value` wrapper makes single-shot (non-forEach) gql ops able to reference earlier `saveAs` bindings — e.g. `{\"id\": {\"$value\": {\"from\": \"step\", \"stepId\": \"existingThings\", \"path\": \"$.collection[0].id\"}}}`."
+          "$comment": "`forEach` is a Value (typically from: \"step\" with a JSONPath into a previously-saved list). `variables` values may be (a) any JSON literal, (b) a `{{item}}` / `{{item.x}}` string template (resolved per forEach iteration), or (c) a single-key wrapper `{\"$value\": <Value>}` that resolves via the scenario's Value channel (literal / input / step / mint / loop). The `$value` wrapper makes single-shot (non-forEach) gql ops able to reference earlier `saveAs` bindings \u2014 e.g. `{\"id\": {\"$value\": {\"from\": \"step\", \"stepId\": \"existingThings\", \"path\": \"$.collection[0].id\"}}}`."
         },
         {
           "type": "object",
-          "required": ["kind", "name", "enabled"],
+          "required": [
+            "kind",
+            "name",
+            "enabled"
+          ],
           "additionalProperties": false,
           "properties": {
-            "kind": { "const": "flag" },
-            "intent": { "type": "string" },
-            "name": { "type": "string", "minLength": 1 },
-            "enabled": { "type": "boolean" },
-            "policy": { "$ref": "#/$defs/EnvOpPolicy" }
+            "kind": {
+              "const": "flag"
+            },
+            "intent": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "policy": {
+              "$ref": "#/$defs/EnvOpPolicy"
+            }
           }
         }
       ]
@@ -510,41 +1008,81 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "alwaysRun": { "type": "boolean" },
-        "onAbort": { "enum": ["run", "skip"] },
-        "onFailure": { "enum": ["abort", "continue"] }
+        "alwaysRun": {
+          "type": "boolean"
+        },
+        "onAbort": {
+          "enum": [
+            "run",
+            "skip"
+          ]
+        },
+        "onFailure": {
+          "enum": [
+            "abort",
+            "continue"
+          ]
+        }
       }
     },
     "Template": {
       "type": "object",
-      "required": ["steps"],
+      "required": [
+        "steps"
+      ],
       "additionalProperties": false,
       "properties": {
-        "intent": { "type": "string" },
+        "intent": {
+          "type": "string"
+        },
         "inputs": {
           "type": "object",
-          "additionalProperties": { "$ref": "#/$defs/InputDecl" }
+          "additionalProperties": {
+            "$ref": "#/$defs/InputDecl"
+          }
         },
-        "steps": { "type": "array", "items": { "$ref": "#/$defs/Step" } },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Step"
+          }
+        },
         "templates": {
           "type": "object",
-          "additionalProperties": { "$ref": "#/$defs/Template" }
+          "additionalProperties": {
+            "$ref": "#/$defs/Template"
+          }
         }
       },
       "$comment": "Same shape as scenario root minus `env` and `producedBy`. Invoked from a StepDo with verb=\"useTemplate\" and params.template=<name> + params.with=<bindings>."
     },
     "Provenance": {
       "type": "object",
-      "required": ["producer"],
+      "required": [
+        "producer"
+      ],
       "additionalProperties": false,
       "properties": {
         "producer": {
-          "enum": ["automated-capture", "llm-author", "agent-recorder", "human"],
+          "enum": [
+            "automated-capture",
+            "llm-author",
+            "agent-recorder",
+            "human"
+          ],
           "$comment": "Producer of the scenario artifact. Kept in the contract so consumers can distinguish authoring sources."
         },
-        "producedAt": { "type": "string", "format": "date-time" },
-        "recordedAt": { "type": "string", "format": "date-time" },
-        "sourceRef": { "type": "string" }
+        "producedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "recordedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "sourceRef": {
+          "type": "string"
+        }
       }
     }
   }

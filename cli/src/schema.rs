@@ -114,6 +114,28 @@ mod tests {
         validate_value(&j).unwrap_err();
     }
 
+    /// `{"console": …}` claims shipped in the runner before the schema
+    /// listed the subject — crawled drafts (console checks on by default)
+    /// failed validation. Pin both matcher shapes.
+    #[test]
+    fn console_claim_subject_validates() {
+        for console in [
+            json!(true),
+            json!({"type": "error"}),
+            json!({"type": "error", "text": "boom"}),
+        ] {
+            let j = json!({
+                "schema": "scenario/2", "id": "j1", "intent": "smoke",
+                "steps": [{
+                    "id": "s1", "intent": "quiet", "kind": "check",
+                    "claim": {"subject": {"console": console}, "predicate": "notExists"}
+                }]
+            });
+            validate_value(&j)
+                .unwrap_or_else(|e| panic!("console={console:?} should validate: {e}"));
+        }
+    }
+
     /// The smoke scenario under examples/scenarios/smoke/scenario.json is a
     /// hand-authored document — schema-validate it from inside cargo
     /// test so a future schema tightening catches the doc drift before
