@@ -149,6 +149,11 @@ pub enum Verb {
     /// Double-click an element (css/testId locator via `on`).
     #[serde(rename = "dblclick")]
     DblClick,
+    /// Secondary-button click — opens context menus: dispatches the
+    /// pointer/mouse chain with `button: 2` then `contextmenu`. Any locator
+    /// kind via `on` (resolved in-page like `drag` endpoints).
+    #[serde(rename = "rightclick")]
+    RightClick,
     /// Browser tab management: `value` is the `tab` subcommand tail —
     /// `new <url>`, `list`, `close <ref>`, or `<ref>` to switch focus.
     /// Claims afterwards evaluate against the now-active tab.

@@ -171,6 +171,8 @@
     "selftest:accept": "bun selftest/accept.ts",
     "golden:frame:tc01": "bun golden/frame-tc01.ts",
     "golden:crawl:tc01": "bun golden/crawl-tc01.ts",
+    "golden:frame:tc01": "bun golden/frame-tc01.ts",
+    "golden:contextmenu:tc01": "bun golden/contextmenu-tc01.ts",
     "golden:edge:tc01": "bun golden/edge-tc01.ts",
     "golden:edge:tc02": "bun golden/edge-tc02.ts",
     "golden:edge:tc03": "bun golden/edge-tc03.ts",

@@ -50,6 +50,7 @@ export interface FileUploadGolden extends GoldenContext {
   assertRolePresent(role: string, name: string, intent: string): Promise<void>;
   assertRoleAbsent(role: string, name: string, intent: string): Promise<void>;
   clickSelector(selector: string, intent: string): Promise<void>;
+  rightClickSelector(selector: string, intent: string): Promise<void>;
   focusBySelector(selector: string, intent: string): Promise<void>;
   pressKeyOn(selector: string, key: string, intent: string): Promise<void>;
   pressKey(key: string, intent: string): Promise<void>;
@@ -61,6 +62,10 @@ export interface FileUploadGolden extends GoldenContext {
   assertNetworkSilent(matcher: Record<string, unknown>, intent: string): Promise<void>;
   assertNetworkStatus(matcher: Record<string, unknown>, predicate: string, value: unknown, intent: string): Promise<void>;
   assertNetworkJson(matcher: Record<string, unknown>, path: string, predicate: string, value: unknown, intent: string): Promise<void>;
+  dialogAccept(intent: string): Promise<void>;
+  assertDialogOpen(intent: string): Promise<void>;
+  assertDialogClosed(intent: string): Promise<void>;
+  waitLiveSelector(selector: string, intent: string): Promise<void>;
 }
 
 function createContext(tc: string, intent: string): GoldenContext {
@@ -216,6 +221,30 @@ export async function runFileUploadGolden(
     async clickSelector(selector, stepIntent) {
       await run(ctx, `click ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "click", selector]);
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
+    },
+    async waitLiveSelector(selector, stepIntent) {
+      // Live-side only: polls the live DOM; records nothing.
+      await run(ctx, `wait ${selector} ${stepIntent}`, [ctx.agentBrowser, "--session", ctx.session, "wait", selector]);
+    },
+    async dialogAccept(stepIntent) {
+      await record(ctx, "action", { method: "dialogAccept", args: [], intent: stepIntent });
+    },
+    async assertDialogOpen(stepIntent) {
+      await record(ctx, "assert", { kind: "dialogOpen", args: [], intent: stepIntent });
+    },
+    async assertDialogClosed(stepIntent) {
+      await record(ctx, "assert", { kind: "dialogClosed", args: [], intent: stepIntent });
+    },
+    async rightClickSelector(selector, stepIntent) {
+      // agent-browser has no rightclick command — dispatch a contextmenu
+      // directly on the live node; the recorded step is the real verb.
+      // Synchronous is safe live: the daemon auto-accepts dialogs, so a
+      // contextmenu→alert handler clears itself instead of deadlocking eval.
+      await run(ctx, `rightclick ${selector}`, [
+        ctx.agentBrowser, "--session", ctx.session, "eval",
+        `document.querySelector(${JSON.stringify(selector)}).dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,button:2}))`,
+      ]);
+      await record(ctx, "action", { method: "rightClickBySelector", args: [selector], intent: stepIntent });
     },
     async focusBySelector(selector, stepIntent) {
       await run(ctx, `focus ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "focus", selector]);
