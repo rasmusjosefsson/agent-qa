@@ -121,6 +121,13 @@ pub struct RunOptions {
     /// the complete failure list in one run's events/audit rather than
     /// re-running once per step.
     pub keep_going: bool,
+
+    /// `--junit [path]` — write the run's terminal step outcomes as JUnit
+    /// XML after the run. Bare `--junit` writes `<run>/junit.xml` (the
+    /// empty-path sentinel); `--junit=<path>` writes that literal path.
+    /// One <testcase> per step so any CI's test-result ingestion renders
+    /// a replay like a unit-test run.
+    pub junit: Option<PathBuf>,
     /// `--base-url <origin>` — retarget the scenario onto another deploy
     /// (e.g. a PR preview): every `env` nav url and `goto` literal rooted
     /// at the recorded origin is rewritten to this origin. See
@@ -615,6 +622,9 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     let mut applied_overrides: Vec<String> = Vec::new();
     // stepIds that self-healed via an inline locator correction (auto-heal).
     let mut healed_steps: Vec<String> = Vec::new();
+    // Ids of steps the --from/--until window excluded — surfaced to --junit
+    // as <skipped/> cases so CI sees the full scenario, not just the slice.
+    let mut skipped_step_ids: Vec<String> = Vec::new();
     let mut summary = RunSummary {
         passed: 0,
         total: 0,
@@ -655,7 +665,9 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             }
         };
         // `--from`/`--until` narrow the dispatch window. Steps outside
-        // the window never dispatch — no events, no summary rows.
+        // the window never dispatch — no events, no summary rows — but
+        // their ids are remembered so `--junit` can emit <skipped/>.
+        let flat_all_ids: Vec<String> = flat.iter().map(|s| s.id().to_string()).collect();
         let flat: Vec<Step> =
             match apply_step_window(flat, opts.from_step.as_ref(), opts.until_step.as_ref()) {
                 Ok(v) => v,
@@ -665,6 +677,15 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                     Vec::new()
                 }
             };
+        skipped_step_ids = if opts.from_step.is_some() || opts.until_step.is_some() {
+            let kept: std::collections::BTreeSet<&str> = flat.iter().map(|s| s.id()).collect();
+            flat_all_ids
+                .into_iter()
+                .filter(|id| !kept.contains(id.as_str()))
+                .collect()
+        } else {
+            Vec::new()
+        };
         if opts.from_step.is_some() || opts.until_step.is_some() {
             eprintln!(
                 "[v2-replay] step window: {}..{} — dispatching {} step(s)",
@@ -1176,6 +1197,20 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 minted.join(", ")
             ),
             Err(err) => eprintln!("baselines: skipped ({err})"),
+        }
+    }
+
+    // 11. `--junit` — XML report for CI test-result ingestion. Written
+    // before the failure bail so a FAIL run still produces its report
+    // (that's the case CI actually needs to render).
+    if let Some(dest) = &opts.junit {
+        let dest = crate::junit::resolve_dest(&run.run_root, dest);
+        match crate::junit::write(&run.run_root, &scenario.id, &dest, &skipped_step_ids) {
+            Ok((t, f)) => eprintln!(
+                "[v2-replay] junit → {} ({t} tests, {f} failures)",
+                dest.display()
+            ),
+            Err(err) => eprintln!("[v2-replay] junit skipped: {err}"),
         }
     }
 
@@ -2446,6 +2481,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut until_step: Option<String> = None;
     let mut update_baselines = false;
     let mut keep_going = false;
+    let mut junit: Option<PathBuf> = None;
     let mut base_url: Option<String> = None;
     let mut auto_promote = false;
     let mut freeze: Option<String> = None;
@@ -2492,6 +2528,9 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             s if s.starts_with("--until=") => until_step = Some(s["--until=".len()..].to_string()),
             "--update-baselines" => update_baselines = true,
             "--keep-going" => keep_going = true,
+
+            "--junit" => junit = Some(PathBuf::new()),
+            s if s.starts_with("--junit=") => junit = Some(PathBuf::from(&s["--junit=".len()..])),
             "--base-url" => base_url = it.next().cloned().or_else(|| bail_missing("--base-url")),
             s if s.starts_with("--base-url=") => {
                 base_url = Some(s["--base-url=".len()..].to_string())
@@ -2560,6 +2599,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         until_step,
         update_baselines,
         keep_going,
+        junit,
         base_url: normalize_base_url(base_url)?,
         auto_promote,
         freeze,
@@ -2646,7 +2686,7 @@ Usage:
                   [--tag <label>] [--output-audit <path>]
                   [--from <stepId>] [--until <stepId>]
                   [--update-baselines] [--freeze <iso>] [--base-url <origin>]
-                  [--runs <N>] [--keep-going]
+                  [--runs <N>] [--keep-going] [--junit [path]]
 
 Loads + validates the scenario, mints a run id, prepares
 <sid>/replays/<runId>/, writes audit.json, runs env.open, iterates
@@ -2752,6 +2792,13 @@ replays/latest.txt.
                          cascade-fail from the broken page state, but a
                          repair sweep wants the complete failure list in
                          one run's audit rather than one re-run per step.
+
+--junit [path]           Write the run's terminal step outcomes as JUnit
+                         XML — one <testcase> per step. Bare flag writes
+                         <run>/junit.xml; --junit=<path> writes that
+                         path. Any CI's standard test-result ingestion
+                         (Jenkins/GitLab/Azure/GitHub reporters) renders
+                         the replay like a unit-test run.
 --offline                Reject every fetch/XHR that matches no mock rule
                          instead of reaching the real backend. With
                          --mock-from that's the full hermetic guarantee;
@@ -2897,6 +2944,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
@@ -2980,6 +3028,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
@@ -3044,6 +3093,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
@@ -3089,6 +3139,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
@@ -3159,6 +3210,7 @@ esac\nexit 0\n",
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
@@ -3417,6 +3469,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
@@ -3485,6 +3538,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
@@ -4215,6 +4269,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
@@ -4307,6 +4362,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
@@ -4531,6 +4587,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
@@ -4625,6 +4682,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
@@ -4698,6 +4756,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
@@ -4749,6 +4808,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
@@ -4937,6 +4997,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
