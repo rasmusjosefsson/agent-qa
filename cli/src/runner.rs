@@ -114,6 +114,12 @@ pub struct RunOptions {
     /// performs). Runs even when shot claims FAILED: intentional UI
     /// changes are exactly the case where a failing diff needs re-minting.
     pub update_baselines: bool,
+    /// `--record-video [path]` — record the browser to video for the
+    /// whole run (agent-browser `record start/stop`; needs ffmpeg on the
+    /// runner). Bare flag writes `<run>/run.webm`; `=<path>` writes that
+    /// path (.webm/.mp4). Start happens right before the step loop so
+    /// env.open navigation is captured; stop after env.close.
+    pub record_video: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -523,6 +529,20 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 Vec::new()
             }
         };
+        // `--record-video`: start filming before the first step so the
+        // whole interaction lands in <run>/run.webm. Best-effort — a
+        // missing ffmpeg is a warning, not a failed run.
+        if let Some(vid) = &opts.record_video {
+            let dest = if vid.as_os_str().is_empty() {
+                run.run_root.join("run.webm")
+            } else {
+                vid.clone()
+            };
+            match browser::record_video_start(&opts.session_name, &dest) {
+                Ok(()) => eprintln!("[v2-replay] recording → {}", dest.display()),
+                Err(e) => eprintln!("[v2-replay] record start skipped: {e}"),
+            }
+        }
         // `--from`/`--until` narrow the dispatch window. Steps outside
         // the window never dispatch — no events, no summary rows.
         let flat: Vec<Step> =
@@ -922,6 +942,15 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         }
         crate::sidecar::atomic_write_file(out, &body)
             .with_context(|| format!("--output-audit write {}", out.display()))?;
+    }
+
+    // 8.5. Stop the video recording (started under `--record-video`).
+    // Runs before audit finalize so the artifact exists even on FAIL.
+    if opts.record_video.is_some() && !opts.dry_run {
+        match browser::record_video_stop(&opts.session_name) {
+            Ok(()) => {}
+            Err(e) => eprintln!("[v2-replay] record stop skipped: {e}"),
+        }
     }
 
     // 9. Latest pointer.
@@ -1761,6 +1790,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut from_step: Option<String> = None;
     let mut until_step: Option<String> = None;
     let mut update_baselines = false;
+    let mut record_video: Option<PathBuf> = None;
     let mut input_overrides: BTreeMap<String, String> = BTreeMap::new();
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
@@ -1800,6 +1830,10 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             "--until" => until_step = it.next().cloned().or_else(|| bail_missing("--until")),
             s if s.starts_with("--until=") => until_step = Some(s["--until=".len()..].to_string()),
             "--update-baselines" => update_baselines = true,
+            "--record-video" => record_video = Some(PathBuf::new()),
+            s if s.starts_with("--record-video=") => {
+                record_video = Some(PathBuf::from(&s["--record-video=".len()..]))
+            }
             "--param" | "-p" => {
                 let pair = it
                     .next()
@@ -1854,6 +1888,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         from_step,
         until_step,
         update_baselines,
+        record_video,
     })
 }
 
@@ -1919,7 +1954,7 @@ Usage:
                   [--no-sidecars] [--quiet | -q] [--plain]
                   [--tag <label>] [--output-audit <path>]
                   [--from <stepId>] [--until <stepId>]
-                  [--update-baselines] [--runs <N>]
+                  [--update-baselines] [--runs <N>] [--record-video [path]]
 
 Loads + validates the scenario, mints a run id, prepares
 <sid>/replays/<runId>/, writes audit.json, runs env.open, iterates
@@ -1968,7 +2003,11 @@ replays/latest.txt.
                          performs). Runs even when shot claims fail —
                          intentional UI changes are the re-mint case.
                          Skips with a warning when the run captured no
-                         screenshots (e.g. --no-sidecars)."
+                         screenshots (e.g. --no-sidecars).
+--record-video [path]    Record the browser to video for the whole run
+                         (needs ffmpeg). Bare flag → <run>/run.webm;
+                         =<path> picks the file (.webm/.mp4). Covers
+                         env.open navigation through env.close."
 }
 
 #[cfg(all(test, unix))]
@@ -2048,6 +2087,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            record_video: None,
         };
         let summary = run(&opts).unwrap();
         assert_eq!(summary.total, 1);
@@ -2124,6 +2164,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            record_video: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2181,6 +2222,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            record_video: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2219,6 +2261,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            record_video: None,
         };
         let err = format!("{:#}", run(&opts).unwrap_err());
         assert!(err.contains("schema error"), "got: {err}");
@@ -2282,6 +2325,7 @@ esac\nexit 0\n",
             from_step: None,
             until_step: None,
             update_baselines: false,
+            record_video: None,
         }
     }
 
@@ -2533,6 +2577,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            record_video: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2594,6 +2639,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            record_video: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2619,6 +2665,22 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         assert_eq!(opts.input_overrides.get("name").unwrap(), "alice");
         assert_eq!(opts.input_overrides.get("count").unwrap(), "3");
         assert_eq!(opts.input_overrides.get("flag").unwrap(), "true");
+    }
+
+    #[test]
+    fn parse_args_record_video() {
+        // bare flag → empty-path sentinel (runner resolves to <run>/run.webm)
+        let o = parse_args(&["./j.json".into(), "--record-video".into()]).unwrap();
+        assert_eq!(o.record_video.as_deref(), Some(std::path::Path::new("")));
+        let o = parse_args(&["./j.json".into(), "--record-video=/tmp/x.mp4".into()]).unwrap();
+        assert_eq!(
+            o.record_video.as_deref(),
+            Some(std::path::Path::new("/tmp/x.mp4"))
+        );
+        assert!(parse_args(&["./j.json".into()])
+            .unwrap()
+            .record_video
+            .is_none());
     }
 
     #[test]
@@ -3150,6 +3212,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            record_video: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3235,6 +3298,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            record_video: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3417,6 +3481,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            record_video: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3504,6 +3569,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            record_video: None,
         };
         // The run bails at the failing step; events/status are written
         // before the bail.
@@ -3570,6 +3636,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            record_video: None,
         };
         run(&opts).unwrap();
 
@@ -3614,6 +3681,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            record_video: None,
         };
         run(&opts).unwrap();
         let run_dir = run_dir_for(&jdir);
@@ -3795,6 +3863,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            record_video: None,
         };
         assert_eq!(resolve_progress_mode(&mk(true, false)), ProgressMode::Quiet);
         // quiet wins over plain.
