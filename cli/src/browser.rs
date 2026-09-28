@@ -612,10 +612,7 @@ pub fn page_errors(session: &str) -> Result<Vec<PageError>, AgentBrowserError> {
                         .and_then(|t| t.as_str())
                         .unwrap_or_default()
                         .to_string(),
-                    url: e
-                        .get("url")
-                        .and_then(|u| u.as_str())
-                        .map(|u| u.to_string()),
+                    url: e.get("url").and_then(|u| u.as_str()).map(|u| u.to_string()),
                 })
                 .collect()
         })

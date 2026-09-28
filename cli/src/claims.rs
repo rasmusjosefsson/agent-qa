@@ -313,9 +313,7 @@ fn check_page_error(
             m.text
                 .as_deref()
                 .map(|t| substitute_scenario_vars(t, scope)),
-            m.url
-                .as_deref()
-                .map(|t| substitute_scenario_vars(t, scope)),
+            m.url.as_deref().map(|t| substitute_scenario_vars(t, scope)),
         ),
     };
     let deadline = Instant::now() + timeout;
@@ -330,9 +328,7 @@ fn check_page_error(
                     .unwrap_or(true)
                     && want_url
                         .as_deref()
-                        .map(|u| {
-                            e.url.as_deref().map(|eu| eu.contains(u)).unwrap_or(false)
-                        })
+                        .map(|u| e.url.as_deref().map(|eu| eu.contains(u)).unwrap_or(false))
                         .unwrap_or(true)
             })
             .collect();
