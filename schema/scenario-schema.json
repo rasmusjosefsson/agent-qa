@@ -295,6 +295,27 @@
             "path": { "type": "string" }
           },
           "$comment": "assertVar via ClaimSubject extension — judges 2 + 3 flagged this as the missing assertion shape (assert a previously-saved variable equals a literal). Lands as a ClaimSubject arm rather than a new step type."
+        },
+        {
+          "type": "object",
+          "required": ["console"],
+          "additionalProperties": false,
+          "properties": {
+            "console": {
+              "oneOf": [
+                { "type": "boolean" },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "type": { "type": "string" },
+                    "text": { "type": "string" }
+                  }
+                }
+              ]
+            }
+          },
+          "$comment": "console claim subject — the runner has evaluated it since #167; the schema branch was missed, so crawl-emitted console checks failed validation."
         }
       ]
     },
