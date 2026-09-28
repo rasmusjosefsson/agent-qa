@@ -915,6 +915,14 @@ pub fn network_request(
     json_data("network request", &r.stdout)
 }
 
+/// `agent-browser console --clear` — drop the session's captured console
+/// log. Like the request log, it is per-session and otherwise accumulates
+/// across replays sharing a session.
+pub fn console_clear(session: &str) -> Result<(), AgentBrowserError> {
+    run(session, ["console", "--clear"], RunOpts::new().capture())?;
+    Ok(())
+}
+
 /// `agent-browser network har start` — begin a HAR recording on the
 /// session. The daemon keeps accumulating entries until `har stop`.
 pub fn network_har_start(session: &str) -> Result<(), AgentBrowserError> {
