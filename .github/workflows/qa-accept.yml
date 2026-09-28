@@ -1,0 +1,97 @@
+name: qa-accept
+# The reviewer half of the visual loop. When a PR legitimately changes the UI
+# and the ui-goldens job shows the diff, a maintainer comments `/qa accept` on
+# the PR: this replays the selftest scenarios against the PR's own build,
+# promotes the fresh captures to baselines/ (agent-qa shot-accept), commits
+# them, and pushes to the PR's head branch — the gate then goes green on the
+# same image that produces the goldens.
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  accept:
+    name: accept goldens on PR
+    # Only on PR comments that issue the command, and only from someone who can
+    # push anyway (the job writes to the PR head branch).
+    if: >-
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/qa accept') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: resolve the PR head
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          info=$(gh pr view ${{ github.event.issue.number }} --json headRefName,headRefOid,isCrossRepository)
+          echo "$info"
+          echo "head_ref=$(echo "$info" | jq -r .headRefName)" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$(echo "$info" | jq -r .headRefOid)" >> "$GITHUB_OUTPUT"
+          echo "cross_repo=$(echo "$info" | jq -r .isCrossRepository)" >> "$GITHUB_OUTPUT"
+      - name: refuse forked PRs
+        if: steps.pr.outputs.cross_repo == 'true'
+        run: |
+          echo "::error::cannot push goldens to a fork branch — run the ui-goldens dispatch job instead"
+          exit 1
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.head_sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+      - name: build cli
+        working-directory: cli
+        run: cargo build --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: launcher install (resolves agent-browser)
+        working-directory: npm/agent-qa
+        run: npm install --no-audit --no-fund
+      - name: build web bundle (lib/public is not committed)
+        working-directory: npm/agent-qa
+        run: npm run build:web
+      - name: browser install
+        working-directory: npm/agent-qa
+        env:
+          AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+        run: ./node_modules/.bin/agent-browser install
+      - uses: oven-sh/setup-bun@v2
+      - name: replay + mint baselines (accept.ts replays, then shot-accepts)
+        working-directory: evals
+        env:
+          AGENT_QA_EVAL_AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
+          AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
+          AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+        run: bun selftest/accept.ts
+      - name: push the new goldens to the PR branch
+        env:
+          HEAD_REF: ${{ steps.pr.outputs.head_ref }}
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add evals/selftest/scenarios/*/baselines/
+          if git diff --cached --quiet; then
+            echo "baselines unchanged — nothing to commit"
+            exit 0
+          fi
+          git commit -m "chore(evals): accept selftest goldens via /qa accept
+
+          Minted by the qa-accept workflow on the PR head — the same image
+          the ui-goldens gate replays against. Requested by comment ${{ github.event.comment.html_url }}."
+          git push origin "HEAD:${HEAD_REF}"
+      - name: comment the result
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          gh pr comment "$PR_NUMBER" --body "🏅 \`/qa accept\` — replays finished; any baseline changes were pushed to this branch in a \`chore(evals)\` commit. [Run log](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
