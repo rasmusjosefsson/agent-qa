@@ -80,8 +80,8 @@ jobs:
         working-directory: .
         env:
           AGENT_BROWSER_BIN: ${{ github.workspace }}/node_modules/.bin/agent-browser
-        run: ./node_modules/.bin/agent-qa replay --all --quiet
-        # sharded: replay --all --shard ${{ matrix.shard }}/2 --quiet
+        run: ./node_modules/.bin/agent-qa replay --all --quiet --report /tmp/qa-report.md
+        # sharded: replay --all --shard ${{ matrix.shard }}/2 --quiet --report /tmp/qa-report.md
       - name: upload run evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -89,6 +89,14 @@ jobs:
           name: agent-qa-runs
           path: scenarios/*/replays/
           retention-days: 14
+      - name: comment verdict on the PR
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          printf '\n\n[run artifacts](%s/artifacts)\n' "$RUN_URL" >> /tmp/qa-report.md
+          gh pr comment ${{ github.event.pull_request.number }} --body-file /tmp/qa-report.md
 "#;
 
 pub fn cli(args: &[String]) -> Result<u8> {
