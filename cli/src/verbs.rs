@@ -32,6 +32,10 @@ use crate::verb_shape::assert_verb_shape;
 pub struct DoContext<'a> {
     pub session: &'a str,
     pub scenario_dir: &'a Path,
+    /// The scenario carries `{"shot": ...}` claims — do-steps that would
+    /// otherwise be allowed to reuse session state (the warm-page `goto`
+    /// skip) must instead produce a fresh, deterministic document.
+    pub visual_checks: bool,
 }
 
 /// Dispatch a single `do` step. Returns `Ok(Some(saved))` if the verb
@@ -61,10 +65,20 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
             // Warm-page: on a reused, already-signed-in session that's ALREADY
             // on this URL, skip the reload — re-navigating a heavy SPA forces a
             // full re-hydration (~20s). Best-effort; any mismatch navigates.
+            // Visual-check scenarios always navigate: the golden diff needs a
+            // fresh document, not whatever the session last loaded.
             if browser::already_on(ctx.session, &url) {
-                eprintln!(
-                    "[v2-replay] goto: already on {url} — reusing warm page (skipped reload)"
-                );
+                if ctx.visual_checks {
+                    eprintln!(
+                        "[v2-replay] goto: already on {url} — reloading anyway (visual checks need a fresh document)"
+                    );
+                    browser::open(ctx.session, &url)?;
+                    browser::wait_for_load(ctx.session, "networkidle")?;
+                } else {
+                    eprintln!(
+                        "[v2-replay] goto: already on {url} — reusing warm page (skipped reload)"
+                    );
+                }
             } else {
                 browser::open(ctx.session, &url)?;
                 browser::wait_for_load(ctx.session, "networkidle")?;
@@ -1333,6 +1347,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let _out = dispatch_do(s, &ctx, &mut scope).unwrap();
@@ -1371,6 +1386,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1404,6 +1420,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1453,6 +1470,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1528,6 +1546,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1550,6 +1569,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err();
@@ -1586,6 +1606,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1612,6 +1633,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1692,6 +1714,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -1725,6 +1748,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let saved = dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1746,6 +1770,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -1783,6 +1808,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let saved = dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1823,6 +1849,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1848,6 +1875,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -1870,6 +1898,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1897,6 +1926,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1928,6 +1958,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1962,6 +1993,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1990,6 +2022,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -2013,6 +2046,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -2036,6 +2070,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -2092,6 +2127,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -2115,6 +2151,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -2158,6 +2195,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -2176,6 +2214,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -2198,6 +2237,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -2235,6 +2275,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -2261,6 +2302,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -2282,6 +2324,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();

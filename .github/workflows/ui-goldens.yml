@@ -1,0 +1,149 @@
+name: ui-goldens
+# The visual-validation loop on PRs that touch the workbench UI: replay the
+# committed selftest goldens (shot claims vs committed baselines) against the
+# PR's own build, then comment the verdict and upload the diff maps + fresh
+# screenshots as artifacts for before/after review.
+on:
+  pull_request:
+    paths:
+      - "npm/agent-qa/web/**"
+      - "npm/agent-qa/lib/**"
+      - "evals/selftest/**"
+      - ".github/workflows/ui-goldens.yml"
+  # Baselines are environment-bound: a screenshot minted on a dev laptop
+  # differs in fonts/AA from CI's headless Chrome, so goldens must be minted
+  # by the same image that gates on them. Dispatch this workflow to re-mint —
+  # it replays every selftest scenario, promotes the captures to baselines/
+  # (agent-qa shot-accept), and opens a PR with the CI-rendered goldens.
+  workflow_dispatch:
+    inputs:
+      update_goldens:
+        description: "Re-mint goldens in CI and open a PR"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  selftest:
+    name: workbench goldens
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+      - name: build cli
+        working-directory: cli
+        run: cargo build --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: launcher install (resolves agent-browser)
+        working-directory: npm/agent-qa
+        run: npm install --no-audit --no-fund
+      - name: build web bundle (lib/public is not committed)
+        working-directory: npm/agent-qa
+        run: npm run build:web
+      - name: browser install
+        working-directory: npm/agent-qa
+        env:
+          AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+        run: ./node_modules/.bin/agent-browser install
+      - uses: oven-sh/setup-bun@v2
+      - name: replay selftest goldens
+        id: selftest
+        working-directory: evals
+        env:
+          AGENT_QA_EVAL_AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
+          AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
+          AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+        run: bun selftest/run.ts
+      - name: upload goldens evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-goldens
+          path: |
+            evals/selftest/results/
+            evals/selftest/scenarios/*/replays/*/screenshots/
+            evals/selftest/scenarios/*/replays/*/shots-diff/
+          retention-days: 30
+      - name: comment the goldens verdict
+        if: always()
+        working-directory: evals
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          bun selftest/pr-comment.ts --run-url "$RUN_URL" --out /tmp/ui-goldens.md
+          gh pr comment "$PR_NUMBER" --body-file /tmp/ui-goldens.md
+
+  update-goldens:
+    name: re-mint goldens in CI
+    if: github.event_name == 'workflow_dispatch' && inputs.update_goldens
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+      - name: build cli
+        working-directory: cli
+        run: cargo build --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: launcher install (resolves agent-browser)
+        working-directory: npm/agent-qa
+        run: npm install --no-audit --no-fund
+      - name: build web bundle (lib/public is not committed)
+        working-directory: npm/agent-qa
+        run: npm run build:web
+      - name: browser install
+        working-directory: npm/agent-qa
+        env:
+          AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+        run: ./node_modules/.bin/agent-browser install
+      - uses: oven-sh/setup-bun@v2
+      - name: replay + mint baselines (accept.ts replays, then shot-accepts)
+        working-directory: evals
+        env:
+          AGENT_QA_EVAL_AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
+          AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
+          AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+        run: bun selftest/accept.ts
+      - name: open goldens PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          branch="bot/ui-goldens-${{ github.run_id }}"
+          git checkout -b "$branch"
+          git add evals/selftest/scenarios/*/baselines/
+          if git diff --cached --quiet; then
+            echo "baselines unchanged — nothing to mint"
+            exit 0
+          fi
+          git commit -m "chore(evals): re-mint selftest goldens in CI rendering
+
+          Baselines are environment-bound — these were captured by the
+          ui-goldens workflow's own ubuntu-latest + headless Chrome, the
+          same image that gates PRs. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          git push -u origin "$branch"
+          gh pr create --title "chore(evals): CI-minted selftest goldens" \
+            --body "Baselines re-minted by the \`ui-goldens\` dispatch job (run ${{ github.run_id }}). Merging this makes the PR gate use CI-rendered references — inspect the diff images before merging." \
+            --head "$branch" --base main

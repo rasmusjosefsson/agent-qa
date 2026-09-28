@@ -169,11 +169,11 @@ export function SettingsPage() {
                 <dl className="space-y-2 text-xs">
                   <div className="flex justify-between gap-4">
                     <dt className="text-muted-foreground">Scenario root</dt>
-                    <dd className="truncate font-mono">{data.root}</dd>
+                    <dd data-qa-volatile className="truncate font-mono">{data.root}</dd>
                   </div>
                   <div className="flex justify-between gap-4">
                     <dt className="text-muted-foreground">Settings file</dt>
-                    <dd className="truncate font-mono">{data.root}/_config/settings.json</dd>
+                    <dd data-qa-volatile className="truncate font-mono">{data.root}/_config/settings.json</dd>
                   </div>
                 </dl>
               </div>

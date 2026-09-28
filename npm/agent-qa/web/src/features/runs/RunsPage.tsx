@@ -142,7 +142,7 @@ export function RunsPage() {
         {showRight && (
           <>
             <ResizeHandle />
-            <Panel defaultSize={22} minSize={16} className="min-h-0">
+            <Panel defaultSize={22} minSize={16} className="min-h-0" data-qa-volatile>
               {showLive ? (
                 <ReplayLive sid={runs.sel.sid!} onLightbox={(url, caption) => setLightbox({ url, caption })} />
               ) : (
@@ -154,7 +154,7 @@ export function RunsPage() {
       </PanelGroup>
 
       {/* Bottom status stripe — scenarios root + live toggle */}
-      <div className="flex h-7 shrink-0 items-center justify-between gap-3 border-t border-border px-4 text-xs text-muted-foreground">
+      <div data-qa-volatile className="flex h-7 shrink-0 items-center justify-between gap-3 border-t border-border px-4 text-xs text-muted-foreground">
         <div className="truncate font-mono">{runs.root}</div>
         <button
           type="button"

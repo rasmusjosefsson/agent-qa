@@ -122,7 +122,7 @@ pub fn dispatch_check(
         ClaimSubject::Flag { flag } => {
             check_flag(flag, &claim.predicate, claim.value.as_ref(), ctx)
         }
-        ClaimSubject::Shot { shot, clip } => check_shot(
+        ClaimSubject::Shot { shot, clip, .. } => check_shot(
             shot,
             clip.as_ref(),
             &claim.predicate,
@@ -130,6 +130,7 @@ pub fn dispatch_check(
             ctx,
             scope,
         ),
+
         ClaimSubject::Dialog { dialog } => {
             if !*dialog {
                 bail!("dialog subject requires dialog=true");
@@ -1931,7 +1932,7 @@ mod tests {
         }))
         .unwrap();
         match claim.subject {
-            ClaimSubject::Shot { shot, clip } => {
+            ClaimSubject::Shot { shot, clip, .. } => {
                 assert_eq!(shot, "s1");
                 assert!(clip.is_some());
             }
