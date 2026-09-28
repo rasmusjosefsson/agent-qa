@@ -23,6 +23,7 @@ pub fn run(args: &[String]) -> Result<u8> {
     let mut run_id: Option<String> = None;
     let mut steps: Option<Vec<String>> = None;
     let mut json = false;
+    let mut dry_run = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -42,8 +43,9 @@ pub fn run(args: &[String]) -> Result<u8> {
                 );
             }
             "--json" => json = true,
+            "--dry-run" | "-n" => dry_run = true,
             "--help" | "-h" => {
-                println!("agent-qa shot-accept — mint screenshot baselines from a run\n\nUsage:\n  agent-qa shot-accept <sid> [--run <runId>] [--steps <csv>] [--json]\n\nCopies <sid>/replays/<run>/screenshots/<stepId>.png to\n<sid>/baselines/<stepId>.png for {{\"shot\"}} claims. Defaults:\nlatest run, every captured screenshot.");
+                println!("agent-qa shot-accept — mint screenshot baselines from a run\n\nUsage:\n  agent-qa shot-accept <sid> [--run <runId>] [--steps <csv>] [--json] [--dry-run]\n\nCopies <sid>/replays/<run>/screenshots/<stepId>.png to\n<sid>/baselines/<stepId>.png for {{\"shot\"}} claims. Defaults:\nlatest run, every captured screenshot. --dry-run previews:\nper step it reports new / identical / update (with the AA-filtered\npixel diff%) and writes nothing.");
                 return Ok(0);
             }
             v if sid.is_none() => sid = Some(v.to_string()),
@@ -86,6 +88,77 @@ pub fn run(args: &[String]) -> Result<u8> {
     }
 
     let base_dir = sdir.join("baselines");
+
+    if dry_run {
+        #[derive(serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Plan {
+            step: String,
+            action: &'static str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            diff_pct: Option<f64>,
+        }
+        let mut plans: Vec<Plan> = Vec::new();
+        for id in &step_ids {
+            let src = shots_dir.join(format!("{id}.png"));
+            if !src.is_file() {
+                bail!("run {rid} has no screenshot for step '{id}'");
+            }
+            let dst = base_dir.join(format!("{id}.png"));
+            let plan = if !dst.is_file() {
+                Plan {
+                    step: id.clone(),
+                    action: "new",
+                    diff_pct: None,
+                }
+            } else {
+                let a = crate::compare::screenshots::decode_png(&dst)
+                    .with_context(|| format!("decode {}", dst.display()))?;
+                let b = crate::compare::screenshots::decode_png(&src)
+                    .with_context(|| format!("decode {}", src.display()))?;
+                if a.dimensions() != b.dimensions() {
+                    Plan {
+                        step: id.clone(),
+                        action: "update",
+                        diff_pct: Some(100.0),
+                    }
+                } else {
+                    let (frac, _) = crate::compare::screenshots::pixel_diff(&a, &b);
+                    if frac == 0.0 {
+                        Plan {
+                            step: id.clone(),
+                            action: "identical",
+                            diff_pct: None,
+                        }
+                    } else {
+                        Plan {
+                            step: id.clone(),
+                            action: "update",
+                            diff_pct: Some((frac * 100.0 * 100.0).round() / 100.0),
+                        }
+                    }
+                }
+            };
+            plans.push(plan);
+        }
+        if json {
+            println!("{}", serde_json::to_string_pretty(&plans)?);
+        } else {
+            for p in &plans {
+                match p.diff_pct {
+                    Some(d) => println!("  {:<9} {} ({}% differs)", p.action, p.step, d),
+                    None => println!("  {:<9} {}", p.action, p.step),
+                }
+            }
+            println!(
+                "dry-run: {} baseline(s) would change under {} from run {rid}",
+                plans.iter().filter(|p| p.action != "identical").count(),
+                base_dir.display()
+            );
+        }
+        return Ok(0);
+    }
+
     fs::create_dir_all(&base_dir)?;
     let mut minted: Vec<String> = Vec::new();
     for id in &step_ids {
@@ -149,6 +222,57 @@ mod tests {
         let base = sroot(root.path(), sid).join("baselines");
         assert_eq!(fs::read(base.join("a.png")).unwrap(), b"pngA");
         assert_eq!(fs::read(base.join("b.png")).unwrap(), b"pngB");
+    }
+
+    #[test]
+    fn dry_run_plans_new_identical_and_update() {
+        let _g = crate::test_util::lock_env();
+        let root = tempfile::tempdir().unwrap();
+        let sid = "s-shot-dry";
+        let run_dir = sroot(root.path(), sid)
+            .join("replays")
+            .join("r1")
+            .join("screenshots");
+        fs::create_dir_all(&run_dir).unwrap();
+        let baselines = sroot(root.path(), sid).join("baselines");
+        fs::create_dir_all(&baselines).unwrap();
+
+        let white = || {
+            let mut img = image::RgbaImage::new(4, 4);
+            for p in img.pixels_mut() {
+                *p = image::Rgba([255, 255, 255, 255]);
+            }
+            img
+        };
+        // a: baseline identical to run shot
+        white().save(run_dir.join("a.png")).unwrap();
+        white().save(baselines.join("a.png")).unwrap();
+        // b: run shot differs from baseline everywhere
+        white().save(run_dir.join("b.png")).unwrap();
+        let mut dark = image::RgbaImage::new(4, 4);
+        for p in dark.pixels_mut() {
+            *p = image::Rgba([0, 0, 0, 255]);
+        }
+        dark.save(baselines.join("b.png")).unwrap();
+        // c: no baseline yet
+        white().save(run_dir.join("c.png")).unwrap();
+
+        fs::write(
+            sroot(root.path(), sid).join("replays").join("latest.txt"),
+            "r1",
+        )
+        .unwrap();
+
+        let cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(root.path()).unwrap();
+        let rc = run(&[sid.to_string(), "--dry-run".to_string()]).unwrap();
+        std::env::set_current_dir(cwd).unwrap();
+        assert_eq!(rc, 0);
+        // dry-run wrote nothing: c.png must still be absent from baselines
+        assert!(!baselines.join("c.png").exists());
+        // b.png must still be the old dark baseline
+        let b = crate::compare::screenshots::decode_png(&baselines.join("b.png")).unwrap();
+        assert_eq!(*b.get_pixel(0, 0), image::Rgba([0, 0, 0, 255]));
     }
 
     #[test]
