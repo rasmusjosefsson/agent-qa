@@ -36,6 +36,7 @@ mod i18n;
 mod info;
 mod init;
 mod io;
+mod junit;
 mod list;
 mod mock;
 mod netlog;
