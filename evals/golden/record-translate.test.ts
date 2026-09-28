@@ -50,12 +50,11 @@ const NOT_RECORDABLE: Record<string, string> = {
   loop: "structural — scenarios iterate via the loop step, not a recorded action",
   group: "structural — groupings are authored, not recorded",
   useTemplate: "structural — template application is authored",
-  drag: "recorded natively by the workbench live pane (endpoint pick + emit), not via agent-browser actions",
   mock: "authored — stubbing decisions belong in the scenario, not the recording",
   unmock: "authored — removes authored stubs; never emitted by capture",
-  frame: "authored — frame context is a scenario decision; capture records flat actions",
   state: "authored — seeds cookies/storage before navigation; never emitted by capture",
   emulate: "authored — emulation config is a scenario decision, not a recorded action",
+  frame: "authored — frame context is a scenario decision; capture records flat actions",
 };
 
 const action = (method: string, args: unknown[] = [], intent = "t") =>
@@ -100,6 +99,7 @@ describe("toRecordDraft — emitted verbs are shipped", () => {
     ["action", { method: "callGqlApi", args: ["/gql", "{ q }", {}, "resp"] }],
     ["action", { method: "reloadPage", args: [] }],
     ["action", { method: "tabCommand", args: ["new https://example.com"] }],
+    ["action", { method: "dragBySelector", args: ["#a", "#b"] }],
     ["wait", { condition: { kind: "duration", ms: 100 } }],
     ["wait", { condition: { kind: "selector", selector: "#x" } }],
     ["wait", { condition: { kind: "selectorAbsent", selector: "#x" } }],
@@ -133,6 +133,12 @@ describe("toRecordDraft — emitted verbs are shipped", () => {
     ["assert", { kind: "networkFired", args: [{ urlMatches: "/api/" }, false] }],
     ["assert", { kind: "networkStatus", args: [{ method: "GET" }, "equals", "200"] }],
     ["assert", { kind: "networkJson", args: [{ operationName: "GetUser" }, "$.data.id", "exists"] }],
+    ["assert", { kind: "consoleMessage", args: [{ type: "error" }] }],
+    ["assert", { kind: "consoleMessage", args: [{ type: "error", text: "undefined" }, "exists"] }],
+    ["assert", { kind: "pageError", args: [] }],
+    ["assert", { kind: "pageError", args: [{ text: "Cannot read" }, "exists"] }],
+    ["assert", { kind: "a11yViolations", args: [] }],
+    ["assert", { kind: "a11yViolations", args: [{ impact: "serious" }, "countEquals", 0] }],
   ];
 
   const verbs = shippedVerbs();
@@ -189,6 +195,7 @@ describe("toRecordDraft — every shipped verb is reachable or triaged", () => {
     ],
     ["dblclick", ["action", { method: "dblclickBySelector", args: ["#d"] }]],
     ["tab", ["action", { method: "tabCommand", args: ["list"] }]],
+    ["drag", ["action", { method: "dragBySelector", args: ["#a", "#b"] }]],
     ["viewport", ["action", { method: "setViewport", args: [375, 812] }]],
     [
       "fileChooser",
