@@ -53,6 +53,7 @@ mod record_setup;
 mod record_step;
 mod recorder_contract;
 mod recorder_state;
+mod run_auth;
 mod run_report;
 mod run_step;
 mod runner;
