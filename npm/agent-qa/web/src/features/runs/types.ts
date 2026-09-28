@@ -63,6 +63,9 @@ export interface ScenarioSummary {
     ratio: number
     shotRatio: number
   } | null
+  // scenario.json's tags[] — `replay --tags` selects on these.
+  tags: string[]
+
   latestRunId: string | null
   activeRunId: string | null
   latestRun: RunSummary | null
