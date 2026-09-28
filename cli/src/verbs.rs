@@ -464,7 +464,6 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                 other => bail!("step '{id}' swipe: unexpected result {other:?}"),
             }
         }
-||||||| fff0594
         Verb::Frame => {
             let p = params.ok_or_else(|| anyhow!("step '{id}' frame: params required"))?;
             let sel = if p.get("main").and_then(|v| v.as_bool()) == Some(true) {
