@@ -108,7 +108,7 @@ fn rewrite_step_refs(step: &mut Step, renames: &HashMap<String, String>) {
             }
             // {"shot": "<stepId>"} references a step id like any other
             // step ref — renumbering must rewire it or the claim dangles.
-            if let crate::scenario::ClaimSubject::Shot { shot } = &mut claim.subject {
+            if let crate::scenario::ClaimSubject::Shot { shot, .. } = &mut claim.subject {
                 if let Some(new) = renames.get(shot.as_str()) {
                     *shot = new.clone();
                 }
