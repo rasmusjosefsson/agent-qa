@@ -52,7 +52,10 @@
       "kind": "check",
       "claim": {
         "subject": {
-          "shot": "s3"
+          "shot": "s3",
+          "mask": [
+            "[data-qa-volatile]"
+          ]
         },
         "predicate": "matches",
         "tolerance": {
