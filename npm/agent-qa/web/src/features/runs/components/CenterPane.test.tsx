@@ -63,4 +63,33 @@ describe('CenterPane scenario controls', () => {
     expect(html).toContain('No replay progress for over a minute')
     expect(html).toContain('host watchdog')
   })
+
+  it('shows a video chip when the run was recorded (--record-video)', () => {
+    const base = {
+      detail: {
+        sid: 's-vid',
+        runId: '2026-08-13T15-00-00-000Z__beefcafe',
+        audit: { summary: 'PASS 2/2', exitCode: 0 },
+        status: { state: 'done', ok: true },
+        events: [],
+        video: true,
+      },
+      scenarioDef: null,
+      sel: { sid: 's-vid', runId: '2026-08-13T15-00-00-000Z__beefcafe', stepIdx: null },
+      runDefSteps: { sid: 's-vid', steps: [] },
+      runsBySid: {},
+    } as unknown as RunsApi
+
+    const html = renderToStaticMarkup(
+      <CenterPane runs={base} onReplay={() => {}} runConfig={runConfig} />
+    )
+    expect(html).toContain('>video</button>')
+    expect(html).not.toContain('<video')
+
+    const noVid = { ...base, detail: { ...base.detail, video: false } } as RunsApi
+    const html2 = renderToStaticMarkup(
+      <CenterPane runs={noVid} onReplay={() => {}} runConfig={runConfig} />
+    )
+    expect(html2).not.toContain('>video</button>')
+  })
 })

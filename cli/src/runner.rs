@@ -115,6 +115,13 @@ pub struct RunOptions {
     /// performs). Runs even when shot claims FAILED: intentional UI
     /// changes are exactly the case where a failing diff needs re-minting.
     pub update_baselines: bool,
+    /// `--keep-going` — dispatch every step even after a failure instead
+    /// of stopping at the first one (the default). Later steps often
+    /// cascade-fail from the broken page state, but a repair sweep wants
+    /// the complete failure list in one run's events/audit rather than
+    /// re-running once per step.
+    pub keep_going: bool,
+
     /// `--record-video [path]` — record the browser to video for the
     /// whole run (agent-browser `record start/stop`; needs ffmpeg on the
     /// runner). Bare flag writes `<run>/run.webm`; `=<path>` writes that
@@ -1024,7 +1031,10 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                         },
                     );
                     first_failure.get_or_insert_with(|| format!("step {id}: {e}"));
-                    break;
+                    if !opts.keep_going {
+                        break;
+                    }
+                    eprintln!("[v2-replay] --keep-going: continuing after step {id}'s failure");
                 }
             }
         }
@@ -2620,6 +2630,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut from_step: Option<String> = None;
     let mut until_step: Option<String> = None;
     let mut update_baselines = false;
+    let mut keep_going = false;
     let mut record_video: Option<PathBuf> = None;
     let mut junit: Option<PathBuf> = None;
     let mut base_url: Option<String> = None;
@@ -2667,6 +2678,8 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             "--until" => until_step = it.next().cloned().or_else(|| bail_missing("--until")),
             s if s.starts_with("--until=") => until_step = Some(s["--until=".len()..].to_string()),
             "--update-baselines" => update_baselines = true,
+            "--keep-going" => keep_going = true,
+
             "--record-video" => record_video = Some(PathBuf::new()),
             s if s.starts_with("--record-video=") => {
                 record_video = Some(PathBuf::from(&s["--record-video=".len()..]))
@@ -2740,6 +2753,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         from_step,
         until_step,
         update_baselines,
+        keep_going,
         record_video,
         junit,
         base_url: normalize_base_url(base_url)?,
@@ -2828,7 +2842,7 @@ Usage:
                   [--tag <label>] [--output-audit <path>]
                   [--from <stepId>] [--until <stepId>]
                   [--update-baselines] [--freeze <iso>] [--base-url <origin>]
-                  [--runs <N>] [--junit [path]] [--record-video [path]]
+                  [--runs <N>] [--keep-going] [--junit [path]] [--record-video [path]]
 
 Loads + validates the scenario, mints a run id, prepares
 <sid>/replays/<runId>/, writes audit.json, runs env.open, iterates
@@ -2942,6 +2956,12 @@ replays/latest.txt.
                          <origin> (scheme://host[:port] only). Claim
                          patterns are left untouched — use inputs for
                          scenario-authored variability.
+--keep-going             Dispatch every step even after a failure
+                         (default: stop at the first). Later steps often
+                         cascade-fail from the broken page state, but a
+                         repair sweep wants the complete failure list in
+                         one run's audit rather than one re-run per step.
+
 --junit [path]           Write the run's terminal step outcomes as JUnit
                          XML — one <testcase> per step. Bare flag writes
                          <run>/junit.xml; --junit=<path> writes that
@@ -3092,6 +3112,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -3176,6 +3197,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -3241,6 +3263,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -3287,6 +3310,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -3358,6 +3382,7 @@ esac\nexit 0\n",
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -3617,6 +3642,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -3686,6 +3712,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -3719,6 +3746,16 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         assert_eq!(opts.input_overrides.get("name").unwrap(), "alice");
         assert_eq!(opts.input_overrides.get("count").unwrap(), "3");
         assert_eq!(opts.input_overrides.get("flag").unwrap(), "true");
+    }
+
+    #[test]
+    fn parse_args_keep_going_flag() {
+        assert!(!parse_args(&["./j.json".into()]).unwrap().keep_going);
+        assert!(
+            parse_args(&["./j.json".into(), "--keep-going".into()])
+                .unwrap()
+                .keep_going
+        );
     }
 
     #[test]
@@ -4461,6 +4498,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -4554,6 +4592,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -4779,6 +4818,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -4874,6 +4914,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -4948,6 +4989,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -5000,6 +5042,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -5189,6 +5232,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
             record_video: None,
             junit: None,
             base_url: None,

@@ -96,6 +96,7 @@ function makeFixture() {
 
   // A real PNG byte payload (1x1) and a snapshot text file.
   fs.writeFileSync(path.join(runDir, 'screenshots', 'navHome.png'), Buffer.from('PNGDATA-navHome'));
+  fs.writeFileSync(path.join(runDir, 'run.webm'), Buffer.from('WEBMDATA'));
   fs.writeFileSync(path.join(runDir, 'snapshots', 'navHome.txt'), 'heading "Example Domain"\n');
 
   // A secret OUTSIDE the run dir that a path-escape attempt would target.
@@ -485,6 +486,32 @@ test('report viewer endpoints', async (t) => {
     const res = await fetch(`${base}/api/scenarios/${fx.sid}/runs/${fx.runId}`);
     const body = await res.json();
     assert.deepEqual(body.shotDiffs, ['navHome']);
+  });
+
+  await t.test('GET /runs/:runId reports video:true when run.webm exists', async () => {
+    const res = await fetch(`${base}/api/scenarios/${fx.sid}/runs/${fx.runId}`);
+    const body = await res.json();
+    assert.equal(body.video, true);
+  });
+
+  await t.test('GET run file streams run.webm as video/webm', async () => {
+    const res = await fetch(
+      `${base}/api/scenarios/${fx.sid}/runs/${fx.runId}/file/run.webm`,
+    );
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('content-type'), 'video/webm');
+    assert.equal(await res.text(), 'WEBMDATA');
+  });
+
+  await t.test('GET run file rejects names outside the allowlist + traversal', async () => {
+    for (const u of [
+      `${base}/api/scenarios/${fx.sid}/runs/${fx.runId}/file/events.jsonl`,
+      `${base}/api/scenarios/${fx.sid}/runs/${fx.runId}/file/audit.json`,
+      `${base}/api/scenarios/${fx.sid}/runs/${fx.runId}/file/..%2fscenario.json`,
+    ]) {
+      const res = await fetch(u);
+      assert.ok(res.status === 400 || res.status === 404, `expected 4xx for ${u}, got ${res.status}`);
+    }
   });
 
   await t.test('GET artifact streams a shot diff map as png', async () => {

@@ -4,7 +4,7 @@ import { BrowserModeToggle } from '@/components/browser-mode-toggle'
 import { TrendChip } from './TrendChip'
 import { cn } from '@/lib/utils'
 import { CameraIcon, GitCompareIcon, Loader2Icon, PlayIcon, PlusIcon, WrenchIcon } from 'lucide-react'
-import { acceptAllShots } from '@/lib/runs-api'
+import { acceptAllShots, runFileUrl } from '@/lib/runs-api'
 import { CompareView } from './CompareView'
 import { InsertCheckDialog } from './InsertCheckDialog' 
 import {
@@ -82,6 +82,9 @@ export function CenterPane({
   // Baseline runId for the compare picker ("" → the run before the selected
   // one, computed below).
   const [baseline, setBaseline] = useState('')
+  // run.webm player — toggled by the video chip in the run header; the file
+  // exists only for runs replayed with --record-video (detail.video).
+  const [showVideo, setShowVideo] = useState(false)
 
   // Mode A — a recorded scenario is previewed (no run selected).
   if (scenarioDef && !detail) {
@@ -269,6 +272,17 @@ export function CenterPane({
               {cleanSummary(summary)}
             </span>
             {live && <span className="text-xs text-amber-400">● live</span>}
+            {detail.video && (
+              <button
+                type="button"
+                onClick={() => setShowVideo((v) => !v)}
+                title="This run was recorded with --record-video — toggle the run.webm player"
+                className="flex items-center gap-1 rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-sky-400 hover:bg-sky-500/25"
+              >
+                <PlayIcon className="size-3" />
+                video
+              </button>
+            )}
             {healedCount > 0 && (
               <span
                 className="flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-400"
@@ -375,6 +389,14 @@ export function CenterPane({
             <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-xs text-destructive">
               {runs.compareErr}
             </div>
+          )}
+          {detail.video && showVideo && sel.sid && (
+            <video
+              controls
+              preload="metadata"
+              src={runFileUrl(sel.sid, detail.runId, 'run.webm')}
+              className="mt-2 w-full rounded-md border border-border bg-black"
+            />
           )}
         </div>
         {runs.compare ? (

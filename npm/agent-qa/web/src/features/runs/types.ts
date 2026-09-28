@@ -135,11 +135,13 @@ export interface RunDetail {
   // StepIds whose {"shot"} claim missed the baseline this run — each has a
   // shots-diff/<stepId>.diff.png delta map servable via artifactUrl.
   shotDiffs?: string[]
+  // run.webm exists in the run dir (replay ran with --record-video) —
+  // servable via runFileUrl(sid, runId, 'run.webm').
+  video?: boolean
   // The run's captured request log (network.json): every fetch/XHR/etc the
   // browser made during replay. Absent on runs that predate the artifact.
   network?: { requestCount?: number; requests?: RunNetworkRequest[] } | null
 }
-
 export interface RunNetworkRequest {
   requestId: string
   url: string

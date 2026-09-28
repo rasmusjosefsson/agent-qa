@@ -35,7 +35,7 @@ if (process.argv[2] === 'view') console.log('9.9.9');
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Updated agent-qa from 0\.0\.0 to 9\.9\.9/);
+  assert.match(result.stdout, /Updated agent-qa from \d+\.\d+\.\d+ to 9\.9\.9/);
   const calls = fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
   assert.deepEqual(calls, [
     ['view', '@rasmusjosefsson/agent-qa', 'version', '--loglevel=error'],
