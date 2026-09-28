@@ -93,6 +93,42 @@ cd evals && bun run run.ts --suite qaplayground --page forms --list
 bun .agents/skills/qaplayground-eval-loop/scripts/summarize-reports.ts evals/results
 ```
 
+## New-site sweeps (edge-pages-lib pattern)
+
+For coverage against a site that isn't the QA Playground (the-internet,
+saucedemo, a customer app), don't hand-write scenario JSON — use the
+record-then-replay helper in `evals/golden/edge-pages-lib.ts`:
+
+```ts
+import { runEdgeGolden, edgeUrl } from "./edge-pages-lib";
+
+await runEdgeGolden(
+  "tc99", "intent text", "https://example.com/path", "#ready",
+  async (p) => {
+    await p.openPage();
+    await p.clickSelector("#x", "click the thing");
+    await p.assertElementText("#out", "done", "result shows");
+  },
+  // opts: { keepDialogs: true, label: "mysite" }
+);
+```
+
+The runner opens a real session, executes each helper as a live browser
+action *and* records it as a step (`run` + `record`), then runs
+`verify` → `flush` → `replay` in a second session and writes
+`golden-report.json` under `evals/results/<runId>/`. Exit code 0 = pass.
+
+The helpers map onto the record-translate vocab — extend
+`evals/golden/record-translate.ts` + add a probe to
+`record-translate.test.ts` before adding a new helper, or the parity gate
+fails. Helpers that drive JS (`eval`) record the nearest user action
+(`clickBySelector`, `fillBySelector`, `dragBySelector`, …), never the eval.
+
+Site quirks live in the case file, not the lib: credentialed URLs via
+`edgeUrl("https://user:pass@host/…")`, dialog auto-accept via
+`keepDialogs`, download asserts via `assertFile*`. New script entries go
+into `evals/package.json` as `"golden:<site>:<tc>"`.
+
 ## Done Criteria
 
 - Target suite reports 100% pass.
