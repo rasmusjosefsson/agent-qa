@@ -85,15 +85,21 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
             }
             Ok(None)
         }
+        // reload/back/forward navigate the TOP document — an active frame
+        // selection is invalidated and must reset first so the eval lands
+        // in the right realm.
         Verb::Reload => {
+            browser::reset_frame_ctx(ctx.session);
             browser::eval_expression(ctx.session, "(() => { location.reload(); })()")?;
             Ok(None)
         }
         Verb::Back => {
+            browser::reset_frame_ctx(ctx.session);
             browser::eval_expression(ctx.session, "(() => { history.back(); })()")?;
             Ok(None)
         }
         Verb::Forward => {
+            browser::reset_frame_ctx(ctx.session);
             browser::eval_expression(ctx.session, "(() => { history.forward(); })()")?;
             Ok(None)
         }
@@ -360,6 +366,20 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
         Verb::State => {
             let p = params.ok_or_else(|| anyhow!("step '{id}' state: params required"))?;
             state_apply(ctx.session, p, scope).map_err(|e| anyhow!("step '{id}' state: {e}"))?;
+            Ok(None)
+        }
+        Verb::Frame => {
+            let p = params.ok_or_else(|| anyhow!("step '{id}' frame: params required"))?;
+            let sel = if p.get("main").and_then(|v| v.as_bool()) == Some(true) {
+                None
+            } else {
+                let raw = p.get("selector").and_then(|v| v.as_str()).ok_or_else(|| {
+                    anyhow!("step '{id}' frame: params.selector or params.main required")
+                })?;
+                Some(crate::value::substitute_scenario_vars(raw, scope))
+            };
+            browser::switch_frame(ctx.session, sel.as_deref())
+                .map_err(|e| anyhow!("step '{id}' frame: {e}"))?;
             Ok(None)
         }
         Verb::Group => {
@@ -2548,6 +2568,49 @@ mod tests {
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         clear_fake();
         assert!(err.contains("value"), "got: {err}");
+    }
+
+    #[test]
+    fn frame_enters_iframe_by_selector() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "frame",
+            "params": { "selector": "#editor-frame" }
+        }));
+        let out = run_one(&s);
+        assert!(
+            out.contains("--session sess frame #editor-frame"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn frame_main_returns_to_top_document() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "frame",
+            "params": { "main": true }
+        }));
+        let out = run_one(&s);
+        assert!(out.contains("--session sess frame main"), "got: {out}");
+    }
+
+    #[test]
+    fn frame_requires_selector_or_main() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "frame",
+            "params": {}
+        }));
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake(tmp.path(), &tmp.path().join("ab.log"));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+        };
+        let mut scope = ValueScope::default();
+        let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
+        clear_fake();
+        assert!(err.contains("selector"), "got: {err}");
     }
 
     #[test]
