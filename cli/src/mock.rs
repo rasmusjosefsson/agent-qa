@@ -29,28 +29,50 @@ pub(crate) struct MockRule {
     pub delay_ms: u64,
 }
 
-static MOCKS: Mutex<Option<HashMap<String, Vec<MockRule>>>> = Mutex::new(None);
+#[derive(Debug, Default)]
+struct MockState {
+    rules: Vec<MockRule>,
+    /// `--offline`: requests matching NO rule get a network rejection
+    /// instead of passing through to the real backend.
+    strict: bool,
+}
 
-fn with_mocks<R>(session: &str, f: impl FnOnce(&mut Vec<MockRule>) -> R) -> R {
+static MOCKS: Mutex<Option<HashMap<String, MockState>>> = Mutex::new(None);
+
+fn with_mocks<R>(session: &str, f: impl FnOnce(&mut MockState) -> R) -> R {
     let mut guard = MOCKS.lock().unwrap_or_else(|e| e.into_inner());
     let map = guard.get_or_insert_with(HashMap::new);
     f(map.entry(session.to_string()).or_default())
 }
 
 pub(crate) fn add(session: &str, rule: MockRule) {
-    with_mocks(session, |v| v.push(rule));
+    with_mocks(session, |s| s.rules.push(rule));
 }
 
 /// Remove rules whose url glob equals `url`, or clear all when None.
+/// Clearing also drops strict mode — `unmock` without a url means "mock
+/// phase over", and an orphaned catch-all would keep rejecting.
 pub(crate) fn clear(session: &str, url: Option<&str>) {
-    with_mocks(session, |v| match url {
-        Some(g) => v.retain(|r| r.url != g),
-        None => v.clear(),
+    with_mocks(session, |s| match url {
+        Some(g) => s.rules.retain(|r| r.url != g),
+        None => {
+            s.rules.clear();
+            s.strict = false;
+        }
     });
 }
 
+/// `--offline`: unmatched requests reject instead of reaching the backend.
+pub(crate) fn set_strict(session: &str, strict: bool) {
+    with_mocks(session, |s| s.strict = strict);
+}
+
+fn is_strict(session: &str) -> bool {
+    with_mocks(session, |s| s.strict)
+}
+
 pub(crate) fn rules(session: &str) -> Vec<MockRule> {
-    with_mocks(session, |v| v.clone())
+    with_mocks(session, |s| s.rules.clone())
 }
 
 /// Parse a `do/mock` step's params into a rule.
@@ -83,8 +105,18 @@ pub(crate) fn rule_from_params(params: &BTreeMap<String, Json>) -> Result<MockRu
 /// The page-side stub: wraps `window.fetch` + `XMLHttpRequest` against a
 /// `window.__qaMocks` rules array. Idempotent — re-install only refreshes
 /// the rules array once the wrapper is in place.
-fn install_js(rules: &[MockRule]) -> String {
+fn install_js(rules: &[MockRule], strict: bool) -> String {
     let rules_json = serde_json::to_string(rules).unwrap_or_else(|_| "[]".to_string());
+    let fetch_miss = if strict {
+        "return new Promise((_, rej) => setTimeout(() => rej(new TypeError('Failed to fetch (offline)')), 0));"
+    } else {
+        "return of.call(window, res, init);"
+    };
+    let xhr_miss = if strict {
+        "{ setTimeout(() => { this.dispatchEvent(new Event('error')); this.dispatchEvent(new Event('loadend')); }, 0); return; }"
+    } else {
+        "return S.apply(this, a);"
+    };
     format!(
         r#"(() => {{
   const rules = {rules_json};
@@ -99,14 +131,14 @@ fn install_js(rules: &[MockRule]) -> String {
   window.fetch = (res, init) => {{
     const u = typeof res === 'string' ? res : ((res && res.url) || '');
     const r = match(u);
-    if (!r) return of.call(window, res, init);
+    if (!r) {fetch_miss}
     return new Promise(done => setTimeout(() => done(respond(r)), r.delayMs || r.delay_ms || 0));
   }};
   const O = XMLHttpRequest.prototype.open, S = XMLHttpRequest.prototype.send;
   XMLHttpRequest.prototype.open = function(m, u, ...rest) {{ this.__qaUrl = u; return O.call(this, m, u, ...rest); }};
   XMLHttpRequest.prototype.send = function(...a) {{
     const r = this.__qaUrl && match(this.__qaUrl);
-    if (!r) return S.apply(this, a);
+    if (!r) {xhr_miss}
     const self = this;
     setTimeout(() => {{
       Object.defineProperty(self, 'status', {{ value: r.status }});
@@ -129,10 +161,10 @@ fn install_js(rules: &[MockRule]) -> String {
 /// verb.
 pub(crate) fn reapply_if_any(session: &str) -> Result<()> {
     let rs = rules(session);
-    if rs.is_empty() {
+    if rs.is_empty() && !is_strict(session) {
         return Ok(());
     }
-    crate::browser::eval_expression(session, &install_js(&rs))?;
+    crate::browser::eval_expression(session, &install_js(&rs, is_strict(session)))?;
     Ok(())
 }
 
@@ -209,7 +241,7 @@ pub(crate) fn seed_from_har(session: &str, scenario_dir: &Path, run_id: &str) ->
 /// eval-install path can't reach.
 pub(crate) fn write_init_script(session: &str, dir: &Path) -> Result<std::path::PathBuf> {
     let path = dir.join("mock-init.js");
-    let body = install_js(&rules(session));
+    let body = install_js(&rules(session), is_strict(session));
     fs::write(&path, body).with_context(|| format!("write {}", path.display()))?;
     Ok(path)
 }
@@ -218,7 +250,7 @@ pub(crate) fn write_init_script(session: &str, dir: &Path) -> Result<std::path::
 pub(crate) fn apply_mock(session: &str, params: &BTreeMap<String, Json>) -> Result<()> {
     let rule = rule_from_params(params)?;
     add(session, rule.clone());
-    crate::browser::eval_expression(session, &install_js(&rules(session)))?;
+    crate::browser::eval_expression(session, &install_js(&rules(session), is_strict(session)))?;
     eprintln!(
         "[v2-replay] mock {} → {} ({} rule(s) active)",
         rule.url,
@@ -234,13 +266,7 @@ pub(crate) fn apply_unmock(session: &str, params: Option<&BTreeMap<String, Json>
     let url = params.and_then(|p| p.get("url")).and_then(|v| v.as_str());
     clear(session, url);
     let rs = rules(session);
-    if !rs.is_empty() {
-        crate::browser::eval_expression(session, &install_js(&rs))?;
-    } else {
-        // Leave the inert wrapper installed with an empty rule set —
-        // uninstalling mid-page risks racing in-flight code paths.
-        crate::browser::eval_expression(session, &install_js(&[]))?;
-    }
+    crate::browser::eval_expression(session, &install_js(&rs, is_strict(session)))?;
     Ok(())
 }
 
@@ -307,17 +333,29 @@ mod tests {
 
     #[test]
     fn install_js_embeds_rules_and_wraps_both_paths() {
-        let js = install_js(&[MockRule {
-            url: "*/api/x*".into(),
-            status: 503,
-            body: "{\"e\":1}".into(),
-            delay_ms: 10,
-        }]);
+        let js = install_js(
+            &[MockRule {
+                url: "*/api/x*".into(),
+                status: 503,
+                body: "{\"e\":1}".into(),
+                delay_ms: 10,
+            }],
+            false,
+        );
         assert!(js.contains("*/api/x*"));
         assert!(js.contains("503"));
         assert!(js.contains("window.fetch ="));
         assert!(js.contains("XMLHttpRequest.prototype.send"));
         assert!(js.contains("__qaMocksInstalled"));
+    }
+
+    #[test]
+    fn strict_mode_rejects_unmatched_requests() {
+        let js = install_js(&[], true);
+        assert!(js.contains("Failed to fetch (offline)"));
+        // non-strict keeps the real-backend passthrough
+        let js = install_js(&[], false);
+        assert!(js.contains("return of.call(window, res, init)"));
     }
 
     #[test]
