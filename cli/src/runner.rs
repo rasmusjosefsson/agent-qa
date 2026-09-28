@@ -120,6 +120,15 @@ pub struct RunOptions {
     /// One <testcase> per step so any CI's test-result ingestion renders
     /// a replay like a unit-test run.
     pub junit: Option<PathBuf>,
+    /// After a passing run, apply this run's locator-correction heal
+    /// patches back into scenario.json (heal-promote --apply for just this
+    /// run). The content-hash guard still applies: a patch recorded
+    /// against an older scenario is refused with a warning, never written.
+    pub auto_promote: bool,
+    /// `--freeze <iso>` — pin `Date.now()`/`new Date()` to the instant and
+    /// replace `Math.random` with a seeded LCG via a page init script, so
+    /// rendered timestamps and random ordering can't flake a golden diff.
+    pub freeze: Option<String>,
     /// `--har` — record a HAR file for the run via `agent-browser network
     /// har start|stop` and write `<run>/network.har`. Unlike network.json
     /// (urls + statuses) a HAR carries response bodies — the artifact you
@@ -393,6 +402,16 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         }
     }
 
+    // The browser's request capture is per-session: a replayed session
+    // still holds the previous run's traffic. Clear it so this run's
+    // network.json (and {"network"} claims) sees only its own requests.
+    // Best-effort — a session that doesn't exist yet just warns.
+    if !opts.dry_run {
+        if let Err(e) = crate::browser::network_clear(&opts.session_name) {
+            eprintln!("[v2-replay] network log clear skipped: {e}");
+        }
+    }
+
     // 1. Load + validate.
     let (scenario_file, scenario_dir) = resolve_source(&opts.source)?;
     let bytes =
@@ -457,6 +476,23 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     } else {
         Some(audit_params)
     };
+
+    // Determinism layer: `--freeze <iso>` pins the clock + RNG via a page
+    // init script (fresh sessions get it on every navigation; the live
+    // eval covers a warm session's current document).
+    if let Some(at) = &opts.freeze {
+        if opts.dry_run {
+            eprintln!("[v2-replay] --freeze ignored under --dry-run");
+        } else {
+            let js_path = run.run_root.join("freeze.js");
+            fs::write(&js_path, freeze_js(at))
+                .with_context(|| format!("write {}", js_path.display()))?;
+            std::env::set_var("AGENT_BROWSER_INIT_SCRIPTS", &js_path);
+            let src = fs::read_to_string(&js_path)?;
+            let _ = browser::eval_expression(&opts.session_name, &src);
+            eprintln!("[v2-replay] freeze {at} → {}", js_path.display());
+        }
+    }
 
     // 5. env.open setup. Skipped under --dry-run.
     //
@@ -704,6 +740,27 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             let result = match &patched_step {
                 Step::Do { save_as, .. } => {
                     let mut outcome = dispatch_do(&patched_step, &do_ctx, &mut scope);
+                    // Per-step retry: params.retry re-dispatches the step
+                    // on failure — cheap flake absorption for one known-
+                    // flaky interaction without --retry's whole-run cost.
+                    // params.retryMs sets the inter-attempt delay
+                    // (default 300ms). Caveat: verbs whose side effect
+                    // isn't idempotent (e.g. `type` appends) can apply it
+                    // per attempt when the first attempt half-dispatched.
+                    if let Step::Do {
+                        params: Some(p), ..
+                    } = &patched_step
+                    {
+                        let retries = p.get("retry").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                        let delay = p.get("retryMs").and_then(|v| v.as_u64()).unwrap_or(300);
+                        let mut attempt = 0u32;
+                        while outcome.is_err() && attempt < retries {
+                            attempt += 1;
+                            eprintln!("[v2-replay] step {id}: retry {attempt}/{retries}");
+                            std::thread::sleep(std::time::Duration::from_millis(delay));
+                            outcome = dispatch_do(&patched_step, &do_ctx, &mut scope);
+                        }
+                    }
                     // Transient-popup recovery: an option/menuitem click that
                     // failed usually means the popup was dismissed between steps
                     // (inter-step keyframe capture, a re-render). Re-fire the
@@ -952,6 +1009,14 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             eprintln!("[v2-replay] status.json finalise failed: {e}");
         }
 
+        // Persist the session's captured network requests as
+        // <run>/network.json — the traffic list {"network"} claims queried
+        // mid-run, kept for post-hoc review/diff. Best-effort, and only
+        // when the run actually executed (a dry-run session has no traffic).
+        if !opts.dry_run {
+            crate::netlog::write_network_log_warn(&run, &opts.session_name);
+        }
+
         // Flush the HAR recording before env.close (teardown traffic —
         // profile saves, cleanup navigations — isn't part of the scenario's
         // network evidence).
@@ -1013,7 +1078,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         audit.heal_overrides_applied = Some(applied_overrides);
     }
     if !healed_steps.is_empty() {
-        audit.auto_healed = Some(healed_steps);
+        audit.auto_healed = Some(healed_steps.clone());
     }
     if let Some(f) = &opts.from_step {
         audit.window_from = Some(f.clone());
@@ -1022,6 +1087,37 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         audit.window_until = Some(u.clone());
     }
     write_run_audit(&run, &audit)?;
+
+    // 9.4. Persist the session console log alongside audit.json — the
+    // `{"console"}` claims evaluated live during the run; landing the
+    // captured messages in the run dir keeps the evidence after the
+    // session closes (mirrors how the request log lands via --har).
+    if !opts.dry_run {
+        match browser::console_messages(&opts.session_name) {
+            Ok(msgs) => {
+                let body = serde_json::json!({
+                    "session": opts.session_name,
+                    "count": msgs.len(),
+                    "messages": msgs.iter().map(|m| serde_json::json!({
+                        "type": m.level,
+                        "text": m.text,
+                    })).collect::<Vec<_>>(),
+                });
+                match serde_json::to_vec_pretty(&body) {
+                    Ok(b) => {
+                        if let Err(e) = crate::sidecar::atomic_write_file(
+                            &run.run_root.join("console.json"),
+                            &b,
+                        ) {
+                            eprintln!("[v2-replay] console.json write failed: {e}");
+                        }
+                    }
+                    Err(e) => eprintln!("[v2-replay] console.json serialize failed: {e}"),
+                }
+            }
+            Err(e) => eprintln!("[v2-replay] console.json skipped: {e}"),
+        }
+    }
 
     // 9.5. Optional --output-audit duplicate (atomic write).
     if let Some(out) = &opts.output_audit {
@@ -1035,6 +1131,23 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
 
     // 9. Latest pointer.
     update_latest_pointer(&scenario_dir, &run.run_id)?;
+
+    // 9.6. `--auto-promote` — self-healing write-back. Only on a passing
+    // run: locator-correction patches this run produced are applied to
+    // scenario.json via the same hash-guarded plan `heal-promote --apply`
+    // uses. A refusal (the file changed since the run started) is a
+    // warning, never a run failure. Skipped for --dry-run (no patches can
+    // exist) and runs that wrote no corrections.
+    if opts.auto_promote && !opts.dry_run && summary.ok && !healed_steps.is_empty() {
+        match crate::heal_promote::promote_run(&scenario_file, &run.run_id) {
+            Ok(0) => {}
+            Ok(n) => eprintln!(
+                "[v2-replay] auto-promoted {n} locator patch(es) into {}",
+                scenario_file.display()
+            ),
+            Err(err) => eprintln!("[v2-replay] --auto-promote skipped: {err}"),
+        }
+    }
 
     // 10. `--update-baselines` — mint from this run's capture set. Runs
     // before the failure bail on purpose: a shot claim that correctly
@@ -1672,6 +1785,12 @@ fn stabilize_visual(session: &str, cap_ms: u64) {
             session,
             "(() => { const imgs = Array.from(document.images || []).filter(i => !i.complete).length; return JSON.stringify({fonts: document.fonts ? document.fonts.status : 'loaded', imgs, ready: document.readyState}); })()",
         );
+        // In-flight fetches don't show up in readyState/images — a lazy data
+        // load can still repaint after the screenshot. Require the session's
+        // request log to be quiet too.
+        let pending = browser::network_requests(session)
+            .map(|rs| rs.iter().filter(|r| r.status.is_none()).count())
+            .unwrap_or(0);
         match status {
             Ok(raw) => {
                 // eval stdout may wrap the JSON in a quoted string — peel once.
@@ -1684,7 +1803,7 @@ fn stabilize_visual(session: &str, cap_ms: u64) {
                             && v.get("ready").and_then(|r| r.as_str()) == Some("complete")
                     })
                     .unwrap_or(false);
-                if settled {
+                if settled && pending == 0 {
                     return;
                 }
             }
@@ -1695,6 +1814,34 @@ fn stabilize_visual(session: &str, cap_ms: u64) {
         }
         thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// The `--freeze` init script: pin `Date.now`/`new Date()` to `at` and
+/// replace `Math.random` with a seeded LCG (mulberry32-style) — same
+/// instant, same random stream, every run.
+fn freeze_js(at: &str) -> String {
+    format!(
+        r#"(() => {{
+  const T = Date.parse({});
+  const R = Date;
+  class F extends R {{
+    constructor(...a) {{ super(...(a.length ? a : [T])); }}
+    static now() {{ return T; }}
+    static parse(s) {{ return R.parse(s); }}
+    static UTC(...a) {{ return R.UTC(...a); }}
+  }}
+  window.Date = F;
+  let s = 0x9E3779B9;
+  Math.random = () => {{
+    s = (s + 0x6D2B79F5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }};
+}})()"#,
+        serde_json::to_string(at).unwrap_or_else(|_| "\"2026-01-01\"".into())
+    )
 }
 
 /// Whether the scenario contains a `check` claim on the `shot` subject
@@ -2184,6 +2331,8 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut until_step: Option<String> = None;
     let mut update_baselines = false;
     let mut junit: Option<PathBuf> = None;
+    let mut auto_promote = false;
+    let mut freeze: Option<String> = None;
     let mut har = false;
     let mut mock_from: Option<String> = None;
     let mut input_overrides: BTreeMap<String, String> = BTreeMap::new();
@@ -2227,6 +2376,9 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             "--update-baselines" => update_baselines = true,
             "--junit" => junit = Some(PathBuf::new()),
             s if s.starts_with("--junit=") => junit = Some(PathBuf::from(&s["--junit=".len()..])),
+            "--auto-promote" => auto_promote = true,
+            "--freeze" => freeze = it.next().cloned().or_else(|| bail_missing("--freeze")),
+            s if s.starts_with("--freeze=") => freeze = Some(s["--freeze=".len()..].to_string()),
             "--har" => har = true,
             "--mock-from" => mock_from = it.next().cloned().or_else(|| bail_missing("--mock-from")),
             s if s.starts_with("--mock-from=") => {
@@ -2287,6 +2439,8 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         until_step,
         update_baselines,
         junit,
+        auto_promote,
+        freeze,
         har,
         mock_from,
     })
@@ -2354,7 +2508,8 @@ Usage:
                   [--no-sidecars] [--quiet | -q] [--plain]
                   [--tag <label>] [--output-audit <path>]
                   [--from <stepId>] [--until <stepId>]
-                  [--update-baselines] [--runs <N>] [--junit [path]]
+                  [--update-baselines] [--freeze <iso>] [--runs <N>]
+                  [--junit [path]]
 
 Loads + validates the scenario, mints a run id, prepares
 <sid>/replays/<runId>/, writes audit.json, runs env.open, iterates
@@ -2433,6 +2588,17 @@ replays/latest.txt.
                          replay. Rules install via a page init script
                          on fresh sessions (covers page-load fetches),
                          else re-apply after every navigation
+--freeze <iso>           Pin Date.now()/new Date() to <iso> and replace
+                         Math.random with a seeded LCG via a page init
+                         script — rendered timestamps and random ordering
+                         can't flake a golden diff. Fresh sessions apply
+                         it on every navigation; warm sessions get the
+                         current document only
+--auto-promote           Self-healing write-back: when the run passed AND
+                         auto-heal corrected locators this run, apply those
+                         patches to scenario.json (the hash-guarded
+                         heal-promote --apply path). A stale-hash refusal
+                         is a warning, never a failure
 --junit [path]           Write the run's terminal step outcomes as JUnit
                          XML — one <testcase> per step. Bare flag writes
                          <run>/junit.xml; --junit=<path> writes that
@@ -2580,6 +2746,8 @@ mod tests {
             until_step: None,
             update_baselines: false,
             junit: None,
+            auto_promote: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -2659,6 +2827,8 @@ mod tests {
             until_step: None,
             update_baselines: false,
             junit: None,
+            auto_promote: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -2719,6 +2889,8 @@ mod tests {
             until_step: None,
             update_baselines: false,
             junit: None,
+            auto_promote: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -2760,6 +2932,8 @@ mod tests {
             until_step: None,
             update_baselines: false,
             junit: None,
+            auto_promote: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -2826,6 +3000,8 @@ esac\nexit 0\n",
             until_step: None,
             update_baselines: false,
             junit: None,
+            auto_promote: false,
+            freeze: None,
             har: false,
             mock_from: None,
         }
@@ -3080,6 +3256,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             junit: None,
+            auto_promote: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -3144,6 +3322,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             junit: None,
+            auto_promote: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -3789,6 +3969,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             junit: None,
+            auto_promote: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -3877,6 +4059,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             junit: None,
+            auto_promote: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -3999,6 +4183,27 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
     }
 
     #[test]
+    fn parse_args_freeze_flag() {
+        let opts = parse_args(&["x".into(), "--freeze".into(), "2026-01-01".into()]).unwrap();
+        assert_eq!(opts.freeze.as_deref(), Some("2026-01-01"));
+        let opts = parse_args(&["x".into(), "--freeze=2026-06-30T00:00Z".into()]).unwrap();
+        assert_eq!(opts.freeze.as_deref(), Some("2026-06-30T00:00Z"));
+        let opts = parse_args(&["x".into()]).unwrap();
+        assert_eq!(opts.freeze, None);
+    }
+
+    #[test]
+    fn freeze_js_pins_clock_and_seeds_rng() {
+        let js = freeze_js("2026-01-01T00:00:00Z");
+        assert!(
+            js.contains("Date.parse(\"2026-01-01T00:00:00Z\")"),
+            "got: {js}"
+        );
+        assert!(js.contains("static now()"), "got: {js}");
+        assert!(js.contains("Math.random ="), "got: {js}");
+    }
+
+    #[test]
     fn render_summary_formats_pass_and_fail() {
         let s = RunSummary {
             passed: 3,
@@ -4062,6 +4267,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             junit: None,
+            auto_promote: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -4152,6 +4359,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             junit: None,
+            auto_promote: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -4221,6 +4430,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             junit: None,
+            auto_promote: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -4268,6 +4479,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             junit: None,
+            auto_promote: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -4452,6 +4665,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             junit: None,
+            auto_promote: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -4468,5 +4683,13 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         assert!(opts.plain);
         let opts = parse_args(&["./j.json".into()]).unwrap();
         assert!(!opts.plain);
+    }
+
+    #[test]
+    fn parse_args_auto_promote_flag() {
+        let opts = parse_args(&["sid".into(), "--auto-promote".into()]).unwrap();
+        assert!(opts.auto_promote);
+        let opts = parse_args(&["sid".into()]).unwrap();
+        assert!(!opts.auto_promote);
     }
 }

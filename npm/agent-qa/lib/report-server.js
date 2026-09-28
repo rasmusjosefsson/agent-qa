@@ -1631,12 +1631,15 @@ async function bindRecordingProfile(runCli, profile) {
 
 async function runDetail(root, sid, runId) {
   const runDir = path.join(root, sid, 'replays', runId);
-  const [audit, status, events, latest, healRows] = await Promise.all([
+  const [audit, status, events, latest, healRows, network] = await Promise.all([
     readJson(path.join(runDir, 'audit.json')),
     readJson(path.join(runDir, 'status.json')),
     readEvents(path.join(runDir, 'events.jsonl')),
     latestRunId(path.join(root, sid)),
     readEvents(path.join(runDir, 'heal.jsonl')),
+    // The run's full request log (written by `replay`'s netlog sidecar;
+    // absent on runs predating it or when capture failed).
+    readJson(path.join(runDir, 'network.json')),
   ]);
   // Join each heal row with its suggested patch (diffs/<stepId>.patch.json)
   // so the UI can review the correction in place.
@@ -1663,6 +1666,7 @@ async function runDetail(root, sid, runId) {
     events,
     heals,
     shotDiffs,
+    network,
   };
 }
 

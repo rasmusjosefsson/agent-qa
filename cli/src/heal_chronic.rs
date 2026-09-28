@@ -39,13 +39,15 @@ pub fn run(args: &[String]) -> Result<u8> {
 
 fn print_help() {
     println!(
-        "agent-qa heal-chronic \u{2014} flag steps that self-heal run after run\n\nUsage:\n  agent-qa heal-chronic <sid> [--min-runs N] [--json]\n\nWalks <sid>/replays/*/heal.jsonl and reports steps that auto-healed in\nat least --min-runs distinct runs (default 2). Chronic steps are stable\nlocator bugs wearing a flaky costume \u{2014} absorb the patch permanently\nwith the printed heal-promote command.\n\nExit code is always 0 on success; a non-empty list means debt exists."
+        "agent-qa heal-chronic \u{2014} flag steps that self-heal run after run\n\nUsage:\n  agent-qa heal-chronic <sid | --all> [--min-runs N] [--json]\n\nWalks <sid>/replays/*/heal.jsonl and reports steps that auto-healed in\nat least --min-runs distinct runs (default 2). --all scans every scenario\nunder the root and prints one cross-scenario board. Chronic steps are\nstable locator bugs wearing a flaky costume \u{2014} absorb the patch\npermanently with the printed heal-promote command.\n\nExit code is always 0 on success; a non-empty list means debt exists."
     );
 }
 
 #[derive(Debug, Clone)]
 struct Opts {
-    sid: String,
+    /// `None` under `--all` (every scenario dir under the root).
+    sid: Option<String>,
+    all: bool,
     min_runs: usize,
     json: bool,
 }
@@ -53,6 +55,9 @@ struct Opts {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Chronic {
+    /// Which scenario this row belongs to — populated always ("sid" in
+    /// json) so `--all` rows stay attributable without a wrapper object.
+    pub(crate) sid: String,
     pub(crate) step_id: String,
     runs_count: usize,
     runs: Vec<String>,
@@ -69,6 +74,7 @@ struct Acc {
 
 fn parse_args(args: &[String]) -> Result<Opts> {
     let mut sid: Option<String> = None;
+    let mut all = false;
     let mut min_runs = 2usize;
     let mut json = false;
     let mut it = args.iter();
@@ -79,6 +85,7 @@ fn parse_args(args: &[String]) -> Result<Opts> {
                 std::process::exit(0);
             }
             "--json" => json = true,
+            "--all" => all = true,
             "--min-runs" => {
                 min_runs = it
                     .next()
@@ -102,17 +109,47 @@ fn parse_args(args: &[String]) -> Result<Opts> {
             }
         }
     }
-    let sid = sid.ok_or_else(|| anyhow!("usage: heal-chronic <sid> [--min-runs N] [--json]"))?;
+    if sid.is_some() == all {
+        bail!("usage: heal-chronic <sid | --all> [--min-runs N] [--json]");
+    }
     Ok(Opts {
         sid,
+        all,
         min_runs,
         json,
     })
 }
 
 fn collect(opts: &Opts) -> Result<Vec<Chronic>> {
-    let scenario_dir = paths::scenario_dir(&opts.sid)?;
-    Ok(collect_dir(&scenario_dir, opts.min_runs, &opts.sid))
+    if !opts.all {
+        let sid = opts.sid.as_deref().unwrap();
+        let scenario_dir = paths::scenario_dir(sid)?;
+        return Ok(collect_dir(&scenario_dir, opts.min_runs, sid));
+    }
+    // --all: every directory under the scenarios root gets a scan — dirs
+    // without replays/ simply contribute nothing.
+    let root = paths::scenarios_root();
+    let mut out: Vec<Chronic> = Vec::new();
+    let mut dirs: Vec<_> = match fs::read_dir(&root) {
+        Ok(it) => it.flatten().map(|e| e.path()).collect(),
+        Err(_) => return Ok(out),
+    };
+    dirs.sort();
+    for dir in dirs {
+        if !dir.is_dir() {
+            continue;
+        }
+        let sid = dir.file_name().unwrap_or_default().to_string_lossy();
+        out.extend(collect_dir(&dir, opts.min_runs, &sid));
+    }
+    // Cross-scenario order: most-chronic first.
+    out.sort_by(|a, b| {
+        b.runs_count
+            .cmp(&a.runs_count)
+            .then(a.sid.cmp(&b.sid))
+            .then(a.step_id.cmp(&b.step_id))
+    });
+    Ok(out)
 }
 
 /// Collect chronic-heal rows for one scenario directory. `sid` only feeds the
@@ -165,6 +202,7 @@ pub(crate) fn collect_dir(
         .map(|(step_id, acc)| {
             let last_run_id = acc.runs.iter().next_back().cloned().unwrap_or_default();
             Chronic {
+                sid: sid.to_string(),
                 runs_count: acc.runs.len(),
                 runs: acc.runs.into_iter().collect(),
                 last_run_id: last_run_id.clone(),
@@ -190,16 +228,34 @@ fn render_text(opts: &Opts, entries: &[Chronic]) {
         println!("(no chronic self-heals — min-runs={})", opts.min_runs);
         return;
     }
-    println!("{:<10} {:<6} {:<20} promote", "stepId", "runs", "modes");
-    println!("{}", "-".repeat(100));
-    for e in entries {
+    if opts.all {
         println!(
-            "{:<10} {:<6} {:<20} {}",
-            e.step_id,
-            e.runs_count,
-            e.modes.join(","),
-            e.promote
+            "{:<22} {:<10} {:<6} {:<20} promote",
+            "scenario", "stepId", "runs", "modes"
         );
+        println!("{}", "-".repeat(120));
+        for e in entries {
+            println!(
+                "{:<22} {:<10} {:<6} {:<20} {}",
+                e.sid,
+                e.step_id,
+                e.runs_count,
+                e.modes.join(","),
+                e.promote
+            );
+        }
+    } else {
+        println!("{:<10} {:<6} {:<20} promote", "stepId", "runs", "modes");
+        println!("{}", "-".repeat(100));
+        for e in entries {
+            println!(
+                "{:<10} {:<6} {:<20} {}",
+                e.step_id,
+                e.runs_count,
+                e.modes.join(","),
+                e.promote
+            );
+        }
     }
     println!();
     println!(
@@ -257,10 +313,54 @@ mod tests {
 
     fn opts(sid: &str, min_runs: usize) -> Opts {
         Opts {
-            sid: sid.into(),
+            sid: Some(sid.into()),
+            all: false,
             min_runs,
             json: false,
         }
+    }
+
+    #[test]
+    fn collect_all_aggregates_across_scenarios_sorted() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        setup(tmp.path());
+        // j1: one step healing in 3 runs; j2: one step in 2 runs; j3: none.
+        let j1 = tmp.path().join("j1");
+        for r in ["rA", "rB", "rC"] {
+            write_heal_row(&j1, r, "s9", "locator-correction");
+        }
+        let j2 = tmp.path().join("j2");
+        for r in ["rA", "rB"] {
+            write_heal_row(&j2, r, "s1", "value-override");
+        }
+        fs::create_dir_all(tmp.path().join("j3")).unwrap();
+        let opts = Opts {
+            sid: None,
+            all: true,
+            min_runs: 2,
+            json: false,
+        };
+        let entries = collect(&opts).unwrap();
+        assert_eq!(entries.len(), 2);
+        // Most-chronic first, sid attribution intact.
+        assert_eq!(entries[0].sid, "j1");
+        assert_eq!(entries[0].step_id, "s9");
+        assert_eq!(entries[1].sid, "j2");
+        assert!(entries[1].promote.contains("heal-promote j2"));
+        teardown();
+    }
+
+    #[test]
+    fn parse_args_all_and_sid_are_exclusive() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        setup(tmp.path());
+        let o = parse_args(&["--all".into()]).unwrap();
+        assert!(o.all && o.sid.is_none());
+        parse_args(&["j1".into(), "--all".into()]).unwrap_err();
+        parse_args(&Vec::<String>::new()).unwrap_err();
+        teardown();
     }
 
     #[test]
