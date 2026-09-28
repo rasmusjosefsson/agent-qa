@@ -32,6 +32,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `replay <sid \| path>` | Run a scenario. Flags: `--profile`, `--session`, `--param name=value`, `--heal-from-run <runId>`, `--dry-run`, `--no-sidecars`, `--runs <N>`, `--quiet`/`-q`, `--tag <label>`, `--output-audit <path>`, `--from <stepId>` (skip earlier steps — needs a warm session at that state), `--until <stepId>` (stop after it, inclusive) |
 | `list` | Enumerate scenarios (root mode) or one scenario's replays. Flags: `--json`, `--filter <substr>`, `--limit <N>` |
 | `compare <a> <b>` | Diff two replay run directories. Alias `diff`. |
+| `crawl <url>` | Coverage scaffolding — enumerate same-origin links + interactive elements and write a draft scenario (goto + shot claim per route) to `<scenarios_root>/crawl-<host>/` plus a `crawl-report.json` authoring inventory. Flags: `--session`, `--out`, `--max`, `--sid`. |
 | `audit show <sid> <runId \| latest>` | Pretty-print one replay's audit.json. `--json` for raw. |
 | `audit list <sid>` | Table of every run (incl. \`dur(s)\` column). Flags: `--json`, `--passed` / `--failed`, `--tag <substr>`, `--profile <substr>`, `--limit <N>`, `--slow <secs>`, `--sort duration\|runId-desc`, `--since <iso-ts>`, `--until <iso-ts>` |
 | `audit stats <sid>` | Pass/fail/tag rollup for one scenario, incl. avg duration. Flags: `--json`, `--since`, `--until`. |
