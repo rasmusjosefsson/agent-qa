@@ -9,7 +9,11 @@ if git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- npm/agent-qa/web; then
   exit 0
 fi
 
-if grep -Eq 'https://github\.com/user-attachments/assets/[[:alnum:]-]+' <<<"$PR_BODY"; then
+# Any embedded image counts — GitHub user-attachments, a Devin attachment
+# proxy, a CDN link, or an <img> tag. The gate exists to force visual
+# evidence, not to require one host (automation can't mint user-attachments
+# URLs; they only come from the web editor).
+if grep -Eq '!\[[^]]*\]\(https?://[^)]+\)|<img[^>]+src="https?://[^"]+"|https://github\.com/user-attachments/assets/[[:alnum:]-]+' <<<"$PR_BODY"; then
   exit 0
 fi
 

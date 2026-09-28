@@ -3,6 +3,7 @@
 //! Useful when investigating a single failure without reaching for a JSON
 //! viewer; complements `list <sid>` which only shows summary rows.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
 
@@ -10,6 +11,7 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
 
 use crate::paths;
+use crate::sidecar::StepEvent;
 
 pub fn run(args: &[String]) -> Result<u8> {
     let mut json_out = false;
@@ -30,6 +32,7 @@ pub fn run(args: &[String]) -> Result<u8> {
     let mut slow_pct: f64 = 50.0;
     let mut slow_min_ms: u64 = 250;
     let mut recent_n: usize = 2;
+    let mut cluster_min: usize = 2;
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -216,6 +219,20 @@ pub fn run(args: &[String]) -> Result<u8> {
                     .filter(|n| *n >= 1)
                     .ok_or_else(|| anyhow!("--recent expects a positive integer"))?;
             }
+            "--min-size" => {
+                cluster_min = it
+                    .next()
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .filter(|n| *n >= 1)
+                    .ok_or_else(|| anyhow!("--min-size expects a positive integer"))?;
+            }
+            s if s.starts_with("--min-size=") => {
+                cluster_min = s["--min-size=".len()..]
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|n| *n >= 1)
+                    .ok_or_else(|| anyhow!("--min-size expects a positive integer"))?;
+            }
             s if s.starts_with("--recent=") => {
                 recent_n = s["--recent=".len()..]
                     .parse::<usize>()
@@ -260,8 +277,13 @@ pub fn run(args: &[String]) -> Result<u8> {
         "flaky" => flaky(&positionals, json_out, min_flips, min_runs),
         "slow" => slow(&positionals, json_out, slow_pct, slow_min_ms, recent_n, min_runs),
         "health" => health(json_out),
+        "trend" => trend(&positionals, json_out, limit),
+        "cluster" => cluster(json_out, cluster_min),
+        "verdict" => verdict(&positionals, json_out),
+
         other => bail!(
-            "unknown audit subverb {other:?} (try: show | list | stats | stats-all | diff | summary | exit-code | field | count | duration | flaky | slow | health)"
+            "unknown audit subverb {other:?} (try: show | list | stats | stats-all | diff | summary | exit-code | field | count | duration | flaky | slow | health | cluster | verdict | trend)"
+
         ),
     }
 }
@@ -770,6 +792,108 @@ fn exit_code(positionals: &[String]) -> Result<u8> {
     let exit = value.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(-1);
     println!("{exit}");
     Ok(0)
+}
+
+/// `audit verdict <sid> <runId|latest>` — the run-level triage signal a
+/// CI gate or a human can act on without reading the audit tree:
+///
+///   PASS  (exit 0): the run was green and needed no self-correction.
+///   FIX   (exit 2): the run was green BUT the runner had to self-correct
+///                   — auto-healed steps or value-rejection evidence mean
+///                   drift is accumulating; review heal.jsonl and promote.
+///   BLOCK (exit 1): the run failed — a human decides product-bug vs
+///                   scenario rot.
+///
+/// Reads `audit.json` (exitCode, autoHealed) + `heal.jsonl` rows (mode +
+/// stepId) for that run only.
+fn verdict(positionals: &[String], json_out: bool) -> Result<u8> {
+    let sid = positionals
+        .get(1)
+        .ok_or_else(|| anyhow!("usage: audit verdict <sid> <runId | latest>"))?;
+    let run_ref = positionals
+        .get(2)
+        .ok_or_else(|| anyhow!("usage: audit verdict <sid> <runId | latest>"))?;
+    let dir = paths::scenario_dir(sid)?;
+    let run_id = resolve_run_id(&dir, run_ref)?;
+    let run_dir = dir.join("replays").join(&run_id);
+    let audit_path = run_dir.join("audit.json");
+    if !audit_path.is_file() {
+        bail!("audit verdict: no audit.json at {}", audit_path.display());
+    }
+    let bytes = fs::read(&audit_path)?;
+    let audit: Value = serde_json::from_slice(&bytes)?;
+    let exit = audit.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(-1);
+    let summary_line = audit.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+
+    let mut healed_steps: Vec<String> = audit
+        .get("autoHealed")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // heal.jsonl rows carry the evidence classes that don't surface in
+    // audit.autoHealed (value rejections land there, not as locator heals).
+    let mut rejection_steps: Vec<String> = Vec::new();
+    let heal_path = run_dir.join("heal.jsonl");
+    if let Ok(body) = fs::read_to_string(&heal_path) {
+        for line in body.lines() {
+            let Ok(row) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            let step = row
+                .get("stepId")
+                .or_else(|| row.get("step_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let mode = row.get("mode").and_then(|v| v.as_str()).unwrap_or("");
+            if mode == "value-rejection" && !rejection_steps.iter().any(|s| s == step) {
+                rejection_steps.push(step.to_string());
+            }
+            if mode == "locator-correction" && !healed_steps.iter().any(|s| s == step) {
+                healed_steps.push(step.to_string());
+            }
+        }
+    }
+    healed_steps.sort();
+    rejection_steps.sort();
+
+    let (name, code) = if exit != 0 {
+        ("BLOCK", 1u8)
+    } else if !healed_steps.is_empty() || !rejection_steps.is_empty() {
+        ("FIX", 2u8)
+    } else {
+        ("PASS", 0u8)
+    };
+
+    if json_out {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "scenario": sid,
+                "runId": run_id,
+                "verdict": name,
+                "exitCode": exit,
+                "healedSteps": healed_steps,
+                "valueRejectionSteps": rejection_steps,
+                "summary": summary_line,
+            }))?
+        );
+    } else {
+        match name {
+            "PASS" => println!("PASS {sid} {run_id} — {summary_line}"),
+            "FIX" => println!(
+                "FIX {sid} {run_id} — green but self-corrected (healed: [{}], value-rejections: [{}]); review + promote",
+                healed_steps.join(", "),
+                rejection_steps.join(", "),
+            ),
+            _ => println!("BLOCK {sid} {run_id} — {summary_line}"),
+        }
+    }
+    Ok(code)
 }
 
 fn summary(positionals: &[String]) -> Result<u8> {
@@ -1377,6 +1501,157 @@ fn collect_health(root: &std::path::Path) -> Vec<HealthRow> {
         .collect()
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TrendRun {
+    run_id: String,
+    exit_code: Option<i64>,
+    duration_secs: Option<f64>,
+    started_at: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TrendOut {
+    scenario_id: String,
+    runs: Vec<TrendRun>,
+    passed: usize,
+    failed: usize,
+    median_secs: f64,
+    outcomes: String,
+    sparkline: String,
+}
+
+fn sparkline(values: &[Option<f64>]) -> String {
+    const BARS: &[char] = &['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let present: Vec<f64> = values.iter().flatten().copied().collect();
+    if present.is_empty() {
+        return String::new();
+    }
+    let min = present.iter().cloned().fold(f64::INFINITY, f64::min);
+    let max = present.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let span = max - min;
+    values
+        .iter()
+        .map(|v| match v {
+            None => ' ',
+            Some(_) if span <= 0.0 => '▄',
+            Some(v) => {
+                let idx = ((v - min) / span * (BARS.len() - 1) as f64).round() as usize;
+                BARS[idx.min(BARS.len() - 1)]
+            }
+        })
+        .collect()
+}
+
+fn collect_trend(dir: &std::path::Path, sid: &str, limit: Option<usize>) -> TrendOut {
+    let replays_dir = dir.join("replays");
+    let mut runs: Vec<PathBuf> = fs::read_dir(&replays_dir)
+        .map(|it| {
+            it.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_dir())
+                .collect()
+        })
+        .unwrap_or_default();
+    runs.sort();
+    if let Some(n) = limit {
+        runs.drain(..runs.len().saturating_sub(n));
+    }
+
+    let mut trend_runs: Vec<TrendRun> = Vec::with_capacity(runs.len());
+    for run in &runs {
+        let audit: Option<Value> = fs::read(run.join("audit.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok());
+        let duration_secs = match (
+            audit.as_ref().and_then(|a| a.get("startedAt")?.as_str()),
+            audit.as_ref().and_then(|a| a.get("finishedAt")?.as_str()),
+        ) {
+            (Some(s), Some(f)) => match (parse_iso_ms(s), parse_iso_ms(f)) {
+                (Ok(sm), Ok(fm)) => Some(fm.saturating_sub(sm) as f64 / 1000.0),
+                _ => None,
+            },
+            _ => None,
+        };
+        trend_runs.push(TrendRun {
+            run_id: run
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            exit_code: audit.as_ref().and_then(|a| a.get("exitCode")?.as_i64()),
+            duration_secs,
+            started_at: audit
+                .as_ref()
+                .and_then(|a| a.get("startedAt")?.as_str().map(str::to_string)),
+        });
+    }
+
+    let with_audit: Vec<&TrendRun> = trend_runs
+        .iter()
+        .filter(|r| r.exit_code.is_some())
+        .collect();
+    let passed = with_audit.iter().filter(|r| r.exit_code == Some(0)).count();
+    let failed = with_audit.len() - passed;
+    let outcomes: String = with_audit
+        .iter()
+        .map(|r| if r.exit_code == Some(0) { '✓' } else { '✗' })
+        .collect();
+    let spark = sparkline(
+        &with_audit
+            .iter()
+            .map(|r| r.duration_secs)
+            .collect::<Vec<_>>(),
+    );
+    let median_secs = median_ms(
+        &with_audit
+            .iter()
+            .filter_map(|r| r.duration_secs.map(|d| (d * 1000.0) as u64))
+            .collect::<Vec<_>>(),
+    ) / 1000.0;
+    TrendOut {
+        scenario_id: sid.to_string(),
+        runs: trend_runs,
+        passed,
+        failed,
+        median_secs,
+        outcomes,
+        sparkline: spark,
+    }
+}
+
+fn trend(positionals: &[String], json_out: bool, limit: Option<usize>) -> Result<u8> {
+    let sid = positionals
+        .get(1)
+        .ok_or_else(|| anyhow!("usage: audit trend <sid> [--limit N] [--json]"))?;
+    let dir = paths::scenario_dir(sid)?;
+    let out = collect_trend(&dir, sid, limit);
+
+    if json_out {
+        // Compact single-line output: the workbench's lastJsonLine parser
+        // (and shell pipes) expect one JSON value per line.
+        println!("{}", serde_json::to_string(&out)?);
+        return Ok(0);
+    }
+    if out.runs.is_empty() {
+        println!("{sid}: (no runs)");
+        return Ok(0);
+    }
+    let total = out.passed + out.failed;
+    let pct = if total > 0 {
+        (out.passed as f64 / total as f64) * 100.0
+    } else {
+        0.0
+    };
+    println!(
+        "{sid}: {total} run(s) — pass {pct:.0}% ({}/{}), median {:.2}s",
+        out.passed, total, out.median_secs
+    );
+    println!("outcomes  {}", out.outcomes);
+    println!("duration  {}", out.sparkline);
+    Ok(0)
+}
+
 fn health(json_out: bool) -> Result<u8> {
     let out = collect_health(&paths::scenarios_root());
     if json_out {
@@ -1413,6 +1688,172 @@ fn health(json_out: bool) -> Result<u8> {
             r.chronic.len(),
             steps.join(", ")
         );
+    }
+    Ok(0)
+}
+
+/// `audit cluster` — group step failures across every scenario's recent
+/// runs by a normalized error signature, so one root cause surfacing in N
+/// scenarios reads as ONE triage item, not N unrelated reds. A failing
+/// step's `error` is normalized (quoted literals → `'`, digit runs → `#`,
+/// whitespace collapsed, lowercased) — locator names, step ids, and timing
+/// numbers don't fragment the signature.
+///
+/// Sorted by blast radius (distinct scenarios hit) then occurrence count.
+/// A cluster needs >= `--min-size` (default 2) occurrences to print — a
+/// lone failure is just a failure, `audit show`/`verdict` cover it.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClusterMember {
+    scenario: String,
+    run_id: String,
+    step_id: String,
+    error: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Cluster {
+    signature: String,
+    count: usize,
+    scenarios: Vec<String>,
+    members: Vec<ClusterMember>,
+}
+
+/// Normalize a failure string into a clustering signature: lowercase,
+/// quoted runs replaced by `'`, digit runs by `#`, whitespace collapsed.
+fn error_signature(err: &str) -> String {
+    let lower = err.to_lowercase();
+    let mut sig = String::with_capacity(lower.len());
+    let mut in_quote: Option<char> = None;
+    let mut in_digits = false;
+    for c in lower.chars() {
+        if let Some(q) = in_quote {
+            if c == q {
+                in_quote = None;
+            }
+            continue;
+        }
+        if c == '"' || c == '\'' {
+            in_quote = Some(c);
+            sig.push('\'');
+            in_digits = false;
+            continue;
+        }
+        if c.is_ascii_digit() {
+            if !in_digits {
+                sig.push('#');
+                in_digits = true;
+            }
+            continue;
+        }
+        in_digits = false;
+        if c.is_whitespace() {
+            if !sig.ends_with(' ') && !sig.is_empty() {
+                sig.push(' ');
+            }
+            continue;
+        }
+        sig.push(c);
+    }
+    sig.trim().chars().take(160).collect()
+}
+
+fn collect_clusters(root: &std::path::Path, min_size: usize) -> Vec<Cluster> {
+    let mut by_sig: BTreeMap<String, Vec<ClusterMember>> = BTreeMap::new();
+    let Ok(sids) = fs::read_dir(root) else {
+        return Vec::new();
+    };
+    for sid_dir in sids.flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
+        let sid = sid_dir
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let replays = sid_dir.join("replays");
+        let Ok(runs) = fs::read_dir(&replays) else {
+            continue;
+        };
+        for run_dir in runs.flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
+            let run_id = run_dir
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let Ok(body) = fs::read_to_string(run_dir.join("events.jsonl")) else {
+                continue;
+            };
+            for line in body.lines() {
+                let Ok(ev) = serde_json::from_str::<StepEvent>(line) else {
+                    continue;
+                };
+                if ev.status != "fail" {
+                    continue;
+                }
+                let err = ev.error.unwrap_or_default();
+                by_sig
+                    .entry(error_signature(&err))
+                    .or_default()
+                    .push(ClusterMember {
+                        scenario: sid.clone(),
+                        run_id: run_id.clone(),
+                        step_id: ev.id,
+                        error: err,
+                    });
+            }
+        }
+    }
+    let mut clusters: Vec<Cluster> = by_sig
+        .into_iter()
+        .filter(|(_, members)| members.len() >= min_size)
+        .map(|(signature, members)| {
+            let mut scenarios: Vec<String> = members
+                .iter()
+                .map(|m| m.scenario.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            scenarios.sort();
+            Cluster {
+                signature,
+                count: members.len(),
+                scenarios,
+                members,
+            }
+        })
+        .collect();
+    clusters.sort_by(|a, b| {
+        b.scenarios
+            .len()
+            .cmp(&a.scenarios.len())
+            .then(b.count.cmp(&a.count))
+    });
+    clusters
+}
+
+fn cluster(json_out: bool, min_size: usize) -> Result<u8> {
+    let out = collect_clusters(&paths::scenarios_root(), min_size);
+    if json_out {
+        println!("{}", serde_json::to_string(&out)?);
+        return Ok(0);
+    }
+    if out.is_empty() {
+        println!("(no failure clusters — no repeated error signature across runs)");
+        return Ok(0);
+    }
+    for c in &out {
+        println!(
+            "{} hit(s) across {} scenario(s) — {}",
+            c.count,
+            c.scenarios.len(),
+            c.signature
+        );
+        for m in c.members.iter().take(5) {
+            let err: String = m.error.chars().take(100).collect();
+            println!("  {} {} {}: {}", m.scenario, m.run_id, m.step_id, err);
+        }
+        if c.members.len() > 5 {
+            println!("  … and {} more", c.members.len() - 5);
+        }
+        println!();
     }
     Ok(0)
 }
@@ -1543,7 +1984,8 @@ fn print_help() {
     println!(
                 "agent-qa audit \u{2014} inspect a replay's audit.json\n\nUsage:\n  agent-qa audit show <sid> <runId | latest> [--json | --format text|json|github]\n  agent-qa audit list <sid>                    Table view: every run's\n                                               summary / exit / profile / tag\n  agent-qa audit list <sid> --json             Structured rows on stdout\n  agent-qa audit list <sid> [--passed | --failed] [--tag <pat>] [--profile <pat>] [--limit N] [--slow <secs>] [--sort duration|runId-desc] [--since <iso-ts>] [--until <iso-ts>] [--format text|json|github]\n                                               Filters: case-insensitive substring\n                                               --passed/--failed are exit-code partitions\n  agent-qa audit stats <sid> [--since <iso-ts>] [--until <iso-ts>]\n                                               Pass/fail/tag rollup for one scenario\n  agent-qa audit stats <sid> --json            Structured rollup on stdout\n  agent-qa audit stats-all                     Per-scenario + overall pass/fail rollup\n  agent-qa audit stats-all --json              Structured rollup on stdout\n  agent-qa audit stats-all [--since <iso-ts>] [--until <iso-ts>]\n                                               Constrain to a date window\n  agent-qa audit diff <sid> <runIdA> <runIdB>  Unified diff between two replays'\n                                               audit.json (canonicalised JSON;\n                                               'latest' accepted for either side;\n                                               exit 1 on difference)\n  agent-qa audit summary <sid> <runId | latest>\n                                               Print just the summary line (one line out)\n  agent-qa audit exit-code <sid> <runId | latest>\n                                               Print just the run's exitCode (-1 if missing)\n  agent-qa audit field <sid> <runId | latest> <fieldName>\n                                               Print any top-level audit field. String/\n                                               number/bool print verbatim; null prints\n                                               empty; object/array prints compact JSON.\n  agent-qa audit count <sid>                   Print the number of runs under <sid>\n  agent-qa audit duration <sid> <runId | latest>\n                                               Print the run's duration in seconds\n                                               (finishedAt - startedAt, 3 decimals)\n  agent-qa audit flaky <sid> [--min-flips N] [--min-runs N] [--json]\n                                               Flag steps whose outcome interleaves\n                                               pass/fail across runs (outcome churn;\n                                               heal-chronic covers locator churn)\n  agent-qa audit slow <sid> [--pct N] [--min-ms N] [--recent N] [--min-runs N] [--json]\n                                               Flag steps whose recent pass median\n                                               regressed vs their earlier-run median\n                                               (default: last 2 runs >50% and >250ms\n                                               over baseline)\n  agent-qa audit health [--json]           Cross-scenario rollup of flaky + slow +
                                                heal-chronic — one row per scenario
-                                               that has silent degradation\n\n'latest' resolves to <sid>/replays/latest.txt if present, otherwise the\nhighest lex-sorted run directory (run_id is timestamp-prefixed)."
+                                               that has silent degradation\n  agent-qa audit verdict <sid> <runId | latest> [--json]\n                                               One-word run triage: PASS (exit 0) clean\n                                               green, FIX (exit 2) green but self-\n                                               corrected, BLOCK (exit 1) failed\n  agent-qa audit cluster [--min-size N] [--json]\n                                               Group step failures across every scenario\n                                               by normalized error signature — one root\n                                               cause across N runs reads as one item\n  agent-qa audit trend <sid> [--limit N] [--json]\n                                               Outcome + duration trend for the last N\n                                               runs (default all): pass%, median secs,\n                                               a ✓/✗ outcome line + a duration sparkline\n\n'latest' resolves to <sid>/replays/latest.txt if present, otherwise the\nhighest lex-sorted run directory (run_id is timestamp-prefixed)."
+
     );
 }
 
@@ -1875,6 +2317,142 @@ mod tests {
     }
 
     #[test]
+    fn cluster_groups_failures_by_normalized_signature() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+
+        // Two scenarios, same underlying error modulo ids/numbers → ONE cluster.
+        for (sid, run, step, err) in [
+            (
+                "sid-a",
+                "r1",
+                "s2",
+                "locator miss: role=button name=\"Save 12 items\"",
+            ),
+            (
+                "sid-b",
+                "r9",
+                "s1",
+                "locator miss: role=button name=\"Save 3 items\"",
+            ),
+            // A different error — its own (sub-threshold) group.
+            ("sid-b", "r9", "s4", "timeout waiting for navigation"),
+        ] {
+            let run_dir = tmp.path().join(sid).join("replays").join(run);
+            std::fs::create_dir_all(&run_dir).unwrap();
+            // Append — sid-b/r9 carries two fail rows.
+            let line = format!(
+                "{{\"idx\":1,\"total\":1,\"id\":\"{step}\",\"intent\":\"x\",\"kind\":\"do:click\",\"status\":\"fail\",\"error\":{}}}\n",
+                serde_json::to_string(err).unwrap()
+            );
+            use std::io::Write as _;
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(run_dir.join("events.jsonl"))
+                .unwrap();
+            f.write_all(line.as_bytes()).unwrap();
+        }
+
+        let clusters = collect_clusters(tmp.path(), 2);
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0].count, 2);
+        assert_eq!(
+            clusters[0].scenarios,
+            vec!["sid-a".to_string(), "sid-b".to_string()]
+        );
+        // Both raw errors retained per member.
+        assert!(clusters[0].members.iter().any(|m| m.step_id == "s2"));
+        assert!(clusters[0].members.iter().any(|m| m.step_id == "s1"));
+
+        // min-size 1 also surfaces the lone timeout cluster.
+        let all = collect_clusters(tmp.path(), 1);
+        assert_eq!(all.len(), 2);
+
+        assert!(
+            error_signature("HTTP 404 on /api/users/82")
+                == error_signature("http 7 on /api/users/9")
+        );
+
+        match prev {
+            Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    #[test]
+
+    fn verdict_maps_pass_fix_block() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        let jdir = tmp.path().join("sid");
+
+        // PASS: clean green run.
+        write_audit(&jdir, "r-pass", "SUMMARY: 3/3 (PASS)", 0);
+        assert_eq!(
+            verdict(&["verdict".into(), "sid".into(), "r-pass".into()], true).unwrap(),
+            0
+        );
+
+        // BLOCK: failed run.
+        write_audit(&jdir, "r-block", "SUMMARY: 2/3 (FAIL)", 1);
+        assert_eq!(
+            verdict(&["verdict".into(), "sid".into(), "r-block".into()], true).unwrap(),
+            1
+        );
+
+        // FIX via autoHealed: green run that self-corrected a locator.
+        let run_dir = jdir.join("replays").join("r-fix-healed");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(
+            run_dir.join("audit.json"),
+            r#"{"runId":"r-fix-healed","summary":"SUMMARY: 3/3 (PASS)","exitCode":0,"autoHealed":["s2"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            verdict(
+                &["verdict".into(), "sid".into(), "r-fix-healed".into()],
+                true
+            )
+            .unwrap(),
+            2
+        );
+
+        // FIX via value-rejection row in heal.jsonl (not reflected in
+        // audit.autoHealed).
+        let run_dir = jdir.join("replays").join("r-fix-reject");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(
+            run_dir.join("audit.json"),
+            r#"{"runId":"r-fix-reject","summary":"SUMMARY: 3/3 (PASS)","exitCode":0}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            run_dir.join("heal.jsonl"),
+            "{\"schema\":\"heal-row/v1\",\"mode\":\"value-rejection\",\"stepId\":\"s4\"}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            verdict(
+                &["verdict".into(), "sid".into(), "r-fix-reject".into()],
+                true
+            )
+            .unwrap(),
+            2
+        );
+
+        match prev {
+            Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    #[test]
+
     fn summary_prints_audit_summary_line() {
         let _g = crate::test_util::lock_env();
         let tmp = TempDir::new().unwrap();
@@ -2203,5 +2781,52 @@ mod tests {
         let c_row = out.iter().find(|r| r.scenario_id == "sid-c").unwrap();
         assert_eq!(c_row.slow, vec!["s9"]);
         assert!(c_row.flaky.is_empty() && c_row.chronic.is_empty());
+    }
+
+    fn write_audit_ms(dir: &std::path::Path, run_id: &str, exit: i64, dur_ms: u64) {
+        let run_dir = dir.join("replays").join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        let body = format!(
+            r#"{{"schema":"scenario-replay-audit/v1","runId":"{run_id}","scenarioId":"j","startedAt":"2026-01-01T00:00:00.000Z","finishedAt":"2026-01-01T00:00:{secs:02}.000Z","summary":"SUMMARY: x","exitCode":{exit}}}"#,
+            secs = dur_ms / 1000
+        );
+        std::fs::write(run_dir.join("audit.json"), body).unwrap();
+    }
+
+    #[test]
+    fn trend_reports_outcomes_median_and_sparkline() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let jdir = tmp.path().join("sid");
+        write_audit_ms(&jdir, "2026-01-01__a", 0, 2000);
+        write_audit_ms(&jdir, "2026-01-02__b", 1, 5000);
+        write_audit_ms(&jdir, "2026-01-03__c", 0, 3000);
+        write_audit_ms(&jdir, "2026-01-04__d", 0, 2000);
+        let out = collect_trend(&jdir, "sid", None);
+        assert_eq!(out.passed, 3);
+        assert_eq!(out.failed, 1);
+        assert_eq!(out.outcomes, "✓✗✓✓");
+        assert_eq!(out.median_secs, 2.5);
+        // Durations 2,5,3,2 → min 2 max 5: ▁, █, ▃(idx2), ▁.
+        assert_eq!(out.sparkline, "▁█▃▁");
+    }
+
+    #[test]
+    fn trend_limit_keeps_latest_runs_and_skips_auditless_dirs() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let jdir = tmp.path().join("sid");
+        write_audit_ms(&jdir, "2026-01-01__a", 0, 1000);
+        write_audit_ms(&jdir, "2026-01-02__b", 0, 1000);
+        write_audit_ms(&jdir, "2026-01-03__c", 0, 1000);
+        // A run dir without audit.json still lists but contributes no outcome.
+        std::fs::create_dir_all(jdir.join("replays").join("2026-01-04__d")).unwrap();
+        let out = collect_trend(&jdir, "sid", Some(2));
+        assert_eq!(out.runs.len(), 2);
+        assert_eq!(out.runs[0].run_id, "2026-01-03__c");
+        assert_eq!(out.passed, 1);
+        assert_eq!(out.outcomes, "✓");
+        // Runs without audit.json are skipped in both lines — no misalignment.
+        assert_eq!(out.sparkline, "▄");
     }
 }

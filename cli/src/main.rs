@@ -18,6 +18,7 @@ mod cdp_url;
 mod claims;
 mod compare;
 mod config;
+mod crawl;
 mod design;
 mod doctor;
 mod dom_activate;
@@ -33,6 +34,7 @@ mod heal_promote;
 mod heal_respond;
 mod i18n;
 mod info;
+mod init;
 mod io;
 mod list;
 mod paths;
@@ -100,6 +102,7 @@ fn main() -> ExitCode {
         "config" => config::run(rest),
         "list" => list::run(rest),
         "compare" | "diff" => compare::run(rest),
+        "crawl" => crawl::run(rest),
         "design" => design::run(rest),
         "audit" => audit::run(rest),
         "start" => start::run(rest),
@@ -128,9 +131,11 @@ fn main() -> ExitCode {
         "heal-list" => heal_list::run(rest),
         "heal-chronic" => heal_chronic::run(rest),
         "shot-accept" => shot_accept::run(rest),
+        "init" => init::cli(rest),
         _ => {
             eprintln!(
-                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, design, audit, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept."
+"agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, init."
+
             );
             eprintln!("Run `agent-qa --help` for usage.");
             Ok(2)
@@ -213,11 +218,17 @@ Verbs:
   list [<sid|path>] [--json]    Show scenario directory contents + replay history
   compare <sid> [<runA>] [<runB>]   Diff per-step ARIA snapshots between two runs
   diff                          (alias of `compare`)
+  crawl <url> [--session <n>] [--out <dir>] [--max N] [--sid <name>]
+                                Draft a coverage scenario from a live page —
+                                one goto + shot claim per same-origin route
+                                found, plus a crawl-report.json inventory of
+                                interactive elements for authoring input
   design review <sid> [--run <id>] [--json]   Pair <sid>/designs/<stepId>.png with
                                 the run's screenshots; exits 2 unless every design
                                 is ok or accepted against current design bytes
   design verdict <sid> --step <id> (--ok | --accepted --reason <t> | --fail --reason <t> | --ask)
                                 Record a design decision in designs/verdicts.json
+  init [dir] [--force]          Bootstrap a dir: agent-qa.toml + scenarios/hello + .gitignore
   start \"<intent>\"             Begin a new recording session
   browser <args...>             Passthrough exec of the pinned agent-browser
                                 binary (same one every other verb uses) —
