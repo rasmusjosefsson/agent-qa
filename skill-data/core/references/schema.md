@@ -190,5 +190,32 @@ bytes, and string predicates match the file name — or the file's UTF-8
 text when `"attribute": "content"` is set (files over 1 MiB are rejected
 for content claims). Relative paths resolve against the scenario dir.
 
+### Console claims
+
+Assert on messages the page logged this session with the `{"console"}`
+subject — the canonical use is gating a golden path on "no JS errors":
+
+```json
+{
+  "id": "s9",
+  "intent": "the page logged no console errors",
+  "kind": "check",
+  "claim": {
+    "subject": { "console": { "type": "error" } },
+    "predicate": "notExists"
+  }
+}
+```
+
+The matcher filters which messages count: `{"console": true}` → all,
+`{"type": "error"|"warn"|"log"|...}` → that level, `{"text": "<substring>"}`
+→ text contains it. `exists`/`notExists` check presence of a matching
+message, `countEquals`/`gt`/`gte`/`lt`/`lte` compare the count to `value`,
+and text predicates (`equals`/`contains`/`matches`/`startsWith`/`endsWith`)
+pass when ANY matching message's text satisfies them.
+
+Messages accumulate for the whole session — on a reused session, entries
+from earlier steps count too.
+
 Use `agent-qa scenario check <scenario.json>` before replay. It validates the
 schema and runs the scenario linter.
