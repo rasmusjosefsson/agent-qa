@@ -12,6 +12,8 @@ function sc(sid: string, intent: string): ScenarioSummary {
     hasScenario: true,
     intent,
     steps: 3,
+    coverage: null,
+    tags: [],
     latestRunId: null,
     activeRunId: null,
     latestRun: null,

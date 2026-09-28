@@ -51,6 +51,8 @@ const NOT_RECORDABLE: Record<string, string> = {
   group: "structural — groupings are authored, not recorded",
   useTemplate: "structural — template application is authored",
   drag: "recorded natively by the workbench live pane (endpoint pick + emit), not via agent-browser actions",
+  mock: "authored — stubbing decisions belong in the scenario, not the recording",
+  unmock: "authored — removes authored stubs; never emitted by capture",
 };
 
 const action = (method: string, args: unknown[] = [], intent = "t") =>
