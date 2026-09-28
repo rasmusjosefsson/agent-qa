@@ -138,6 +138,10 @@ describe("toRecordDraft — emitted verbs are shipped", () => {
     ["assert", { kind: "pageError", args: [{ text: "Cannot read" }, "exists"] }],
     ["assert", { kind: "a11yViolations", args: [] }],
     ["assert", { kind: "a11yViolations", args: [{ impact: "serious" }, "countEquals", 0] }],
+    ["assert", { kind: "cookiePresent", args: ["session-username"] }],
+    ["assert", { kind: "cookiePresent", args: ["session-username", false] }],
+    ["assert", { kind: "storagePresent", args: ["theme"] }],
+    ["assert", { kind: "storagePresent", args: [{ key: "jwt", scope: "session" }, false] }],
   ];
 
   const verbs = shippedVerbs();

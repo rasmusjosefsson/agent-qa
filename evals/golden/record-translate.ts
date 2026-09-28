@@ -374,6 +374,22 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
             args[1] ?? "notExists",
             args[2],
           );
+        case "cookiePresent":
+          // args[0] = cookie name; args[1] === false flips to expecting it
+          // absent (e.g. after logout).
+          return checkStep(
+            intent,
+            { cookie: args[0] },
+            args[1] === false ? "notExists" : "exists",
+          );
+        case "storagePresent":
+          // args[0] = key or {key, scope:"local"|"session"}; args[1] ===
+          // false flips to expecting the key absent.
+          return checkStep(
+            intent,
+            { storage: args[0] },
+            args[1] === false ? "notExists" : "exists",
+          );
         default:
           throw new Error(`record-step translate: unknown assert kind ${String(p.kind)}`);
       }

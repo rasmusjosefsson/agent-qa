@@ -15,7 +15,8 @@ await runEdgeGolden(
     await b.waitSelector(".inventory_list", "inventory rendered");
     await b.clickSelector("#react-burger-menu-btn", "open the menu");
     await b.waitSelector("#logout_sidebar_link", "drawer rendered");
-    await b.clickSelector("#logout_sidebar_link", "log out");
+    await b.waitMs(800, "drawer animation settles — link click point clears the header");
+    await b.clickSelectorForce("#logout_sidebar_link", "log out");
     await b.assertElementPresent(
       "input#login-button",
       "back on the login screen",
