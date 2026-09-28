@@ -9,13 +9,14 @@ import { composePayload } from './compose'
 import { EMPTY_FORM, type AriaNode, type ClickMode, type ComposeForm, type PickedElement, type RunResult } from './types'
 import { cn } from '@/lib/utils'
 import { PlugZapIcon, RefreshCwIcon } from 'lucide-react'
-import { Panel, PanelGroup } from 'react-resizable-panels'
+import { Group, Panel, useDefaultLayout } from 'react-resizable-panels'
 import { ResizeHandle } from '@/components/ResizeHandle'
 
 const PICK_VERBS = ['click', 'type', 'assertPresent', 'assertAbsent']
 
 export function EditorPage() {
   const ed = useEditor()
+  const cols = useDefaultLayout({ id: 'aqa-editor-cols' })
   const [form, setForm] = useState<ComposeForm>(EMPTY_FORM)
   const [pickedHint, setPickedHint] = useState('')
   const [clickMode, setClickMode] = useState<ClickMode>('interact')
@@ -76,9 +77,9 @@ export function EditorPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <PanelGroup direction="horizontal" autoSaveId="aqa-editor-cols" className="min-h-0 flex-1">
+      <Group orientation="horizontal" defaultLayout={cols.defaultLayout} onLayoutChanged={cols.onLayoutChanged} className="min-h-0 flex-1">
         {/* left: session + steps + composer — flat sections divided by hairlines */}
-        <Panel defaultSize={26} minSize={16} className="min-h-0">
+        <Panel defaultSize="26" minSize="16%" className="min-h-0">
           <div className="flex h-full min-h-0 flex-col overflow-auto">
           <SessionBox
             buffer={ed.buffer}
@@ -131,7 +132,7 @@ export function EditorPage() {
         <ResizeHandle />
 
         {/* center: live browser */}
-        <Panel defaultSize={50} minSize={30} className="min-h-0">
+        <Panel defaultSize="50" minSize="30%" className="min-h-0">
           <LiveCanvas
             subscribeFrame={ed.subscribeFrame}
             sendInput={ed.sendInput}
@@ -149,7 +150,7 @@ export function EditorPage() {
         <ResizeHandle />
 
         {/* right: element picker */}
-        <Panel defaultSize={24} minSize={16} className="min-h-0">
+        <Panel defaultSize="24" minSize="16%" className="min-h-0">
           <ElementPicker
             nodes={ed.ariaNodes}
             interactiveOnly={ed.interactiveOnly}
@@ -158,7 +159,7 @@ export function EditorPage() {
             onPick={applyTreePick}
           />
         </Panel>
-      </PanelGroup>
+      </Group>
 
       {/* Bottom status stripe — scenarios root + flash */}
       <div data-qa-volatile className="flex h-7 shrink-0 items-center justify-between gap-3 border-t border-border px-4 text-xs text-muted-foreground">

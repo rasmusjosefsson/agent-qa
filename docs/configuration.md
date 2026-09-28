@@ -57,6 +57,51 @@ directory; absolute paths pass through.
 Env vars always win over the toml. The toml always wins over the
 default.
 
+## Personas and environments
+
+Credentialed replays draw from two record kinds under the scenarios
+root (the same files the workbench reads and writes):
+
+```
+<scenarios>/_personas/<id>/persona.json
+<scenarios>/_environments/<id>/environment.json
+```
+
+```jsonc
+// persona.json — an identity: which profile, which credentials
+{ "schema": "persona/1", "profile": "admin", "default": true,
+  "credentials": { "entries": {
+    "ADMIN_USER": "admin@example.com",
+    "ADMIN_PASS": "vault:kv/qa/admin:password" } } }
+
+// environment.json — a target: base URL, params, how auth happens
+{ "schema": "environment/1", "default": true,
+  "baseUrl": "https://staging.example.com",
+  "params": { "tenant": "acme" },
+  "auth": { "plugin": "acme-auth", "loginUrl": "/login",
+            "config": { "realm": "staff" },
+            "creds": { "ADMIN_PASS": "vault:kv/qa/admin:password" } } }
+```
+
+`replay --persona <id>` loads the persona: its `credentials.entries`
+land in the process env (a `vault:` ref resolves via
+`GET $VAULT_ADDR/v1/<path>` with `$VAULT_TOKEN`/`~/.vault-token`,
+KV-v2 `data.data` or `data` layout auto-detected) and the persona's
+`profile` becomes the run's profile (`--session` stays
+`<profile>-session`, overridable as usual) so an
+`env.open useProfile` op replays through that profile's auth
+session.
+
+`replay --environment <id>` (alias `--env`) layers on the
+environment: `params` + `baseUrl` merge into the scenario's inputs
+**under** any `--param`/`input_overrides`, `baseUrl` also lands on the
+`baseUrl` input when the scenario declares it, `auth.config` lands
+as `AGENT_QA_ENV_<KEY>` env vars, `auth.loginUrl` as
+`AGENT_QA_ENV_LOGIN_URL`, and `auth.creds` merge under the persona's
+credentials. With `--persona` and no `--environment` the
+`default:true` (or sole) environment is picked up automatically —
+`--environment <id>` pins one explicitly.
+
 ## Discovery
 
 `agent-qa.toml` is found by walking from `cwd` up to the filesystem
@@ -95,6 +140,8 @@ agent-browser and pings each plugin.
 | `AGENT_QA_PI_SDK`          | Explicit path to the pi SDK (`@earendil-works/pi-coding-agent`)     |
 | `AGENT_QA_OPENCODE_SDK`    | Explicit path to the opencode SDK (`@opencode-ai/sdk`, v2 surface)  |
 | `AGENT_QA_NO_CHAT`         | `1` disables the in-app Chat tab entirely                           |
+| `VAULT_ADDR`               | Vault base URL for `vault:<path>:<key>` credential refs             |
+| `VAULT_TOKEN`              | Vault token (falls back to `~/.vault-token` when unset)             |
 
 The `opencode` backend needs the `opencode` CLI on `PATH` (`npm i -g
 opencode-ai`) — each chat spawns its own `opencode serve` process with that
