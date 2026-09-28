@@ -1238,6 +1238,11 @@ fn list_lint_rules(json_out: bool) -> Result<u8> {
             severity: "warning",
             description: "A {shot: <stepId>} claim has no baselines/<stepId>.png beside scenario.json; replay will fail with a missing-baseline hint. Skipped for stdin input.",
         },
+        Rule {
+            code: "orphan-baseline",
+            severity: "warning",
+            description: "baselines/<stepId>.png exists but no shot claim references <stepId> — a stale golden left by a deleted or renamed step. Skipped for stdin input.",
+        },
     ];
     if json_out {
         println!("{}", serde_json::to_string_pretty(&rules)?);
@@ -1658,6 +1663,29 @@ pub(crate) fn lint(
                             "check claims shot {sid:?} but baselines/{sid}.png is missing — run `agent-qa shot-accept` after a replay"
                         ),
                     });
+                }
+            }
+            // Inverse: a baseline PNG whose stepId no shot claim references
+            // is a stale golden — deleted steps and renumbered ids leave
+            // them behind, and they cost review attention forever.
+            if let Ok(rd) = fs::read_dir(&baselines) {
+                let claimed: std::collections::BTreeSet<&str> =
+                    shot_ids.iter().map(String::as_str).collect();
+                for ent in rd.flatten() {
+                    let name = ent.file_name();
+                    let name = name.to_string_lossy();
+                    let Some(stem) = name.strip_suffix(".png") else {
+                        continue;
+                    };
+                    if !claimed.contains(stem) {
+                        findings.push(Finding {
+                            severity: "warning",
+                            code: "orphan-baseline",
+                            message: format!(
+                                "baselines/{name} — no shot claim references step {stem:?}; delete it or the claim was renamed"
+                            ),
+                        });
+                    }
                 }
             }
         }
@@ -3409,6 +3437,43 @@ mod tests {
         fs::create_dir_all(dir.join("baselines")).unwrap();
         fs::write(dir.join("baselines/s0.png"), b"png").unwrap();
         assert_eq!(lint(&p, LintFormat::Text, false, None, None).unwrap(), 0);
+    }
+
+    #[test]
+    fn lint_orphan_baseline_warns_on_unclaimed_png() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("demo");
+        fs::create_dir_all(dir.join("baselines")).unwrap();
+        let p = dir.join("scenario.json");
+        fs::write(
+            &p,
+            r#"{
+              "schema": "scenario/2", "id": "demo", "intent": "x",
+              "steps": [
+                { "id": "s0", "intent": "go", "kind": "do", "verb": "reload" },
+                { "id": "s1", "intent": "looks", "kind": "check",
+                  "claim": { "subject": { "shot": "s0" }, "predicate": "matches" } }
+              ]
+            }"#,
+        )
+        .unwrap();
+        // Claimed baseline → clean.
+        fs::write(dir.join("baselines/s0.png"), b"png").unwrap();
+        assert_eq!(lint(&p, LintFormat::Text, false, None, None).unwrap(), 0);
+        // s9.png has no claim → warning (exit stays 0 for warnings).
+        fs::write(dir.join("baselines/s9.png"), b"png").unwrap();
+        let code = lint(&p, LintFormat::Json, false, None, None).unwrap();
+        assert_eq!(code, 0);
+        // And the rule surfaces in --only filtering.
+        let code = lint(
+            &p,
+            LintFormat::Json,
+            true, // strict: warnings fail
+            Some(&["orphan-baseline".to_string()]),
+            None,
+        )
+        .unwrap();
+        assert_eq!(code, 1);
     }
 
     #[test]
