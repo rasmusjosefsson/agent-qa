@@ -36,6 +36,10 @@ pub struct DoContext<'a> {
     /// otherwise be allowed to reuse session state (the warm-page `goto`
     /// skip) must instead produce a fresh, deterministic document.
     pub visual_checks: bool,
+    /// The scenario drives native dialogs — clicks may open an alert that
+    /// keeps the page's JS thread (and the daemon's pending eval reply)
+    /// blocked, so post-click settle waits must yield to the dialog.
+    pub uses_dialog: bool,
 }
 
 /// Dispatch a single `do` step. Returns `Ok(Some(saved))` if the verb
@@ -99,6 +103,17 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
         }
         Verb::Click => {
             click_locator(ctx.session, on.unwrap(), scope, ctx.scenario_dir)?;
+            // The activation chain is deferred (~150ms, see
+            // try_selector_native_click) so an onclick alert/confirm doesn't
+            // block the eval — the dialog surfaces as pending a tick later.
+            // Let that timer land, then skip the settle wait while a dialog
+            // is up: evals would queue behind it.
+            if ctx.uses_dialog {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                if browser::dialog_pending(ctx.session) {
+                    return Ok(None);
+                }
+            }
             browser::wait_for_load(ctx.session, "networkidle")?;
             Ok(None)
         }
@@ -1077,9 +1092,18 @@ fn try_selector_native_click(session: &str, selector: &str) -> anyhow::Result<bo
     || ['button', 'checkbox', 'radio', 'link'].includes(role);
   if (!isNativeControl) return false;
   try {{ el.focus(); }} catch (e) {{}}
-  el.dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true, cancelable: true, view: window }}));
-  el.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true, cancelable: true, view: window }}));
-  el.click();
+  // Defer the activation chain past the eval's response window: an onclick
+  // alert/confirm/prompt blocks the page's JS thread, which stops the daemon
+  // from delivering the eval result at all (~30s internal timeout). A ~150ms
+  // timer lets the response land first — the dialog then surfaces as pending
+  // for the next `dialog` step.
+  setTimeout(() => {{
+    try {{
+      el.dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true, cancelable: true, view: window }}));
+      el.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true, cancelable: true, view: window }}));
+      el.click();
+    }} catch (e) {{}}
+  }}, 150);
   return true;
 }})()"#,
         selector_lit = json_str(selector)
@@ -1174,13 +1198,34 @@ fn click_locator(
     scenario_dir: &std::path::Path,
 ) -> Result<()> {
     match act_on_locator(session, loc, scope, RoleAct::Click, None, scenario_dir) {
-        Err(e) if dialog_blocking_error(&e) && browser::dialog_pending(session) => Ok(()),
+        Err(e) if dialog_blocking_error(&e) && dialog_pending_within(session, 3000) => {
+            eprintln!("[v2-replay] click tolerated — dialog pending");
+            Ok(())
+        }
         other => other,
     }
 }
 
+/// Poll `dialog status` briefly — the daemon can take a beat to surface the
+/// pending dialog after a blocked eval is killed mid-click.
+fn dialog_pending_within(session: &str, timeout_ms: u64) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    loop {
+        if browser::dialog_pending(session) {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
 fn dialog_blocking_error(e: &anyhow::Error) -> bool {
-    format!("{e:#}").contains("dialog is blocking")
+    let msg = format!("{e:#}");
+    // `Runtime.evaluate` either returns the agent-browser error or times out:
+    // both mean the click handler opened a native dialog mid-eval.
+    msg.contains("dialog is blocking") || msg.contains("timed out")
 }
 
 /// Resolve a role locator's `name` to the literal accessible name. Plain and
@@ -1497,6 +1542,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         let _out = dispatch_do(s, &ctx, &mut scope).unwrap();
@@ -1536,6 +1582,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1570,6 +1617,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1620,6 +1668,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1696,6 +1745,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1719,6 +1769,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err();
@@ -1750,6 +1801,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1779,6 +1831,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err();
@@ -1813,6 +1866,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1840,6 +1894,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1921,6 +1976,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -1955,6 +2011,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         let saved = dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1977,6 +2034,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -2015,6 +2073,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         let saved = dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -2056,6 +2115,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -2082,6 +2142,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -2105,6 +2166,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -2133,6 +2195,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -2165,6 +2228,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -2200,6 +2264,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -2229,6 +2294,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -2253,6 +2319,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -2277,6 +2344,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -2334,6 +2402,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -2358,6 +2427,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -2402,6 +2472,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -2421,6 +2492,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -2444,6 +2516,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -2482,6 +2555,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -2509,6 +2583,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -2531,6 +2606,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();

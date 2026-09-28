@@ -467,7 +467,8 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     // nothing to resolve. The daemon reads the flag at launch; a warm-up eval
     // brings the daemon up before the first navigation (a launch-time `open`
     // can lose its navigation to the launch race).
-    if scenario_uses_dialog(&scenario) && !opts.dry_run {
+    let uses_dialog = scenario_uses_dialog(&scenario);
+    if uses_dialog && !opts.dry_run {
         crate::browser::set_no_auto_dialog(true);
         let _ = crate::browser::eval_expression(&opts.session_name, "1");
     }
@@ -649,6 +650,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             session: &opts.session_name,
             scenario_dir: &scenario_dir,
             visual_checks: scenario_has_shot_claims(&scenario),
+            uses_dialog,
         };
         let check_ctx = CheckContext {
             session: &opts.session_name,
