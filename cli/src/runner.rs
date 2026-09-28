@@ -114,6 +114,11 @@ pub struct RunOptions {
     /// performs). Runs even when shot claims FAILED: intentional UI
     /// changes are exactly the case where a failing diff needs re-minting.
     pub update_baselines: bool,
+    /// After a passing run, apply this run's locator-correction heal
+    /// patches back into scenario.json (heal-promote --apply for just this
+    /// run). The content-hash guard still applies: a patch recorded
+    /// against an older scenario is refused with a warning, never written.
+    pub auto_promote: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -904,7 +909,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         audit.heal_overrides_applied = Some(applied_overrides);
     }
     if !healed_steps.is_empty() {
-        audit.auto_healed = Some(healed_steps);
+        audit.auto_healed = Some(healed_steps.clone());
     }
     if let Some(f) = &opts.from_step {
         audit.window_from = Some(f.clone());
@@ -926,6 +931,23 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
 
     // 9. Latest pointer.
     update_latest_pointer(&scenario_dir, &run.run_id)?;
+
+    // 9.6. `--auto-promote` — self-healing write-back. Only on a passing
+    // run: locator-correction patches this run produced are applied to
+    // scenario.json via the same hash-guarded plan `heal-promote --apply`
+    // uses. A refusal (the file changed since the run started) is a
+    // warning, never a run failure. Skipped for --dry-run (no patches can
+    // exist) and runs that wrote no corrections.
+    if opts.auto_promote && !opts.dry_run && summary.ok && !healed_steps.is_empty() {
+        match crate::heal_promote::promote_run(&scenario_file, &run.run_id) {
+            Ok(0) => {}
+            Ok(n) => eprintln!(
+                "[v2-replay] auto-promoted {n} locator patch(es) into {}",
+                scenario_file.display()
+            ),
+            Err(err) => eprintln!("[v2-replay] --auto-promote skipped: {err}"),
+        }
+    }
 
     // 10. `--update-baselines` — mint from this run's capture set. Runs
     // before the failure bail on purpose: a shot claim that correctly
@@ -1761,6 +1783,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut from_step: Option<String> = None;
     let mut until_step: Option<String> = None;
     let mut update_baselines = false;
+    let mut auto_promote = false;
     let mut input_overrides: BTreeMap<String, String> = BTreeMap::new();
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
@@ -1800,6 +1823,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             "--until" => until_step = it.next().cloned().or_else(|| bail_missing("--until")),
             s if s.starts_with("--until=") => until_step = Some(s["--until=".len()..].to_string()),
             "--update-baselines" => update_baselines = true,
+            "--auto-promote" => auto_promote = true,
             "--param" | "-p" => {
                 let pair = it
                     .next()
@@ -1854,6 +1878,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         from_step,
         until_step,
         update_baselines,
+        auto_promote,
     })
 }
 
@@ -1968,7 +1993,12 @@ replays/latest.txt.
                          performs). Runs even when shot claims fail —
                          intentional UI changes are the re-mint case.
                          Skips with a warning when the run captured no
-                         screenshots (e.g. --no-sidecars)."
+                         screenshots (e.g. --no-sidecars).
+--auto-promote           Self-healing write-back: when the run passed AND
+                         auto-heal corrected locators this run, apply those
+                         patches to scenario.json (the hash-guarded
+                         heal-promote --apply path). A stale-hash refusal
+                         is a warning, never a failure."
 }
 
 #[cfg(all(test, unix))]
@@ -2048,6 +2078,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
         };
         let summary = run(&opts).unwrap();
         assert_eq!(summary.total, 1);
@@ -2124,6 +2155,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2181,6 +2213,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2219,6 +2252,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
         };
         let err = format!("{:#}", run(&opts).unwrap_err());
         assert!(err.contains("schema error"), "got: {err}");
@@ -2282,6 +2316,7 @@ esac\nexit 0\n",
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
         }
     }
 
@@ -2533,6 +2568,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2594,6 +2630,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3150,6 +3187,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3235,6 +3273,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3417,6 +3456,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3504,6 +3544,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
         };
         // The run bails at the failing step; events/status are written
         // before the bail.
@@ -3570,6 +3611,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
         };
         run(&opts).unwrap();
 
@@ -3614,6 +3656,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
         };
         run(&opts).unwrap();
         let run_dir = run_dir_for(&jdir);
@@ -3795,6 +3838,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
         };
         assert_eq!(resolve_progress_mode(&mk(true, false)), ProgressMode::Quiet);
         // quiet wins over plain.
@@ -3809,5 +3853,13 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         assert!(opts.plain);
         let opts = parse_args(&["./j.json".into()]).unwrap();
         assert!(!opts.plain);
+    }
+
+    #[test]
+    fn parse_args_auto_promote_flag() {
+        let opts = parse_args(&["sid".into(), "--auto-promote".into()]).unwrap();
+        assert!(opts.auto_promote);
+        let opts = parse_args(&["sid".into()]).unwrap();
+        assert!(!opts.auto_promote);
     }
 }

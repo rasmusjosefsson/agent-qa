@@ -34,7 +34,10 @@ Only `do` and `check` drafts are accepted.
 `replay <sid-or-path> [--session <name>] [--profile <name>] [--update-baselines]`
 replays a sealed `scenario/2` document. It writes its audit and sidecars below
 `replays/`; `--update-baselines` mints `baselines/` PNGs from the run's
-screenshots afterwards (visual baselines — see `visual.md`).
+screenshots afterwards (visual baselines — see `visual.md`).`--auto-promote`
+writes this run's locator-correction patches back into `scenario.json` when
+the run passed — the self-healing loop that keeps a drifting app green
+without a `heal-promote` step.
 
 ## Connection settings (BYO only — skip this by default)
 
