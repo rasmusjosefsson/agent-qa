@@ -20,12 +20,12 @@ the picture shifts materially.
 
 ### P0 — the loop isn't closed for recorded users
 
-1. ~~Record → network claims~~ **done in #252** — `flush --auto-network`
-   appends deduped `networkFired` claims for XHR/fetch/non-GET traffic.
-   Remaining tail: default-on so hand-recorded scenarios get them
-   without flags.
-2. ~~`pageError`/`console` claims in record~~ **done in #252** — `flush
-   --auto-errors` appends `pageError notExists`; same default-on tail.
+1. ~~Record → network claims~~ **done in #252 + default-on in #256** —
+   `flush --auto-network` appends deduped `networkFired` claims for
+   XHR/fetch/non-GET traffic; on by default, `--no-auto-network` opts out.
+2. ~~`pageError`/`console` claims in record~~ **done in #252 +
+   default-on in #256** — `flush --auto-errors` appends
+   `pageError notExists`; on by default, `--no-auto-errors` opts out.
 
 ### P1 — shipped verbs with no golden coverage
 
@@ -36,19 +36,23 @@ the picture shifts materially.
    `cookiePresent`/`storagePresent` vocab + `assertCookie`/`assertStorage`
    helpers + sauce-tc05 (cookie lifecycle) / sauce-tc06 (`do/state`
    cookie seed lands logged-in).
-5. **`loop`/`group`/`useTemplate`** — no golden exercises them; a
-   `forgot_password`-style loop case would.
+5. ~~`loop`/`group`/`useTemplate`~~ **done in #255** —
+   `runAuthoredGolden` writes authored scenario/2 docs straight into the
+   golden scenarios root; struct-tc01 expands a login `useTemplate` plus
+   a `group`→`loop` over the four saucedemo sort orders (17/17).
 
 ### P1 — claim subjects still missing
 
-6. **`computedStyle` claim** — "element has color X / display:grid" is a
-   common UI assertion `element.attribute` can't express (styles aren't
-   attributes). Small surface: one subject reading `getComputedStyle`.
+6. ~~`computedStyle` claim~~ **done in #254** — no new subject needed:
+   `element` + `attribute: "style:<prop>"` reads `getComputedStyle`
+   (edge-tc35 proves `display:none`→`block` on `/dynamic_loading`).
 7. ~~`focus` claim~~ — already covered: `element` + `elementFocused`
    predicate (`{element: <locator>, attribute: "focused"}`); no new
    subject needed. (Listed in error.)
-8. **`timing` claim** — "step finished < 2s" exists in audit-slow but not as
-   a per-step assertion.
+8. ~~`timing` claim~~ **done in #255** — `{"timing": "<stepId>"}` reads
+   the run's own `events.jsonl` (latest terminal row's `ms`), numeric
+   predicates compare; `stepTiming` vocab kind; struct-tc01 pins the
+   login click <15s and each sort select <5s.
 
 ### P2 — platform coverage
 
