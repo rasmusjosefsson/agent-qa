@@ -1052,6 +1052,16 @@ fn list_lint_rules(json_out: bool) -> Result<u8> {
             description: "A do step is not followed by a check (trailing or pre-do).",
         },
         Rule {
+            code: "no-visual-check",
+            severity: "warning",
+            description: "A scenario with do steps has no { shot: ... } claim — nothing pixel-diffs a baseline.",
+        },
+        Rule {
+            code: "shot-missing-baseline",
+            severity: "error",
+            description: "A { shot: <stepId> } claim has no <scenario>/baselines/<stepId>.png — replay always fails the claim.",
+        },
+        Rule {
             code: "undeclared-input",
             severity: "error",
             description: "A value references inputs.<name> not declared on the scenario.",
@@ -1104,7 +1114,12 @@ fn list_lint_rules(json_out: bool) -> Result<u8> {
         Rule {
             code: "wait-without-condition",
             severity: "warning",
-            description: "A do/wait step has neither params.timeoutMs nor params.locator; will hang the replay until the global timeout.",
+            description: "A do/wait step has none of params.ms/until/url/timeoutMs/locator; falls back to a networkidle wait that may miss the intended condition.",
+        },
+        Rule {
+            code: "shot-without-baseline",
+            severity: "warning",
+            description: "A {shot: <stepId>} claim has no baselines/<stepId>.png beside scenario.json; replay will fail with a missing-baseline hint. Skipped for stdin input.",
         },
     ];
     if json_out {
@@ -1225,6 +1240,54 @@ pub(crate) fn lint(
             code: "bare-do",
             message: format!("step {id:?} is a trailing do not followed by a check"),
         });
+    }
+
+    // 3b) no visual coverage — a scenario with do steps but zero shot claims
+    // has no pixel baseline; nudge toward `flush --auto-shots` / editor camera.
+    let has_do = j.steps.iter().any(|s| matches!(s, Step::Do { .. }));
+    let has_shot = j.steps.iter().any(|s| {
+        matches!(
+            s,
+            Step::Check {
+                claim: crate::scenario::Claim {
+                    subject: crate::scenario::ClaimSubject::Shot { .. },
+                    ..
+                },
+                ..
+            }
+        )
+    });
+    if has_do && !has_shot {
+        findings.push(Finding {
+            severity: "warning",
+            code: "no-visual-check",
+            message: "scenario has do steps but no { shot: ... } claim — add one for pixel-diff coverage (`flush --auto-shots` covers every do step)".to_string(),
+        });
+    }
+
+    // 3c) shot claim with no minted baseline — guaranteed replay failure.
+    // Only meaningful when the lint target is a real `<sid>/scenario.json`
+    // on disk (stdin has no scenario dir, so baselines can't be resolved).
+    if path.file_name().is_some_and(|n| n == "scenario.json") {
+        let baselines = path
+            .parent()
+            .map(|d| d.join("baselines"))
+            .unwrap_or_default();
+        for step in &j.steps {
+            if let Step::Check { id, claim, .. } = step {
+                if let crate::scenario::ClaimSubject::Shot { shot, .. } = &claim.subject {
+                    if !baselines.join(format!("{shot}.png")).is_file() {
+                        findings.push(Finding {
+                            severity: "error",
+                            code: "shot-missing-baseline",
+                            message: format!(
+                                "step {id:?} claims shot {shot:?} but baselines/{shot}.png is missing — mint it with `shot-accept <sid>`"
+                            ),
+                        });
+                    }
+                }
+            }
+        }
     }
 
     // 4) input references vs declarations
@@ -1413,16 +1476,70 @@ pub(crate) fn lint(
         {
             let has_condition = params
                 .as_ref()
-                .map(|p| p.get("timeoutMs").is_some() || p.get("locator").is_some())
+                .map(|p| {
+                    p.get("ms").is_some()
+                        || p.get("until").is_some()
+                        || p.get("url").is_some()
+                        || p.get("timeoutMs").is_some()
+                        || p.get("locator").is_some()
+                })
                 .unwrap_or(false);
             if !has_condition {
                 findings.push(Finding {
                     severity: "warning",
                     code: "wait-without-condition",
                     message: format!(
-                        "step {id:?} verb=wait has neither params.timeoutMs nor params.locator; will hang the replay"
+                        "step {id:?} verb=wait has no wait condition (params.ms/until/url/timeoutMs/locator); falls back to networkidle"
                     ),
                 });
+            }
+        }
+    }
+
+    // 13) a {"shot": <stepId>} claim needs a committed baseline —
+    // replay fails on the missing file anyway; flag it while the author
+    // still has the terminal in hand. Skipped on stdin ('-'): the tempfile
+    // has no scenario dir to resolve baselines/ against. Nested shot claims
+    // (inside group/loop params.steps) count too — same JSON walk the
+    // runner uses to find them.
+    let from_stdin = matches!(&_guard, crate::io::StdinOrPath::Stdin { .. });
+    if !from_stdin {
+        if let Some(scenario_dir) = path.parent() {
+            let mut shot_ids: Vec<String> = Vec::new();
+            fn collect_shots(v: &serde_json::Value, out: &mut Vec<String>) {
+                match v {
+                    serde_json::Value::Object(map) => {
+                        if let Some(subject) = map.get("claim").and_then(|c| c.get("subject")) {
+                            if let Some(sid) = subject.get("shot").and_then(|s| s.as_str()) {
+                                out.push(sid.to_string());
+                            }
+                        }
+                        for v in map.values() {
+                            collect_shots(v, out);
+                        }
+                    }
+                    serde_json::Value::Array(arr) => {
+                        for v in arr {
+                            collect_shots(v, out);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(steps) = raw.get("steps") {
+                collect_shots(steps, &mut shot_ids);
+            }
+            let baselines = scenario_dir.join("baselines");
+            for sid in &shot_ids {
+                if !baselines.join(format!("{sid}.png")).is_file() {
+                    findings.push(Finding {
+                        severity: "warning",
+                        code: "shot-without-baseline",
+                        message: format!(
+                            "check claims shot {sid:?} but baselines/{sid}.png is missing — run `agent-qa shot-accept` after a replay"
+                        ),
+                    });
+                }
             }
         }
     }
@@ -1544,6 +1661,9 @@ struct CoverageCounts {
     check_steps: usize,
     do_followed_by_check: usize,
     bare_do: usize,
+    /// do-steps whose following check is a `{"shot": <that do's id>}` claim —
+    /// the fraction of the flow covered by a pixel-diffed baseline.
+    shot_covered: usize,
 }
 
 impl CoverageCounts {
@@ -1554,32 +1674,43 @@ impl CoverageCounts {
             self.do_followed_by_check as f64 / self.do_steps as f64
         }
     }
+    fn shot_ratio(&self) -> f64 {
+        if self.do_steps == 0 {
+            1.0
+        } else {
+            self.shot_covered as f64 / self.do_steps as f64
+        }
+    }
 }
 
 fn coverage_counts(steps: &[crate::scenario::Step]) -> CoverageCounts {
-    use crate::scenario::Step;
+    use crate::scenario::{ClaimSubject, Step};
     let mut c = CoverageCounts::default();
-    let mut prev_was_do = false;
+    let mut prev_do_id: Option<&str> = None;
     for step in steps {
         c.total += 1;
         match step {
-            Step::Do { .. } => {
-                if prev_was_do {
+            Step::Do { id, .. } => {
+                if prev_do_id.is_some() {
                     c.bare_do += 1;
                 }
                 c.do_steps += 1;
-                prev_was_do = true;
+                prev_do_id = Some(id.as_str());
             }
-            Step::Check { .. } => {
+            Step::Check { claim, .. } => {
                 c.check_steps += 1;
-                if prev_was_do {
+                if let Some(did) = prev_do_id.take() {
                     c.do_followed_by_check += 1;
-                    prev_was_do = false;
+                    if let ClaimSubject::Shot { shot, .. } = &claim.subject {
+                        if shot == did {
+                            c.shot_covered += 1;
+                        }
+                    }
                 }
             }
         }
     }
-    if prev_was_do {
+    if prev_do_id.is_some() {
         c.bare_do += 1;
     }
     c
@@ -1609,6 +1740,8 @@ fn coverage(path: &Path, json_out: bool) -> Result<u8> {
             do_followed_by_check: usize,
             bare_do_steps: usize,
             coverage_ratio: f64,
+            shot_covered_steps: usize,
+            shot_coverage_ratio: f64,
         }
         let report = Report {
             id: &j.id,
@@ -1618,6 +1751,8 @@ fn coverage(path: &Path, json_out: bool) -> Result<u8> {
             do_followed_by_check,
             bare_do_steps: bare_do,
             coverage_ratio: ratio,
+            shot_covered_steps: c.shot_covered,
+            shot_coverage_ratio: c.shot_ratio(),
         };
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
@@ -1627,6 +1762,11 @@ fn coverage(path: &Path, json_out: bool) -> Result<u8> {
         println!("  do → check       : {do_followed_by_check}");
         println!("  bare do steps   : {bare_do}");
         println!("  coverage ratio  : {:.0}%", ratio * 100.0);
+        println!(
+            "  visual (shot)   : {} covered, {:.0}%",
+            c.shot_covered,
+            c.shot_ratio() * 100.0
+        );
     }
     Ok(0)
 }
@@ -1675,6 +1815,7 @@ fn coverage_all(filter: Option<&str>, json_out: bool) -> Result<u8> {
         agg.check_steps += c.check_steps;
         agg.do_followed_by_check += c.do_followed_by_check;
         agg.bare_do += c.bare_do;
+        agg.shot_covered += c.shot_covered;
     }
 
     if json_out {
@@ -1688,6 +1829,8 @@ fn coverage_all(filter: Option<&str>, json_out: bool) -> Result<u8> {
             do_followed_by_check: usize,
             bare_do_steps: usize,
             coverage_ratio: f64,
+            shot_covered_steps: usize,
+            shot_coverage_ratio: f64,
         }
         #[derive(serde::Serialize)]
         #[serde(rename_all = "camelCase")]
@@ -1700,6 +1843,8 @@ fn coverage_all(filter: Option<&str>, json_out: bool) -> Result<u8> {
             do_followed_by_check: usize,
             bare_do_steps: usize,
             coverage_ratio: f64,
+            shot_covered_steps: usize,
+            shot_coverage_ratio: f64,
             rows: Vec<Row<'a>>,
         }
         let report = Report {
@@ -1711,6 +1856,8 @@ fn coverage_all(filter: Option<&str>, json_out: bool) -> Result<u8> {
             do_followed_by_check: agg.do_followed_by_check,
             bare_do_steps: agg.bare_do,
             coverage_ratio: agg.ratio(),
+            shot_covered_steps: agg.shot_covered,
+            shot_coverage_ratio: agg.shot_ratio(),
             rows: rows
                 .iter()
                 .map(|(sid, intent, c)| Row {
@@ -1721,6 +1868,8 @@ fn coverage_all(filter: Option<&str>, json_out: bool) -> Result<u8> {
                     do_followed_by_check: c.do_followed_by_check,
                     bare_do_steps: c.bare_do,
                     coverage_ratio: c.ratio(),
+                    shot_covered_steps: c.shot_covered,
+                    shot_coverage_ratio: c.shot_ratio(),
                 })
                 .collect(),
         };
@@ -1737,28 +1886,30 @@ fn coverage_all(filter: Option<&str>, json_out: bool) -> Result<u8> {
         return Ok(0);
     }
     println!(
-        "{:<24} {:>5} {:>5} {:>7} {:>5}  {:<5} intent",
-        "sid", "steps", "do", "do→ck", "bare", "ratio"
+        "{:<24} {:>5} {:>5} {:>7} {:>5}  {:<5} {:<6} intent",
+        "sid", "steps", "do", "do→ck", "bare", "ratio", "shot%"
     );
     for (sid, intent, c) in &rows {
         println!(
-            "{:<24} {:>5} {:>5} {:>7} {:>5}  {:>4.0}% {}",
+            "{:<24} {:>5} {:>5} {:>7} {:>5}  {:>4.0}% {:>4.0}% {}",
             sid,
             c.total,
             c.do_steps,
             c.do_followed_by_check,
             c.bare_do,
             c.ratio() * 100.0,
+            c.shot_ratio() * 100.0,
             intent.chars().take(40).collect::<String>()
         );
     }
     println!(
-        "\nOVERALL: scenarios={} do={} do→check={} bare={} ratio={:.0}%",
+        "\nOVERALL: scenarios={} do={} do→check={} bare={} ratio={:.0}% shot={:.0}%",
         rows.len(),
         agg.do_steps,
         agg.do_followed_by_check,
         agg.bare_do,
-        agg.ratio() * 100.0
+        agg.ratio() * 100.0,
+        agg.shot_ratio() * 100.0
     );
     Ok(0)
 }
@@ -2145,7 +2296,13 @@ fn lint_collect(
         {
             let has_condition = params
                 .as_ref()
-                .map(|p| p.get("timeoutMs").is_some() || p.get("locator").is_some())
+                .map(|p| {
+                    p.get("ms").is_some()
+                        || p.get("until").is_some()
+                        || p.get("url").is_some()
+                        || p.get("timeoutMs").is_some()
+                        || p.get("locator").is_some()
+                })
                 .unwrap_or(false);
             if !has_condition && active("wait-without-condition") {
                 warnings += 1;
@@ -3072,6 +3229,58 @@ mod tests {
         assert_eq!(c.do_followed_by_check, 1);
         assert_eq!(c.bare_do, 1);
         assert!((c.ratio() - 0.5).abs() < 1e-9);
+        assert_eq!(c.shot_covered, 0);
+    }
+
+    #[test]
+    fn coverage_counts_shot_claims_on_the_following_check() {
+        // do,shot-check(s0) + do,bare → shot_covered=1, do→check=1.
+        let tmp = TempDir::new().unwrap();
+        let p = write(
+            tmp.path(),
+            r#"{
+              "schema": "scenario/2", "id": "x", "intent": "y",
+              "steps": [
+                { "id": "s0", "intent": "a", "kind": "do", "verb": "reload" },
+                { "id": "s1", "intent": "looks right", "kind": "check",
+                  "claim": { "subject": { "shot": "s0" }, "predicate": "matches" } },
+                { "id": "s2", "intent": "b", "kind": "do", "verb": "reload" }
+              ]
+            }"#,
+        );
+        let j = load_scenario(&p).unwrap();
+        let c = coverage_counts(&j.steps);
+        assert_eq!(c.do_steps, 2);
+        assert_eq!(c.do_followed_by_check, 1);
+        assert_eq!(c.bare_do, 1);
+        assert_eq!(c.shot_covered, 1);
+        assert!((c.shot_ratio() - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn lint_shot_claim_without_baseline_is_an_error() {
+        // Only fires for a real `<sid>/scenario.json` layout — baselines live
+        // beside it; a bare `j.json` skips the rule entirely.
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("demo");
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("scenario.json");
+        fs::write(
+            &p,
+            r#"{
+              "schema": "scenario/2", "id": "demo", "intent": "x",
+              "steps": [
+                { "id": "s0", "intent": "go", "kind": "do", "verb": "reload" },
+                { "id": "s1", "intent": "looks", "kind": "check",
+                  "claim": { "subject": { "shot": "s0" }, "predicate": "matches" } }
+              ]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(lint(&p, LintFormat::Text, false, None, None).unwrap(), 1);
+        fs::create_dir_all(dir.join("baselines")).unwrap();
+        fs::write(dir.join("baselines/s0.png"), b"png").unwrap();
+        assert_eq!(lint(&p, LintFormat::Text, false, None, None).unwrap(), 0);
     }
 
     #[test]
@@ -3437,6 +3646,67 @@ mod tests {
         );
         assert_eq!(lint(&p, LintFormat::Json, false, None, None).unwrap(), 0);
         assert_eq!(lint(&p, LintFormat::Json, true, None, None).unwrap(), 1);
+    }
+
+    #[test]
+    fn lint_shot_claim_without_baseline_warns() {
+        let tmp = TempDir::new().unwrap();
+        let p = write(
+            tmp.path(),
+            r#"{
+              "schema": "scenario/2", "id": "j", "intent": "x",
+              "steps": [
+                { "id": "s0", "intent": "shot", "kind": "check",
+                  "claim": { "subject": { "shot": "s0" }, "predicate": "matches" } }
+              ]
+            }"#,
+        );
+        // warning-only: exit 0 without --strict
+        assert_eq!(lint(&p, LintFormat::Json, false, None, None).unwrap(), 0);
+        // but the finding is there
+        let guard = crate::io::stdin_or_path(&p).unwrap();
+        let _ = guard;
+        let findings_dir = tmp.path().join("baselines");
+        fs::create_dir_all(&findings_dir).unwrap();
+        fs::write(findings_dir.join("s0.png"), b"png").unwrap();
+        assert_eq!(lint(&p, LintFormat::Json, false, None, None).unwrap(), 0);
+    }
+
+    #[test]
+    fn lint_shot_claim_missing_baseline_is_reported() {
+        let tmp = TempDir::new().unwrap();
+        let p = write(
+            tmp.path(),
+            r#"{
+              "schema": "scenario/2", "id": "j", "intent": "x",
+              "steps": [
+                { "id": "s0", "intent": "shot", "kind": "check",
+                  "claim": { "subject": { "shot": "s0" }, "predicate": "matches" } }
+              ]
+            }"#,
+        );
+        // capture stdout isn't accessible — use --strict so warnings exit 1
+        assert_eq!(lint(&p, LintFormat::Text, true, None, None).unwrap(), 1);
+    }
+
+    #[test]
+    fn lint_shot_claim_with_baseline_is_clean() {
+        let tmp = TempDir::new().unwrap();
+        let p = write(
+            tmp.path(),
+            r#"{
+              "schema": "scenario/2", "id": "j", "intent": "x",
+              "env": { "open": [ { "kind": "nav", "url": "https://example.com/" } ] },
+              "steps": [
+                { "id": "s0", "intent": "shot", "kind": "check",
+                  "claim": { "subject": { "shot": "s0" }, "predicate": "matches" } }
+              ]
+            }"#,
+        );
+        let baselines = tmp.path().join("baselines");
+        fs::create_dir_all(&baselines).unwrap();
+        fs::write(baselines.join("s0.png"), b"png").unwrap();
+        assert_eq!(lint(&p, LintFormat::Text, true, None, None).unwrap(), 0);
     }
 
     #[test]

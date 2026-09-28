@@ -148,6 +148,10 @@ jobs:
           ./node_modules/.bin/agent-qa skills get core | head -5
           ./node_modules/.bin/agent-qa scenario validate \
             $GITHUB_WORKSPACE/examples/scenarios/smoke/scenario.json
+          # Lint + schema across every committed example scenario — catches a
+          # malformed/undocumented scenario landing on main silently.
+          AGENT_QA_SCENARIOS_DIR=$GITHUB_WORKSPACE/examples/scenarios \
+            ./node_modules/.bin/agent-qa scenario check-all
           ./node_modules/.bin/agent-qa --version
       - name: browser contract
         run: AQ=/tmp/install/node_modules/.bin/agent-qa WORK="$RUNNER_TEMP/agent-qa-browser-contract" BROWSER_HOME="$RUNNER_TEMP/agent-qa-browser-home" scripts/ci-browser-contract.sh

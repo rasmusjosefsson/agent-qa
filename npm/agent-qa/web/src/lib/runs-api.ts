@@ -67,6 +67,20 @@ export async function startReplay(
   return { ok: false, error: j.error || String(res.status) }
 }
 
+export async function crawlScenario(
+  url: string,
+  opts?: { sid?: string; max?: number },
+): Promise<{ ok: boolean; stdout?: string; error?: string }> {
+  const res = await fetch('/api/scenarios/crawl', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ url, ...(opts?.sid ? { sid: opts.sid } : {}), ...(opts?.max ? { max: opts.max } : {}) }),
+  })
+  const j = (await res.json().catch(() => ({}))) as { stdout?: string; error?: string }
+  if (res.ok) return { ok: true, stdout: j.stdout }
+  return { ok: false, error: j.error || String(res.status) }
+}
+
 export async function deleteScenario(sid: string): Promise<{ ok: boolean; error?: string }> {
   const res = await fetch(`/api/scenarios/${encodeURIComponent(sid)}/delete`, {
     method: 'POST',
@@ -109,6 +123,21 @@ export async function acceptShot(
   )
   if (res.ok) return { ok: true }
   const j = (await res.json().catch(() => ({}))) as { error?: string }
+  return { ok: false, error: j.error || String(res.status) }
+}
+
+// Same route with {all:true} — promote every screenshot captured in the run
+// (the "apply new goldens" path after an intentional UI change).
+export async function acceptAllShots(
+  sid: string,
+  runId: string
+): Promise<{ ok: boolean; minted?: string[]; error?: string }> {
+  const res = await fetch(
+    `/api/scenarios/${encodeURIComponent(sid)}/runs/${encodeURIComponent(runId)}/shot-accept`,
+    { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ all: true }) }
+  )
+  const j = (await res.json().catch(() => ({}))) as { ok?: boolean; minted?: string[]; error?: string }
+  if (res.ok && j.ok) return { ok: true, minted: j.minted || [] }
   return { ok: false, error: j.error || String(res.status) }
 }
 
