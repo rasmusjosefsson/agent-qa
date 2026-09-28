@@ -205,7 +205,8 @@
     "golden:sauce:s01": "bun golden/sauce-tc01.ts",
     "golden:sauce:s02": "bun golden/sauce-tc02.ts",
     "golden:sauce:s03": "bun golden/sauce-tc03.ts",
-    "golden:sauce:s04": "bun golden/sauce-tc04.ts"
+    "golden:sauce:s04": "bun golden/sauce-tc04.ts",
+    "golden:frame:tc01": "bun golden/frame-tc01.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"
