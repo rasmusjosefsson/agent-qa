@@ -53,6 +53,7 @@ export interface EdgeGolden extends GoldenContext {
   downloadBySelector(selector: string, scenarioRelPath: string, intent: string): Promise<void>;
   dragSelector(from: string, to: string, intent: string): Promise<void>;
   tabCommand(tail: string, intent: string): Promise<void>;
+  reload(intent: string): Promise<void>;
   upload(selector: string, repoRelFixture: string, intent: string): Promise<void>;
   assertFileExists(scenarioRelPath: string, intent: string): Promise<void>;
   assertFileName(scenarioRelPath: string, expectedName: string, intent: string): Promise<void>;
@@ -302,6 +303,10 @@ export async function runEdgeGolden(
         args: [matcher, predicate, value],
         intent: stepIntent,
       });
+    },
+    async reload(stepIntent) {
+      await run(ctx, "reload", [ctx.agentBrowser, "--session", ctx.session, "reload"]);
+      await record(ctx, "action", { method: "reloadPage", args: [], intent: stepIntent });
     },
     async assertNetworkStatus(matcher, predicate, value, stepIntent) {
       await record(ctx, "assert", {
