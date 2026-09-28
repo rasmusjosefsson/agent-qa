@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use regex::Regex;
 use serde_json::Value as Json;
 
@@ -122,15 +122,136 @@ pub fn dispatch_check(
         ClaimSubject::Flag { flag } => {
             check_flag(flag, &claim.predicate, claim.value.as_ref(), ctx)
         }
-        ClaimSubject::Shot { shot, .. } => {
-            check_shot(shot, &claim.predicate, claim.tolerance.as_ref(), ctx)
-        }
+        ClaimSubject::Shot { shot, clip, .. } => check_shot(
+            shot,
+            clip.as_ref(),
+            &claim.predicate,
+            claim.tolerance.as_ref(),
+            ctx,
+            scope,
+        ),
+
         ClaimSubject::Dialog { dialog } => {
             if !*dialog {
                 bail!("dialog subject requires dialog=true");
             }
             check_dialog(&claim.predicate, claim.value.as_ref(), ctx, scope, timeout)
         }
+        ClaimSubject::Console { console } => check_console(
+            console,
+            &claim.predicate,
+            claim.value.as_ref(),
+            ctx,
+            scope,
+            timeout,
+        ),
+    }
+}
+
+// ---------- console ----------
+
+/// Check console messages captured this session via
+/// `agent-browser console --json`. The matcher filters which messages count:
+/// `{"console": true}` → all; `{"type": "error"}` → that level;
+/// `{"text": "<substring>"}` → message text contains it.
+///
+/// Predicates:
+///   `exists`/`isVisible`      ≥1 matching message
+///   `notExists`/`isHidden`    zero matching — the "page logged no errors" gate
+///   `countEquals`/`gt`/`gte`/`lt`/`lte`  compare the matching count to `value`
+///   text predicates           ANY matching message's text satisfies them
+fn check_console(
+    subject: &crate::scenario::ConsoleSubject,
+    predicate: &Predicate,
+    expected: Option<&Json>,
+    ctx: &CheckContext,
+    scope: &mut ValueScope,
+    timeout: Duration,
+) -> Result<()> {
+    use crate::scenario::ConsoleSubject;
+    let (want_type, want_text) = match subject {
+        ConsoleSubject::Flag(true) => (None, None),
+        ConsoleSubject::Flag(false) => bail!("console subject requires console=true or a matcher"),
+        ConsoleSubject::Matcher(m) => (
+            m.r#type
+                .as_deref()
+                .map(|t| substitute_scenario_vars(t, scope)),
+            m.text
+                .as_deref()
+                .map(|t| substitute_scenario_vars(t, scope)),
+        ),
+    };
+    let deadline = Instant::now() + timeout;
+    loop {
+        let msgs = browser::console_messages(ctx.session).unwrap_or_default();
+        let matched: Vec<&crate::browser::ConsoleMessage> = msgs
+            .iter()
+            .filter(|m| {
+                want_type.as_deref().map(|t| m.level == t).unwrap_or(true)
+                    && want_text
+                        .as_deref()
+                        .map(|t| m.text.contains(t))
+                        .unwrap_or(true)
+            })
+            .collect();
+        let done = match predicate {
+            Predicate::Exists | Predicate::IsVisible => !matched.is_empty(),
+            Predicate::NotExists | Predicate::IsHidden => matched.is_empty(),
+            Predicate::CountEquals
+            | Predicate::Gt
+            | Predicate::Gte
+            | Predicate::Lt
+            | Predicate::Lte => {
+                let need = expected.and_then(|v| v.as_u64()).ok_or_else(|| {
+                    anyhow!(
+                        "console claim with predicate '{predicate:?}' requires a numeric 'value'"
+                    )
+                })?;
+                let n = matched.len() as u64;
+                match predicate {
+                    Predicate::CountEquals => n == need,
+                    Predicate::Gt => n > need,
+                    Predicate::Gte => n >= need,
+                    Predicate::Lt => n < need,
+                    _ => n <= need,
+                }
+            }
+            other @ (Predicate::Equals
+            | Predicate::Contains
+            | Predicate::Matches
+            | Predicate::StartsWith
+            | Predicate::EndsWith) => {
+                let need = expected.ok_or_else(|| {
+                    anyhow!("console claim with predicate '{other:?}' requires 'value'")
+                })?;
+                let need = substitute_scenario_vars(&value_to_string(need), scope);
+                matched
+                    .iter()
+                    .any(|m| compare_string(other, &m.text, &need).is_ok())
+            }
+            other => bail!("console subject does not support predicate '{other:?}'"),
+        };
+        if done {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            let sample: Vec<String> = msgs
+                .iter()
+                .take(3)
+                .map(|m| format!("[{}] {}", m.level, m.text))
+                .collect();
+            bail!(
+                "console claim timed out ({} messages; {} matched; latest: {})",
+                msgs.len(),
+                matched.len(),
+                if sample.is_empty() {
+                    "<none>".to_string()
+                } else {
+                    sample.join(" | ")
+                }
+            );
+        }
+        thread::sleep(POLL_INTERVAL);
     }
 }
 
@@ -286,9 +407,11 @@ fn check_flag(
 /// the `shot-accept` mint command rather than silently passing.
 fn check_shot(
     shot: &str,
+    clip: Option<&Locator>,
     predicate: &Predicate,
     tolerance: Option<&std::collections::BTreeMap<String, Json>>,
     ctx: &CheckContext,
+    scope: &mut ValueScope,
 ) -> Result<()> {
     if *predicate != Predicate::Matches {
         bail!("shot subject only supports predicate 'matches', got '{predicate:?}'");
@@ -317,8 +440,28 @@ fn check_shot(
         .and_then(|t| t.get("pixels"))
         .and_then(|v| v.as_f64())
         .unwrap_or(0.01);
-    let a = crate::compare::screenshots::decode_png(&baseline)?;
-    let b = crate::compare::screenshots::decode_png(&current)?;
+    let mut a = crate::compare::screenshots::decode_png(&baseline)?;
+    let mut b = crate::compare::screenshots::decode_png(&current)?;
+    if let Some(loc) = clip {
+        // Crop BOTH images to the element's live box (CSS px → image px via
+        // the screenshot's device-pixel scale). The rect is read now, at
+        // claim time — keep the viewport pinned so record ≈ replay rects.
+        let rect = clip_rect(ctx.session, loc, scope, b.width())?;
+        a = crop_to_rect(&a, rect).with_context(|| {
+            format!(
+                "shot '{shot}' clip rect {:?} outside baseline {:?}",
+                rect,
+                a.dimensions()
+            )
+        })?;
+        b = crop_to_rect(&b, rect).with_context(|| {
+            format!(
+                "shot '{shot}' clip rect {:?} outside current {:?}",
+                rect,
+                b.dimensions()
+            )
+        })?;
+    }
     if a.dimensions() != b.dimensions() {
         bail!(
             "shot '{shot}' changed size — baseline {:?} vs current {:?}; re-mint with shot-accept if intentional",
@@ -340,6 +483,70 @@ fn check_shot(
         tol * 100.0,
         diff_path.display()
     )
+}
+
+/// A pixel-space rectangle `(x, y, w, h)` in the screenshot's own
+/// coordinate system (CSS px × device scale).
+type ImgRect = (u32, u32, u32, u32);
+
+/// Resolve the clip locator to its element's box, scaled from CSS px into
+/// the screenshot's pixel space (`css_width` = `window.innerWidth`, so the
+/// scale factor is `img.width / innerWidth`). Reads the rect live — a shot
+/// claim pairs with the step that just ran, so the element should still be
+/// on screen.
+fn clip_rect(
+    session: &str,
+    loc: &Locator,
+    scope: &mut ValueScope,
+    img_width: u32,
+) -> Result<ImgRect> {
+    let selector = match loc {
+        Locator::Raw(raw) => {
+            let v = substitute_scenario_vars(&raw.raw.value, scope);
+            match &raw.raw.kind {
+                RawLocatorKind::Css => v,
+                RawLocatorKind::TestId => {
+                    format!("[data-testid=\"{}\"]", v.replace('"', "\\\""))
+                }
+                other => bail!("shot clip does not support raw locator kind {other:?}"),
+            }
+        }
+        _ => bail!("shot clip currently requires a raw css or testId locator"),
+    };
+    let expr = format!(
+        "(() => {{ const el = document.querySelector({q}); if (!el) throw new Error('clip selector not found: ' + {q}); const r = el.getBoundingClientRect(); return JSON.stringify({{x: r.x, y: r.y, w: r.width, h: r.height, iw: window.innerWidth}}); }})()",
+        q = serde_json::to_string(&selector).expect("string serializes")
+    );
+    let raw = browser::eval_expression(session, &expr)?;
+    let v: Json = serde_json::from_str(&decode_json_string(raw.trim()))
+        .with_context(|| format!("clip rect eval returned {raw}"))?;
+    let f = |k: &str| -> Result<f64> {
+        v.get(k)
+            .and_then(|n| n.as_f64())
+            .ok_or_else(|| anyhow!("clip rect eval missing '{k}' in {v}"))
+    };
+    let iw = f("iw")?;
+    let scale = if iw > 0.0 { img_width as f64 / iw } else { 1.0 };
+    Ok((
+        (f("x")? * scale).round().max(0.0) as u32,
+        (f("y")? * scale).round().max(0.0) as u32,
+        (f("w")? * scale).round().max(0.0) as u32,
+        (f("h")? * scale).round().max(0.0) as u32,
+    ))
+}
+
+/// Crop an image to `(x, y, w, h)` in its own pixel space, clamped to its
+/// bounds. Bails when the requested box is empty or fully outside.
+fn crop_to_rect(img: &image::RgbaImage, (x, y, w, h): ImgRect) -> Result<image::RgbaImage> {
+    if w == 0 || h == 0 {
+        bail!("clip rect is empty ({x},{y} {w}x{h}) — element has zero size or is offscreen");
+    }
+    let (iw, ih) = img.dimensions();
+    let x = x.min(iw.saturating_sub(1));
+    let y = y.min(ih.saturating_sub(1));
+    let w = w.min(iw - x);
+    let h = h.min(ih - y);
+    Ok(image::imageops::crop_imm(img, x, y, w, h).to_image())
 }
 
 /// `{"file": "<name-or-path>"}` claims: poll the filesystem so a check step
@@ -1189,6 +1396,106 @@ mod tests {
     }
 
     #[test]
+    fn console_subject_no_errors_passes_when_none_logged() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake_console(tmp.path(), &[]);
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "console": { "type": "error" } },
+            "predicate": "notExists"
+        }))
+        .unwrap();
+        let mut scope = ValueScope::default();
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: Path::new("."),
+            run_dir: None,
+        };
+        dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+        clear_console();
+    }
+
+    #[test]
+    fn console_subject_text_predicate_matches_any_message() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake_console(
+            tmp.path(),
+            &[
+                json!({ "type": "log", "text": "boot ok" }),
+                json!({ "type": "warn", "text": "deprecation: use v2" }),
+            ],
+        );
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "console": { "type": "warn" } },
+            "predicate": "contains",
+            "value": "deprecation"
+        }))
+        .unwrap();
+        let mut scope = ValueScope::default();
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: Path::new("."),
+            run_dir: None,
+        };
+        dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+        clear_console();
+    }
+
+    #[test]
+    fn console_subject_error_present_fails_not_exists() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake_console(
+            tmp.path(),
+            &[json!({ "type": "error", "text": "TypeError: x is undefined" })],
+        );
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "console": { "type": "error" } },
+            "predicate": "notExists"
+        }))
+        .unwrap();
+        let mut scope = ValueScope::default();
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: Path::new("."),
+            run_dir: None,
+        };
+        // times out fast — pass a 1ms timeout so the poll exits immediately
+        let err =
+            dispatch_check(&claim, &ctx, &mut scope, Some(Duration::from_millis(1))).unwrap_err();
+        clear_console();
+        assert!(err.to_string().contains("console claim"), "got: {err}");
+    }
+
+    fn install_fake_console(dir: &Path, messages: &[serde_json::Value]) {
+        // Respond to `console` with a canned --json payload; other verbs
+        // are no-ops.
+        let resp_path = dir.join("console.json");
+        fs::write(
+            &resp_path,
+            json!({ "success": true, "data": { "messages": messages } }).to_string(),
+        )
+        .unwrap();
+        let body = format!(
+            "#!/bin/sh\ncase \" $* \" in *\\ console\\ *) cat '{}' ;;\nesac\nexit 0\n",
+            resp_path.display()
+        );
+        let bin = dir.join("agent-browser");
+        fs::write(&bin, body).unwrap();
+        let mut perm = fs::metadata(&bin).unwrap().permissions();
+        perm.set_mode(0o755);
+        fs::set_permissions(&bin, perm).unwrap();
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+    }
+
+    fn clear_console() {
+        std::env::remove_var(ab::BIN_ENV);
+        ab::_reset_bin_cache_for_tests();
+    }
+
+    #[test]
     fn read_saved_walks_path() {
         let mut scope = ValueScope::default();
         scope
@@ -1610,6 +1917,38 @@ mod tests {
         };
         let err2 = dispatch_check(&claim, &ctx2, &mut scope, None).unwrap_err();
         assert!(err2.to_string().contains("shot-accept"), "got: {err2}");
+    }
+
+    #[test]
+    fn shot_clip_parses_and_crop_clamps_to_bounds() {
+        let _g = lock_env();
+        // `{"shot":"s1","clip":{...}}` parses as the Shot subject's locator.
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": {
+                "shot": "s1",
+                "clip": { "raw": { "kind": "css", "value": "#card" }, "reason": "clip target" }
+            },
+            "predicate": "matches"
+        }))
+        .unwrap();
+        match claim.subject {
+            ClaimSubject::Shot { shot, clip, .. } => {
+                assert_eq!(shot, "s1");
+                assert!(clip.is_some());
+            }
+            other => panic!("expected shot subject, got {other:?}"),
+        }
+
+        // Crop clamps to bounds and rejects empty rects.
+        let img = image::RgbaImage::from_pixel(10, 10, image::Rgba([1, 2, 3, 255]));
+        let c = crop_to_rect(&img, (4, 2, 4, 3)).unwrap();
+        assert_eq!(c.dimensions(), (4, 3));
+        assert_eq!(c.get_pixel(0, 0), &image::Rgba([1, 2, 3, 255]));
+        // Overhanging box → clamped to the image edge.
+        let c2 = crop_to_rect(&img, (8, 8, 10, 10)).unwrap();
+        assert_eq!(c2.dimensions(), (2, 2));
+        // Empty rect → hard error.
+        assert!(crop_to_rect(&img, (0, 0, 0, 5)).is_err());
     }
 
     // ---------- network claims ----------

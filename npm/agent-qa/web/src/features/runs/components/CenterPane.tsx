@@ -1,6 +1,7 @@
 // web/src/features/runs/components/CenterPane.tsx
 import { useState } from 'react'
 import { BrowserModeToggle } from '@/components/browser-mode-toggle'
+import { TrendChip } from './TrendChip'
 import { cn } from '@/lib/utils'
 import { CameraIcon, GitCompareIcon, Loader2Icon, PlayIcon, PlusIcon, WrenchIcon } from 'lucide-react'
 import { acceptAllShots } from '@/lib/runs-api'
@@ -99,6 +100,7 @@ export function CenterPane({
               {lastRun
                 ? ` · last run ${relRunTime(lastRun.runId)}${lastRun.summary ? ' · ' + cleanSummary(lastRun.summary) : ''}`
                 : ' · not yet replayed'}
+              {sel.sid && <TrendChip sid={sel.sid} />}
             </div>
             {sel.sid && (
               <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground opacity-50">{sel.sid}</div>

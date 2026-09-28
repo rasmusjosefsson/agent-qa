@@ -1,6 +1,7 @@
 // web/src/features/runs/components/ScenarioSidebar.tsx
+import { useState } from 'react'
 import { cn } from '@/lib/utils'
-import { RefreshCwIcon, Trash2Icon } from 'lucide-react'
+import { GlobeIcon, RefreshCwIcon, Trash2Icon } from 'lucide-react'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -12,6 +13,17 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
 import { cleanSummary, fmtRunTime, relRunTime, scenarioVerdict, verdictTone } from '../rows'
 import type { RunsApi } from '../useRuns'
 
@@ -54,28 +66,92 @@ function Badge({ tone, children }: { tone: string; children: React.ReactNode }) 
   )
 }
 
+function CrawlDialog({ runs }: { runs: RunsApi }) {
+  const [open, setOpen] = useState(false)
+  const [url, setUrl] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<string | null>(null)
+  const submit = async () => {
+    setBusy(true)
+    setNote(null)
+    const r = await runs.crawl(url.trim())
+    setBusy(false)
+    if (!r.ok) {
+      setNote(r.error || 'crawl failed')
+      return
+    }
+    setOpen(false)
+    setUrl('')
+    setNote(null)
+  }
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <button
+          type="button"
+          title="Crawl a URL into a draft scenario"
+          aria-label="Crawl a URL into a draft scenario"
+          className="grid h-5 w-5 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <GlobeIcon className="size-3.5" />
+        </button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Crawl a page</DialogTitle>
+          <DialogDescription>
+            Opens the URL, discovers same-origin routes, and writes a draft scenario with a
+            screenshot check per route — replay it, then mint baselines.
+          </DialogDescription>
+        </DialogHeader>
+        <Input
+          autoFocus
+          placeholder="https://app.example.com"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && url.trim() && !busy) void submit()
+          }}
+        />
+        {note && <div className="text-xs text-destructive">{note}</div>}
+        <DialogFooter>
+          <Button variant="secondary" onClick={() => setOpen(false)} disabled={busy}>
+            Cancel
+          </Button>
+          <Button onClick={() => void submit()} disabled={busy || !/^https?:\/\//.test(url.trim())}>
+            {busy ? 'Crawling…' : 'Crawl'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
   const { scenarios, expanded, runsBySid, sel } = runs
   return (
     <nav className="flex h-full min-h-0 flex-col overflow-hidden">
       <div className="flex items-center justify-between border-b border-border px-3 py-2.5">
         <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Scenarios</span>
-        <button
-          type="button"
-          title="Refresh"
-          aria-label="Refresh"
-          onClick={runs.refresh}
-          className="grid h-5 w-5 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
-        >
-          <RefreshCwIcon className="size-3.5" />
-        </button>
+        <div className="flex items-center gap-1">
+          <CrawlDialog runs={runs} />
+          <button
+            type="button"
+            title="Refresh"
+            aria-label="Refresh"
+            onClick={runs.refresh}
+            className="grid h-5 w-5 place-items-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <RefreshCwIcon className="size-3.5" />
+          </button>
+        </div>
       </div>
       <ul className="min-h-0 flex-1 space-y-0.5 overflow-auto p-2">
         {scenarios.length === 0 && (
           <li className="flex flex-col items-center gap-1.5 px-3 py-10 text-center">
             <div className="text-[13px] font-semibold tracking-tight">No scenarios yet</div>
             <div className="max-w-[16rem] text-xs leading-relaxed text-muted-foreground">
-              Record your first scenario from Chat or the CLI — it will show up here.
+              Record your first scenario from Chat or the CLI — or crawl a URL for a draft — and it will show up here.
             </div>
           </li>
         )}

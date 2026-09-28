@@ -11,16 +11,18 @@ use crate::schema;
 use crate::sidecar::atomic_write_file;
 
 pub fn run(args: &[String]) -> Result<u8> {
-    if let Some(arg) = args.first() {
+    let mut auto_shots = false;
+    for arg in args {
         match arg.as_str() {
             "-h" | "--help" | "help" => {
                 print_help();
                 return Ok(0);
             }
-            other => bail!("flush takes no arguments; got {other:?}"),
+            "--auto-shots" => auto_shots = true,
+            other => bail!("flush: unknown argument {other:?}"),
         }
     }
-    let summary = flush()?;
+    let summary = flush(auto_shots)?;
     println!("flushed sid={} steps={}", summary.sid, summary.steps);
     println!("wrote   {}", summary.scenario_file.display());
     Ok(0)
@@ -31,7 +33,13 @@ fn print_help() {
         "agent-qa flush - seal the active recording as scenario.json
 
 Usage:
-  agent-qa flush
+  agent-qa flush [--auto-shots]
+
+Options:
+  --auto-shots   Append a {{\"shot\"}} visual claim after every do-step, so a
+                recorded flow gains golden-image coverage for free. Mint the
+                baselines with `agent-qa shot-accept <sid>` after the first
+                replay.
 
 Writes:
   <scenarios_root>/<sid>/scenario.json
@@ -110,8 +118,44 @@ pub(crate) fn assemble_scenario(state: &RecorderState) -> Result<serde_json::Val
     Ok(scenario_json)
 }
 
-fn flush() -> Result<Summary> {
-    let state = RecorderState::load_active()?;
+/// Insert a {\"shot\": \"<doStepId>\"} check after every do-step; renumber
+/// afterwards so ids stay dense and the new refs get rewritten correctly.
+fn insert_auto_shot_claims(steps: &mut Vec<crate::scenario::Step>) {
+    let mut out: Vec<crate::scenario::Step> = Vec::with_capacity(steps.len() * 2);
+    for step in steps.drain(..) {
+        if let crate::scenario::Step::Do { id, intent, .. } = &step {
+            out.push(step.clone());
+            out.push(crate::scenario::Step::Check {
+                id: String::new(),
+                intent: format!("visual: {}", intent),
+                claim: crate::scenario::Claim {
+                    subject: crate::scenario::ClaimSubject::Shot {
+                        shot: id.clone(),
+                        clip: None,
+                        mask: Vec::new(),
+                    },
+                    predicate: crate::scenario::Predicate::Matches,
+                    value: None,
+                    tolerance: Some(std::collections::BTreeMap::from([(
+                        "pixels".to_string(),
+                        serde_json::json!(0.05),
+                    )])),
+                },
+                context: None,
+            });
+        } else {
+            out.push(step);
+        }
+    }
+    *steps = out;
+    crate::buffer::normalize_ids(steps);
+}
+
+fn flush(auto_shots: bool) -> Result<Summary> {
+    let mut state = RecorderState::load_active()?;
+    if auto_shots {
+        insert_auto_shot_claims(&mut state.steps);
+    }
     let scenario_json = assemble_scenario(&state)?;
 
     let scenario_dir = paths::scenario_dir(&state.sid)?;
@@ -164,7 +208,7 @@ mod tests {
         )
         .unwrap();
 
-        let summary = flush().unwrap();
+        let summary = flush(false).unwrap();
         let scenario: serde_json::Value =
             serde_json::from_slice(&fs::read(&summary.scenario_file).unwrap()).unwrap();
         assert_eq!(summary.steps, 2);
@@ -212,7 +256,7 @@ mod tests {
         }))
         .unwrap();
         state.save().unwrap();
-        flush().unwrap();
+        flush(false).unwrap();
 
         let scenario: serde_json::Value =
             serde_json::from_slice(&fs::read(dir.join("scenario.json")).unwrap()).unwrap();
@@ -222,6 +266,55 @@ mod tests {
         assert_eq!(scenario["env"]["close"], json!([{ "kind": "fresh" }]));
         assert_eq!(scenario["env"]["open"][0]["kind"], "nav");
         assert_eq!(scenario["steps"][0]["intent"], "edited");
+        std::env::remove_var(paths::SCENARIOS_DIR_ENV);
+        std::env::remove_var(paths::RECORD_DIR_ENV);
+        std::env::remove_var("AGENT_QA_RECORD_SKIP_SIDECARS");
+    }
+
+    #[test]
+    fn flush_auto_shots_appends_a_visual_claim_after_each_do_step() {
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var(paths::SCENARIOS_DIR_ENV, tmp.path());
+        std::env::set_var(paths::RECORD_DIR_ENV, tmp.path().join("record"));
+        std::env::set_var("AGENT_QA_RECORD_SKIP_SIDECARS", "1");
+        let mut state = RecorderState::new(
+            "autoshot".into(),
+            "flow".into(),
+            "default".into(),
+            RecorderBaseline::Fresh,
+            None,
+            BrowserConnection::default(),
+        );
+        record_draft(&mut state, StepKind::Do, &json!({"intent":"go","verb":"goto","value":{"from":"literal","literal":"https://example.com/"}}), "default").unwrap();
+        record_draft(
+            &mut state,
+            StepKind::Check,
+            &json!({"intent":"loaded","claim":{"subject":{"url":true},"predicate":"exists"}}),
+            "default",
+        )
+        .unwrap();
+        record_draft(
+            &mut state,
+            StepKind::Do,
+            &json!({"intent":"hit save","verb":"reload"}),
+            "default",
+        )
+        .unwrap();
+
+        let summary = flush(true).unwrap();
+        let scenario: serde_json::Value =
+            serde_json::from_slice(&fs::read(&summary.scenario_file).unwrap()).unwrap();
+        let steps = scenario["steps"].as_array().unwrap();
+        // do, shot, check, do, shot — dense ids, shot refs point at the
+        // renumbered do-step they follow.
+        assert_eq!(steps.len(), 5);
+        assert_eq!(steps[1]["claim"]["subject"]["shot"], "s0");
+        assert_eq!(steps[1]["id"], "s1");
+        assert_eq!(steps[2]["claim"]["subject"]["url"], true);
+        assert_eq!(steps[3]["id"], "s3");
+        assert_eq!(steps[4]["claim"]["subject"]["shot"], "s3");
+        assert_eq!(steps[4]["claim"]["tolerance"]["pixels"], json!(0.05));
         std::env::remove_var(paths::SCENARIOS_DIR_ENV);
         std::env::remove_var(paths::RECORD_DIR_ENV);
         std::env::remove_var("AGENT_QA_RECORD_SKIP_SIDECARS");

@@ -380,7 +380,14 @@ test('report viewer endpoints', async (t) => {
     assert.equal(sc.latestRun.state, 'done');
     assert.equal(sc.latestRun.ok, false);
     // do→check coverage: navHome covered by headingVisible; clickMissingLogin bare.
-    assert.deepEqual(sc.coverage, { doSteps: 2, checked: 1, bare: 1, ratio: 0.5 });
+    assert.deepEqual(sc.coverage, {
+      doSteps: 2,
+      checked: 1,
+      bare: 1,
+      ratio: 0.5,
+      shotCovered: 0,
+      shotRatio: 0,
+    });
   });
 
   await t.test('GET /api/health passes through audit health --json', async () => {
@@ -546,6 +553,36 @@ test('report viewer endpoints', async (t) => {
       body: JSON.stringify({ stepId: 'nope' }),
     });
     assert.equal(res2.status, 404);
+  });
+
+  await t.test('POST /api/scenarios/crawl spawns the crawl verb with flags', async () => {
+    const calls = [];
+    const { server: cSrv, base: cBase } = await boot(fx.root, {
+      runCli: async (args) => {
+        calls.push(args);
+        return { code: 0, stdout: 'crawl: crawl-app — 3 route(s)\n', stderr: '' };
+      },
+    });
+    try {
+      const res = await fetch(`${cBase}/api/scenarios/crawl`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ url: 'https://app.example.com/', sid: 'crawl-app', max: 5 }),
+      });
+      assert.equal(res.status, 200);
+      const j = await res.json();
+      assert.equal(j.ok, true);
+      assert.match(j.stdout, /3 route/);
+      assert.deepEqual(calls, [['crawl', 'https://app.example.com/', '--sid', 'crawl-app', '--max', '5']]);
+      const bad = await fetch(`${cBase}/api/scenarios/crawl`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ url: 'notaurl' }),
+      });
+      assert.equal(bad.status, 400);
+    } finally {
+      cSrv.close();
+    }
   });
 
   await t.test('GET artifact streams a captured screenshot', async () => {
