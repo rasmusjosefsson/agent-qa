@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Network claims fixture</title>
+  </head>
+  <body>
+    <!-- Served over http by the golden runner's in-process static server —
+         file:// pages cannot fetch, so this fixture is never opened directly. -->
+    <h1>Network claims</h1>
+    <button id="load" data-testid="load">Load users (GET 200)</button>
+    <button id="post" data-testid="post">Post user (POST → 405)</button>
+    <button id="missing" data-testid="missing">Load missing (404)</button>
+    <button id="gql" data-testid="gql">GraphQL-style (operationName)</button>
+    <div id="out" data-testid="out">idle</div>
+    <script>
+      const out = document.getElementById("out");
+      document.getElementById("load").addEventListener("click", async () => {
+        out.textContent = "loading";
+        const r = await fetch("api/users.json");
+        const d = await r.json();
+        out.textContent = `users:${d.users.length}`;
+      });
+      document.getElementById("post").addEventListener("click", async () => {
+        out.textContent = "posting";
+        const r = await fetch("api/users.json", { method: "POST" });
+        out.textContent = `post:${r.status}`;
+      });
+      document.getElementById("missing").addEventListener("click", async () => {
+        out.textContent = "loading";
+        const r = await fetch("api/missing.json");
+        out.textContent = `missing:${r.status}`;
+      });
+      document.getElementById("gql").addEventListener("click", async () => {
+        out.textContent = "loading";
+        const r = await fetch("api/graphql.json?operationName=LoadUser");
+        const d = await r.json();
+        out.textContent = `user:${d.data.user.name}`;
+      });
+    </script>
+  </body>
+</html>
