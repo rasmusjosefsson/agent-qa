@@ -47,6 +47,9 @@ jobs:
           # Fixture-backed cases only: downloads fixture (13) + dialogs
           # fixture (TC01-06; TC07+ hit the live practice page).
           GOLDEN_ONLY: "golden:file-upload:download,golden:alerts-dialogs:tc01,golden:alerts-dialogs:tc02,golden:alerts-dialogs:tc03,golden:alerts-dialogs:tc04,golden:alerts-dialogs:tc05,golden:alerts-dialogs:tc06"
+          # Every replay captures a HAR — the uploaded qa-gate artifact then
+          # carries per-run network.har + network.json for debugging.
+          AGENT_QA_REPLAY_ARGS: "--har"
         run: bun golden:all
       - name: upload gate evidence
         if: always()
