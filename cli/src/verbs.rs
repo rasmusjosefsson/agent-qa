@@ -89,15 +89,21 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
             }
             Ok(None)
         }
+        // reload/back/forward navigate the TOP document — an active frame
+        // selection is invalidated and must reset first so the eval lands
+        // in the right realm.
         Verb::Reload => {
+            browser::reset_frame_ctx(ctx.session);
             browser::eval_expression(ctx.session, "(() => { location.reload(); })()")?;
             Ok(None)
         }
         Verb::Back => {
+            browser::reset_frame_ctx(ctx.session);
             browser::eval_expression(ctx.session, "(() => { history.back(); })()")?;
             Ok(None)
         }
         Verb::Forward => {
+            browser::reset_frame_ctx(ctx.session);
             browser::eval_expression(ctx.session, "(() => { history.forward(); })()")?;
             Ok(None)
         }
@@ -355,6 +361,12 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                 .map_err(|e| anyhow!("step '{id}' viewport {w}x{h}: {e}"))?;
             Ok(None)
         }
+        Verb::Emulate => {
+            let p = params.ok_or_else(|| anyhow!("step '{id}' emulate: params required"))?;
+            emulate_apply(ctx.session, p, scope)
+                .map_err(|e| anyhow!("step '{id}' emulate: {e}"))?;
+            Ok(None)
+        }
         Verb::Mock => {
             let p = params.ok_or_else(|| anyhow!("step '{id}' mock: params required"))?;
             crate::mock::apply_mock(ctx.session, p)
@@ -369,6 +381,20 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
         Verb::State => {
             let p = params.ok_or_else(|| anyhow!("step '{id}' state: params required"))?;
             state_apply(ctx.session, p, scope).map_err(|e| anyhow!("step '{id}' state: {e}"))?;
+            Ok(None)
+        }
+        Verb::Frame => {
+            let p = params.ok_or_else(|| anyhow!("step '{id}' frame: params required"))?;
+            let sel = if p.get("main").and_then(|v| v.as_bool()) == Some(true) {
+                None
+            } else {
+                let raw = p.get("selector").and_then(|v| v.as_str()).ok_or_else(|| {
+                    anyhow!("step '{id}' frame: params.selector or params.main required")
+                })?;
+                Some(crate::value::substitute_scenario_vars(raw, scope))
+            };
+            browser::switch_frame(ctx.session, sel.as_deref())
+                .map_err(|e| anyhow!("step '{id}' frame: {e}"))?;
             Ok(None)
         }
         Verb::Group => {
@@ -824,6 +850,122 @@ fn state_apply(
     }
     let expr = format!("(() => {{ {body} }})()");
     browser::eval_expression(session, &expr)?;
+    Ok(())
+}
+
+/// `do/emulate` — translate `params` into `agent-browser set …` calls.
+/// Order is fixed: device first (it resets UA + viewport), then headers,
+/// credentials, geo, offline, media — so a scenario listing several keys
+/// doesn't depend on map iteration order.
+fn emulate_apply(
+    session: &str,
+    params: &std::collections::BTreeMap<String, Json>,
+    scope: &mut ValueScope,
+) -> Result<()> {
+    const KEYS: &[&str] = &[
+        "device",
+        "geo",
+        "offline",
+        "colorScheme",
+        "reducedMotion",
+        "headers",
+        "credentials",
+    ];
+    for k in params.keys() {
+        if !KEYS.contains(&k.as_str()) {
+            bail!("unknown emulate key {k:?} (known: {})", KEYS.join(", "));
+        }
+    }
+    if params.is_empty() {
+        bail!("params has no emulation to apply");
+    }
+    let subst = |v: &Json, scope: &mut ValueScope| -> Result<String> {
+        let s = value_to_string(v);
+        Ok(crate::value::substitute_scenario_vars(&s, scope))
+    };
+
+    if let Some(v) = params.get("device") {
+        let name = subst(v, scope)?;
+        browser::set_emulation(session, &["device".into(), name])
+            .map_err(|e| anyhow!("set device: {e}"))?;
+    }
+    if let Some(v) = params.get("headers") {
+        let map = v
+            .as_object()
+            .ok_or_else(|| anyhow!("params.headers must be an object of name→value"))?;
+        let mut out = serde_json::Map::new();
+        for (k, hv) in map {
+            out.insert(k.clone(), Json::String(subst(hv, scope)?));
+        }
+        browser::set_emulation(session, &["headers".into(), Json::Object(out).to_string()])
+            .map_err(|e| anyhow!("set headers: {e}"))?;
+    }
+    if let Some(v) = params.get("credentials") {
+        let user = v
+            .get("user")
+            .ok_or_else(|| anyhow!("params.credentials.user is required"))?;
+        let pass = v
+            .get("pass")
+            .ok_or_else(|| anyhow!("params.credentials.pass is required"))?;
+        browser::set_emulation(
+            session,
+            &[
+                "credentials".into(),
+                subst(user, scope)?,
+                subst(pass, scope)?,
+            ],
+        )
+        .map_err(|e| anyhow!("set credentials: {e}"))?;
+    }
+    if let Some(v) = params.get("geo") {
+        let mut f = |k: &str| -> Result<String> {
+            let n = v
+                .get(k)
+                .ok_or_else(|| anyhow!("params.geo.{k} is required"))?;
+            match n {
+                Json::Number(n) => Ok(n.to_string()),
+                Json::String(_) => Ok(subst(n, scope)?),
+                _ => bail!("params.geo.{k} must be a number"),
+            }
+        };
+        browser::set_emulation(session, &["geo".into(), f("lat")?, f("lng")?])
+            .map_err(|e| anyhow!("set geo: {e}"))?;
+    }
+    if let Some(v) = params.get("offline") {
+        let on = v
+            .as_bool()
+            .ok_or_else(|| anyhow!("params.offline must be a boolean"))?;
+        browser::set_emulation(
+            session,
+            &["offline".into(), if on { "on" } else { "off" }.into()],
+        )
+        .map_err(|e| anyhow!("set offline: {e}"))?;
+    }
+    {
+        let scheme = params
+            .get("colorScheme")
+            .map(|v| subst(v, scope))
+            .transpose()?
+            .map(|s| match s.as_str() {
+                "dark" | "light" => Ok(s),
+                other => bail!("params.colorScheme must be \"dark\" or \"light\", got {other:?}"),
+            })
+            .transpose()?;
+        let rm = params
+            .get("reducedMotion")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if scheme.is_some() || rm {
+            let mut args = vec!["media".to_string()];
+            if let Some(s) = scheme {
+                args.push(s);
+            }
+            if rm {
+                args.push("reduced-motion".into());
+            }
+            browser::set_emulation(session, &args).map_err(|e| anyhow!("set media: {e}"))?;
+        }
+    }
     Ok(())
 }
 
@@ -2498,6 +2640,50 @@ mod tests {
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         clear_fake();
         assert!(err.contains("value"), "got: {err}");
+    }
+
+    #[test]
+    fn frame_enters_iframe_by_selector() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "frame",
+            "params": { "selector": "#editor-frame" }
+        }));
+        let out = run_one(&s);
+        assert!(
+            out.contains("--session sess frame #editor-frame"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn frame_main_returns_to_top_document() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "frame",
+            "params": { "main": true }
+        }));
+        let out = run_one(&s);
+        assert!(out.contains("--session sess frame main"), "got: {out}");
+    }
+
+    #[test]
+    fn frame_requires_selector_or_main() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "frame",
+            "params": {}
+        }));
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake(tmp.path(), &tmp.path().join("ab.log"));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
+        clear_fake();
+        assert!(err.contains("selector"), "got: {err}");
     }
 
     #[test]

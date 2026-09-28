@@ -69,6 +69,34 @@ Recognized `params` keys: `localStorage`, `sessionStorage`, `cookies`
 that. Assert the result with `{"storage": "key"}` / `{"storage": {"key": "k",
 "scope": "session"}, "path": "$.json.path"}` or `{"cookie": "name"}` claims.
 
+### Iframes
+
+A `frame` do-step switches the session's frame context — every locator on
+later steps resolves inside the selected iframe until you switch back:
+
+```json
+{
+  "id": "s2", "intent": "enter the editor iframe", "kind": "do", "verb": "frame",
+  "params": { "selector": "#editor-frame" }
+},
+{
+  "id": "s3", "intent": "type inside it", "kind": "do", "verb": "type",
+  "on": { "raw": { "kind": "css", "value": "body" }, "reason": "frame body" },
+  "value": { "from": "literal", "literal": "hello" }
+},
+{
+  "id": "s4", "intent": "back to the top document", "kind": "do", "verb": "frame",
+  "params": { "main": true }
+}
+```
+
+`params.selector` is a CSS selector matched against the *current* document
+(contexts do not nest — `frame` + `frame` enters a sibling, not a child);
+`params.main: true` always returns to the top document. Strings substitute
+`{{var}}`. Cross-origin iframes work — frame context is a CDP-level switch,
+not a DOM read. Note: claims and screenshots keep evaluating against the
+selected frame, so switch back to `main` before asserting on outer chrome.
+
 ### Viewport resizing
 
 Resize the browser viewport mid-scenario with a `viewport` do-step:
@@ -87,6 +115,46 @@ Both `width` and `height` are required positive integers (CSS pixels); string
 values like `"{{mobileWidth}}"` are resolved through scenario vars. Combine with
 an element claim afterwards to assert responsive behaviour (e.g. a hamburger
 menu that only renders below a breakpoint).
+
+### Emulation
+
+An `emulate` do-step changes the browser's emulation layer mid-scenario —
+device preset, geolocation, media prefs, network state, request headers,
+HTTP auth. Keys map onto `agent-browser set …`:
+
+```json
+{
+  "id": "s1",
+  "intent": "run as a tagged mobile client",
+  "kind": "do",
+  "verb": "emulate",
+  "params": {
+    "device": "iPhone 12",
+    "geo": { "lat": 37.7749, "lng": -122.4194 },
+    "colorScheme": "dark",
+    "reducedMotion": true,
+    "headers": { "X-QA-Suite": "golden" },
+    "credentials": { "user": "admin", "pass": "{{adminPass}}" },
+    "offline": false
+  }
+}
+```
+
+| key             | effect                                                        |
+| --------------- | ------------------------------------------------------------- |
+| `device`        | `set device <name>` — UA + viewport + scale preset            |
+| `geo`           | `set geo <lat> <lng>` — geolocation override                  |
+| `offline`       | `set offline on|off` — toggle offline mode                    |
+| `colorScheme`   | `set media dark|light`                                        |
+| `reducedMotion` | adds `reduced-motion` to the media call when true             |
+| `headers`       | `set headers {json}` — extra headers on subsequent requests   |
+| `credentials`   | `set credentials <user> <pass>` — HTTP auth for this + new tabs|
+
+At least one key is required; unknown keys fail at dispatch. Strings go
+through `{{var}}` substitution. Apply BEFORE the `goto`/`reload` you want
+to observe — emulation set mid-page doesn't retroactively change requests
+already made. Timezone/locale emulation isn't reachable through
+agent-browser's `set` surface yet.
 
 ### Waits
 
