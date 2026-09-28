@@ -1275,7 +1275,7 @@ pub(crate) fn lint(
             .unwrap_or_default();
         for step in &j.steps {
             if let Step::Check { id, claim, .. } = step {
-                if let crate::scenario::ClaimSubject::Shot { shot } = &claim.subject {
+                if let crate::scenario::ClaimSubject::Shot { shot, .. } = &claim.subject {
                     if !baselines.join(format!("{shot}.png")).is_file() {
                         findings.push(Finding {
                             severity: "error",
@@ -1701,7 +1701,7 @@ fn coverage_counts(steps: &[crate::scenario::Step]) -> CoverageCounts {
                 c.check_steps += 1;
                 if let Some(did) = prev_do_id.take() {
                     c.do_followed_by_check += 1;
-                    if let ClaimSubject::Shot { shot } = &claim.subject {
+                    if let ClaimSubject::Shot { shot, .. } = &claim.subject {
                         if shot == did {
                             c.shot_covered += 1;
                         }
