@@ -18,6 +18,7 @@ mod cdp_url;
 mod claims;
 mod compare;
 mod config;
+mod crawl;
 mod design;
 mod doctor;
 mod dom_activate;
@@ -100,6 +101,7 @@ fn main() -> ExitCode {
         "config" => config::run(rest),
         "list" => list::run(rest),
         "compare" | "diff" => compare::run(rest),
+        "crawl" => crawl::run(rest),
         "design" => design::run(rest),
         "audit" => audit::run(rest),
         "start" => start::run(rest),
@@ -130,7 +132,7 @@ fn main() -> ExitCode {
         "shot-accept" => shot_accept::run(rest),
         _ => {
             eprintln!(
-                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, design, audit, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept."
+                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept."
             );
             eprintln!("Run `agent-qa --help` for usage.");
             Ok(2)
@@ -213,6 +215,11 @@ Verbs:
   list [<sid|path>] [--json]    Show scenario directory contents + replay history
   compare <sid> [<runA>] [<runB>]   Diff per-step ARIA snapshots between two runs
   diff                          (alias of `compare`)
+  crawl <url> [--session <n>] [--out <dir>] [--max N] [--sid <name>]
+                                Draft a coverage scenario from a live page —
+                                one goto + shot claim per same-origin route
+                                found, plus a crawl-report.json inventory of
+                                interactive elements for authoring input
   design review <sid> [--run <id>] [--json]   Pair <sid>/designs/<stepId>.png with
                                 the run's screenshots; exits 2 unless every design
                                 is ok or accepted against current design bytes

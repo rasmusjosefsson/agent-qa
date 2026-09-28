@@ -62,7 +62,7 @@ fn parse_index(value: &str, label: &str) -> Result<usize> {
         .map_err(|_| anyhow!("{label} must be a non-negative integer; got {value:?}"))
 }
 
-fn normalize_ids(steps: &mut [Step]) {
+pub(crate) fn normalize_ids(steps: &mut [Step]) -> HashMap<String, String> {
     // Rewire `{"from":"step","stepId":…}` values and `opensFromStepId`
     // before renumbering so references keep pointing at the same step.
     // References to a step that no longer exists keep their old id.
@@ -80,6 +80,7 @@ fn normalize_ids(steps: &mut [Step]) {
     for (index, step) in steps.iter_mut().enumerate() {
         step.set_id(format!("s{index}"));
     }
+    renames
 }
 
 fn rewrite_step_refs(step: &mut Step, renames: &HashMap<String, String>) {
@@ -105,6 +106,13 @@ fn rewrite_step_refs(step: &mut Step, renames: &HashMap<String, String>) {
         Step::Check { claim, context, .. } => {
             if let Some(value) = &mut claim.value {
                 rewrite_step_refs_json(value, renames);
+            }
+            // {"shot": "<stepId>"} references a step id like any other
+            // step ref — renumbering must rewire it or the claim dangles.
+            if let crate::scenario::ClaimSubject::Shot { shot, .. } = &mut claim.subject {
+                if let Some(new) = renames.get(shot.as_str()) {
+                    *shot = new.clone();
+                }
             }
             rewrite_context_refs(context, renames);
         }
@@ -356,6 +364,16 @@ fn cmd_load(args: &[String]) -> Result<u8> {
         }
     }
     let sid = sid.ok_or_else(|| anyhow!("usage: buffer load <sid> [--force]"))?;
+    let steps = load_into_buffer(sid, "default", force)?;
+    println!("loaded {sid} into the buffer ({steps} step(s))");
+    Ok(0)
+}
+
+/// Seed the active recorder state with a saved scenario's steps (same sid,
+/// so `flush` writes back to it). `session` is the browser session the
+/// caller intends to keep driving — record-step captures sidecars there.
+/// Returns the number of seeded steps. Reused by `record continue`.
+pub(crate) fn load_into_buffer(sid: &str, session: &str, force: bool) -> Result<usize> {
     if let Some(existing) = RecorderState::try_load_active()? {
         if !existing.steps.is_empty() && !force {
             bail!(
@@ -375,7 +393,7 @@ fn cmd_load(args: &[String]) -> Result<u8> {
     let mut state = RecorderState::new(
         sid.to_string(),
         sc.intent.clone(),
-        "default".into(),
+        session.to_string(),
         crate::recorder_state::RecorderBaseline::KeepSession,
         Some(format!("scenario:{sid}")),
         crate::browser::BrowserConnection::default(),
@@ -392,8 +410,7 @@ fn cmd_load(args: &[String]) -> Result<u8> {
     state.original = Some(value);
     let steps = state.steps.len();
     state.save()?;
-    println!("loaded {sid} into the buffer ({steps} step(s))");
-    Ok(0)
+    Ok(steps)
 }
 
 #[cfg(test)]
