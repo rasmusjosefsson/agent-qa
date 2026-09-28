@@ -1,8 +1,8 @@
 // web/src/features/runs/components/StepDetail.tsx
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { BugIcon, WrenchIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { acceptShot, artifactUrl, fetchArtifactText, getScenarioDef } from '@/lib/runs-api'
+import { acceptShot, artifactUrl, fetchArtifactText, getScenarioDef, promoteHeal } from '@/lib/runs-api'
 import { collapseEvents, fmtMs, icon } from '../rows'
 import type { DetailTab, HealRow, RunEvent, ScenarioDef, ScenarioStep } from '../types'
 import type { RunsApi as Api } from '../useRuns'
@@ -44,6 +44,12 @@ export function StepDetail({ runs, onLightbox }: { runs: Api; onLightbox: (url: 
   // Load the scenario.json for the selected scenario so the detail pane can show
   // what each step actually targets + its source. (Hook stays unconditional.)
   const [scenario, setScenario] = useState<ScenarioDef | null>(null)
+  const reloadScenario = useCallback(() => {
+    if (!sid0) return
+    getScenarioDef(sid0)
+      .then((r) => setScenario(r.scenario))
+      .catch(() => {})
+  }, [sid0])
   useEffect(() => {
     if (!sid0) {
       setScenario(null)
@@ -135,7 +141,7 @@ export function StepDetail({ runs, onLightbox }: { runs: Api; onLightbox: (url: 
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
-        {heal && <HealCard heal={heal} />}
+        {heal && <HealCard heal={heal} sid={sid} runId={runId} onPromoted={reloadScenario} />}
         {shotDiff && (
           <ShotDiffCard sid={sid} runId={runId} shotStep={shotDiff} onLightbox={onLightbox} />
         )}
@@ -274,8 +280,32 @@ function TabBody({
 // A locator the auto-heal loop rewrote mid-run, or a failure it classified as
 // a value rejection. Corrections carry the suggested patch (diffs/*.patch.json)
 // inline so it can be promoted to scenario.json without the terminal.
-function HealCard({ heal }: { heal: HealRow }) {
+function HealCard({
+  heal,
+  sid,
+  runId,
+  onPromoted,
+}: {
+  heal: HealRow
+  sid: string
+  runId: string
+  onPromoted?: () => void
+}) {
   const isRejection = heal.mode === 'value-rejection'
+  const [promote, setPromote] = useState<'idle' | 'busy' | 'done' | 'error'>('idle')
+  const [promoteError, setPromoteError] = useState('')
+  const apply = async () => {
+    if (!heal.stepId) return
+    setPromote('busy')
+    const r = await promoteHeal(sid, runId, heal.stepId)
+    if (r.ok) {
+      setPromote('done')
+      onPromoted?.()
+    } else {
+      setPromote('error')
+      setPromoteError(r.error || 'promote failed')
+    }
+  }
   return (
     <div
       className={cn(
@@ -298,12 +328,32 @@ function HealCard({ heal }: { heal: HealRow }) {
       {heal.patch && (
         <details className="mt-1.5">
           <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-            Suggested patch — promote with <span className="font-mono">heal-promote</span>
+            Suggested patch
           </summary>
           <pre className="mt-1 whitespace-pre-wrap break-all rounded border border-border bg-muted/20 p-2 font-mono leading-relaxed">
             {JSON.stringify(heal.patch, null, 2)}
           </pre>
         </details>
+      )}
+      {heal.patch && !isRejection && (
+        <div className="mt-1.5 flex items-center gap-2">
+          {promote === 'done' ? (
+            <span className="text-emerald-400">Promoted into scenario.json — re-run to confirm.</span>
+          ) : (
+            <>
+              <span className="text-muted-foreground">Looks right?</span>
+              <button
+                type="button"
+                onClick={apply}
+                disabled={promote === 'busy'}
+                className="rounded border border-amber-500/40 px-1.5 py-0.5 font-medium transition-colors hover:bg-amber-500/20 disabled:opacity-50"
+              >
+                {promote === 'busy' ? 'Promoting…' : 'Promote patch'}
+              </button>
+              {promote === 'error' && <span className="text-destructive">{promoteError}</span>}
+            </>
+          )}
+        </div>
       )}
     </div>
   )

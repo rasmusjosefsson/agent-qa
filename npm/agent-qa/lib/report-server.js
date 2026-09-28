@@ -3905,6 +3905,43 @@ function createRequestHandler(root, deps, chat) {
         return sendJson(res, 200, { ok: true, minted: [stepId] });
       }
 
+      // POST /api/scenarios/:sid/runs/:runId/heal-promote {stepId} — absorb the
+      // run's suggested locator patch for one step into scenario.json. Runs the
+      // CLI's `heal-promote --apply` so the rebase guard stays authoritative:
+      // exit 3 (scenario drifted since the patch was written) → 409.
+      if (
+        req.method === 'POST' &&
+        segAll[0] === 'api' &&
+        segAll[1] === 'scenarios' &&
+        segAll[3] === 'runs' &&
+        segAll[5] === 'heal-promote' &&
+        segAll.length === 6
+      ) {
+        const sid = decodeURIComponent(segAll[2]);
+        const runId = decodeURIComponent(segAll[4]);
+        if (!isSafeSegment(sid) || !isSafeSegment(runId)) return badRequest(res, 'unsafe id');
+        const body = await readJsonBody(req);
+        const stepId = typeof body.stepId === 'string' ? body.stepId : '';
+        if (!isSafeSegment(stepId)) return badRequest(res, 'stepId (safe segment) is required');
+        if (!deps || typeof deps.runCli !== 'function') {
+          return sendJson(res, 503, { error: 'heal-promote unavailable: agent-qa CLI not resolved' });
+        }
+        const r = await deps.runCli(
+          ['heal-promote', sid, '--run', runId, '--steps', stepId, '--apply'],
+          {}
+        );
+        if (r.spawnError) return sendJson(res, 500, { error: 'heal-promote failed to start' });
+        if (r.code === 3) {
+          return sendJson(res, 409, {
+            error: (r.stderr || 'scenario.json drifted since this patch was written — re-run to re-derive it').trim().slice(0, 2000),
+          });
+        }
+        if (r.code !== 0) {
+          return sendJson(res, 422, { error: (r.stderr || r.stdout || 'heal-promote failed').trim().slice(0, 2000) });
+        }
+        return sendJson(res, 200, { ok: true, promoted: stepId });
+      }
+
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         return sendJson(res, 405, { error: 'method not allowed' });
       }
