@@ -1527,6 +1527,7 @@ pub fn cli(args: &[String]) -> Result<u8> {
             flags.runs,
             flags.shard,
             flags.filter.as_deref(),
+            flags.report.as_deref(),
         );
     }
     if flags.shard.is_some() {
@@ -1535,18 +1536,26 @@ pub fn cli(args: &[String]) -> Result<u8> {
     if flags.filter.is_some() {
         bail!("--filter requires --all");
     }
+    if flags.report.is_some() {
+        bail!("--report requires --all");
+    }
     let parsed = parse_args(&flags.filtered)?;
-    run_n(&parsed, flags.runs, None)
+    let (code, _) = run_n(&parsed, flags.runs, None)?;
+    Ok(code)
 }
 
 /// Replay `parsed` `runs` times; `label` prefixes the per-run banner.
-/// Returns the process exit code — 0 iff every run's summary is ok.
-fn run_n(parsed: &RunOptions, runs: u32, label: Option<&str>) -> Result<u8> {
+/// Returns the exit code (0 iff every run is ok) and the last run's
+/// summary for reporting (None when every run errored before producing
+/// one).
+fn run_n(parsed: &RunOptions, runs: u32, label: Option<&str>) -> Result<(u8, Option<RunSummary>)> {
     if runs <= 1 {
         let summary = run(parsed)?;
-        return Ok(if summary.ok { 0 } else { 1 });
+        let code = if summary.ok { 0 } else { 1 };
+        return Ok((code, Some(summary)));
     }
     let mut all_ok = true;
+    let mut last: Option<RunSummary> = None;
     for i in 1..=runs {
         eprintln!("[v2-replay]{} run {i}/{runs}", label.unwrap_or(""));
         match run(parsed) {
@@ -1554,6 +1563,7 @@ fn run_n(parsed: &RunOptions, runs: u32, label: Option<&str>) -> Result<u8> {
                 if !summary.ok {
                     all_ok = false;
                 }
+                last = Some(summary);
             }
             Err(e) => {
                 eprintln!(
@@ -1564,7 +1574,7 @@ fn run_n(parsed: &RunOptions, runs: u32, label: Option<&str>) -> Result<u8> {
             }
         }
     }
-    Ok(if all_ok { 0 } else { 1 })
+    Ok((if all_ok { 0 } else { 1 }, last))
 }
 
 /// `replay --all`: every scenario under the scenarios root, optionally
@@ -1575,6 +1585,7 @@ fn cli_all(
     runs: u32,
     shard: Option<(u32, u32)>,
     filter: Option<&str>,
+    report: Option<&Path>,
 ) -> Result<u8> {
     let root = crate::paths::scenarios_root();
     let mut sids = crate::scenario_cli::all_sids(&root, filter);
@@ -1601,15 +1612,21 @@ fn cli_all(
     );
     let mut all_ok = true;
     let mut failed: Vec<String> = Vec::new();
+    let mut rows: Vec<(String, Option<RunSummary>)> = Vec::new();
     for sid in &sids {
         let mut per = filtered.to_vec();
         per.push(sid.clone());
         let parsed = parse_args(&per)?;
-        let code = run_n(&parsed, runs, Some(&format!(" {sid}")))?;
+        let (code, summary) = run_n(&parsed, runs, Some(&format!(" {sid}")))?;
         if code != 0 {
             all_ok = false;
             failed.push(sid.clone());
         }
+        rows.push((sid.clone(), summary));
+    }
+    if let Some(path) = report {
+        write_report(path, &rows)?;
+        eprintln!("[v2-replay] report → {}", path.display());
     }
     eprintln!(
         "[v2-replay] --all done: {} passed, {} failed{}",
@@ -1624,7 +1641,52 @@ fn cli_all(
     Ok(if all_ok { 0 } else { 1 })
 }
 
-/// CLI-level flags peeled off before [`parse_args`] sees `args`.
+/// `--report` — a markdown verdict table for the suite run, the shape a
+/// CI step drops into a PR comment: header counts, one row per scenario,
+/// and a failing-scenario list at the bottom.
+fn write_report(path: &Path, rows: &[(String, Option<RunSummary>)]) -> Result<()> {
+    let passed = rows
+        .iter()
+        .filter(|(_, s)| s.as_ref().map(|s| s.ok).unwrap_or(false))
+        .count();
+    let failed = rows.len() - passed;
+    let mut out = String::new();
+    out.push_str("### agent-qa replay\n\n");
+    if failed == 0 {
+        out.push_str(&format!("✅ {passed}/{} scenarios pass.\n\n", rows.len()));
+    } else {
+        out.push_str(&format!(
+            "❌ {failed}/{} scenarios fail ({passed} pass).\n\n",
+            rows.len()
+        ));
+    }
+    out.push_str("| scenario | result | steps |\n| --- | --- | --- |\n");
+    for (sid, summary) in rows {
+        let (verdict, steps) = match summary {
+            Some(s) if s.ok => ("PASS".to_string(), format!("{}/{}", s.passed, s.total)),
+            Some(s) => ("FAIL".to_string(), format!("{}/{}", s.passed, s.total)),
+            None => ("ERROR".to_string(), "—".to_string()),
+        };
+        out.push_str(&format!("| `{sid}` | {verdict} | {steps} |\n"));
+    }
+    let failing: Vec<&str> = rows
+        .iter()
+        .filter(|(_, s)| !s.as_ref().map(|s| s.ok).unwrap_or(false))
+        .map(|(sid, _)| sid.as_str())
+        .collect();
+    if !failing.is_empty() {
+        out.push_str(&format!(
+            "\nFailing: {} — run artifacts live under `scenarios/<sid>/replays/`.\n",
+            failing.join(", ")
+        ));
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    fs::write(path, out).with_context(|| format!("write report {}", path.display()))
+}
+
+/// CLI-level flags peeled off before [`parse_args`] sees `args`.},{
 #[derive(Debug)]
 struct CliFlags {
     /// Remaining args (positional sid + per-run flags) for parse_args.
@@ -1637,6 +1699,8 @@ struct CliFlags {
     shard: Option<(u32, u32)>,
     /// `--filter <substr>` — sid substring filter for --all.
     filter: Option<String>,
+    /// `--report <path>` — write a markdown verdict table for --all.
+    report: Option<PathBuf>,
 }
 
 /// Peel the CLI-level flags `--runs N`, `--all`, `--shard k/n`, and
@@ -1647,6 +1711,7 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
     let mut all = false;
     let mut shard: Option<(u32, u32)> = None;
     let mut filter: Option<String> = None;
+    let mut report: Option<PathBuf> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -1690,6 +1755,15 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
             s if s.starts_with("--filter=") => {
                 filter = Some(s["--filter=".len()..].to_string());
             }
+            "--report" => {
+                let v = it
+                    .next()
+                    .ok_or_else(|| anyhow!("--report requires a file path"))?;
+                report = Some(PathBuf::from(v));
+            }
+            s if s.starts_with("--report=") => {
+                report = Some(PathBuf::from(&s["--report=".len()..]));
+            }
             other => filtered.push(other.to_string()),
         }
     }
@@ -1699,6 +1773,7 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
         all,
         shard,
         filter,
+        report,
     })
 }
 
@@ -1934,6 +2009,10 @@ replays/latest.txt.
                          For CI matrix jobs, e.g. shard 1/4 + 2/4 + …
 --filter <substr>        With --all: keep sids containing <substr>
                          (case-insensitive).
+--report <path>          With --all: write a markdown verdict table
+                         (per-scenario PASS/FAIL + step counts) — the
+                         shape a CI step drops into a PR comment.
+                         (case-insensitive).
 --no-sidecars            Skip per-step ARIA snapshot + screenshot
                          capture. audit.json is still written. Useful
                          when running with --runs N.
@@ -1984,6 +2063,47 @@ mod tests {
     #[test]
     fn cli_shard_without_all_errors() {
         let args: Vec<String> = ["sid-x", "--shard", "1/2"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(cli(&args).is_err());
+    }
+
+    #[test]
+    fn write_report_renders_verdict_table() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("report.md");
+        let rows = vec![
+            (
+                "alpha".to_string(),
+                Some(RunSummary {
+                    passed: 3,
+                    total: 3,
+                    ok: true,
+                }),
+            ),
+            (
+                "beta".to_string(),
+                Some(RunSummary {
+                    passed: 1,
+                    total: 4,
+                    ok: false,
+                }),
+            ),
+            ("gamma".to_string(), None),
+        ];
+        write_report(&path, &rows).unwrap();
+        let md = fs::read_to_string(&path).unwrap();
+        assert!(md.contains("❌ 2/3 scenarios fail (1 pass)"));
+        assert!(md.contains("| `alpha` | PASS | 3/3 |"));
+        assert!(md.contains("| `beta` | FAIL | 1/4 |"));
+        assert!(md.contains("| `gamma` | ERROR | — |"));
+        assert!(md.contains("Failing: beta, gamma"));
+    }
+
+    #[test]
+    fn cli_report_without_all_errors() {
+        let args: Vec<String> = ["sid-x", "--report", "/tmp/r.md"]
             .iter()
             .map(|s| s.to_string())
             .collect();
