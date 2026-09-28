@@ -50,7 +50,6 @@ const NOT_RECORDABLE: Record<string, string> = {
   loop: "structural — scenarios iterate via the loop step, not a recorded action",
   group: "structural — groupings are authored, not recorded",
   useTemplate: "structural — template application is authored",
-  drag: "recorded natively by the workbench live pane (endpoint pick + emit), not via agent-browser actions",
   mock: "authored — stubbing decisions belong in the scenario, not the recording",
   unmock: "authored — removes authored stubs; never emitted by capture",
   state: "authored — seeds cookies/storage before navigation; never emitted by capture",
@@ -99,6 +98,7 @@ describe("toRecordDraft — emitted verbs are shipped", () => {
     ["action", { method: "callGqlApi", args: ["/gql", "{ q }", {}, "resp"] }],
     ["action", { method: "reloadPage", args: [] }],
     ["action", { method: "tabCommand", args: ["new https://example.com"] }],
+    ["action", { method: "dragBySelector", args: ["#a", "#b"] }],
     ["wait", { condition: { kind: "duration", ms: 100 } }],
     ["wait", { condition: { kind: "selector", selector: "#x" } }],
     ["wait", { condition: { kind: "selectorAbsent", selector: "#x" } }],
@@ -188,6 +188,7 @@ describe("toRecordDraft — every shipped verb is reachable or triaged", () => {
     ],
     ["dblclick", ["action", { method: "dblclickBySelector", args: ["#d"] }]],
     ["tab", ["action", { method: "tabCommand", args: ["list"] }]],
+    ["drag", ["action", { method: "dragBySelector", args: ["#a", "#b"] }]],
     ["viewport", ["action", { method: "setViewport", args: [375, 812] }]],
     [
       "fileChooser",

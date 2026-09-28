@@ -130,6 +130,13 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
         case "scrollTop":
           // scrollTo with no locator scrolls the page to the top.
           return doStep(intent, { verb: "scrollTo" });
+        case "dragBySelector":
+          // args[0] = source css, args[1] = target css — drives do/drag.
+          return doStep(intent, {
+            verb: "drag",
+            on: css(args[0]),
+            params: { to: css(args[1]) },
+          });
         case "checkBySelector":
           return doStep(intent, { verb: "check", on: css(args[0]) });
         case "uncheckBySelector":
