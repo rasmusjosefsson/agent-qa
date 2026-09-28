@@ -114,6 +114,11 @@ pub struct RunOptions {
     /// performs). Runs even when shot claims FAILED: intentional UI
     /// changes are exactly the case where a failing diff needs re-minting.
     pub update_baselines: bool,
+    /// `--har` — record a HAR file for the run via `agent-browser network
+    /// har start|stop` and write `<run>/network.har`. Unlike network.json
+    /// (urls + statuses) a HAR carries response bodies — the artifact you
+    /// open in DevTools/Charles when a claim needs the payload.
+    pub har: bool,
     /// `--mock-from <runId>` — seed mock rules from that run's
     /// `network.har` (recorded via `--har`): the app's fetch/XHR calls get
     /// the recorded status + body instead of the real backend. Fails the
@@ -469,6 +474,13 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     }
 
     let mut scope = ValueScope::new(resolved_inputs);
+    // HAR recording starts before env.open so the open-phase navigation is
+    // part of the captured traffic.
+    if opts.har && !opts.dry_run {
+        if let Err(e) = crate::browser::network_har_start(&opts.session_name) {
+            eprintln!("[v2-replay] har start skipped: {e}");
+        }
+    }
     if !opts.dry_run {
         if let Some(env) = &scenario.env {
             if let Some(open_ops) = &env.open {
@@ -908,6 +920,16 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             },
         ) {
             eprintln!("[v2-replay] status.json finalise failed: {e}");
+        }
+
+        // Flush the HAR recording before env.close (teardown traffic —
+        // profile saves, cleanup navigations — isn't part of the scenario's
+        // network evidence).
+        if opts.har {
+            let dest = run.run_root.join("network.har");
+            if let Err(e) = crate::browser::network_har_stop(&opts.session_name, &dest) {
+                eprintln!("[v2-replay] har stop skipped: {e}");
+            }
         }
 
         // Persist the session's captured network requests as
@@ -2104,6 +2126,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut from_step: Option<String> = None;
     let mut until_step: Option<String> = None;
     let mut update_baselines = false;
+    let mut har = false;
     let mut mock_from: Option<String> = None;
     let mut input_overrides: BTreeMap<String, String> = BTreeMap::new();
     let mut it = args.iter().peekable();
@@ -2144,6 +2167,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             "--until" => until_step = it.next().cloned().or_else(|| bail_missing("--until")),
             s if s.starts_with("--until=") => until_step = Some(s["--until=".len()..].to_string()),
             "--update-baselines" => update_baselines = true,
+            "--har" => har = true,
             "--mock-from" => mock_from = it.next().cloned().or_else(|| bail_missing("--mock-from")),
             s if s.starts_with("--mock-from=") => {
                 mock_from = Some(s["--mock-from=".len()..].to_string())
@@ -2202,6 +2226,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         from_step,
         until_step,
         update_baselines,
+        har,
         mock_from,
     })
 }
@@ -2334,6 +2359,12 @@ replays/latest.txt.
                          intentional UI changes are the re-mint case.
                          Skips with a warning when the run captured no
                          screenshots (e.g. --no-sidecars).
+--har                    Record a HAR file for the run and write
+                         <sid>/replays/<runId>/network.har — request +
+                         response bodies for DevTools/Charles-level
+                         inspection. network.json (when present) stays
+                         the lightweight status list; the HAR is the
+                         deep dive.
 --mock-from <runId>      Seed network stubs from <runId>'s
                          network.har (record it with --har first): the
                          page's fetch/XHR calls get the recorded
@@ -2481,6 +2512,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
         };
         let summary = run(&opts).unwrap();
@@ -2558,6 +2590,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
         };
         let summary = run(&opts).unwrap();
@@ -2616,6 +2649,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
         };
         let summary = run(&opts).unwrap();
@@ -2655,6 +2689,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
         };
         let err = format!("{:#}", run(&opts).unwrap_err());
@@ -2719,6 +2754,7 @@ esac\nexit 0\n",
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
         }
     }
@@ -2971,6 +3007,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
         };
         let summary = run(&opts).unwrap();
@@ -3033,6 +3070,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
         };
         let summary = run(&opts).unwrap();
@@ -3666,6 +3704,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
         };
         let summary = run(&opts).unwrap();
@@ -3752,6 +3791,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
         };
         let summary = run(&opts).unwrap();
@@ -3935,6 +3975,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
         };
         let summary = run(&opts).unwrap();
@@ -4023,6 +4064,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
         };
         // The run bails at the failing step; events/status are written
@@ -4090,6 +4132,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
         };
         run(&opts).unwrap();
@@ -4135,6 +4178,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
         };
         run(&opts).unwrap();
@@ -4317,6 +4361,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
         };
         assert_eq!(resolve_progress_mode(&mk(true, false)), ProgressMode::Quiet);
