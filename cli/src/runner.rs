@@ -2177,6 +2177,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             s if s.starts_with("--until=") => until_step = Some(s["--until=".len()..].to_string()),
             "--update-baselines" => update_baselines = true,
             "--har" => har = true,
+            "--offline" => offline = true,
             "--mock-from" => mock_from = it.next().cloned().or_else(|| bail_missing("--mock-from")),
             s if s.starts_with("--mock-from=") => {
                 mock_from = Some(s["--mock-from=".len()..].to_string())
