@@ -2,7 +2,8 @@
 import { useState } from 'react'
 import { BrowserModeToggle } from '@/components/browser-mode-toggle'
 import { cn } from '@/lib/utils'
-import { GitCompareIcon, Loader2Icon, PlayIcon, PlusIcon, WrenchIcon } from 'lucide-react'
+import { CameraIcon, GitCompareIcon, Loader2Icon, PlayIcon, PlusIcon, WrenchIcon } from 'lucide-react'
+import { acceptAllShots } from '@/lib/runs-api'
 import { CompareView } from './CompareView'
 import { InsertCheckDialog } from './InsertCheckDialog' 
 import {
@@ -76,6 +77,7 @@ export function CenterPane({
 }) {
   const { detail, scenarioDef, sel, runDefSteps, runsBySid } = runs
   const [insertAfter, setInsertAfter] = useState<{ stepId: string; label: string } | null>(null)
+  const [acceptAll, setAcceptAll] = useState<'' | 'busy' | 'done' | 'error'>('')
   // Baseline runId for the compare picker ("" → the run before the selected
   // one, computed below).
   const [baseline, setBaseline] = useState('')
@@ -235,6 +237,16 @@ export function CenterPane({
     const heals = detail.heals || []
     const healByStep = new Map(heals.map((h) => [h.stepId, h]))
     const healedCount = heals.filter((h) => h.mode === 'locator-correction').length
+    // Any {"shot":…} claim in the scenario → the run can promote its
+    // screenshots as the new baselines ("apply new goldens").
+    const hasShotClaims = !!(
+      defSteps &&
+      defSteps.some((s) => {
+        const check = s.check as { shot?: unknown } | undefined
+        const claim = s.claim as { subject?: { shot?: unknown } } | undefined
+        return (check && check.shot != null) || (claim && claim.subject && claim.subject.shot != null)
+      })
+    )
     const stepError = stepFail && stepFail.error
       ? stepFail.error.replace(/^.*?exited \d+:\s*/, '').replace(/^[✗✘x]\s*/, '').trim()
       : null
@@ -264,8 +276,31 @@ export function CenterPane({
                 {healedCount} healed
               </span>
             )}
-            {!live && otherRuns.length > 0 && (
+            {!live && (otherRuns.length > 0 || hasShotClaims) && (
               <span className="ml-auto flex items-center gap-1.5">
+                {hasShotClaims && (
+                  <button
+                    type="button"
+                    disabled={acceptAll === 'busy'}
+                    title="Promote every screenshot captured in this run to the checked-in baselines — apply new goldens"
+                    className="flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                    onClick={() => {
+                      if (!sel.sid) return
+                      setAcceptAll('busy')
+                      void acceptAllShots(sel.sid, detail.runId).then((r) =>
+                        setAcceptAll(r.ok ? 'done' : 'error')
+                      )
+                    }}
+                  >
+                    {acceptAll === 'busy' ? (
+                      <Loader2Icon className="size-3 animate-spin" />
+                    ) : (
+                      <CameraIcon className="size-3" />
+                    )}
+                    {acceptAll === 'done' ? 'Goldens accepted' : 'Accept shots'}
+                  </button>
+                )}
+                {otherRuns.length > 0 && (
                 <select
                   value={baseRun}
                   onChange={(e) => setBaseline(e.target.value)}
@@ -280,6 +315,7 @@ export function CenterPane({
                     </option>
                   ))}
                 </select>
+                )}
                 <button
                   type="button"
                   onClick={() => void runs.startCompare(baseRun)}
