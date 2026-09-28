@@ -132,6 +132,9 @@ export interface RunDetail {
   // StepIds whose {"shot"} claim missed the baseline this run — each has a
   // shots-diff/<stepId>.diff.png delta map servable via artifactUrl.
   shotDiffs?: string[]
+  // run.webm exists in the run dir (replay ran with --record-video) —
+  // servable via runFileUrl(sid, runId, 'run.webm').
+  video?: boolean
 }
 
 export type DetailTab = 'step' | 'scenario' | 'context' | 'network' | 'html' | 'console'

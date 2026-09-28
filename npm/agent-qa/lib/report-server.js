@@ -42,6 +42,18 @@ const ARTIFACT_KINDS = {
   perf: { ext: '.json', type: 'application/json; charset=utf-8' },
 };
 
+// Top-level run artifacts streamable via .../runs/:runId/file/<name> —
+// whole-run files written by replay flags (--record-video, --junit, --har,
+// console.json, network.json). Fixed allowlist; never user-supplied names.
+const RUN_FILES = {
+  'run.webm': 'video/webm',
+  'run.mp4': 'video/mp4',
+  'console.json': 'application/json; charset=utf-8',
+  'network.json': 'application/json; charset=utf-8',
+  'run.har': 'application/json; charset=utf-8',
+  'junit.xml': 'text/xml; charset=utf-8',
+};
+
 const STATIC_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -1650,6 +1662,7 @@ async function runDetail(root, sid, runId) {
   // claim missed its baseline. Listed here so the Runs pane can render the
   // delta map inline on the failing check step.
   const shotDiffs = await listShotDiffs(runDir);
+  const video = await fileExists(path.join(runDir, 'run.webm'));
   return {
     sid,
     runId,
@@ -1659,6 +1672,7 @@ async function runDetail(root, sid, runId) {
     events,
     heals,
     shotDiffs,
+    video,
   };
 }
 
@@ -1751,6 +1765,41 @@ async function serveArtifact(res, root, sid, runId, kind, stepId) {
   if (!stat.isFile()) return notFound(res, 'not captured');
   res.writeHead(200, {
     'content-type': spec.type,
+    'content-length': stat.size,
+    'cache-control': 'no-store',
+  });
+  createReadStream(full).pipe(res);
+}
+
+async function fileExists(p) {
+  try {
+    return (await fsp.stat(p)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+// Stream a top-level run artifact (run.webm video, console.json, junit.xml,
+// run.har, network.json). Allowlisted names only — same clamp discipline as
+// serveArtifact.
+async function serveRunFile(res, root, sid, runId, name) {
+  if (![sid, runId].every(isSafeSegment)) {
+    return badRequest(res, 'unsafe path segment');
+  }
+  const type = RUN_FILES[name];
+  if (!type) return badRequest(res, `unknown run file ${name}`);
+  const runDir = path.resolve(root, sid, 'replays', runId);
+  const full = path.resolve(runDir, name);
+  if (!full.startsWith(runDir + path.sep)) return badRequest(res, 'path escapes run dir');
+  let stat;
+  try {
+    stat = await fsp.stat(full);
+  } catch {
+    return notFound(res, 'not captured');
+  }
+  if (!stat.isFile()) return notFound(res, 'not captured');
+  res.writeHead(200, {
+    'content-type': type,
     'content-length': stat.size,
     'cache-control': 'no-store',
   });
@@ -4119,6 +4168,9 @@ function createRequestHandler(root, deps, chat) {
             const kind = decodeURIComponent(seg[6]);
             const stepId = decodeURIComponent(seg[7]);
             return serveArtifact(res, root, sid, runId, kind, stepId);
+          }
+          if (seg[5] === 'file' && seg.length === 7) {
+            return serveRunFile(res, root, sid, runId, decodeURIComponent(seg[6]));
           }
 
         }
