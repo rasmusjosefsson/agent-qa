@@ -124,6 +124,10 @@ describe("toRecordDraft — emitted verbs are shipped", () => {
     ["assert", { kind: "dialogOpen", args: [] }],
     ["assert", { kind: "dialogClosed", args: [] }],
     ["assert", { kind: "dialogText", args: ["Sure?"] }],
+    ["assert", { kind: "networkFired", args: [{ urlMatches: "/api/" }] }],
+    ["assert", { kind: "networkFired", args: [{ urlMatches: "/api/" }, false] }],
+    ["assert", { kind: "networkStatus", args: [{ method: "GET" }, "equals", "200"] }],
+    ["assert", { kind: "networkJson", args: [{ operationName: "GetUser" }, "$.data.id", "exists"] }],
   ];
 
   const verbs = shippedVerbs();
