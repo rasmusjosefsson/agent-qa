@@ -12,8 +12,8 @@ use crate::sidecar::atomic_write_file;
 
 pub fn run(args: &[String]) -> Result<u8> {
     let mut auto_shots = false;
-    let mut auto_network = false;
-    let mut auto_errors = false;
+    let mut auto_network = true;
+    let mut auto_errors = true;
     for arg in args {
         match arg.as_str() {
             "-h" | "--help" | "help" => {
@@ -23,6 +23,8 @@ pub fn run(args: &[String]) -> Result<u8> {
             "--auto-shots" => auto_shots = true,
             "--auto-network" => auto_network = true,
             "--auto-errors" => auto_errors = true,
+            "--no-auto-network" => auto_network = false,
+            "--no-auto-errors" => auto_errors = false,
             other => bail!("flush: unknown argument {other:?}"),
         }
     }
@@ -47,11 +49,11 @@ Options:
   --auto-network Append a {{\"network\": {{urlMatches,method}},ofKind:fired}}
                 check per distinct XHR/fetch/non-GET request the session
                 made — replays then prove the same API calls still happen
-                (max 12).
+                (max 12). ON by default; --no-auto-network disables.
   --auto-errors  Append a {{\"pageError\": true}} notExists check — a page
                 that starts throwing uncaught exceptions fails the replay.
-
-All three are opt-in; run them together for the fullest auto-coverage.
+                ON by default; --no-auto-errors disables.
+  --auto-shots stays opt-in: shot claims need minted baselines.
 
 Writes:
   <scenarios_root>/<sid>/scenario.json
