@@ -1761,7 +1761,6 @@ fn parse_args_with_runs(args: &[String]) -> Result<(RunOptions, u32, u32)> {
     // command line, so an explicit argv flag still overrides it. Lets
     // harnesses (golden libs, CI jobs) force flags like --har without
     // editing every replay call site.
-    let mut filtered = filtered;
     if let Ok(extra) = std::env::var("AGENT_QA_REPLAY_ARGS") {
         let extra = extra.trim();
         if !extra.is_empty() {
