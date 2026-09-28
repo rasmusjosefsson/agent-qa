@@ -1984,8 +1984,14 @@ pub fn cli(args: &[String]) -> Result<u8> {
     if flags.jobs > 1 {
         bail!("--jobs requires --all");
     }
+    if flags.watch && flags.runs > 1 {
+        bail!("--watch already re-runs on every save; --runs N inside it is redundant");
+    }
 
     let parsed = parse_args(&flags.filtered)?;
+    if flags.watch {
+        return cli_watch(&parsed, &flags);
+    }
     if flags.retry > 1 {
         // --retry N: re-run until a pass or N attempts spent. Each attempt is
         // its own replay dir, so a pass-after-retries leaves flake evidence in
@@ -2012,6 +2018,58 @@ pub fn cli(args: &[String]) -> Result<u8> {
     }
     let (code, _) = run_n(&parsed, flags.runs, None)?;
     Ok(code)
+}
+
+/// `replay <sid> --watch`: run once, then re-run every time the scenario
+/// file's mtime changes. Poll-based (700ms) — no watcher dependency, works
+/// the same on every OS. Ctrl-C exits. The save→replay cycle is the dev
+/// loop; combine with `--auto-promote`/`--update-baselines` for a
+/// self-healing golden refresh.
+fn cli_watch(parsed: &RunOptions, flags: &CliFlags) -> Result<u8> {
+    let (file, _) = resolve_source(&parsed.source)?;
+    let stamp = |f: &std::path::Path| std::fs::metadata(f).and_then(|m| m.modified()).ok();
+    let mut last = stamp(&file);
+    eprintln!(
+        "[v2-replay] watch: re-running when {} changes (ctrl-c to stop)",
+        file.display()
+    );
+    let mut cycle = 0u32;
+    loop {
+        cycle += 1;
+        eprintln!("[v2-replay] watch cycle {cycle}");
+        let res = if flags.retry > 1 {
+            // Same retry-until-pass ladder as the non-watch path.
+            let mut code = 1u8;
+            for attempt in 1..=flags.retry {
+                match run(parsed) {
+                    Ok(s) if s.ok => {
+                        code = 0;
+                        break;
+                    }
+                    Ok(_) => {}
+                    Err(e) => eprintln!("[v2-replay] attempt {attempt} errored: {e}"),
+                }
+            }
+            Ok(code)
+        } else {
+            run_n(parsed, flags.runs, None).map(|(c, _)| c)
+        };
+        match res {
+            Ok(0) => eprintln!("[v2-replay] cycle {cycle}: PASS"),
+            Ok(_) => eprintln!("[v2-replay] cycle {cycle}: FAIL"),
+            Err(e) => eprintln!("[v2-replay] cycle {cycle} errored: {e}"),
+        }
+        // Wait for the file's mtime to advance before the next cycle. A
+        // save lands mid-write occasionally — re-check settles it.
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(700));
+            let now = stamp(&file);
+            if now != last {
+                last = now;
+                break;
+            }
+        }
+    }
 }
 
 /// Replay `parsed` `runs` times; `label` prefixes the per-run banner.
@@ -2281,6 +2339,10 @@ struct CliFlags {
     /// `--retry N` — re-run until a pass, at most N attempts (mutually
     /// exclusive with --runs). Under --all it applies per scenario.
     retry: u32,
+    /// `--watch` — re-run whenever scenario.json's mtime changes
+    /// (the save-driven dev loop; pairs with --auto-promote /
+    /// --update-baselines for hands-free goldens).
+    watch: bool,
 }
 
 /// Peel the CLI-level flags `--runs N`, `--retry N`, `--all`,
@@ -2296,6 +2358,7 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
     let mut tags: Vec<String> = Vec::new();
     let mut report: Option<PathBuf> = None;
     let mut jobs: u32 = 1;
+    let mut watch = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -2407,6 +2470,7 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
                     bail!("--retry must be >= 1");
                 }
             }
+            "--watch" => watch = true,
             other => filtered.push(other.to_string()),
         }
     }
@@ -2436,6 +2500,7 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
         tags,
         report,
         jobs,
+        watch,
     })
 }
 
@@ -2733,6 +2798,10 @@ replays/latest.txt.
 --runs <N>               Repeat the replay N times in one invocation
                          (each run mints its own runId). Useful for
                          flake detection. Exit 0 iff every run is OK.
+--watch                  Re-run every time scenario.json's mtime
+                         changes — the save-driven dev loop. Combine
+                         with --auto-promote/--update-baselines for
+                         hands-free golden refreshes. Ctrl-C to stop.
 --all                    Replay every scenario under the scenarios root
                          (sorted sid order), printing a per-run banner
                          plus a final pass/fail rollup. Combines with
@@ -3706,6 +3775,18 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         let f = parse_args_cli(&["./j.json".into()]).unwrap();
         assert_eq!(f.runs, 1);
         assert_eq!(f.retry, 1);
+        assert!(!f.watch);
+    }
+
+    #[test]
+    fn parse_args_cli_watch_flag() {
+        let f = parse_args_cli(&["./j.json".into(), "--watch".into()]).unwrap();
+        assert!(f.watch);
+        assert_eq!(f.runs, 1);
+        assert_eq!(f.retry, 1);
+        // --watch + --runs is rejected at cli(), not parse time
+        let f = parse_args_cli(&["./j.json".into(), "--watch".into(), "--runs=2".into()]).unwrap();
+        assert!(f.watch && f.runs == 2);
     }
 
     #[test]
