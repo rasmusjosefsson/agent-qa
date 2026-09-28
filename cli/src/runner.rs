@@ -913,7 +913,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     // flagged a real UI change is the re-mint case, and requiring a
     // passing run first would force a shot-accept round trip.
     if opts.update_baselines {
-        match crate::shot_accept::mint_baselines(&scenario_dir, &run.run_id, None) {
+        match crate::shot_accept::mint_baselines(&scenario_dir, &run.run_id, None, false, false) {
             Ok(minted) => eprintln!(
                 "baselines: minted {} shot(s) from run {}: {}",
                 minted.len(),
