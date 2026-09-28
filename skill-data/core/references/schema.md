@@ -207,6 +207,10 @@ URL (`*` is the only wildcard):
 }
 ```
 
+`params.abort: true` rejects instead of responding — the page sees a real
+network failure (`fetch` rejects `TypeError: Failed to fetch`, XHR fires
+`error`), modeling a backend that's unreachable rather than erroring.
+
 Registered rules re-apply automatically after `goto`/`reload`/`back`/
 `forward` (navigation wipes the page's JS world, so the runner reinstalls
 the wrapper). A click that navigates still drops them — put `mock` steps

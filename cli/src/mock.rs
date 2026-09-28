@@ -27,6 +27,9 @@ pub(crate) struct MockRule {
     pub body: String,
     /// Optional artificial latency.
     pub delay_ms: u64,
+    /// Reject instead of respond — models an unreachable backend:
+    /// fetch gets a `TypeError: Failed to fetch`, XHR fires `error`.
+    pub abort: bool,
 }
 
 static MOCKS: Mutex<Option<HashMap<String, Vec<MockRule>>>> = Mutex::new(None);
@@ -67,7 +70,8 @@ fn har_is_stale(har_path: &Path, scenario_json: &Path) -> bool {
 
 /// Parse a `do/mock` step's params into a rule.
 /// `params`: `{ "url": "*/api/x*", "status": 503, "json": {...}|"body": "…",
-/// "delayMs": 50 }`. `url` is required.
+/// "delayMs": 50, "abort": true }`. `url` is required; `abort: true`
+/// rejects the request instead of responding (offline / backend-down).
 pub(crate) fn rule_from_params(params: &BTreeMap<String, Json>) -> Result<MockRule> {
     let url = params
         .get("url")
@@ -84,11 +88,16 @@ pub(crate) fn rule_from_params(params: &BTreeMap<String, Json>) -> Result<MockRu
         "{}".to_string()
     };
     let delay_ms = params.get("delayMs").and_then(|v| v.as_u64()).unwrap_or(0);
+    let abort = params
+        .get("abort")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     Ok(MockRule {
         url: url.to_string(),
         status,
         body,
         delay_ms,
+        abort,
     })
 }
 
@@ -112,6 +121,7 @@ fn install_js(rules: &[MockRule]) -> String {
     const u = typeof res === 'string' ? res : ((res && res.url) || '');
     const r = match(u);
     if (!r) return of.call(window, res, init);
+    if (r.abort) return new Promise((_, rej) => setTimeout(() => rej(new TypeError('Failed to fetch')), r.delayMs || r.delay_ms || 0));
     return new Promise(done => setTimeout(() => done(respond(r)), r.delayMs || r.delay_ms || 0));
   }};
   const O = XMLHttpRequest.prototype.open, S = XMLHttpRequest.prototype.send;
@@ -120,6 +130,13 @@ fn install_js(rules: &[MockRule]) -> String {
     const r = this.__qaUrl && match(this.__qaUrl);
     if (!r) return S.apply(this, a);
     const self = this;
+    if (r.abort) {{
+      setTimeout(() => {{
+        self.dispatchEvent(new Event('error'));
+        self.dispatchEvent(new Event('loadend'));
+      }}, r.delayMs || r.delay_ms || 0);
+      return;
+    }}
     setTimeout(() => {{
       Object.defineProperty(self, 'status', {{ value: r.status }});
       Object.defineProperty(self, 'statusText', {{ value: String(r.status) }});
@@ -213,6 +230,7 @@ pub(crate) fn seed_from_har(session: &str, scenario_dir: &Path, run_id: &str) ->
                 status,
                 body,
                 delay_ms: 0,
+                abort: false,
             },
         );
         seeded += 1;
@@ -239,7 +257,11 @@ pub(crate) fn apply_mock(session: &str, params: &BTreeMap<String, Json>) -> Resu
     eprintln!(
         "[v2-replay] mock {} → {} ({} rule(s) active)",
         rule.url,
-        rule.status,
+        if rule.abort {
+            "abort".to_string()
+        } else {
+            rule.status.to_string()
+        },
         rules(session).len()
     );
     Ok(())
@@ -303,6 +325,7 @@ mod tests {
                 status: 500,
                 body: "{}".into(),
                 delay_ms: 0,
+                abort: false,
             },
         );
         add(
@@ -312,6 +335,7 @@ mod tests {
                 status: 200,
                 body: "{}".into(),
                 delay_ms: 0,
+                abort: false,
             },
         );
         assert_eq!(rules(s).len(), 2);
@@ -329,12 +353,22 @@ mod tests {
             status: 503,
             body: "{\"e\":1}".into(),
             delay_ms: 10,
+            abort: false,
         }]);
         assert!(js.contains("*/api/x*"));
         assert!(js.contains("503"));
         assert!(js.contains("window.fetch ="));
         assert!(js.contains("XMLHttpRequest.prototype.send"));
         assert!(js.contains("__qaMocksInstalled"));
+    }
+
+    #[test]
+    fn abort_rule_rejects_fetch_and_errors_xhr() {
+        let r = rule_from_params(&p(json!({"url": "*/api/*", "abort": true}))).unwrap();
+        assert!(r.abort);
+        let js = install_js(&[r]);
+        assert!(js.contains("Failed to fetch"));
+        assert!(js.contains("new Event('error')"));
     }
 
     #[test]
