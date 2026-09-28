@@ -68,6 +68,25 @@ pub fn run(args: &[String]) -> Result<u8> {
         bail!("no screenshots dir at {}", shots_dir.display());
     }
 
+    // Stale-run guard: the audit records the scenario's content hash; if
+    // scenario.json changed since this run, the captures describe a different
+    // scenario — warn (re-minting still proceeds; --dry-run keeps it advisory).
+    let run_dir = sdir.join("replays").join(&rid);
+    if let Ok(audit_bytes) = fs::read(run_dir.join("audit.json")) {
+        if let Ok(audit) = serde_json::from_slice::<serde_json::Value>(&audit_bytes) {
+            if let Some(recorded) = audit.get("scenarioContentHash").and_then(|v| v.as_str()) {
+                if let Ok(current) = fs::read(sdir.join("scenario.json")) {
+                    let now = crate::sidecar::hash_scenario_bytes(&current);
+                    if recorded != now {
+                        eprintln!(
+                            "warning: scenario.json changed since run {rid} — baselines minted from it may not match what you replay next"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     let step_ids: Vec<String> = match steps {
         Some(v) => v,
         None => {
@@ -222,6 +241,35 @@ mod tests {
         let base = sroot(root.path(), sid).join("baselines");
         assert_eq!(fs::read(base.join("a.png")).unwrap(), b"pngA");
         assert_eq!(fs::read(base.join("b.png")).unwrap(), b"pngB");
+    }
+
+    #[test]
+    fn stale_scenario_still_mints_but_warns() {
+        let _g = crate::test_util::lock_env();
+        let root = tempfile::tempdir().unwrap();
+        let sid = "s-shot-stale";
+        let sdir = sroot(root.path(), sid);
+        let run_dir = sdir.join("replays").join("r1").join("screenshots");
+        fs::create_dir_all(&run_dir).unwrap();
+        fs::write(run_dir.join("a.png"), b"pngA").unwrap();
+        fs::write(sdir.join("replays").join("latest.txt"), "r1").unwrap();
+        // audit recorded a DIFFERENT scenario hash than the current file
+        fs::write(
+            sdir.join("replays").join("r1").join("audit.json"),
+            r#"{"schema":"scenario-replay-audit/v1","scenarioContentHash":"stale"}"#,
+        )
+        .unwrap();
+        fs::write(sdir.join("scenario.json"), br#"{"id":"x"}"#).unwrap();
+
+        let cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(root.path()).unwrap();
+        let rc = run(&[sid.to_string()]).unwrap();
+        std::env::set_current_dir(cwd).unwrap();
+        assert_eq!(rc, 0); // warn-only — the mint still lands
+        assert_eq!(
+            fs::read(sdir.join("baselines").join("a.png")).unwrap(),
+            b"pngA"
+        );
     }
 
     #[test]
