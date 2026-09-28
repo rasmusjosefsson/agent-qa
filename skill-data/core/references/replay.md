@@ -57,7 +57,15 @@ Store translated labels there instead of hard-coding display strings in the
 contract; a missing file or key fails the step with the available keys.
 
 `--har` records the run's traffic as `<run>/network.har` (HAR 1.2 — open in
-DevTools/Charles when a claim needs the full payload). Harnesses and CI jobs
+DevTools/Charles when a claim needs the full payload); `--record-video [path]`
+films the run as webm and `--junit [path]` writes JUnit XML for CI ingestion.
+`--mock-from <runId>` replays hermetically off a recorded HAR — add `--offline`
+to reject any fetch/XHR no mock rule matches, and `--freeze` pins the clock +
+RNG so goldens are deterministic. `--keep-going` dispatches every step past the
+first failure (a repair sweep wants the full failure list), `--retry <N>`
+re-runs until pass keeping the flake evidence, `params.retry` retries one step
+inline, and `--base-url <url>` retargets the scenario onto another deploy (a PR
+preview URL). Harnesses and CI jobs
 can force replay flags without editing call sites via the
 `AGENT_QA_REPLAY_ARGS` env var — whitespace-separated flags applied before
 argv, so an explicit command-line flag still wins:

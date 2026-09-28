@@ -32,6 +32,9 @@ Only `do` and `check` drafts are accepted.
 ## Replay
 
 `replay <sid-or-path> [--session <name>] [--profile <name>] [--update-baselines]`
+`[--keep-going] [--retry N] [--junit [path]] [--record-video [path]] [--freeze]`
+`[--har] [--mock-from <runId>] [--offline] [--base-url <url>] [--auto-promote]`
+`[--all [--shard k/n] [--filter <substr>] [--tags <a,b>] [--jobs N] [--report <path>]]`
 replays a sealed `scenario/2` document. It writes its audit and sidecars below
 `replays/`; `--update-baselines` mints `baselines/` PNGs from the run's
 screenshots afterwards (visual baselines — see `visual.md`).`--auto-promote`
@@ -54,6 +57,9 @@ without a `heal-promote` step.
 | `heal-list <sid>` / `heal-chronic <sid>` / `heal-promote <sid> --apply` | Pending suggested patches; steps re-healing every run; absorb patches into `scenario.json`. |
 | `doctor` | Environment sanity (binary, browser, config). |
 `replay <sid-or-path> [--session <name>] [--profile <name>] [--update-baselines]`
+`[--keep-going] [--retry N] [--junit [path]] [--record-video [path]] [--freeze]`
+`[--har] [--mock-from <runId>] [--offline] [--base-url <url>] [--auto-promote]`
+`[--all [--shard k/n] [--filter <substr>] [--tags <a,b>] [--jobs N] [--report <path>]]`
 replays a sealed `scenario/2` document. It writes its audit and sidecars below
 `replays/`; `--update-baselines` mints `baselines/` PNGs from the run's
 screenshots afterwards (visual baselines — see `visual.md`).
