@@ -20,23 +20,22 @@ the picture shifts materially.
 
 ### P0 — the loop isn't closed for recorded users
 
-1. **Record → network claims.** Recording captures the session HAR (#206)
-   but nothing translates it into `network` claims at flush — a recorded
-   scenario gets element/console asserts, never "POST /login fired". Record
-   should emit at least a `networkFired` claim for each XHR/fetch the
-   session made, mirroring what `crawl` already emits.
-2. **`pageError`/`console` claims in record.** Same story — record knows the
-   session's errors; a `pageError notExists` claim should be auto-appended
-   to recorded goldens the way `crawl` appends console-error checks (#168).
+1. ~~Record → network claims~~ **done in #252** — `flush --auto-network`
+   appends deduped `networkFired` claims for XHR/fetch/non-GET traffic.
+   Remaining tail: default-on so hand-recorded scenarios get them
+   without flags.
+2. ~~`pageError`/`console` claims in record~~ **done in #252** — `flush
+   --auto-errors` appends `pageError notExists`; same default-on tail.
 
 ### P1 — shipped verbs with no golden coverage
 
 3. **`emulate` (#242) and `frame` (#245)** are open but have zero eval
    coverage — `/geolocation` + `/tinymce`/`/nested_frames` goldens are the
    obvious first runs once they merge.
-4. **`storage`/`cookie` claims (#239)** landed with unit tests only — a
-   golden that logs in via `do/state` (cookie seed) and asserts
-   `storage`/`cookie` would close the loop.
+4. ~~`storage`/`cookie` claims (#239)~~ **done in #253** —
+   `cookiePresent`/`storagePresent` vocab + `assertCookie`/`assertStorage`
+   helpers + sauce-tc05 (cookie lifecycle) / sauce-tc06 (`do/state`
+   cookie seed lands logged-in).
 5. **`loop`/`group`/`useTemplate`** — no golden exercises them; a
    `forgot_password`-style loop case would.
 
@@ -45,8 +44,9 @@ the picture shifts materially.
 6. **`computedStyle` claim** — "element has color X / display:grid" is a
    common UI assertion `element.attribute` can't express (styles aren't
    attributes). Small surface: one subject reading `getComputedStyle`.
-7. **`focus` claim** — "the input has focus" — a11y/keyboard-nav testing
-   needs it; cheap (`document.activeElement`).
+7. ~~`focus` claim~~ — already covered: `element` + `elementFocused`
+   predicate (`{element: <locator>, attribute: "focused"}`); no new
+   subject needed. (Listed in error.)
 8. **`timing` claim** — "step finished < 2s" exists in audit-slow but not as
    a per-step assertion.
 
@@ -71,6 +71,15 @@ the picture shifts materially.
 ## Recently closed (for orientation)
 
 - Dialog tolerance on dialog-opening clicks (#246)
+- Auto-claims on flush: `--auto-network`/`--auto-errors` (#252)
+- Cookie/storage goldens + `do/state` seeding (#253)
+- Live-drive findings from the sauce sweep (#253): agent-browser's real
+  input click doesn't trigger React state on saucedemo's add-to-cart
+  (recorded `click` replays fine via native DOM click — live/recording
+  divergence, not a replay bug); covered-element refusals on still-
+  animating drawer links need a settle wait or `el.click()`. If live
+  clicks keep missing delegated handlers, the record path may silently
+  drop user actions worth capturing — watch for it.
 - `pageError` + `console` + `a11y` claim subjects (#248/#167/#240)
 - Network claims fired/status/json (#143), postDataContains (#205),
   `wait url` (#166)
