@@ -145,6 +145,14 @@ pub fn dispatch_check(
             scope,
             timeout,
         ),
+        ClaimSubject::PageError { page_error } => check_page_error(
+            page_error,
+            &claim.predicate,
+            claim.value.as_ref(),
+            ctx,
+            scope,
+            timeout,
+        ),
         ClaimSubject::Storage { storage, path } => check_storage(
             storage,
             path.as_deref(),
@@ -262,6 +270,117 @@ fn check_console(
             bail!(
                 "console claim timed out ({} messages; {} matched; latest: {})",
                 msgs.len(),
+                matched.len(),
+                if sample.is_empty() {
+                    "<none>".to_string()
+                } else {
+                    sample.join(" | ")
+                }
+            );
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+}
+
+// ---------- page errors (uncaught exceptions) ----------
+
+/// Check uncaught exceptions captured this session via
+/// `agent-browser errors --json` — a different channel from `console`:
+/// uncaught throws (window.onerror / Runtime.exceptionThrown) land here,
+/// `console.*` calls do not. Matcher `{"pageError": {"text": "s",
+/// "url": "u"}}` filters on the error text / raising document URL.
+///
+/// Predicates:
+///   `exists`/`isVisible`      ≥1 matching error
+///   `notExists`/`isHidden`    zero matching — the "page threw nothing" gate
+///   `countEquals`/`gt`/`gte`/`lt`/`lte`  compare the matching count to `value`
+///   text predicates           ANY matching error's text satisfies them
+fn check_page_error(
+    subject: &crate::scenario::PageErrorSubject,
+    predicate: &Predicate,
+    expected: Option<&Json>,
+    ctx: &CheckContext,
+    scope: &mut ValueScope,
+    timeout: Duration,
+) -> Result<()> {
+    use crate::scenario::PageErrorSubject;
+    let (want_text, want_url) = match subject {
+        PageErrorSubject::Flag(true) => (None, None),
+        PageErrorSubject::Flag(false) => {
+            bail!("pageError subject requires pageError=true or a matcher")
+        }
+        PageErrorSubject::Matcher(m) => (
+            m.text
+                .as_deref()
+                .map(|t| substitute_scenario_vars(t, scope)),
+            m.url.as_deref().map(|t| substitute_scenario_vars(t, scope)),
+        ),
+    };
+    let deadline = Instant::now() + timeout;
+    loop {
+        let errs = browser::page_errors(ctx.session).unwrap_or_default();
+        let matched: Vec<&crate::browser::PageError> = errs
+            .iter()
+            .filter(|e| {
+                want_text
+                    .as_deref()
+                    .map(|t| e.text.contains(t))
+                    .unwrap_or(true)
+                    && want_url
+                        .as_deref()
+                        .map(|u| e.url.as_deref().map(|eu| eu.contains(u)).unwrap_or(false))
+                        .unwrap_or(true)
+            })
+            .collect();
+        let done = match predicate {
+            Predicate::Exists | Predicate::IsVisible => !matched.is_empty(),
+            Predicate::NotExists | Predicate::IsHidden => matched.is_empty(),
+            Predicate::CountEquals
+            | Predicate::Gt
+            | Predicate::Gte
+            | Predicate::Lt
+            | Predicate::Lte => {
+                let need = expected.and_then(|v| v.as_u64()).ok_or_else(|| {
+                    anyhow!(
+                        "pageError claim with predicate '{predicate:?}' requires a numeric 'value'"
+                    )
+                })?;
+                let n = matched.len() as u64;
+                match predicate {
+                    Predicate::CountEquals => n == need,
+                    Predicate::Gt => n > need,
+                    Predicate::Gte => n >= need,
+                    Predicate::Lt => n < need,
+                    _ => n <= need,
+                }
+            }
+            other @ (Predicate::Equals
+            | Predicate::Contains
+            | Predicate::Matches
+            | Predicate::StartsWith
+            | Predicate::EndsWith) => {
+                let need = expected.ok_or_else(|| {
+                    anyhow!("pageError claim with predicate '{other:?}' requires 'value'")
+                })?;
+                let need = substitute_scenario_vars(&value_to_string(need), scope);
+                matched
+                    .iter()
+                    .any(|e| compare_string(other, &e.text, &need).is_ok())
+            }
+            other => bail!("pageError subject does not support predicate '{other:?}'"),
+        };
+        if done {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            let sample: Vec<String> = errs
+                .iter()
+                .take(3)
+                .map(|e| e.text.lines().next().unwrap_or_default().to_string())
+                .collect();
+            bail!(
+                "pageError claim timed out ({} errors; {} matched; latest: {})",
+                errs.len(),
                 matched.len(),
                 if sample.is_empty() {
                     "<none>".to_string()
@@ -1746,6 +1865,117 @@ mod tests {
         fs::set_permissions(&bin, perm).unwrap();
         std::env::set_var(ab::BIN_ENV, &bin);
         ab::_reset_bin_cache_for_tests();
+    }
+
+    fn install_fake_errors(dir: &Path, errors: &[serde_json::Value]) {
+        // Respond to `errors` with a canned --json payload; other verbs
+        // are no-ops.
+        let resp_path = dir.join("errors.json");
+        fs::write(
+            &resp_path,
+            json!({ "success": true, "data": { "errors": errors } }).to_string(),
+        )
+        .unwrap();
+        let body = format!(
+            "#!/bin/sh\ncase \" $* \" in *\\ errors\\ *) cat '{}' ;;\nesac\nexit 0\n",
+            resp_path.display()
+        );
+        let bin = dir.join("agent-browser");
+        fs::write(&bin, body).unwrap();
+        let mut perm = fs::metadata(&bin).unwrap().permissions();
+        perm.set_mode(0o755);
+        fs::set_permissions(&bin, perm).unwrap();
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+    }
+
+    #[test]
+    fn page_error_subject_no_errors_passes_not_exists() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake_errors(tmp.path(), &[]);
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "pageError": true },
+            "predicate": "notExists"
+        }))
+        .unwrap();
+        let mut scope = ValueScope::default();
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: Path::new("."),
+            run_dir: None,
+        };
+        dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+        clear_console();
+    }
+
+    #[test]
+    fn page_error_subject_text_match_and_url_filter() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake_errors(
+            tmp.path(),
+            &[
+                json!({ "text": "TypeError: Cannot read properties of undefined (reading 'xyz')", "url": "https://app.example/a" }),
+                json!({ "text": "RangeError: too far", "url": null }),
+            ],
+        );
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "pageError": { "text": "Cannot read", "url": "app.example" } },
+            "predicate": "exists"
+        }))
+        .unwrap();
+        let mut scope = ValueScope::default();
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: Path::new("."),
+            run_dir: None,
+        };
+        dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+
+        // text predicate against the error's rendered text
+        let claim2: Claim = serde_json::from_value(json!({
+            "subject": { "pageError": { "text": "too far" } },
+            "predicate": "contains",
+            "value": "RangeError"
+        }))
+        .unwrap();
+        dispatch_check(&claim2, &ctx, &mut scope, None).unwrap();
+
+        // count the total
+        let claim3: Claim = serde_json::from_value(json!({
+            "subject": { "pageError": true },
+            "predicate": "countEquals",
+            "value": 2
+        }))
+        .unwrap();
+        dispatch_check(&claim3, &ctx, &mut scope, None).unwrap();
+        clear_console();
+    }
+
+    #[test]
+    fn page_error_subject_error_present_fails_not_exists() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake_errors(
+            tmp.path(),
+            &[json!({ "text": "TypeError: x is undefined", "url": null })],
+        );
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "pageError": true },
+            "predicate": "notExists"
+        }))
+        .unwrap();
+        let mut scope = ValueScope::default();
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: Path::new("."),
+            run_dir: None,
+        };
+        let err =
+            dispatch_check(&claim, &ctx, &mut scope, Some(Duration::from_millis(1))).unwrap_err();
+        clear_console();
+        assert!(err.to_string().contains("pageError claim"), "got: {err}");
     }
 
     fn clear_console() {

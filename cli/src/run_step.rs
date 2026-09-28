@@ -107,6 +107,7 @@ fn run_step(opts: &Opts) -> Result<Outcome> {
                 session: &session,
                 scenario_dir: &scenario_dir,
                 visual_checks: false,
+                uses_dialog: false,
             },
             &mut scope,
         )
