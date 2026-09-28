@@ -730,17 +730,25 @@ fn check_network(
             .unwrap_or("");
         serde_json::from_str(body).map_err(|e| anyhow!("response body of {id} is not JSON ({e})"))
     };
+    let post_filter = matcher
+        .post_data_contains
+        .as_deref()
+        .map(|s| substitute_scenario_vars(s, scope));
 
     let deadline = Instant::now() + timeout;
     let mut pending: String;
     loop {
         match browser::network_requests(ctx.session) {
             Ok(reqs) => {
-                let matches = matching_requests(
-                    url_re.as_ref(),
-                    op_name.as_deref(),
-                    matcher.method.as_ref(),
-                    &reqs,
+                let matches = filter_by_post(
+                    matching_requests(
+                        url_re.as_ref(),
+                        op_name.as_deref(),
+                        matcher.method.as_ref(),
+                        &reqs,
+                    ),
+                    post_filter.as_deref(),
+                    ctx.session,
                 );
                 match evaluate_network(
                     &kind,
@@ -762,6 +770,36 @@ fn check_network(
         }
         thread::sleep(POLL_INTERVAL);
     }
+}
+
+/// Keep candidates whose POST body carries the substring. The request
+/// list has no bodies — `network request <id>` fetches per candidate,
+/// so this runs only on the already-narrowed set.
+fn filter_by_post<'r>(
+    matches: Vec<&'r CapturedRequest>,
+    needle: Option<&str>,
+    session: &str,
+) -> Vec<&'r CapturedRequest> {
+    let Some(needle) = needle else {
+        return matches;
+    };
+    matches
+        .into_iter()
+        .filter(|r| {
+            if let Some(pd) = r.post_data.as_deref() {
+                return pd.contains(needle);
+            }
+            browser::network_request(session, &r.request_id)
+                .ok()
+                .and_then(|d| {
+                    d.get("postData")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                })
+                .map(|pd| pd.contains(needle))
+                .unwrap_or(false)
+        })
+        .collect()
 }
 
 enum NetEval {
@@ -1961,11 +1999,34 @@ mod tests {
             status,
             resource_type: None,
             mime_type: None,
+            post_data: None,
         }
     }
 
     fn net_claim(j: serde_json::Value) -> Claim {
         serde_json::from_value(j).unwrap()
+    }
+
+    #[test]
+    fn network_post_data_contains_narrows_by_body() {
+        let mut reqs = vec![
+            cap_req("1", "https://a/api/save", "POST", Some(200)),
+            cap_req("2", "https://a/api/save", "POST", Some(200)),
+        ];
+        reqs[0].post_data = Some(r#"{"op":"deleteAll"}"#.into());
+        reqs[1].post_data = Some(r#"{"op":"rename"}"#.into());
+        let matcher: NetworkMatcher = serde_json::from_value(json!({
+            "urlMatches": "/api/save",
+            "postDataContains": "deleteAll"
+        }))
+        .unwrap();
+        let matches = filter_by_post(
+            matching_requests(Some(&Regex::new("/api/save").unwrap()), None, None, &reqs),
+            matcher.post_data_contains.as_deref(),
+            "unused-session",
+        );
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].request_id, "1");
     }
 
     #[test]

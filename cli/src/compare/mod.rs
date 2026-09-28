@@ -28,6 +28,7 @@ use similar::TextDiff;
 
 use crate::paths;
 
+pub(crate) mod network;
 pub(crate) mod screenshots;
 
 pub fn run(args: &[String]) -> Result<u8> {
@@ -77,8 +78,9 @@ pub fn run(args: &[String]) -> Result<u8> {
         &report.out_dir,
         pixel_threshold,
     )?;
-    write_outputs(&scenario_dir, &report, &shots)?;
-    render_text(&report, &shots);
+    let net = network::build(&scenario_dir, &run_a, &run_b)?;
+    write_outputs(&scenario_dir, &report, &shots, &net)?;
+    render_text(&report, &shots, &net);
 
     let changed = report
         .entries
@@ -87,13 +89,17 @@ pub fn run(args: &[String]) -> Result<u8> {
         || shots
             .entries
             .iter()
-            .any(|e| matches!(e.outcome, screenshots::ShotOutcome::Changed));
+            .any(|e| matches!(e.outcome, screenshots::ShotOutcome::Changed))
+        || net
+            .entries
+            .iter()
+            .any(|e| !matches!(e.outcome, network::NetOutcome::Same));
     Ok(if strict && changed { 1 } else { 0 })
 }
 
 fn print_help() {
     println!(
-        "agent-qa compare — diff per-step ARIA snapshots + screenshots between two replays
+        "agent-qa compare — diff per-step snapshots, screenshots + network logs between two replays
 
 Usage:
   agent-qa compare <sid>                       Latest two runs under <sid>
@@ -279,6 +285,7 @@ fn write_outputs(
     _scenario_dir: &Path,
     r: &ReportData,
     shots: &screenshots::ShotReport,
+    net: &network::NetReport,
 ) -> Result<()> {
     fs::create_dir_all(&r.out_dir).with_context(|| format!("mkdir -p {}", r.out_dir.display()))?;
 
@@ -319,6 +326,21 @@ fn write_outputs(
             frac
         ));
     }
+    md.push_str("\n## network\n\n");
+    if !net.present_a && !net.present_b {
+        md.push_str("(no network.json in either run — recorded before the artifact existed)\n");
+    } else {
+        md.push_str("| request | outcome | status A | status B |\n|---|---|---|---|\n");
+        for e in &net.entries {
+            md.push_str(&format!(
+                "| {} | {} | {} | {} |\n",
+                e.key,
+                e.outcome.label(),
+                e.statuses_a,
+                e.statuses_b
+            ));
+        }
+    }
     let md_path = r.out_dir.join("compare.md");
     let mut f =
         fs::File::create(&md_path).with_context(|| format!("create {}", md_path.display()))?;
@@ -326,11 +348,11 @@ fn write_outputs(
     Ok(())
 }
 
-fn render_text(r: &ReportData, shots: &screenshots::ShotReport) {
+fn render_text(r: &ReportData, shots: &screenshots::ShotReport, net: &network::NetReport) {
     println!("compare {} vs {}", r.run_a, r.run_b);
     println!("output: {}", r.out_dir.display());
-    if r.entries.is_empty() && shots.entries.is_empty() {
-        println!("(no snapshot or screenshot files in either run)");
+    if r.entries.is_empty() && shots.entries.is_empty() && net.entries.is_empty() {
+        println!("(no snapshot, screenshot or network files in either run)");
         return;
     }
     if !r.entries.is_empty() {
@@ -349,6 +371,20 @@ fn render_text(r: &ReportData, shots: &screenshots::ShotReport) {
             println!("  {:<7}  {}{}", e.outcome.label(), e.step_id, pct);
         }
     }
+    if !net.present_a && !net.present_b {
+        println!("network: (no network.json in either run)");
+    } else if !net.entries.is_empty() {
+        println!("network:");
+        for e in &net.entries {
+            println!(
+                "  {:<7}  {}  ({} → {})",
+                e.outcome.label(),
+                e.key,
+                e.statuses_a,
+                e.statuses_b
+            );
+        }
+    }
     let changed_snap = r
         .entries
         .iter()
@@ -359,10 +395,15 @@ fn render_text(r: &ReportData, shots: &screenshots::ShotReport) {
         .iter()
         .filter(|e| matches!(e.outcome, screenshots::ShotOutcome::Changed))
         .count();
+    let changed_net = net
+        .entries
+        .iter()
+        .filter(|e| !matches!(e.outcome, network::NetOutcome::Same))
+        .count();
     println!();
     println!(
-        "{} snapshot diff(s); {} screenshot diff(s)",
-        changed_snap, changed_shot,
+        "{} snapshot diff(s); {} screenshot diff(s); {} network diff(s)",
+        changed_snap, changed_shot, changed_net,
     );
 }
 
@@ -437,9 +478,19 @@ mod tests {
             &screenshots::ShotReport {
                 entries: Vec::new(),
             },
+            &network::NetReport {
+                present_a: false,
+                present_b: false,
+                entries: Vec::new(),
+            },
         )
         .unwrap();
         assert!(r.out_dir.join("compare.md").is_file());
+        let md = fs::read_to_string(r.out_dir.join("compare.md")).unwrap();
+        assert!(
+            md.contains("## network"),
+            "compare.md lacks the network section: {md}"
+        );
         let diff = r.out_dir.join("snapshots").join("s1.diff");
         assert!(diff.is_file());
         let body = fs::read_to_string(&diff).unwrap();
