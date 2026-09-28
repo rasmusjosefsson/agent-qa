@@ -167,8 +167,8 @@
     "golden:all": "bun golden-all.ts",
     "golden:network:tc01": "bun golden/network-tc01.ts",
     "golden:selftest": "bun selftest/run.ts",
-    "selftest:accept": "bun selftest/accept.ts"
-
+    "selftest:accept": "bun selftest/accept.ts",
+    "golden:frame:tc01": "bun golden/frame-tc01.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"
