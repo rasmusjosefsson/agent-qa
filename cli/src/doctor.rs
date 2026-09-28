@@ -4,6 +4,9 @@
 //!
 //!   1. agent-browser binary resolution + `--version` preflight
 //!   2. plugin discovery via the host's full lookup chain
+//!   3. `--deep <url>`: full end-to-end smoke — launches a real browser
+//!      session, navigates, reads the DOM, then closes. Answers "can
+//!      agent-qa actually drive this app from here?" in one command.
 //!
 //! Exit code: 0 when every probe passes, 1 otherwise. `--json` emits a
 //! structured report on stdout (one object); useful for automation.
@@ -20,9 +23,25 @@ use crate::plugin::{discovery, host};
 
 pub fn run(args: &[String]) -> Result<u8> {
     let mut json_out = false;
-    for a in args {
+    let mut deep_url: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
         match a.as_str() {
             "--json" => json_out = true,
+            "--deep" => {
+                i += 1;
+                match args.get(i) {
+                    Some(u) => deep_url = Some(u.clone()),
+                    None => {
+                        eprintln!("agent-qa doctor: --deep needs a <url>");
+                        return Ok(2);
+                    }
+                }
+            }
+            s if s.starts_with("--deep=") => {
+                deep_url = Some(s["--deep=".len()..].to_string());
+            }
             "-h" | "--help" | "help" => {
                 print_help();
                 return Ok(0);
@@ -32,9 +51,10 @@ pub fn run(args: &[String]) -> Result<u8> {
                 return Ok(2);
             }
         }
+        i += 1;
     }
 
-    let report = collect();
+    let report = collect(deep_url.as_deref());
     if json_out {
         let body = serde_json::to_string_pretty(&report)?;
         let mut out = std::io::stdout();
@@ -48,7 +68,7 @@ pub fn run(args: &[String]) -> Result<u8> {
 
 fn print_help() {
     println!(
-        "agent-qa doctor \u{2014} diagnose the local installation\n\nUsage:\n  agent-qa doctor          Human-readable summary (default)\n  agent-qa doctor --json   Structured report on stdout"
+        "agent-qa doctor \u{2014} diagnose the local installation\n\nUsage:\n  agent-qa doctor            Human-readable summary (default)\n  agent-qa doctor --json     Structured report on stdout\n  agent-qa doctor --deep <url>\n                             End-to-end smoke: launch a browser session,\n                             navigate to <url>, read the DOM, close."
     );
 }
 
@@ -65,7 +85,7 @@ struct Probe {
     detail: Json,
 }
 
-fn collect() -> Report {
+fn collect(deep_url: Option<&str>) -> Report {
     let mut probes: Vec<Probe> = Vec::new();
     let mut overall = true;
 
@@ -140,9 +160,50 @@ fn collect() -> Report {
         }),
     });
 
+    // 4. --deep <url>: real browser smoke
+    if let Some(url) = deep_url {
+        let probe = deep_probe(url);
+        if !probe.ok {
+            overall = false;
+        }
+        probes.push(probe);
+    }
+
     Report {
         ok: overall,
         probes,
+    }
+}
+
+fn deep_probe(url: &str) -> Probe {
+    let session = format!("doctor-deep-{}", std::process::id());
+    let outcome = (|| -> Result<Json, crate::browser::AgentBrowserError> {
+        browser::open(&session, url)?;
+        // bounded settle — a chatty SPA never reaches networkidle
+        let _ = browser::wait_for_load_capped(&session, "networkidle", 5000);
+        let snap = browser::snapshot_full(&session).unwrap_or_default();
+        let elements = snap.lines().filter(|l| !l.trim().is_empty()).count();
+        let console = browser::console_messages(&session).unwrap_or_default();
+        let errors = console.iter().filter(|m| m.level == "error").count();
+        Ok(serde_json::json!({
+            "url": url,
+            "finalUrl": browser::current_url(&session),
+            "elements": elements,
+            "consoleErrors": errors,
+        }))
+    })();
+    browser::close_session(&session);
+    match outcome {
+        Ok(detail) => Probe {
+            topic: "deep".into(),
+            ok: true,
+            detail,
+        },
+        Err(e) => Probe {
+            topic: "deep".into(),
+            ok: false,
+            detail: serde_json::json!({ "url": url, "error": e.to_string() }),
+        },
     }
 }
 
