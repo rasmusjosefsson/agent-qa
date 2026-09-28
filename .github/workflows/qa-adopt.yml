@@ -1,0 +1,148 @@
+name: qa-adopt
+# The "grow coverage" half of the QA loop. qa-crawl proposes a draft scenario
+# on every UI PR (`<!-- qa-crawl -->` comment). A maintainer comments
+# `/qa adopt` to land it: this job extracts the embedded scenario.json,
+# writes it under evals/selftest/scenarios/crawl-pr-<N>/, replays it against
+# the PR's own build, shot-accepts the captures as baselines, commits, and
+# pushes to the PR head — the ui-goldens gate covers it from then on.
+# `/qa adopt <dir>` overrides the target dir (relative to the repo root).
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  adopt:
+    name: adopt the crawl draft
+    if: >-
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/qa adopt') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: resolve the PR head
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          info=$(gh pr view ${{ github.event.issue.number }} --json headRefName,headRefOid,isCrossRepository)
+          echo "$info"
+          echo "head_ref=$(echo "$info" | jq -r .headRefName)" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$(echo "$info" | jq -r .headRefOid)" >> "$GITHUB_OUTPUT"
+          echo "cross_repo=$(echo "$info" | jq -r .isCrossRepository)" >> "$GITHUB_OUTPUT"
+      - name: refuse forked PRs
+        if: steps.pr.outputs.cross_repo == 'true'
+        run: |
+          echo "::error::cannot write to a fork branch — adopt the draft manually from the qa-crawl comment"
+          exit 1
+      - name: extract the draft scenario.json from the qa-crawl comment
+        id: draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          # The crawl comment embeds scenario.json as the last ```json fence.
+          gh api "repos/${{ github.repository }}/issues/${PR}/comments" --paginate \
+            --jq '[.[] | select(.body | startswith("<!-- qa-crawl -->"))] | last | .body' \
+            > /tmp/crawl-comment.md
+          python3 - <<'PY'
+          import json, re
+          raw = open('/tmp/crawl-comment.md').read()
+          body = json.loads(raw)  # gh --jq emits a JSON string literal
+          m = re.findall(r'```json\n(.*?)```', body, re.S)
+          assert m, 'no json fence in the qa-crawl comment'
+          scenario = m[-1]
+          json.loads(scenario)  # validate
+          open('/tmp/scenario.json', 'w').write(scenario.strip() + '\n')
+          print('extracted', len(scenario), 'bytes')
+          PY
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.head_sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+      - name: build cli
+        working-directory: cli
+        run: cargo build --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: launcher install (resolves agent-browser)
+        working-directory: npm/agent-qa
+        run: npm install --no-audit --no-fund
+      - name: build web bundle (lib/public is not committed)
+        working-directory: npm/agent-qa
+        run: npm run build:web
+      - name: browser install
+        working-directory: npm/agent-qa
+        env:
+          AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+        run: ./node_modules/.bin/agent-browser install
+      - name: write the draft into the selftest scenarios
+        id: adopt
+        env:
+          PR: ${{ github.event.issue.number }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          # /qa adopt <dir> — dir defaults to the selftest goldens root.
+          DIR="$(echo "$COMMENT_BODY" | sed -n 's|^/qa adopt \+\([^ ]*\).*$|\1|p' | head -1)"
+          SID="crawl-pr-${PR}"
+          DEST="${DIR:-evals/selftest/scenarios}/${SID}"
+          mkdir -p "$DEST"
+          cp /tmp/scenario.json "$DEST/scenario.json"
+          # The crawl comment's sid is crawl-pr-<N>; rewrite to the adopted
+          # path id if a custom dir was given (keep the scenario's own id).
+          echo "dest=$DEST" >> "$GITHUB_OUTPUT"
+          echo "sid=$SID" >> "$GITHUB_OUTPUT"
+      - name: replay + mint baselines
+        working-directory: evals
+        env:
+          AGENT_QA_EVAL_AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
+          AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
+          AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+          SID: ${{ steps.adopt.outputs.sid }}
+          DEST: ${{ steps.adopt.outputs.dest }}
+        run: |
+          set -euo pipefail
+          CLI="${{ github.workspace }}/cli/target/debug/agent-qa"
+          # scenarios root = the directory that holds the adopted scenario dir
+          export AGENT_QA_SCENARIOS_DIR="$(dirname "${{ github.workspace }}/${DEST}")"
+          "$CLI" replay "$SID" || true
+          "$CLI" shot-accept "$SID"
+      - name: push the adopted scenario to the PR branch
+        env:
+          HEAD_REF: ${{ steps.pr.outputs.head_ref }}
+          DEST: ${{ steps.adopt.outputs.dest }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add "$DEST/scenario.json" "$DEST/baselines/"
+          if git diff --cached --quiet; then
+            echo "::notice::adoption produced no changes — the draft is already committed"
+            exit 0
+          fi
+          git commit -qm "test(evals): adopt qa-crawl draft for PR #$PR_NUMBER"
+          git push -q origin "HEAD:${HEAD_REF}"
+      - name: reply on the PR
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.issue.number }}
+          DEST: ${{ steps.adopt.outputs.dest }}
+          STATUS: ${{ job.status }}
+        run: |
+          if [ "$STATUS" = "success" ]; then
+            gh pr comment "$PR" --body "<!-- qa-adopt -->Adopted the crawl draft into \`$DEST\` — scenario + baselines are on this branch; the ui-goldens gate covers them from here."
+          else
+            gh pr comment "$PR" --body "<!-- qa-adopt -->\`/qa adopt\` failed — see the [workflow log](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). The draft is still in the qa-crawl comment above for manual adoption."
+          fi

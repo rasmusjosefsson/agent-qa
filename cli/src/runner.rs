@@ -115,6 +115,25 @@ pub struct RunOptions {
     /// performs). Runs even when shot claims FAILED: intentional UI
     /// changes are exactly the case where a failing diff needs re-minting.
     pub update_baselines: bool,
+    /// `--keep-going` — dispatch every step even after a failure instead
+    /// of stopping at the first one (the default). Later steps often
+    /// cascade-fail from the broken page state, but a repair sweep wants
+    /// the complete failure list in one run's events/audit rather than
+    /// re-running once per step.
+    pub keep_going: bool,
+
+    /// `--record-video [path]` — record the browser to video for the
+    /// whole run (agent-browser `record start/stop`; needs ffmpeg on the
+    /// runner). Bare flag writes `<run>/run.webm`; `=<path>` writes that
+    /// path (.webm/.mp4). Start happens right before the step loop so
+    /// env.open navigation is captured; stop after env.close.
+    pub record_video: Option<PathBuf>,
+    /// `--junit [path]` — write the run's terminal step outcomes as JUnit
+    /// XML after the run. Bare `--junit` writes `<run>/junit.xml` (the
+    /// empty-path sentinel); `--junit=<path>` writes that literal path.
+    /// One <testcase> per step so any CI's test-result ingestion renders
+    /// a replay like a unit-test run.
+    pub junit: Option<PathBuf>,
     /// `--base-url <origin>` — retarget the scenario onto another deploy
     /// (e.g. a PR preview): every `env` nav url and `goto` literal rooted
     /// at the recorded origin is rewritten to this origin. See
@@ -140,6 +159,11 @@ pub struct RunOptions {
     /// run when the HAR is absent — a partial stub silently hitting the
     /// real backend is worse than no run.
     pub mock_from: Option<String>,
+    /// `--offline` — fetch/XHR requests matching no mock rule get a network
+    /// rejection instead of reaching the real backend. With `--mock-from`
+    /// this is the full hermetic guarantee: only recorded traffic replays.
+    /// Alone it stubs every request (UI-only replays on static pages).
+    pub offline: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -518,21 +542,24 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     // page-load fetches are stubbed. A warm session that already exists
     // ignores init scripts — the post-navigation re-apply still covers its
     // in-page XHR/fetch traffic.
-    if let Some(from) = &opts.mock_from {
+    if opts.mock_from.is_some() || opts.offline {
         if opts.dry_run {
-            eprintln!("[v2-replay] --mock-from ignored under --dry-run");
+            eprintln!("[v2-replay] --mock-from/--offline ignored under --dry-run");
         } else {
-            let n = crate::mock::seed_from_har(&opts.session_name, &scenario_dir, from)
-                .with_context(|| format!("--mock-from {from:?}"))?;
+            if opts.offline {
+                crate::mock::set_strict(&opts.session_name, true);
+            }
+            if let Some(from) = &opts.mock_from {
+                let n = crate::mock::seed_from_har(&opts.session_name, &scenario_dir, from)
+                    .with_context(|| format!("--mock-from {from:?}"))?;
+                eprintln!("[v2-replay] mock-from {from}: {n} stub(s) seeded");
+            }
             let js_path = crate::mock::write_init_script(&opts.session_name, &run.run_root)
-                .with_context(|| "--mock-from: write init script")?;
+                .with_context(|| "mock seed: write init script")?;
             // Children spawned from this process inherit the var; the
             // daemon registers the script on session launch.
             std::env::set_var("AGENT_BROWSER_INIT_SCRIPTS", &js_path);
-            eprintln!(
-                "[v2-replay] mock-from {from}: {n} stub(s) seeded (init script {})",
-                js_path.display()
-            );
+            eprintln!("[v2-replay] mock init script {}", js_path.display());
         }
     }
 
@@ -601,6 +628,9 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     let mut applied_overrides: Vec<String> = Vec::new();
     // stepIds that self-healed via an inline locator correction (auto-heal).
     let mut healed_steps: Vec<String> = Vec::new();
+    // Ids of steps the --from/--until window excluded — surfaced to --junit
+    // as <skipped/> cases so CI sees the full scenario, not just the slice.
+    let mut skipped_step_ids: Vec<String> = Vec::new();
     let mut summary = RunSummary {
         passed: 0,
         total: 0,
@@ -640,8 +670,24 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 Vec::new()
             }
         };
+        // `--record-video`: start filming before the first step so the
+        // whole interaction lands in <run>/run.webm. Best-effort — a
+        // missing ffmpeg is a warning, not a failed run.
+        if let Some(vid) = &opts.record_video {
+            let dest = if vid.as_os_str().is_empty() {
+                run.run_root.join("run.webm")
+            } else {
+                vid.clone()
+            };
+            match browser::record_video_start(&opts.session_name, &dest) {
+                Ok(()) => eprintln!("[v2-replay] recording → {}", dest.display()),
+                Err(e) => eprintln!("[v2-replay] record start skipped: {e}"),
+            }
+        }
         // `--from`/`--until` narrow the dispatch window. Steps outside
-        // the window never dispatch — no events, no summary rows.
+        // the window never dispatch — no events, no summary rows — but
+        // their ids are remembered so `--junit` can emit <skipped/>.
+        let flat_all_ids: Vec<String> = flat.iter().map(|s| s.id().to_string()).collect();
         let flat: Vec<Step> =
             match apply_step_window(flat, opts.from_step.as_ref(), opts.until_step.as_ref()) {
                 Ok(v) => v,
@@ -651,6 +697,15 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                     Vec::new()
                 }
             };
+        skipped_step_ids = if opts.from_step.is_some() || opts.until_step.is_some() {
+            let kept: std::collections::BTreeSet<&str> = flat.iter().map(|s| s.id()).collect();
+            flat_all_ids
+                .into_iter()
+                .filter(|id| !kept.contains(id.as_str()))
+                .collect()
+        } else {
+            Vec::new()
+        };
         if opts.from_step.is_some() || opts.until_step.is_some() {
             eprintln!(
                 "[v2-replay] step window: {}..{} — dispatching {} step(s)",
@@ -976,7 +1031,10 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                         },
                     );
                     first_failure.get_or_insert_with(|| format!("step {id}: {e}"));
-                    break;
+                    if !opts.keep_going {
+                        break;
+                    }
+                    eprintln!("[v2-replay] --keep-going: continuing after step {id}'s failure");
                 }
             }
         }
@@ -1126,6 +1184,15 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             .with_context(|| format!("--output-audit write {}", out.display()))?;
     }
 
+    // 8.5. Stop the video recording (started under `--record-video`).
+    // Runs before audit finalize so the artifact exists even on FAIL.
+    if opts.record_video.is_some() && !opts.dry_run {
+        match browser::record_video_stop(&opts.session_name) {
+            Ok(()) => {}
+            Err(e) => eprintln!("[v2-replay] record stop skipped: {e}"),
+        }
+    }
+
     // 9. Latest pointer.
     update_latest_pointer(&scenario_dir, &run.run_id)?;
 
@@ -1159,6 +1226,20 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 minted.join(", ")
             ),
             Err(err) => eprintln!("baselines: skipped ({err})"),
+        }
+    }
+
+    // 11. `--junit` — XML report for CI test-result ingestion. Written
+    // before the failure bail so a FAIL run still produces its report
+    // (that's the case CI actually needs to render).
+    if let Some(dest) = &opts.junit {
+        let dest = crate::junit::resolve_dest(&run.run_root, dest);
+        match crate::junit::write(&run.run_root, &scenario.id, &dest, &skipped_step_ids) {
+            Ok((t, f)) => eprintln!(
+                "[v2-replay] junit → {} ({t} tests, {f} failures)",
+                dest.display()
+            ),
+            Err(err) => eprintln!("[v2-replay] junit skipped: {err}"),
         }
     }
 
@@ -2428,11 +2509,15 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut from_step: Option<String> = None;
     let mut until_step: Option<String> = None;
     let mut update_baselines = false;
+    let mut keep_going = false;
+    let mut record_video: Option<PathBuf> = None;
+    let mut junit: Option<PathBuf> = None;
     let mut base_url: Option<String> = None;
     let mut auto_promote = false;
     let mut freeze: Option<String> = None;
     let mut har = false;
     let mut mock_from: Option<String> = None;
+    let mut offline = false;
     let mut input_overrides: BTreeMap<String, String> = BTreeMap::new();
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
@@ -2472,6 +2557,14 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             "--until" => until_step = it.next().cloned().or_else(|| bail_missing("--until")),
             s if s.starts_with("--until=") => until_step = Some(s["--until=".len()..].to_string()),
             "--update-baselines" => update_baselines = true,
+            "--keep-going" => keep_going = true,
+
+            "--record-video" => record_video = Some(PathBuf::new()),
+            s if s.starts_with("--record-video=") => {
+                record_video = Some(PathBuf::from(&s["--record-video=".len()..]))
+            }
+            "--junit" => junit = Some(PathBuf::new()),
+            s if s.starts_with("--junit=") => junit = Some(PathBuf::from(&s["--junit=".len()..])),
             "--base-url" => base_url = it.next().cloned().or_else(|| bail_missing("--base-url")),
             s if s.starts_with("--base-url=") => {
                 base_url = Some(s["--base-url=".len()..].to_string())
@@ -2480,6 +2573,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             "--freeze" => freeze = it.next().cloned().or_else(|| bail_missing("--freeze")),
             s if s.starts_with("--freeze=") => freeze = Some(s["--freeze=".len()..].to_string()),
             "--har" => har = true,
+            "--offline" => offline = true,
             "--mock-from" => mock_from = it.next().cloned().or_else(|| bail_missing("--mock-from")),
             s if s.starts_with("--mock-from=") => {
                 mock_from = Some(s["--mock-from=".len()..].to_string())
@@ -2538,11 +2632,15 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         from_step,
         until_step,
         update_baselines,
+        keep_going,
+        record_video,
+        junit,
         base_url: normalize_base_url(base_url)?,
         auto_promote,
         freeze,
         har,
         mock_from,
+        offline,
     })
 }
 
@@ -2623,7 +2721,7 @@ Usage:
                   [--tag <label>] [--output-audit <path>]
                   [--from <stepId>] [--until <stepId>]
                   [--update-baselines] [--freeze <iso>] [--base-url <origin>]
-                  [--runs <N>]
+                  [--runs <N>] [--keep-going] [--junit [path]] [--record-video [path]]
 
 Loads + validates the scenario, mints a run id, prepares
 <sid>/replays/<runId>/, writes audit.json, runs env.open, iterates
@@ -2713,17 +2811,37 @@ replays/latest.txt.
                          can't flake a golden diff. Fresh sessions apply
                          it on every navigation; warm sessions get the
                          current document only
+--record-video [path]    Record the browser to video for the whole run
+                         (needs ffmpeg). Bare flag → <run>/run.webm;
+                         =<path> picks the file (.webm/.mp4). Covers
+                         env.open navigation through env.close.
 --auto-promote           Self-healing write-back: when the run passed AND
                          auto-heal corrected locators this run, apply those
                          patches to scenario.json (the hash-guarded
                          heal-promote --apply path). A stale-hash refusal
-                         is a warning, never a failure
+                         is a warning, never a failure.
 --base-url <origin>      Retarget the run onto another deploy (e.g. a
                          PR preview): every env nav url + goto literal
                          rooted at the recorded origin is rewritten to
                          <origin> (scheme://host[:port] only). Claim
                          patterns are left untouched — use inputs for
-                         scenario-authored variability."
+                         scenario-authored variability.
+--keep-going             Dispatch every step even after a failure
+                         (default: stop at the first). Later steps often
+                         cascade-fail from the broken page state, but a
+                         repair sweep wants the complete failure list in
+                         one run's audit rather than one re-run per step.
+
+--junit [path]           Write the run's terminal step outcomes as JUnit
+                         XML — one <testcase> per step. Bare flag writes
+                         <run>/junit.xml; --junit=<path> writes that
+                         path. Any CI's standard test-result ingestion
+                         (Jenkins/GitLab/Azure/GitHub reporters) renders
+                         the replay like a unit-test run.
+--offline                Reject every fetch/XHR that matches no mock rule
+                         instead of reaching the real backend. With
+                         --mock-from that's the full hermetic guarantee;
+                         alone it stubs everything (static-page replays)."
 }
 
 #[cfg(all(test, unix))]
@@ -2864,11 +2982,15 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
+            record_video: None,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         let summary = run(&opts).unwrap();
         assert_eq!(summary.total, 1);
@@ -2945,11 +3067,15 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
+            record_video: None,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3007,11 +3133,15 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
+            record_video: None,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3050,11 +3180,15 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
+            record_video: None,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         let err = format!("{:#}", run(&opts).unwrap_err());
         assert!(err.contains("schema error"), "got: {err}");
@@ -3118,11 +3252,15 @@ esac\nexit 0\n",
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
+            record_video: None,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         }
     }
 
@@ -3374,11 +3512,15 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
+            record_video: None,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3440,11 +3582,15 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
+            record_video: None,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3470,6 +3616,32 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         assert_eq!(opts.input_overrides.get("name").unwrap(), "alice");
         assert_eq!(opts.input_overrides.get("count").unwrap(), "3");
         assert_eq!(opts.input_overrides.get("flag").unwrap(), "true");
+    }
+
+    #[test]
+    fn parse_args_keep_going_flag() {
+        assert!(!parse_args(&["./j.json".into()]).unwrap().keep_going);
+        assert!(
+            parse_args(&["./j.json".into(), "--keep-going".into()])
+                .unwrap()
+                .keep_going
+        );
+    }
+
+    #[test]
+    fn parse_args_record_video() {
+        // bare flag → empty-path sentinel (runner resolves to <run>/run.webm)
+        let o = parse_args(&["./j.json".into(), "--record-video".into()]).unwrap();
+        assert_eq!(o.record_video.as_deref(), Some(std::path::Path::new("")));
+        let o = parse_args(&["./j.json".into(), "--record-video=/tmp/x.mp4".into()]).unwrap();
+        assert_eq!(
+            o.record_video.as_deref(),
+            Some(std::path::Path::new("/tmp/x.mp4"))
+        );
+        assert!(parse_args(&["./j.json".into()])
+            .unwrap()
+            .record_video
+            .is_none());
     }
 
     #[test]
@@ -4158,11 +4330,15 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
+            record_video: None,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -4248,11 +4424,15 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
+            record_video: None,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -4470,11 +4650,15 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
+            record_video: None,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -4562,11 +4746,15 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
+            record_video: None,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         // The run bails at the failing step; events/status are written
         // before the bail.
@@ -4633,11 +4821,15 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
+            record_video: None,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         run(&opts).unwrap();
 
@@ -4682,11 +4874,15 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
+            record_video: None,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         run(&opts).unwrap();
         let run_dir = run_dir_for(&jdir);
@@ -4868,11 +5064,15 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
+            record_video: None,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         assert_eq!(resolve_progress_mode(&mk(true, false)), ProgressMode::Quiet);
         // quiet wins over plain.

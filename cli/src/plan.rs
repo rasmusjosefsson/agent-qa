@@ -291,11 +291,15 @@ fn run_plan(root: &Path, plan: &PlanFile, opts: &RunOpts) -> Result<(Vec<RunRow>
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
+            record_video: None,
+            junit: None,
             base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         match crate::runner::run(&run_opts) {
             Ok(summary) => {
