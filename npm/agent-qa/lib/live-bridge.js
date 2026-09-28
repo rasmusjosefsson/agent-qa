@@ -190,6 +190,18 @@ function createLiveBridge({
         rec = { kind: 'select', name: aqName(t), value: labels.join(',') };
       } else if (t.tagName === 'INPUT' && (t.type === 'checkbox' || t.type === 'radio')) {
         rec = { kind: t.checked ? 'check' : 'uncheck', name: aqName(t), role: t.type };
+      } else if (t.tagName === 'INPUT' && t.type === 'file' && t.files && t.files.length) {
+        // File inputs only expose basenames — the recorded step replays
+        // once the user drops the real files next to the scenario.
+        const css = t.id ? '#' + t.id
+          : t.name ? 'input[type="file"][name="' + t.name + '"]'
+          : 'input[type="file"]';
+        rec = {
+          kind: 'upload',
+          name: aqName(t),
+          selector: css,
+          files: Array.from(t.files).map((f) => f.name),
+        };
       }
       if (rec) { try { __aqRecord(JSON.stringify(rec)); } catch (e) { /* binding absent */ } }
     }, true);
@@ -553,6 +565,18 @@ function createLiveBridge({
         verb: 'select',
         on: { role: 'combobox', name: rec.name },
         value: { from: 'literal', literal: rec.value },
+      });
+    } else if (rec.kind === 'upload') {
+      const files = Array.isArray(rec.files) && rec.files.length ? rec.files : [];
+      if (!files.length) return;
+      const on = rec.selector
+        ? { raw: { kind: 'css', value: rec.selector }, reason: 'file input' }
+        : { role: 'button', name: rec.name };
+      emitRecord('do', {
+        intent: `upload ${files.join(', ')} to ${rec.name} — place the file(s) next to the scenario`,
+        verb: 'upload',
+        on,
+        value: { from: 'literal', literal: files.length === 1 ? files[0] : files },
       });
     } else if (rec.kind === 'check' || rec.kind === 'uncheck') {
       emitRecord('do', {
