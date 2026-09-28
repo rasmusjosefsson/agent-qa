@@ -1483,6 +1483,11 @@ fn list_lint_rules(json_out: bool) -> Result<u8> {
             severity: "warning",
             description: "baselines/<stepId>.png exists but no shot claim references <stepId> — a stale golden left by a deleted or renamed step. Skipped for stdin input.",
         },
+        Rule {
+            code: "brittle-locator",
+            severity: "warning",
+            description: "A raw css/xpath locator is positional or generated-looking (xpath [N]/last()/position(), css :nth-* chains, #id with a digit/hash tail). Self-heal can't rescue these — prefer role+name, text, or a stable css/testid.",
+        },
     ];
     if json_out {
         println!("{}", serde_json::to_string_pretty(&rules)?);
@@ -1518,6 +1523,110 @@ fn scenario_navigates(j: &Scenario) -> bool {
                 }
             )
         })
+}
+
+/// Collect every `{ "raw": { "kind": "css"|"xpath", "value": <str> } }` shape
+/// in a JSON subtree — that pair is the locator envelope everywhere it can
+/// appear (do `on`, claim `element`, shot `clip`, `params.to`, role scopes).
+fn walk_raw_locators(v: &serde_json::Value, out: &mut Vec<(String, String)>) {
+    match v {
+        serde_json::Value::Object(m) => {
+            if let Some(raw) = m.get("raw").and_then(|r| r.as_object()) {
+                let kind = raw.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+                let value = raw.get("value").and_then(|s| s.as_str()).unwrap_or("");
+                if !value.is_empty() && (kind == "css" || kind == "xpath") {
+                    out.push((kind.to_string(), value.to_string()));
+                }
+            }
+            for child in m.values() {
+                walk_raw_locators(child, out);
+            }
+        }
+        serde_json::Value::Array(a) => {
+            for child in a {
+                walk_raw_locators(child, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A locator is brittle when a page change removes every stable signal:
+/// positional xpath predicates break on a sibling reorder, css `:nth-*`
+/// chains on a wrapper insert, generated-looking ids on the next deploy.
+fn brittle_locator_reason(kind: &str, value: &str) -> Option<&'static str> {
+    if kind == "xpath" {
+        let mut in_bracket = false;
+        let mut buf = String::new();
+        for c in value.chars() {
+            if in_bracket {
+                if c == ']' {
+                    in_bracket = false;
+                    let t = buf.trim();
+                    if (!t.is_empty() && t.chars().all(|ch| ch.is_ascii_digit()))
+                        || t.starts_with("last()")
+                        || t.starts_with("position()")
+                    {
+                        return Some("xpath uses a positional predicate ([N]/last()/position())");
+                    }
+                    buf.clear();
+                } else {
+                    buf.push(c);
+                }
+            } else if c == '[' {
+                in_bracket = true;
+            }
+        }
+        return None;
+    }
+    // css: a chain of 2+ positional pseudos, or an id that looks generated
+    // (ends in 3+ digits or is a hex/uuid run) — e.g. #ember982, #a1b2c3d4.
+    if value.matches(":nth-").count() >= 2 {
+        return Some("css chains multiple positional selectors (:nth-*)");
+    }
+    let mut i = 0;
+    let bytes = value.as_bytes();
+    let mut depth = 0usize;
+    let mut quote = 0u8;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if quote != 0 {
+            if c == quote {
+                quote = 0;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            b'"' | b'\'' => quote = c,
+            b'[' => depth += 1,
+            b']' => depth = depth.saturating_sub(1),
+            b'#' if depth == 0 => {
+                let id: String = value[i + 1..]
+                    .chars()
+                    .take_while(|ch| ch.is_alphanumeric() || *ch == '-' || *ch == '_' || *ch == ':')
+                    .collect();
+                let hexish = id.len() >= 8
+                    && id
+                        .chars()
+                        .all(|ch| ch.is_ascii_hexdigit() || ch == '-' || ch == '_');
+                let digit_tail = id
+                    .chars()
+                    .rev()
+                    .take_while(|ch| ch.is_ascii_digit())
+                    .count()
+                    >= 3;
+                if hexish || digit_tail {
+                    return Some(
+                        "id selector looks generated (#…hex/digits) — it drifts between deploys",
+                    );
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
 }
 
 pub(crate) fn lint(
@@ -1647,6 +1756,29 @@ pub(crate) fn lint(
                             ),
                         });
                     }
+                }
+            }
+        }
+    }
+
+    // 3d) brittle locators — walk every locator-shaped object in the step
+    // list (on, claim element, shot clip, params.to, role scopes — all carry
+    // `raw: {kind, value}`). These are the locators self-heal cannot rescue:
+    // a sibling reorder or a regenerated id leaves no stable signal.
+    if let Some(steps) = raw.get("steps").and_then(|s| s.as_array()) {
+        for step in steps {
+            let sid = step.get("id").and_then(|i| i.as_str()).unwrap_or("?");
+            let mut locs: Vec<(String, String)> = Vec::new();
+            walk_raw_locators(step, &mut locs);
+            for (kind, value) in locs {
+                if let Some(reason) = brittle_locator_reason(&kind, &value) {
+                    findings.push(Finding {
+                        severity: "warning",
+                        code: "brittle-locator",
+                        message: format!(
+                            "step {sid:?} locator {value:?}: {reason} — prefer role+name, text, or a stable css/testid"
+                        ),
+                    });
                 }
             }
         }
@@ -3714,6 +3846,56 @@ mod tests {
         )
         .unwrap();
         assert_eq!(code, 1);
+    }
+
+    #[test]
+    fn lint_brittle_locator_flags_positional_and_generated() {
+        let tmp = TempDir::new().unwrap();
+        let brittle = |locator: serde_json::Value| {
+            let p = write(
+                tmp.path(),
+                &format!(
+                    r#"{{
+                      "schema": "scenario/2", "id": "j", "intent": "x",
+                      "steps": [
+                        {{ "id": "s0", "intent": "go", "kind": "do", "verb": "click",
+                          "on": {locator} }},
+                        {{ "id": "s1", "intent": "ok", "kind": "check",
+                          "claim": {{ "subject": {{ "url": true }}, "predicate": "exists" }} }}
+                      ]
+                    }}"#
+                ),
+            );
+            // strict: warnings gate
+            lint(
+                &p,
+                LintFormat::Text,
+                true,
+                Some(&["brittle-locator".to_string()]),
+                None,
+            )
+            .unwrap()
+        };
+        let raw = |value: &str| serde_json::json!({ "raw": { "kind": "css", "value": value }, "reason": "r" });
+        let xpath = |value: &str| serde_json::json!({ "raw": { "kind": "xpath", "value": value }, "reason": "r" });
+        assert_eq!(brittle(xpath("//div[2]/span")), 1);
+        assert_eq!(brittle(xpath("//ul/li[last()-1]")), 1);
+        assert_eq!(brittle(xpath("//a[@href='/x']")), 0);
+        assert_eq!(
+            brittle(raw("div > ul > li:nth-of-type(2) > a:nth-child(1)")),
+            1
+        );
+        assert_eq!(brittle(raw("#ember982")), 1);
+        assert_eq!(brittle(raw("#a1b2c3d4")), 1);
+        // Legit shapes stay clean: single positional, hash in an attribute,
+        // plain ids, role locators.
+        assert_eq!(brittle(raw(".todo-list li:nth-of-type(2)")), 0);
+        assert_eq!(brittle(raw("a[href='#/active']")), 0);
+        assert_eq!(brittle(raw("#login-button")), 0);
+        assert_eq!(
+            brittle(serde_json::json!({ "role": "button", "name": "Save" })),
+            0
+        );
     }
 
     #[test]

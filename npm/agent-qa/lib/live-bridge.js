@@ -179,6 +179,25 @@ function createLiveBridge({
       if (t.labels && t.labels.length) { const s = lbl(t.labels[0].textContent); if (s) return s; }
       return lbl(t.getAttribute('placeholder') || t.getAttribute('name') || t.getAttribute('id'));
     };
+    const aqSel = (t) => {
+      if (t.id) return '#' + CSS.escape(t.id);
+      const parts = [];
+      for (let n = t; n && n !== document.body && parts.length < 4; n = n.parentElement) {
+        if (n.id) { parts.unshift('#' + CSS.escape(n.id)); break; }
+        const cls = Array.from(n.classList || []).slice(0, 2)
+          .map((c) => '.' + CSS.escape(c)).join('');
+        parts.unshift(n.tagName.toLowerCase() + cls);
+      }
+      return parts.join(' ');
+    };
+    // Secondary-click gestures produce no change event — listen for
+    // contextmenu directly so a right-click records as do/rightclick.
+    document.addEventListener('contextmenu', (ev) => {
+      const t = ev.target;
+      if (!(t instanceof HTMLElement)) return;
+      const rec = { kind: 'rightclick', name: aqName(t), selector: aqSel(t) };
+      try { __aqRecord(JSON.stringify(rec)); } catch (e) { /* binding absent */ }
+    }, true);
     document.addEventListener('change', (ev) => {
       const t = ev.target;
       if (!(t instanceof HTMLElement)) return;
@@ -555,7 +574,9 @@ function createLiveBridge({
       return;
     }
     if (!rec || typeof rec !== 'object') return;
-    if (!rec.name) {
+    // rightclick falls back to its css selector — a nameless icon button or
+    // canvas region is still recordable.
+    if (!rec.name && !(rec.kind === 'rightclick' && rec.selector)) {
       broadcastEvent('record-skip', { reason: `${rec.kind} target has no accessible name` });
       return;
     }
@@ -577,6 +598,16 @@ function createLiveBridge({
         verb: 'upload',
         on,
         value: { from: 'literal', literal: files.length === 1 ? files[0] : files },
+      });
+    } else if (rec.kind === 'rightclick') {
+      if (!rec.selector) {
+        broadcastEvent('record-skip', { reason: 'rightclick target has no css selector' });
+        return;
+      }
+      emitRecord('do', {
+        intent: `right-click ${rec.name || rec.selector}`,
+        verb: 'rightclick',
+        on: { raw: { kind: 'css', value: rec.selector }, reason: 'right-click target' },
       });
     } else if (rec.kind === 'check' || rec.kind === 'uncheck') {
       emitRecord('do', {
