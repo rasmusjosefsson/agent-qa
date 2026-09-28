@@ -274,6 +274,8 @@ fn run_plan(root: &Path, plan: &PlanFile, opts: &RunOpts) -> Result<(Vec<RunRow>
         let run_opts = RunOptions {
             source: ScenarioSource::Sid(sid.clone()),
             profile: opts.profile.clone(),
+            persona: None,
+            environment: None,
             session_name: opts
                 .profile
                 .as_ref()
