@@ -577,6 +577,51 @@ pub struct ConsoleMessage {
     pub text: String,
 }
 
+/// One uncaught exception / page error as reported by
+/// `agent-browser errors --json` — a different capture channel from
+/// `console`: it sees `window.onerror`/`Runtime.exceptionThrown`, not
+/// `console.*` calls.
+#[derive(Debug)]
+pub struct PageError {
+    /// The error's rendered text (message + stack).
+    pub text: String,
+    /// The document URL it was raised on, when reported.
+    pub url: Option<String>,
+}
+
+/// Run `agent-browser errors --json` and return the session's captured
+/// page errors (uncaught exceptions), oldest-first.
+pub fn page_errors(session: &str) -> Result<Vec<PageError>, AgentBrowserError> {
+    let r = run(session, ["--json", "errors"], RunOpts::new().capture())?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(r.stdout.trim()).map_err(|e| AgentBrowserError::NonZero {
+            verb: "errors".to_string(),
+            exit_code: 0,
+            stderr: format!("unparseable errors JSON: {e}: {:?}", r.stdout.trim()),
+            hint: String::new(),
+        })?;
+    Ok(parsed
+        .get("data")
+        .and_then(|d| d.get("errors"))
+        .and_then(|m| m.as_array())
+        .map(|errs| {
+            errs.iter()
+                .map(|e| PageError {
+                    text: e
+                        .get("text")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    url: e
+                        .get("url")
+                        .and_then(|u| u.as_str())
+                        .map(|u| u.to_string()),
+                })
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
 /// Messages the page logged to the console so far this session
 /// (`agent-browser console --json` → `data.messages[]`).
 pub fn console_messages(session: &str) -> Result<Vec<ConsoleMessage>, AgentBrowserError> {

@@ -12,7 +12,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const evalsRoot = resolve(__dirname, "..");
 const repoRoot = resolve(evalsRoot, "..");
 const base = "https://the-internet.herokuapp.com";
-export const edgeUrl = (path: string) => `${base}${path}`;
+// pagePath may be a path (joined to the site base) or a full URL — e.g. a
+// credentialed URL for the basic_auth case.
+export const edgeUrl = (path: string) =>
+  path.startsWith("http://") || path.startsWith("https://") ? path : `${base}${path}`;
 
 interface StepResult {
   name: string;
@@ -48,6 +51,8 @@ export interface EdgeGolden extends GoldenContext {
   scrollToSelector(selector: string, intent: string): Promise<void>;
   scrollBottom(intent: string): Promise<void>;
   downloadBySelector(selector: string, scenarioRelPath: string, intent: string): Promise<void>;
+  dragSelector(from: string, to: string, intent: string): Promise<void>;
+  tabCommand(tail: string, intent: string): Promise<void>;
   upload(selector: string, repoRelFixture: string, intent: string): Promise<void>;
   assertFileExists(scenarioRelPath: string, intent: string): Promise<void>;
   assertFileName(scenarioRelPath: string, expectedName: string, intent: string): Promise<void>;
@@ -65,6 +70,9 @@ export interface EdgeGolden extends GoldenContext {
   assertElementAbsent(selector: string, intent: string): Promise<void>;
   assertElementPresent(selector: string, intent: string): Promise<void>;
   assertUrlContains(fragment: string, intent: string): Promise<void>;
+  assertConsole(matcher: true | { type?: string; text?: string }, predicate: string, value: string | undefined, intent: string): Promise<void>;
+  assertPageError(matcher: true | { text?: string; url?: string }, predicate: string, value: string | undefined, intent: string): Promise<void>;
+  a11yAudit(matcher: true | Record<string, unknown>, predicate: string, value: number | undefined, intent: string): Promise<void>;
 }
 
 function createContext(tc: string, intent: string, keepDialogs: boolean): GoldenContext {
@@ -260,8 +268,45 @@ export async function runEdgeGolden(
     async assertElementAbsent(selector, stepIntent) {
       await record(ctx, "assert", { kind: "elementAbsent", args: [selector], intent: stepIntent });
     },
+    async dragSelector(from, to, stepIntent) {
+      // do/drag synthesizes the full HTML5 gesture in-page — live-probe the
+      // endpoints exist first, then record.
+      await run(ctx, `drag ${from} → ${to}`, [
+        ctx.agentBrowser,
+        "--session",
+        ctx.session,
+        "eval",
+        `(() => { const f = document.querySelector(${JSON.stringify(from)}); const t = document.querySelector(${JSON.stringify(to)}); if (!f || !t) throw new Error('drag endpoint missing'); ${""} const r = el => { const b = el.getBoundingClientRect(); return [b.x + b.width / 2, b.y + b.height / 2]; }; const [fx, fy] = r(f); const [tx, ty] = r(t); const dt = new DataTransfer(); for (const [type, ev, x, y] of [['dragstart', f, fx, fy], ['dragenter', t, tx, ty], ['dragover', t, tx, ty], ['drop', t, tx, ty], ['dragend', f, fx, fy]]) { ev.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, dataTransfer: dt })); } return 'done'; })()`,
+      ]);
+      await record(ctx, "action", { method: "dragBySelector", args: [from, to], intent: stepIntent });
+    },
+    async tabCommand(tail, stepIntent) {
+      await run(ctx, `tab ${tail}`, [ctx.agentBrowser, "--session", ctx.session, "tab", ...tail.split(" ")]);
+      await record(ctx, "action", { method: "tabCommand", args: [tail], intent: stepIntent });
+    },
     async assertElementPresent(selector, stepIntent) {
       await record(ctx, "assert", { kind: "elementPresent", args: [selector], intent: stepIntent });
+    },
+    async assertConsole(matcher, predicate, value, stepIntent) {
+      await record(ctx, "assert", {
+        kind: "consoleMessage",
+        args: [matcher, predicate, value],
+        intent: stepIntent,
+      });
+    },
+    async assertPageError(matcher, predicate, value, stepIntent) {
+      await record(ctx, "assert", {
+        kind: "pageError",
+        args: [matcher, predicate, value],
+        intent: stepIntent,
+      });
+    },
+    async a11yAudit(matcher, predicate, value, stepIntent) {
+      await record(ctx, "assert", {
+        kind: "a11yViolations",
+        args: [matcher, predicate, value],
+        intent: stepIntent,
+      });
     },
     async assertUrlContains(fragment, stepIntent) {
       await record(ctx, "assert", { kind: "url", args: [fragment], intent: stepIntent });
