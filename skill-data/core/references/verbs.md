@@ -49,6 +49,7 @@ without a `heal-promote` step.
 | `diff <sid> <runA> <runB>` | Diff two runs of a scenario (steps, timings, screenshots). |
 | `scenario check <file>` | Schema + lint validation of a scenario doc. |
 | `scenario insert <sid> --step '<json>' [--after <stepId> \| --at <index>]` | Splice a validated step into a saved scenario. |
+| `scenario extract <sid> [--run <id>] [--through <stepId>] [--to <new>]` | Clone a scenario truncated at the run's first failing step — the repro unit. |
 | `scenario coverage <file>` / `scenario coverage-all` | Per-scenario and whole-suite do→check coverage rolls. |
 | `scenario lint <file> [--strict]` / `scenario lint-all` | Common lints (duplicate ids, bare do, …); `--format github` emits CI annotations. |
 | `audit health` | Suite rollup: flaky + slow + heal-chronic step ids per scenario. |

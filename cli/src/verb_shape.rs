@@ -101,6 +101,13 @@ fn rule_for(verb: &Verb) -> VerbRule {
             forbidden: &[DoField::On, DoField::Value],
             ..VerbRule::default()
         },
+        // `params.selector` or `params.main` — either/or is validated in
+        // dispatch.
+        Verb::Frame => VerbRule {
+            required: &[DoField::Params],
+            forbidden: &[DoField::On, DoField::Value],
+            ..VerbRule::default()
+        },
         // `params` carries the emulate spec; at least one known key must be
         // present (device/geo/offline/colorScheme/reducedMotion/headers/
         // credentials) — validated in dispatch.

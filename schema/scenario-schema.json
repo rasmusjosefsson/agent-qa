@@ -478,6 +478,7 @@
             "state",
             "hold",
             "swipe",
+            "frame",
             "emulate",
             "loop",
             "group",
