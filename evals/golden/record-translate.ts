@@ -295,6 +295,32 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           return checkStep(intent, { dialog: true }, "notExists");
         case "dialogText":
           return checkStep(intent, { dialog: true }, "contains", args[0]);
+        case "networkFired":
+          // args[0] = matcher {urlMatches?, operationName?, method?};
+          // args[1] === false flips to "must not have fired".
+          return checkStep(
+            intent,
+            { network: args[0], ofKind: "fired" },
+            args[1] === false ? "notExists" : "exists",
+          );
+        case "networkStatus":
+          // args: [matcher, predicate, value] — predicate on the latest
+          // matching request's HTTP status.
+          return checkStep(
+            intent,
+            { network: args[0], ofKind: "status" },
+            args[1] ?? "equals",
+            args[2],
+          );
+        case "networkJson":
+          // args: [matcher, path, predicate, value?] — JSON path into the
+          // latest matching request's response body.
+          return checkStep(
+            intent,
+            { network: args[0], ofKind: "responseJsonPath", path: args[1] },
+            args[2],
+            args[3],
+          );
         case "elementChecked":
           // `checked` reads the live IDL property, not the attribute — so this
           // sees the post-interaction state. args[1] flips to expect unchecked.

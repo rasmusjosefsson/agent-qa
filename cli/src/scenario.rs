@@ -347,8 +347,15 @@ pub enum ClaimSubject {
     /// differing pixels ≤ `tolerance.pixels` (default 0.01). On mismatch the
     /// delta map lands at `<run>/shots-diff/<stepId>.diff.png` and the claim
     /// fails with the diff ratio. Baselines are minted with `shot-accept`.
+    ///
+    /// `clip` (optional) restricts the diff to a single element's box —
+    /// `{"shot": "s3", "clip": {"raw": {"kind": "css", "value": "#card"}, "reason": ".."}}`. The
+    /// element's rect is read live at claim time and applied to BOTH images,
+    /// so keep the viewport pinned; baselines stay full-page.
     Shot {
         shot: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        clip: Option<Locator>,
     },
     Var {
         kind: String, // always "var" — kept literal to disambiguate untagged
