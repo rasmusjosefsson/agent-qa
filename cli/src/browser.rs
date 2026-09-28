@@ -702,6 +702,9 @@ pub struct CapturedRequest {
     pub resource_type: Option<String>,
     #[serde(default)]
     pub mime_type: Option<String>,
+    /// POST body when the capture pipeline surfaces it on the list entry.
+    #[serde(default)]
+    pub post_data: Option<String>,
 }
 
 fn json_data(verb: &str, stdout: &str) -> Result<serde_json::Value, AgentBrowserError> {

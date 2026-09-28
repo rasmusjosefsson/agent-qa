@@ -203,9 +203,14 @@
       "properties": {
         "urlMatches": { "type": "string" },
         "operationName": { "type": "string" },
-        "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"] }
+        "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"] },
+        "postDataContains": { "type": "string" }
       },
-      "anyOf": [{ "required": ["urlMatches"] }, { "required": ["operationName"] }]
+      "anyOf": [
+        { "required": ["urlMatches"] },
+        { "required": ["operationName"] },
+        { "required": ["postDataContains"] }
+      ]
     },
     "ClaimSubject": {
       "oneOf": [
