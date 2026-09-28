@@ -191,6 +191,9 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
               ...(args[1] != null ? { radius: args[1] } : {}),
             },
           });
+||||||| b450b5a
+        case "rightClickBySelector":
+          return doStep(intent, { verb: "rightclick", on: css(args[0]) });
         case "scrollToBySelector":
           return doStep(intent, { verb: "scrollTo", on: css(args[0]) });
         case "scrollTop":
