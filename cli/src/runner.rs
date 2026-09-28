@@ -2064,6 +2064,19 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
     if runs > 1 && retry > 1 {
         bail!("--runs and --retry are mutually exclusive (repeat-N vs until-pass)");
     }
+    // AGENT_QA_REPLAY_ARGS: whitespace-separated flags applied BEFORE the
+    // command line, so an explicit argv flag still overrides it. Lets
+    // harnesses (golden libs, CI jobs) force flags like --har without
+    // editing every replay call site.
+    if let Ok(extra) = std::env::var("AGENT_QA_REPLAY_ARGS") {
+        let extra = extra.trim();
+        if !extra.is_empty() {
+            let mut merged: Vec<String> = extra.split_whitespace().map(str::to_string).collect();
+            merged.extend(filtered);
+            filtered = merged;
+            eprintln!("[v2-replay] AGENT_QA_REPLAY_ARGS applied: {extra}");
+        }
+    }
     Ok(CliFlags {
         filtered,
         runs,
@@ -3286,6 +3299,16 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         // malformed json → never matches
         fs::write(sid.join("scenario.json"), b"not json").unwrap();
         assert!(!scenario_has_any_tag(root, "s1", &smoke));
+    }
+
+    #[test]
+    fn replay_args_env_applies_and_argv_overrides() {
+        std::env::set_var("AGENT_QA_REPLAY_ARGS", "--har --dry-run");
+        let flags = parse_args_cli(&["./j.json".into()]).unwrap();
+        std::env::remove_var("AGENT_QA_REPLAY_ARGS");
+        let opts = parse_args(&flags.filtered).unwrap();
+        assert!(opts.har, "--har from AGENT_QA_REPLAY_ARGS applied");
+        assert!(opts.dry_run, "--dry-run from the env applied");
     }
 
     #[test]
