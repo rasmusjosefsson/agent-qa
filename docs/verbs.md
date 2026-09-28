@@ -7,7 +7,9 @@ The full set of CLI verbs at a glance. Every verb also responds to
 
 | Verb | What it does |
 | --- | --- |
+| `init [dir] [--force] [--ci]` | Bootstrap a directory: `agent-qa.toml` (`scenarios_root = ./scenarios`), a `scenarios/hello` smoke scenario, `.gitignore` for run artifacts. `--ci` also writes `.github/workflows/agent-qa.yml` (a PR gate running `replay --all`). Idempotent. |
 | `init [dir] [--force]` | Bootstrap a directory: `agent-qa.toml` (`scenarios_root = ./scenarios`), a `scenarios/hello` smoke scenario, `.gitignore` for run artifacts. Idempotent. |
+
 | `start` | Mint a new scenario directory + skeleton `scenario.json` |
 | `record-step` | Append one step to the in-flight scenario via the recorder |
 | `record pause \| resume \| status` | Freeze capture while you set up page state — record append paths (`record-step`, `smart-click`, `fill-unique`, the editor's auto-record) drop steps while paused instead of writing them. `status --json` emits `{sid, intent, session, paused, steps, startedAt}`. |
