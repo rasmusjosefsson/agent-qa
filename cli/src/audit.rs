@@ -282,7 +282,13 @@ pub fn run(args: &[String]) -> Result<u8> {
         "trend" => trend(&positionals, json_out, limit, trend_all),
 
         "cluster" => cluster(json_out, cluster_min),
-        "verdict" => verdict(&positionals, json_out),
+        "verdict" => {
+            if trend_all {
+                verdict_all(json_out)
+            } else {
+                verdict(&positionals, json_out)
+            }
+        }
 
         other => bail!(
             "unknown audit subverb {other:?} (try: show | list | stats | stats-all | diff | summary | exit-code | field | count | duration | flaky | slow | health | cluster | verdict | trend)"
@@ -823,10 +829,49 @@ fn verdict(positionals: &[String], json_out: bool) -> Result<u8> {
     if !audit_path.is_file() {
         bail!("audit verdict: no audit.json at {}", audit_path.display());
     }
-    let bytes = fs::read(&audit_path)?;
+    let (name, code, healed_steps, rejection_steps, summary_line, exit) = verdict_for(&run_dir)?;
+
+    if json_out {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "scenario": sid,
+                "runId": run_id,
+                "verdict": name,
+                "exitCode": exit,
+                "healedSteps": healed_steps,
+                "valueRejectionSteps": rejection_steps,
+                "summary": summary_line,
+            }))?
+        );
+    } else {
+        match name {
+            "PASS" => println!("PASS {sid} {run_id} — {summary_line}"),
+            "FIX" => println!(
+                "FIX {sid} {run_id} — green but self-corrected (healed: [{}], value-rejections: [{}]); review + promote",
+                healed_steps.join(", "),
+                rejection_steps.join(", "),
+            ),
+            _ => println!("BLOCK {sid} {run_id} — {summary_line}"),
+        }
+    }
+    Ok(code)
+}
+
+/// Verdict computation shared by `audit verdict <sid>` and
+/// `audit verdict --all`. Returns (name, exit-code, healed step ids,
+/// value-rejection step ids, audit summary line).
+type VerdictInfo = (&'static str, u8, Vec<String>, Vec<String>, String, i64);
+
+fn verdict_for(run_dir: &std::path::Path) -> Result<VerdictInfo> {
+    let bytes = fs::read(run_dir.join("audit.json"))?;
     let audit: Value = serde_json::from_slice(&bytes)?;
     let exit = audit.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(-1);
-    let summary_line = audit.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+    let summary_line = audit
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     let mut healed_steps: Vec<String> = audit
         .get("autoHealed")
@@ -871,32 +916,101 @@ fn verdict(positionals: &[String], json_out: bool) -> Result<u8> {
     } else {
         ("PASS", 0u8)
     };
+    Ok((
+        name,
+        code,
+        healed_steps,
+        rejection_steps,
+        summary_line,
+        exit,
+    ))
+}
+
+/// `audit verdict --all`: one verdict row per scenario's latest run —
+/// the suite triage board. Exit 1 if any scenario is BLOCK, else 0
+/// (FIX rows still exit 0 — they're warnings, not failures).
+fn verdict_all(json_out: bool) -> Result<u8> {
+    let root = paths::scenarios_root();
+    let mut sids: Vec<String> = fs::read_dir(&root)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| root.join(n).join("scenario.json").is_file())
+        .collect();
+    sids.sort();
+
+    let mut rows: Vec<Value> = Vec::new();
+    let mut any_block = false;
+    for sid in &sids {
+        let dir = paths::scenario_dir(sid)?;
+        let run_id = match resolve_run_id(&dir, "latest") {
+            Ok(r) => r,
+            Err(_) => {
+                rows.push(serde_json::json!({
+                    "scenario": sid, "verdict": "NO RUNS",
+                }));
+                continue;
+            }
+        };
+        let run_dir = dir.join("replays").join(&run_id);
+        match verdict_for(&run_dir) {
+            Ok((name, _, healed, rejected, _summary, _exit)) => {
+                if name == "BLOCK" {
+                    any_block = true;
+                }
+                rows.push(serde_json::json!({
+                    "scenario": sid,
+                    "runId": run_id,
+                    "verdict": name,
+                    "healedSteps": healed,
+                    "valueRejectionSteps": rejected,
+                }));
+            }
+            Err(e) => {
+                rows.push(serde_json::json!({
+                    "scenario": sid, "runId": run_id,
+                    "verdict": "BLOCK", "error": e.to_string(),
+                }));
+                any_block = true;
+            }
+        }
+    }
 
     if json_out {
+        let blocked = rows
+            .iter()
+            .filter(|r| r.get("verdict").and_then(|v| v.as_str()) == Some("BLOCK"))
+            .count();
+        let fixed = rows
+            .iter()
+            .filter(|r| r.get("verdict").and_then(|v| v.as_str()) == Some("FIX"))
+            .count();
+        let passed = rows
+            .iter()
+            .filter(|r| r.get("verdict").and_then(|v| v.as_str()) == Some("PASS"))
+            .count();
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
-                "scenario": sid,
-                "runId": run_id,
-                "verdict": name,
-                "exitCode": exit,
-                "healedSteps": healed_steps,
-                "valueRejectionSteps": rejection_steps,
-                "summary": summary_line,
+                "scenarios": rows,
+                "roll": { "pass": passed, "fix": fixed, "block": blocked },
             }))?
         );
     } else {
-        match name {
-            "PASS" => println!("PASS {sid} {run_id} — {summary_line}"),
-            "FIX" => println!(
-                "FIX {sid} {run_id} — green but self-corrected (healed: [{}], value-rejections: [{}]); review + promote",
-                healed_steps.join(", "),
-                rejection_steps.join(", "),
-            ),
-            _ => println!("BLOCK {sid} {run_id} — {summary_line}"),
+        println!("{:<28} {:<7} run", "scenario", "verdict");
+        for r in &rows {
+            println!(
+                "{:<28} {:<7} {}",
+                r["scenario"].as_str().unwrap_or(""),
+                r["verdict"].as_str().unwrap_or(""),
+                r["runId"].as_str().unwrap_or("—")
+            );
         }
+        let blocked = rows.iter().filter(|r| r["verdict"] == "BLOCK").count();
+        let fixed = rows.iter().filter(|r| r["verdict"] == "FIX").count();
+        let passed = rows.iter().filter(|r| r["verdict"] == "PASS").count();
+        println!("{passed} PASS, {fixed} FIX, {blocked} BLOCK");
     }
-    Ok(code)
+    Ok(if any_block { 1 } else { 0 })
 }
 
 fn summary(positionals: &[String]) -> Result<u8> {
@@ -2032,7 +2146,7 @@ fn print_help() {
     println!(
                 "agent-qa audit \u{2014} inspect a replay's audit.json\n\nUsage:\n  agent-qa audit show <sid> <runId | latest> [--json | --format text|json|github]\n  agent-qa audit list <sid>                    Table view: every run's\n                                               summary / exit / profile / tag\n  agent-qa audit list <sid> --json             Structured rows on stdout\n  agent-qa audit list <sid> [--passed | --failed] [--tag <pat>] [--profile <pat>] [--limit N] [--slow <secs>] [--sort duration|runId-desc] [--since <iso-ts>] [--until <iso-ts>] [--format text|json|github]\n                                               Filters: case-insensitive substring\n                                               --passed/--failed are exit-code partitions\n  agent-qa audit stats <sid> [--since <iso-ts>] [--until <iso-ts>]\n                                               Pass/fail/tag rollup for one scenario\n  agent-qa audit stats <sid> --json            Structured rollup on stdout\n  agent-qa audit stats-all                     Per-scenario + overall pass/fail rollup\n  agent-qa audit stats-all --json              Structured rollup on stdout\n  agent-qa audit stats-all [--since <iso-ts>] [--until <iso-ts>]\n                                               Constrain to a date window\n  agent-qa audit diff <sid> <runIdA> <runIdB>  Unified diff between two replays'\n                                               audit.json (canonicalised JSON;\n                                               'latest' accepted for either side;\n                                               exit 1 on difference)\n  agent-qa audit summary <sid> <runId | latest>\n                                               Print just the summary line (one line out)\n  agent-qa audit exit-code <sid> <runId | latest>\n                                               Print just the run's exitCode (-1 if missing)\n  agent-qa audit field <sid> <runId | latest> <fieldName>\n                                               Print any top-level audit field. String/\n                                               number/bool print verbatim; null prints\n                                               empty; object/array prints compact JSON.\n  agent-qa audit count <sid>                   Print the number of runs under <sid>\n  agent-qa audit duration <sid> <runId | latest>\n                                               Print the run's duration in seconds\n                                               (finishedAt - startedAt, 3 decimals)\n  agent-qa audit flaky <sid> [--min-flips N] [--min-runs N] [--json]\n                                               Flag steps whose outcome interleaves\n                                               pass/fail across runs (outcome churn;\n                                               heal-chronic covers locator churn)\n  agent-qa audit slow <sid> [--pct N] [--min-ms N] [--recent N] [--min-runs N] [--json]\n                                               Flag steps whose recent pass median\n                                               regressed vs their earlier-run median\n                                               (default: last 2 runs >50% and >250ms\n                                               over baseline)\n  agent-qa audit health [--json]           Cross-scenario rollup of flaky + slow +
                                                heal-chronic — one row per scenario
-                                               that has silent degradation\n  agent-qa audit verdict <sid> <runId | latest> [--json]\n                                               One-word run triage: PASS (exit 0) clean\n                                               green, FIX (exit 2) green but self-\n                                               corrected, BLOCK (exit 1) failed\n  agent-qa audit cluster [--min-size N] [--json]\n                                               Group step failures across every scenario\n                                               by normalized error signature — one root\n                                               cause across N runs reads as one item\n  agent-qa audit trend <sid> [--limit N] [--json]\n                                               Outcome + duration trend for the last N\n                                               runs (default all): pass%, median secs,\n                                               a ✓/✗ outcome line + a duration sparkline\n  agent-qa audit trend --all [--limit N] [--json]\n                                               Suite board: one trend row per scenario\n\n'latest' resolves to <sid>/replays/latest.txt if present, otherwise the\nhighest lex-sorted run directory (run_id is timestamp-prefixed)."
+                                               that has silent degradation\n  agent-qa audit verdict <sid> <runId | latest> [--json]\n                                               One-word run triage: PASS (exit 0) clean\n                                               green, FIX (exit 2) green but self-\n                                               corrected, BLOCK (exit 1) failed\n  agent-qa audit verdict --all [--json]\n                                               Suite triage board: one verdict row per\n                                               scenario's latest run; exit 1 if any\n                                               BLOCK (FIX rows are warnings only)\n  agent-qa audit cluster [--min-size N] [--json]\n                                               Group step failures across every scenario\n                                               by normalized error signature — one root\n                                               cause across N runs reads as one item\n  agent-qa audit trend <sid> [--limit N] [--json]\n                                               Outcome + duration trend for the last N\n                                               runs (default all): pass%, median secs,\n                                               a ✓/✗ outcome line + a duration sparkline\n  agent-qa audit trend --all [--limit N] [--json]\n                                               Suite board: one trend row per scenario\n\n'latest' resolves to <sid>/replays/latest.txt if present, otherwise the\nhighest lex-sorted run directory (run_id is timestamp-prefixed)."
 
 
     );
