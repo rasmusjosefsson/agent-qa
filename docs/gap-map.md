@@ -29,9 +29,13 @@ the picture shifts materially.
 
 ### P1 — shipped verbs with no golden coverage
 
-3. **`emulate` (#242) and `frame` (#245)** are open but have zero eval
-   coverage — `/geolocation` + `/tinymce`/`/nested_frames` goldens are the
-   obvious first runs once they merge.
+3. ~~`emulate` (#242) and `frame` (#245)~~ — goldens land in #257
+   (frame: TinyMCE iframe read/claims/back-out) and #258 (emulate:
+   device-UA + custom-header echo via httpbingo). **Found while probing:**
+   `set geo` applies the CDP override but nothing grants the geolocation
+   permission — `navigator.geolocation` hangs in headless, so no
+   `/geolocation` golden until a grant path lands upstream or via a CDP
+   passthrough verb.
 4. ~~`storage`/`cookie` claims (#239)~~ **done in #253** —
    `cookiePresent`/`storagePresent` vocab + `assertCookie`/`assertStorage`
    helpers + sauce-tc05 (cookie lifecycle) / sauce-tc06 (`do/state`
@@ -58,8 +62,10 @@ the picture shifts materially.
 
 9. **Mobile/touch**: `do/viewport` + `emulate` give layout, but no swipe/
    tap-hold/pinch verbs; edge pages have no touch cases yet.
-10. **Geolocation/timezone**: verbs queued in #242; needs the `/geolocation`
-    + a timezone-shifted golden.
+10. **Geolocation/timezone**: #242 ships `geo`/`device` (device presets
+    bundle timezone+locale), but geolocation is *blocked on a permission
+    grant* — see P1 #3's finding. Timezone has no `set` subcommand in
+    agent-browser at all (documented gap in #242).
 11. **WebSocket/SSE**: the network layer is request/response only —
     `ws://` frames aren't captured; a `network` ofKind would need daemon
     support first.
