@@ -680,10 +680,179 @@ pub struct Scenario {
     pub produced_by: Option<Provenance>,
 }
 
+/// `replay --base-url <origin>` retargeting: rewrite every absolute URL
+/// rooted at the scenario's recorded origin onto `to_origin`, so a scenario
+/// recorded on prod/staging replays against a preview deploy without editing
+/// the file. Covers `env.open`/`env.close` `nav` urls and `do/goto` literal
+/// values — the URLs replay actually navigates to. Claim-side URL patterns
+/// (e.g. a `urlMatches` glob) are left alone: a host embedded there is
+/// deliberate specificity, and inputs/templates are the escape hatch for
+/// scenario-authored variability.
+///
+/// The recorded origin is the first `nav` op's origin, falling back to the
+/// first `goto` literal. Returns that origin, or None when the scenario has
+/// no absolute URL to retarget from.
+pub fn retarget_origin(scenario: &mut Scenario, to_origin: &str) -> Option<String> {
+    let from = recorded_origin(scenario)?;
+    for ops in scenario
+        .env
+        .iter_mut()
+        .flat_map(|e| e.open.iter_mut().chain(e.close.iter_mut()))
+        .flatten()
+    {
+        if let EnvOp::Nav { url: Some(u), .. } = ops {
+            rewrite_url_at_origin(u, &from, to_origin);
+        }
+    }
+    for step in scenario.steps.iter_mut() {
+        if let Step::Do {
+            verb: Verb::Goto,
+            value: Some(Value::Literal { literal }),
+            ..
+        } = step
+        {
+            if let Some(u) = literal.as_str() {
+                if let Some(new) = rewritten_at_origin(u, &from, to_origin) {
+                    *literal = Json::String(new);
+                }
+            }
+        }
+    }
+    Some(from)
+}
+
+/// `url` rewritten onto `to` when it is exactly `from` + path: a bare
+/// `starts_with` would also match `prod.example.com:8443` (a different
+/// origin) and `prod.example.com.evil.io` (a different host).
+fn rewritten_at_origin(url: &str, from: &str, to: &str) -> Option<String> {
+    let rest = url.strip_prefix(from)?;
+    if rest.is_empty() || rest.starts_with(['/', '?', '#']) {
+        Some(format!("{to}{rest}"))
+    } else {
+        None
+    }
+}
+
+fn rewrite_url_at_origin(url: &mut String, from: &str, to: &str) {
+    if let Some(new) = rewritten_at_origin(url, from, to) {
+        *url = new;
+    }
+}
+
+/// The scenario's recorded origin: first `env` nav op's origin, falling back
+/// to the first `goto` literal's. None when no absolute URL exists.
+fn recorded_origin(scenario: &Scenario) -> Option<String> {
+    for op in scenario
+        .env
+        .iter()
+        .flat_map(|e| e.open.iter().chain(e.close.iter()))
+        .flatten()
+    {
+        if let EnvOp::Nav { url: Some(u), .. } = op {
+            if let Some(o) = origin_of(u) {
+                return Some(o);
+            }
+        }
+    }
+    for step in &scenario.steps {
+        if let Step::Do {
+            verb: Verb::Goto,
+            value: Some(Value::Literal { literal }),
+            ..
+        } = step
+        {
+            if let Some(o) = literal.as_str().and_then(origin_of) {
+                return Some(o);
+            }
+        }
+    }
+    None
+}
+
+/// `scheme://host[:port]` of an absolute URL, None for relative/bare input.
+fn origin_of(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let hostport = rest.split('/').next()?;
+    if hostport.is_empty() {
+        return None;
+    }
+    Some(format!("{scheme}://{hostport}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn retarget_origin_rewrites_navs_and_gotos() {
+        let mut s: Scenario = serde_json::from_value(json!({
+            "schema": "scenario/2", "id": "t", "intent": "x",
+            "env": { "open": [
+                { "kind": "nav", "url": "https://prod.example.com/app?x=1" },
+                { "kind": "nav", "url": "https://cdn.other.com/asset" }
+            ]},
+            "steps": [
+                { "id": "s1", "intent": "go", "kind": "do", "verb": "goto",
+                  "value": { "from": "literal", "literal": "https://prod.example.com/dash" } },
+                { "id": "s2", "intent": "ext", "kind": "do", "verb": "goto",
+                  "value": { "from": "literal", "literal": "https://elsewhere.io/x" } },
+                { "id": "s3", "intent": "port stays", "kind": "do", "verb": "goto",
+                  "value": { "from": "literal", "literal": "https://prod.example.com:8443/deep" } }
+            ]
+        }))
+        .unwrap();
+        let from = retarget_origin(&mut s, "https://pr-7.preview.app").unwrap();
+        assert_eq!(from, "https://prod.example.com");
+        let ops = s.env.as_ref().unwrap().open.as_ref().unwrap();
+        assert!(
+            matches!(&ops[0], EnvOp::Nav { url: Some(u), .. } if u == "https://pr-7.preview.app/app?x=1")
+        );
+        // Foreign-origin nav is untouched.
+        assert!(
+            matches!(&ops[1], EnvOp::Nav { url: Some(u), .. } if u == "https://cdn.other.com/asset")
+        );
+        assert!(
+            matches!(&s.steps[0], Step::Do { value: Some(Value::Literal { literal }), .. } if literal == "https://pr-7.preview.app/dash")
+        );
+        assert!(
+            matches!(&s.steps[1], Step::Do { value: Some(Value::Literal { literal }), .. } if literal == "https://elsewhere.io/x")
+        );
+        // Same host but a different port is a different origin — untouched.
+        assert!(
+            matches!(&s.steps[2], Step::Do { value: Some(Value::Literal { literal }), .. } if literal == "https://prod.example.com:8443/deep")
+        );
+    }
+
+    #[test]
+    fn retarget_origin_falls_back_to_goto_and_reports_none_when_nothing() {
+        // No env nav ops: the recorded origin comes from the first goto.
+        let mut s: Scenario = serde_json::from_value(json!({
+            "schema": "scenario/2", "id": "t", "intent": "x",
+            "steps": [
+                { "id": "s1", "intent": "go", "kind": "do", "verb": "goto",
+                  "value": { "from": "literal", "literal": "https://a.io/" } }
+            ]
+        }))
+        .unwrap();
+        assert_eq!(
+            retarget_origin(&mut s, "https://b.io"),
+            Some("https://a.io".into())
+        );
+        assert!(
+            matches!(&s.steps[0], Step::Do { value: Some(Value::Literal { literal }), .. } if literal == "https://b.io/")
+        );
+        // No absolute URL anywhere → nothing to retarget.
+        let mut s2: Scenario = serde_json::from_value(json!({
+            "schema": "scenario/2", "id": "t", "intent": "x",
+            "steps": [
+                { "id": "s1", "intent": "rel", "kind": "do", "verb": "goto",
+                  "value": { "from": "literal", "literal": "/relative/path" } }
+            ]
+        }))
+        .unwrap();
+        assert_eq!(retarget_origin(&mut s2, "https://b.io"), None);
+    }
 
     #[test]
     fn minimal_scenario_roundtrips() {
