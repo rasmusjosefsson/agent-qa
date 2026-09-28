@@ -240,7 +240,6 @@ Verbs:
   design verdict <sid> --step <id> (--ok | --accepted --reason <t> | --fail --reason <t> | --ask)
                                 Record a design decision in designs/verdicts.json
   init [dir] [--force] [--ci]   Bootstrap a dir: toml + scenarios/hello + .gitignore (+ --ci PR gate)
-||||||| 7a8edfd
 
   start \"<intent>\"             Begin a new recording session
   browser <args...>             Passthrough exec of the pinned agent-browser
