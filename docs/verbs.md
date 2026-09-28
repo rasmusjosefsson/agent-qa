@@ -46,6 +46,16 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `audit slow <sid>` | Flag steps whose duration regressed — every one of the last `--recent` pass runs (default 2) exceeds the earlier-run median by `+--pct%` (default 50) and `--min-ms` (default 250). Pass rows only; a fail's `ms` is the timeout budget, not step cost. |
 | `audit health` | Cross-scenario rollup of `flaky` + `slow` + `heal-chronic` at their defaults — one row per scenario with silent degradation, none when the suite is quiet. `--json` emits one compact line (the workbench consumes it to badge scenario rows). |
 
+## Plans
+
+Plans/cases/sets are the workbench's run-scope records under `<root>/_plans`, `_sets`, `_cases` (created/edited in the UI); `plan` is their terminal + CI twin.
+
+| Verb | What it does |
+| --- | --- |
+| `plan list` | Every plan with its resolved member count. `--json` emits one compact line. |
+| `plan cases <planId>` | Resolved member cases (caseId → scenario sid → title), in run order. `--json`. |
+| `plan run <planId>` | Replay every member case's linked scenario and roll up pass/fail/skip — the PR/CI gate entrypoint (`plan run regression --json`). Cases with no recorded scenario or a missing scenario dir are `SKIP`ped. Flags: `--profile <p>`, `--param k=v` (repeatable), `--headed`/`--headless`, `--dry-run`, `--no-sidecars`, `--json` (single-line rollup as the last line). Exit 0 iff every started run passed. |
+
 ## Heal
 
 | Verb | What it does |
