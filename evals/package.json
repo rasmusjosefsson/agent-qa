@@ -179,7 +179,10 @@
     "golden:edge:tc09": "bun golden/edge-tc09.ts",
     "golden:edge:tc10": "bun golden/edge-tc10.ts",
     "golden:edge:tc11": "bun golden/edge-tc11.ts",
-    "golden:edge:tc12": "bun golden/edge-tc12.ts"
+    "golden:edge:tc12": "bun golden/edge-tc12.ts",
+    "golden:edge:tc13": "bun golden/edge-tc13.ts",
+    "golden:edge:tc14": "bun golden/edge-tc14.ts",
+    "golden:edge:tc15": "bun golden/edge-tc15.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"
