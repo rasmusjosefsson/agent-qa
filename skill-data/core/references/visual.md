@@ -32,10 +32,16 @@ Live at `<scenario>/baselines/<stepId>.png` and are committed with the
 scenario. Mint or re-mint them with:
 
 ```bash
+agent-qa shot-accept <sid> --dry-run       # preview: new / identical / update <pct>
 agent-qa shot-accept <sid>                 # latest run, all shot claims
 agent-qa shot-accept <sid> --steps s3      # one claim only
 agent-qa replay <sid> --update-baselines   # run, then accept its shots
 ```
+
+`--dry-run` is the review step before applying new goldens: it reports what
+each baseline would become without writing. Accept also warns when the
+scenario file changed since the run you're minting from (hash mismatch —
+the captures may describe an older scenario).
 
 **Baselines are environment-bound.** Fonts and rasterization differ between
 your laptop and CI runners, so mint baselines in the environment that gates
@@ -53,11 +59,27 @@ dispatch job that does this and opens a PR with the CI-rendered PNGs.
   button; the Runs pane renders failed diffs inline and can re-mint the
   baseline (one claim or the whole run) without the terminal.
 
+## Masking volatile regions
+
+`{"shot": "<stepId>", "mask": ["<css>", ...]}` hides elements (clocks, live
+counters, random ids) during capture — union of every claim's mask becomes
+one injected `visibility:hidden` stylesheet around each screenshot. Mark
+volatile markup with `data-qa-volatile` once and mask on that attribute.
+
+## Responsive goldens
+
+`do/viewport` before a shot step resizes mid-scenario — one scenario can
+hold a 1280x800 baseline and a 375x812 baseline for the same surface.
+`evals/selftest` demonstrates the pattern.
+
 ## Stability
 
-When a scenario contains shot claims, replay waits for fonts + a stable
-layout tick before screenshotting. If a run still flakes visually, prefer
-`clip` to narrow the compared region over raising `pixels` — a tolerance
+Shot-claim scenarios always navigate fresh (the warm-page goto skip is
+bypassed so the mask applies to a live document), and replay waits for
+fonts + a stable layout tick before screenshotting. Pixel diffs ignore
+sub-pixel antialias jitter (channel delta ≤ 32/255) — cross-host font AA
+doesn't flake goldens. If a run still flakes visually, prefer `clip` or
+`mask` to narrow the compared region over raising `pixels` — a tolerance
 you have to keep raising is a scenario with a real instability.
 
 ## Failure output
