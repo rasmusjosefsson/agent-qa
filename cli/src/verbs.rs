@@ -279,6 +279,19 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                 .map_err(|e| anyhow!("step '{id}' dblclick: {e}"))?;
             Ok(None)
         }
+        Verb::RightClick => {
+            let ep = drag_endpoint(on.unwrap(), scope, ctx.scenario_dir)
+                .map_err(|e| anyhow!("step '{id}' rightclick: {e}"))?;
+            let js = crate::dom_activate::build_contextmenu_js(&ep);
+            let r = browser::eval_expression(ctx.session, &js)
+                .map_err(|e| anyhow!("step '{id}' rightclick: {e}"))?;
+            let out = r.trim().trim_matches('"').trim().to_string();
+            match out.as_str() {
+                "true" => Ok(None),
+                "miss" => bail!("step '{id}' rightclick: locator did not resolve"),
+                other => bail!("step '{id}' rightclick: unexpected result {other:?}"),
+            }
+        }
         Verb::Drag => {
             let src = drag_endpoint(on.unwrap(), scope, ctx.scenario_dir)
                 .map_err(|e| anyhow!("step '{id}' drag: {e}"))?;

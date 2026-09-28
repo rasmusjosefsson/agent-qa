@@ -87,6 +87,7 @@ describe("toRecordDraft — emitted verbs are shipped", () => {
     ["action", { method: "dialogDismiss", args: [] }],
     ["action", { method: "downloadBySelector", args: ["#d", "out/x"] }],
     ["action", { method: "dblclickBySelector", args: ["#d"] }],
+    ["action", { method: "rightClickBySelector", args: ["#d"] }],
     ["action", { method: "scrollToBySelector", args: ["#s"] }],
     ["action", { method: "scrollTop", args: [] }],
     ["action", { method: "checkBySelector", args: ["#c"] }],
@@ -188,6 +189,7 @@ describe("toRecordDraft — every shipped verb is reachable or triaged", () => {
       ["action", { method: "downloadBySelector", args: ["#d", "out"] }],
     ],
     ["dblclick", ["action", { method: "dblclickBySelector", args: ["#d"] }]],
+    ["rightclick", ["action", { method: "rightClickBySelector", args: ["#d"] }]],
     ["tab", ["action", { method: "tabCommand", args: ["list"] }]],
     ["viewport", ["action", { method: "setViewport", args: [375, 812] }]],
     [

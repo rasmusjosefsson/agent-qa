@@ -125,6 +125,8 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           });
         case "dblclickBySelector":
           return doStep(intent, { verb: "dblclick", on: css(args[0]) });
+        case "rightClickBySelector":
+          return doStep(intent, { verb: "rightclick", on: css(args[0]) });
         case "scrollToBySelector":
           return doStep(intent, { verb: "scrollTo", on: css(args[0]) });
         case "scrollTop":
