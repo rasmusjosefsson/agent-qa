@@ -29,6 +29,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 
@@ -107,6 +109,11 @@ pub struct RunOptions {
     /// `--until <stepId>` — stop dispatch after this step (inclusive).
     /// Steps after it never run; env.close still executes.
     pub until_step: Option<String>,
+    /// `--update-baselines` — after the run finishes, mint every captured
+    /// screenshot as a `baselines/<stepId>.png` (same copy `shot-accept`
+    /// performs). Runs even when shot claims FAILED: intentional UI
+    /// changes are exactly the case where a failing diff needs re-minting.
+    pub update_baselines: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -364,6 +371,10 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         crate::browser::set_no_auto_dialog(true);
         let _ = crate::browser::eval_expression(&opts.session_name, "1");
     }
+    // Shot claims diff pixels — kill capture-time noise first (fonts still
+    // decoding, images mid-fetch, layout mid-frame) rather than absorbing
+    // it in tolerance. Bounded ~1.5s so it never meaningfully slows a run.
+    let stabilize_shots = scenario_uses_shots(&scenario);
 
     // 2. Mint run + prepare root.
     let run_id = mint_run_id(opts.profile.as_deref());
@@ -728,7 +739,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             match result {
                 Ok(()) => {
                     if !opts.no_sidecars {
-                        capture_step_sidecars(&run, id, &opts.session_name);
+                        capture_step_sidecars(&run, id, &opts.session_name, stabilize_shots);
                     }
                     summary.passed += 1;
                     emit_step_done(progress_mode, idx, total, true, &label, step_ms);
@@ -750,7 +761,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 }
                 Err(e) => {
                     if !opts.no_sidecars {
-                        capture_step_sidecars(&run, id, &opts.session_name);
+                        capture_step_sidecars(&run, id, &opts.session_name, stabilize_shots);
                     }
                     summary.ok = false;
                     let reason = format!("{e:#}");
@@ -896,6 +907,22 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
 
     // 9. Latest pointer.
     update_latest_pointer(&scenario_dir, &run.run_id)?;
+
+    // 10. `--update-baselines` — mint from this run's capture set. Runs
+    // before the failure bail on purpose: a shot claim that correctly
+    // flagged a real UI change is the re-mint case, and requiring a
+    // passing run first would force a shot-accept round trip.
+    if opts.update_baselines {
+        match crate::shot_accept::mint_baselines(&scenario_dir, &run.run_id, None) {
+            Ok(minted) => eprintln!(
+                "baselines: minted {} shot(s) from run {}: {}",
+                minted.len(),
+                run.run_id,
+                minted.join(", ")
+            ),
+            Err(err) => eprintln!("baselines: skipped ({err})"),
+        }
+    }
 
     if let Some(msg) = first_failure {
         bail!(msg);
@@ -1320,7 +1347,12 @@ fn apply_heal_override(step: &Step, corrected: &str) -> Step {
 /// Capture the post-step ARIA snapshot + screenshot keyed by literal
 /// stepId. Best-effort: any failure logs to stderr but does not fail
 /// the step. Mirrors the TS runner's sidecar-after-each-step shape.
-fn capture_step_sidecars(run: &crate::sidecar::RunPaths, step_id: &str, session: &str) {
+fn capture_step_sidecars(
+    run: &crate::sidecar::RunPaths,
+    step_id: &str,
+    session: &str,
+    stabilize_shots: bool,
+) {
     use crate::sidecar::{ensure_kind_dir, step_sidecar_path, write_step_sidecar, SidecarKind};
     if !is_safe_step_id(step_id) {
         eprintln!("[v2-replay] skip sidecars for unsafe stepId {step_id:?}");
@@ -1377,6 +1409,11 @@ fn capture_step_sidecars(run: &crate::sidecar::RunPaths, step_id: &str, session:
     if let Ok(dir) = ensure_kind_dir(run, SidecarKind::Screenshots) {
         let _ = dir; // keep the directory creation eager
     }
+    // Shot claims diff this image pixel-wise — wait for fonts/images/
+    // layout to settle first so a mid-decode frame doesn't read as drift.
+    if stabilize_shots {
+        stabilize_visual(session, 1500);
+    }
     if let Ok(path) = step_sidecar_path(run, SidecarKind::Screenshots, step_id) {
         match browser::screenshot(session, &path, true, Some(cap_ms)) {
             Ok(true) => {}
@@ -1386,6 +1423,65 @@ fn capture_step_sidecars(run: &crate::sidecar::RunPaths, step_id: &str, session:
             Err(e) => eprintln!("[v2-replay] screenshot {step_id} failed: {e}"),
         }
     }
+}
+
+/// Poll the page until fonts have decoded, all `<img>`s have completed,
+/// and `document.readyState` is `complete` — or `cap_ms` elapses. Sync-eval
+/// based (agent-browser `eval` doesn't await Promises): each poll returns a
+/// JSON status, and a settled status ends the wait. Soft-fail: any error
+/// or timeout just stops waiting — artifact fidelity only.
+fn stabilize_visual(session: &str, cap_ms: u64) {
+    let deadline = Instant::now() + Duration::from_millis(cap_ms);
+    loop {
+        let status = browser::eval_expression(
+            session,
+            "(() => { const imgs = Array.from(document.images || []).filter(i => !i.complete).length; return JSON.stringify({fonts: document.fonts ? document.fonts.status : 'loaded', imgs, ready: document.readyState}); })()",
+        );
+        match status {
+            Ok(raw) => {
+                // eval stdout may wrap the JSON in a quoted string — peel once.
+                let peeled = raw.trim().trim_matches('"').replace("\\\"", "\"");
+                let settled = serde_json::from_str::<serde_json::Value>(raw.trim())
+                    .or_else(|_| serde_json::from_str::<serde_json::Value>(&peeled))
+                    .map(|v| {
+                        v.get("fonts").and_then(|f| f.as_str()) == Some("loaded")
+                            && v.get("imgs").and_then(|i| i.as_u64()) == Some(0)
+                            && v.get("ready").and_then(|r| r.as_str()) == Some("complete")
+                    })
+                    .unwrap_or(false);
+                if settled {
+                    return;
+                }
+            }
+            Err(_) => return,
+        }
+        if Instant::now() >= deadline {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Whether the scenario contains a `check` claim on the `shot` subject
+/// (`{"shot": "<stepId>"}`) — anywhere, including steps nested in
+/// `group`/`loop` params and `useTemplate` bodies. Serialized-JSON walk
+/// like [`scenario_uses_dialog`] so nesting can't hide it.
+fn scenario_uses_shots(scenario: &Scenario) -> bool {
+    fn contains_shot_marker(v: &serde_json::Value) -> bool {
+        match v {
+            serde_json::Value::Object(map) => {
+                if map.contains_key("shot") {
+                    return true;
+                }
+                map.values().any(contains_shot_marker)
+            }
+            serde_json::Value::Array(items) => items.iter().any(contains_shot_marker),
+            _ => false,
+        }
+    }
+    let steps = serde_json::to_value(&scenario.steps).unwrap_or(serde_json::Value::Null);
+    let templates = serde_json::to_value(&scenario.templates).unwrap_or(serde_json::Value::Null);
+    contains_shot_marker(&steps) || contains_shot_marker(&templates)
 }
 
 /// Whether the scenario contains a `do` step with `verb: dialog` or a
@@ -1432,6 +1528,7 @@ pub fn cli(args: &[String]) -> Result<u8> {
             flags.shard,
             flags.filter.as_deref(),
             &flags.tags,
+            flags.report.as_deref(),
         );
     }
     if flags.shard.is_some() {
@@ -1443,18 +1540,27 @@ pub fn cli(args: &[String]) -> Result<u8> {
     if !flags.tags.is_empty() {
         bail!("--tags requires --all");
     }
+    if flags.report.is_some() {
+        bail!("--report requires --all");
+    }
+
     let parsed = parse_args(&flags.filtered)?;
-    run_n(&parsed, flags.runs, None)
+    let (code, _) = run_n(&parsed, flags.runs, None)?;
+    Ok(code)
 }
 
 /// Replay `parsed` `runs` times; `label` prefixes the per-run banner.
-/// Returns the process exit code — 0 iff every run's summary is ok.
-fn run_n(parsed: &RunOptions, runs: u32, label: Option<&str>) -> Result<u8> {
+/// Returns the exit code (0 iff every run is ok) and the last run's
+/// summary for reporting (None when every run errored before producing
+/// one).
+fn run_n(parsed: &RunOptions, runs: u32, label: Option<&str>) -> Result<(u8, Option<RunSummary>)> {
     if runs <= 1 {
         let summary = run(parsed)?;
-        return Ok(if summary.ok { 0 } else { 1 });
+        let code = if summary.ok { 0 } else { 1 };
+        return Ok((code, Some(summary)));
     }
     let mut all_ok = true;
+    let mut last: Option<RunSummary> = None;
     for i in 1..=runs {
         eprintln!("[v2-replay]{} run {i}/{runs}", label.unwrap_or(""));
         match run(parsed) {
@@ -1462,6 +1568,7 @@ fn run_n(parsed: &RunOptions, runs: u32, label: Option<&str>) -> Result<u8> {
                 if !summary.ok {
                     all_ok = false;
                 }
+                last = Some(summary);
             }
             Err(e) => {
                 eprintln!(
@@ -1472,7 +1579,7 @@ fn run_n(parsed: &RunOptions, runs: u32, label: Option<&str>) -> Result<u8> {
             }
         }
     }
-    Ok(if all_ok { 0 } else { 1 })
+    Ok((if all_ok { 0 } else { 1 }, last))
 }
 
 /// `replay --all`: every scenario under the scenarios root, optionally
@@ -1484,6 +1591,7 @@ fn cli_all(
     shard: Option<(u32, u32)>,
     filter: Option<&str>,
     tags: &[String],
+    report: Option<&Path>,
 ) -> Result<u8> {
     let root = crate::paths::scenarios_root();
     let mut sids = crate::scenario_cli::all_sids(&root, filter);
@@ -1513,15 +1621,21 @@ fn cli_all(
     );
     let mut all_ok = true;
     let mut failed: Vec<String> = Vec::new();
+    let mut rows: Vec<(String, Option<RunSummary>)> = Vec::new();
     for sid in &sids {
         let mut per = filtered.to_vec();
         per.push(sid.clone());
         let parsed = parse_args(&per)?;
-        let code = run_n(&parsed, runs, Some(&format!(" {sid}")))?;
+        let (code, summary) = run_n(&parsed, runs, Some(&format!(" {sid}")))?;
         if code != 0 {
             all_ok = false;
             failed.push(sid.clone());
         }
+        rows.push((sid.clone(), summary));
+    }
+    if let Some(path) = report {
+        write_report(path, &rows)?;
+        eprintln!("[v2-replay] report → {}", path.display());
     }
     eprintln!(
         "[v2-replay] --all done: {} passed, {} failed{}",
@@ -1536,7 +1650,52 @@ fn cli_all(
     Ok(if all_ok { 0 } else { 1 })
 }
 
-/// CLI-level flags peeled off before [`parse_args`] sees `args`.
+/// `--report` — a markdown verdict table for the suite run, the shape a
+/// CI step drops into a PR comment: header counts, one row per scenario,
+/// and a failing-scenario list at the bottom.
+fn write_report(path: &Path, rows: &[(String, Option<RunSummary>)]) -> Result<()> {
+    let passed = rows
+        .iter()
+        .filter(|(_, s)| s.as_ref().map(|s| s.ok).unwrap_or(false))
+        .count();
+    let failed = rows.len() - passed;
+    let mut out = String::new();
+    out.push_str("### agent-qa replay\n\n");
+    if failed == 0 {
+        out.push_str(&format!("✅ {passed}/{} scenarios pass.\n\n", rows.len()));
+    } else {
+        out.push_str(&format!(
+            "❌ {failed}/{} scenarios fail ({passed} pass).\n\n",
+            rows.len()
+        ));
+    }
+    out.push_str("| scenario | result | steps |\n| --- | --- | --- |\n");
+    for (sid, summary) in rows {
+        let (verdict, steps) = match summary {
+            Some(s) if s.ok => ("PASS".to_string(), format!("{}/{}", s.passed, s.total)),
+            Some(s) => ("FAIL".to_string(), format!("{}/{}", s.passed, s.total)),
+            None => ("ERROR".to_string(), "—".to_string()),
+        };
+        out.push_str(&format!("| `{sid}` | {verdict} | {steps} |\n"));
+    }
+    let failing: Vec<&str> = rows
+        .iter()
+        .filter(|(_, s)| !s.as_ref().map(|s| s.ok).unwrap_or(false))
+        .map(|(sid, _)| sid.as_str())
+        .collect();
+    if !failing.is_empty() {
+        out.push_str(&format!(
+            "\nFailing: {} — run artifacts live under `scenarios/<sid>/replays/`.\n",
+            failing.join(", ")
+        ));
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    fs::write(path, out).with_context(|| format!("write report {}", path.display()))
+}
+
+/// CLI-level flags peeled off before [`parse_args`] sees `args`.},{
 #[derive(Debug)]
 struct CliFlags {
     /// Remaining args (positional sid + per-run flags) for parse_args.
@@ -1551,6 +1710,8 @@ struct CliFlags {
     filter: Option<String>,
     /// `--tags <a,b>` — keep scenarios carrying any of these tags (OR).
     tags: Vec<String>,
+    /// `--report <path>` — write a markdown verdict table for --all.
+    report: Option<PathBuf>,
 }
 
 /// Peel the CLI-level flags `--runs N`, `--all`, `--shard k/n`, and
@@ -1562,6 +1723,8 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
     let mut shard: Option<(u32, u32)> = None;
     let mut filter: Option<String> = None;
     let mut tags: Vec<String> = Vec::new();
+    let mut report: Option<PathBuf> = None;
+
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -1624,6 +1787,16 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
                         .filter(|t| !t.is_empty()),
                 );
             }
+            "--report" => {
+                let v = it
+                    .next()
+                    .ok_or_else(|| anyhow!("--report requires a file path"))?;
+                report = Some(PathBuf::from(v));
+            }
+            s if s.starts_with("--report=") => {
+                report = Some(PathBuf::from(&s["--report=".len()..]));
+            }
+
             other => filtered.push(other.to_string()),
         }
     }
@@ -1634,6 +1807,7 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
         shard,
         filter,
         tags,
+        report,
     })
 }
 
@@ -1696,6 +1870,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut output_audit: Option<PathBuf> = None;
     let mut from_step: Option<String> = None;
     let mut until_step: Option<String> = None;
+    let mut update_baselines = false;
     let mut input_overrides: BTreeMap<String, String> = BTreeMap::new();
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
@@ -1734,6 +1909,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             s if s.starts_with("--from=") => from_step = Some(s["--from=".len()..].to_string()),
             "--until" => until_step = it.next().cloned().or_else(|| bail_missing("--until")),
             s if s.starts_with("--until=") => until_step = Some(s["--until=".len()..].to_string()),
+            "--update-baselines" => update_baselines = true,
             "--param" | "-p" => {
                 let pair = it
                     .next()
@@ -1787,6 +1963,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         output_audit,
         from_step,
         until_step,
+        update_baselines,
     })
 }
 
@@ -1852,7 +2029,7 @@ Usage:
                   [--no-sidecars] [--quiet | -q] [--plain]
                   [--tag <label>] [--output-audit <path>]
                   [--from <stepId>] [--until <stepId>]
-                  [--runs <N>]
+                  [--update-baselines] [--runs <N>]
 
 Loads + validates the scenario, mints a run id, prepares
 <sid>/replays/<runId>/, writes audit.json, runs env.open, iterates
@@ -1889,6 +2066,11 @@ replays/latest.txt.
                          (case-insensitive).
 --tags <a,b>             With --all: keep scenarios whose `tags` list
                          contains any of the comma-separated names (OR).
+--report <path>          With --all: write a markdown verdict table
+                         (per-scenario PASS/FAIL + step counts) — the
+                         shape a CI step drops into a PR comment.
+                         (case-insensitive).
+
 --no-sidecars            Skip per-step ARIA snapshot + screenshot
                          capture. audit.json is still written. Useful
                          when running with --runs N.
@@ -1906,7 +2088,13 @@ replays/latest.txt.
                          additional path. The canonical copy still
                          lives under <sid>/replays/<runId>/audit.json;
                          this is for CI artifact upload or pipeline
-                         convenience."
+                         convenience.
+--update-baselines       After the run, mint every captured screenshot
+                         into <sid>/baselines/ (same copy shot-accept
+                         performs). Runs even when shot claims fail —
+                         intentional UI changes are the re-mint case.
+                         Skips with a warning when the run captured no
+                         screenshots (e.g. --no-sidecars)."
 }
 
 #[cfg(all(test, unix))]
@@ -1933,6 +2121,47 @@ mod tests {
     #[test]
     fn cli_shard_without_all_errors() {
         let args: Vec<String> = ["sid-x", "--shard", "1/2"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(cli(&args).is_err());
+    }
+
+    #[test]
+    fn write_report_renders_verdict_table() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("report.md");
+        let rows = vec![
+            (
+                "alpha".to_string(),
+                Some(RunSummary {
+                    passed: 3,
+                    total: 3,
+                    ok: true,
+                }),
+            ),
+            (
+                "beta".to_string(),
+                Some(RunSummary {
+                    passed: 1,
+                    total: 4,
+                    ok: false,
+                }),
+            ),
+            ("gamma".to_string(), None),
+        ];
+        write_report(&path, &rows).unwrap();
+        let md = fs::read_to_string(&path).unwrap();
+        assert!(md.contains("❌ 2/3 scenarios fail (1 pass)"));
+        assert!(md.contains("| `alpha` | PASS | 3/3 |"));
+        assert!(md.contains("| `beta` | FAIL | 1/4 |"));
+        assert!(md.contains("| `gamma` | ERROR | — |"));
+        assert!(md.contains("Failing: beta, gamma"));
+    }
+
+    #[test]
+    fn cli_report_without_all_errors() {
+        let args: Vec<String> = ["sid-x", "--report", "/tmp/r.md"]
             .iter()
             .map(|s| s.to_string())
             .collect();
@@ -2005,6 +2234,7 @@ mod tests {
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         let summary = run(&opts).unwrap();
         assert_eq!(summary.total, 1);
@@ -2080,6 +2310,7 @@ mod tests {
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2136,6 +2367,7 @@ mod tests {
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2173,6 +2405,7 @@ mod tests {
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         let err = format!("{:#}", run(&opts).unwrap_err());
         assert!(err.contains("schema error"), "got: {err}");
@@ -2235,6 +2468,7 @@ esac\nexit 0\n",
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         }
     }
 
@@ -2485,6 +2719,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2545,6 +2780,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2780,6 +3016,34 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         });
         let s: Scenario = serde_json::from_value(j).unwrap();
         assert!(!scenario_uses_dialog(&s));
+    }
+
+    #[test]
+    fn scenario_uses_shots_detects_claim_including_nested() {
+        let j = serde_json::json!({
+            "schema": "scenario/2", "id": "d", "intent": "x",
+            "steps": [
+                { "id": "s0", "intent": "open", "kind": "do", "verb": "goto",
+                  "value": { "from": "literal", "literal": "https://x" } },
+                { "id": "g1", "intent": "grp", "kind": "do", "verb": "group",
+                  "params": { "steps": [
+                      { "id": "sc", "intent": "visual", "kind": "check",
+                        "claim": { "subject": { "shot": "s0" }, "predicate": "matches" } }
+                  ]}}
+            ]
+        });
+        let s: Scenario = serde_json::from_value(j).unwrap();
+        assert!(scenario_uses_shots(&s));
+
+        let j = serde_json::json!({
+            "schema": "scenario/2", "id": "d", "intent": "x",
+            "steps": [
+                { "id": "c1", "intent": "url", "kind": "check",
+                  "claim": { "subject": { "url": true }, "predicate": "exists" } }
+            ]
+        });
+        let s: Scenario = serde_json::from_value(j).unwrap();
+        assert!(!scenario_uses_shots(&s));
     }
 
     #[test]
@@ -3027,6 +3291,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3111,6 +3376,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3292,6 +3558,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3378,6 +3645,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         // The run bails at the failing step; events/status are written
         // before the bail.
@@ -3443,6 +3711,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         run(&opts).unwrap();
 
@@ -3486,6 +3755,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         run(&opts).unwrap();
         let run_dir = run_dir_for(&jdir);
@@ -3666,6 +3936,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         assert_eq!(resolve_progress_mode(&mk(true, false)), ProgressMode::Quiet);
         // quiet wins over plain.

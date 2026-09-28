@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   compareRuns as apiCompareRuns,
+  crawlScenario as apiCrawlScenario,
   deleteRun as apiDeleteRun,
   deleteScenario as apiDeleteScenario,
   getHealth,
@@ -47,6 +48,7 @@ export interface RunsApi {
   setLive: (v: boolean) => void
   toggleScenario: (sid: string) => Promise<void>
   deleteScenario: (sid: string) => Promise<{ ok: boolean; error?: string }>
+  crawl: (url: string, opts?: { sid?: string; max?: number }) => Promise<{ ok: boolean; stdout?: string; error?: string }>
   deleteRun: (sid: string, runId: string) => Promise<{ ok: boolean; error?: string }>
   selectRun: (sid: string, runId: string, manual?: boolean) => Promise<void>
   selectStep: (idx: number) => void
@@ -232,6 +234,16 @@ export function useRuns(): RunsApi {
     [loadScenarios]
   )
 
+  const crawl = useCallback(
+    async (url: string, opts?: { sid?: string; max?: number }) => {
+      const res = await apiCrawlScenario(url, opts)
+      if (!res.ok) return res
+      await loadScenarios().catch(() => {})
+      return { ok: true, stdout: res.stdout }
+    },
+    [loadScenarios]
+  )
+
   const deleteRun = useCallback(
     async (sid: string, runId: string): Promise<{ ok: boolean; error?: string }> => {
       const res = await apiDeleteRun(sid, runId)
@@ -398,6 +410,7 @@ export function useRuns(): RunsApi {
     setLive,
     toggleScenario,
     deleteScenario,
+    crawl,
     deleteRun,
     selectRun,
     selectStep,

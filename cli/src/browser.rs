@@ -642,6 +642,74 @@ pub fn dialog_pending(session: &str) -> bool {
     dialog_status(session).map(|s| s.open).unwrap_or(false)
 }
 
+// ---------- captured network traffic ----------
+
+/// One captured HTTP exchange, as listed by `agent-browser network requests`.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapturedRequest {
+    pub request_id: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub method: String,
+    #[serde(default)]
+    pub status: Option<i64>,
+    #[serde(default)]
+    pub resource_type: Option<String>,
+    #[serde(default)]
+    pub mime_type: Option<String>,
+}
+
+fn json_data(verb: &str, stdout: &str) -> Result<serde_json::Value, AgentBrowserError> {
+    let parsed: serde_json::Value =
+        serde_json::from_str(stdout.trim()).map_err(|e| AgentBrowserError::NonZero {
+            verb: verb.to_string(),
+            exit_code: 0,
+            stderr: format!("unparseable {verb} JSON: {e}: {:?}", stdout.trim()),
+            hint: String::new(),
+        })?;
+    Ok(parsed
+        .get("data")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null))
+}
+
+/// `agent-browser --json network requests` — captured exchanges in
+/// chronological order.
+pub fn network_requests(session: &str) -> Result<Vec<CapturedRequest>, AgentBrowserError> {
+    let r = run(
+        session,
+        ["--json", "network", "requests"],
+        RunOpts::new().capture(),
+    )?;
+    let data = json_data("network requests", &r.stdout)?;
+    let list = data
+        .get("requests")
+        .cloned()
+        .unwrap_or(serde_json::Value::Array(vec![]));
+    serde_json::from_value(list).map_err(|e| AgentBrowserError::NonZero {
+        verb: "network requests".to_string(),
+        exit_code: 0,
+        stderr: format!("unparseable requests array: {e}"),
+        hint: String::new(),
+    })
+}
+
+/// `agent-browser --json network request <id>` — full record for one
+/// exchange, including `responseBody`.
+pub fn network_request(
+    session: &str,
+    request_id: &str,
+) -> Result<serde_json::Value, AgentBrowserError> {
+    let r = run(
+        session,
+        ["--json", "network", "request", request_id],
+        RunOpts::new().capture(),
+    )?;
+    json_data("network request", &r.stdout)
+}
+
 pub fn open(session: &str, url: &str) -> Result<(), AgentBrowserError> {
     let mut last_err = None;
     for attempt in 1..=OPEN_MAX_ATTEMPTS {
