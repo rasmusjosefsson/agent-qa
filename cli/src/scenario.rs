@@ -517,6 +517,15 @@ pub enum ClaimSubject {
     PageError {
         page_error: PageErrorSubject,
     },
+    /// `{"timing": "<stepId>"}` — assert on a step's recorded duration in
+    /// this run (`<run>/events.jsonl`). Numeric predicates
+    /// (`gt`/`gte`/`lt`/`lte`/`equals`) compare milliseconds against
+    /// `value`; `exists`/`notExists` test whether the step has a timing
+    /// row at all. Only meaningful inside a replay (there is no run dir
+    /// under run-step).
+    Timing {
+        timing: String,
+    },
     /// `{"a11y": true}` or `{"a11y": {"impact": "serious"}}` — run an
     /// axe-core accessibility audit (`agent-browser a11y`) and count the
     /// matching violations. `exists`/`notExists` on ≥1/zero violations;

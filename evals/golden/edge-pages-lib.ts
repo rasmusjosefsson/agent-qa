@@ -412,3 +412,54 @@ export async function runEdgeGolden(
   console.log(JSON.stringify(report, null, 2));
   process.exit(pass ? 0 : 1);
 }
+
+/// Structural goldens for authored-only constructs (group/loop/useTemplate)
+/// that the record→flush path can't produce: writes the scenario JSON
+/// directly and replays it.
+export async function runAuthoredGolden(
+  tc: string,
+  intent: string,
+  scenario: { steps: unknown[]; templates?: Record<string, unknown>; inputs?: Record<string, unknown> },
+  opts: { label?: string } = {},
+): Promise<void> {
+  const ctx = createContext(tc, intent, false, opts.label ?? "struct");
+  const sid = `s-${tc}-authored`;
+  let pass = false;
+  let error = "";
+
+  const doc = {
+    schema: "scenario/2",
+    id: sid,
+    intent,
+    env: { open: [{ kind: "fresh" }] },
+    producedBy: { producer: "llm-author", producedAt: new Date().toISOString() },
+    ...(scenario.inputs ? { inputs: scenario.inputs } : {}),
+    ...(scenario.templates ? { templates: scenario.templates } : {}),
+    steps: scenario.steps,
+  };
+  mkdirSync(resolve(ctx.scenariosRoot, sid), { recursive: true });
+  writeFileSync(resolve(ctx.scenariosRoot, sid, "scenario.json"), JSON.stringify(doc, null, 2));
+
+  try {
+    await run(ctx, "check", [ctx.agentQa, "scenario", "check", resolve(ctx.scenariosRoot, sid, "scenario.json")]);
+    await run(ctx, "replay", [ctx.agentQa, "replay", sid, "--session", `${ctx.session}-replay`]);
+    pass = true;
+  } catch (err) {
+    error = err instanceof Error ? err.message : String(err);
+  }
+
+  const report = {
+    pass,
+    runId: ctx.runId,
+    sid,
+    resultRoot: ctx.resultRoot,
+    scenariosRoot: ctx.scenariosRoot,
+    recordRoot: ctx.recordRoot,
+    session: ctx.session,
+    error,
+    results: ctx.results,
+  };
+  writeFileSync(resolve(ctx.resultRoot, "golden-report.json"), JSON.stringify(report, null, 2));
+  console.log(JSON.stringify(report, null, 2));
+  process.exit(pass ? 0 : 1);
+}
