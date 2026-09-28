@@ -101,6 +101,21 @@ fn rule_for(verb: &Verb) -> VerbRule {
             forbidden: &[DoField::On, DoField::Value],
             ..VerbRule::default()
         },
+        // `params.selector` or `params.main` — either/or is validated in
+        // dispatch.
+        Verb::Frame => VerbRule {
+            required: &[DoField::Params],
+            forbidden: &[DoField::On, DoField::Value],
+            ..VerbRule::default()
+        },
+        // `params` carries the emulate spec; at least one known key must be
+        // present (device/geo/offline/colorScheme/reducedMotion/headers/
+        // credentials) — validated in dispatch.
+        Verb::Emulate => VerbRule {
+            required: &[DoField::Params],
+            forbidden: &[DoField::On, DoField::Value],
+            ..VerbRule::default()
+        },
         // `on` is the drag source; `params.to` is the drop target locator.
         Verb::Drag => VerbRule {
             required: &[DoField::On, DoField::Params],

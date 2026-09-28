@@ -55,6 +55,7 @@ const NOT_RECORDABLE: Record<string, string> = {
   unmock: "authored — removes authored stubs; never emitted by capture",
   state: "authored — seeds cookies/storage before navigation; never emitted by capture",
   emulate: "authored — emulation config is a scenario decision, not a recorded action",
+  frame: "authored — frame context is a scenario decision; capture records flat actions",
 };
 
 const action = (method: string, args: unknown[] = [], intent = "t") =>

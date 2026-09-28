@@ -476,6 +476,8 @@
             "mock",
             "unmock",
             "state",
+            "frame",
+            "emulate",
             "loop",
             "group",
             "useTemplate"
