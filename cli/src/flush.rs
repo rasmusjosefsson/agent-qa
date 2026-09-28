@@ -129,7 +129,10 @@ fn insert_auto_shot_claims(steps: &mut Vec<crate::scenario::Step>) {
                 id: String::new(),
                 intent: format!("visual: {}", intent),
                 claim: crate::scenario::Claim {
-                    subject: crate::scenario::ClaimSubject::Shot { shot: id.clone() },
+                    subject: crate::scenario::ClaimSubject::Shot {
+                        shot: id.clone(),
+                        clip: None,
+                    },
                     predicate: crate::scenario::Predicate::Matches,
                     value: None,
                     tolerance: Some(std::collections::BTreeMap::from([(
