@@ -914,6 +914,37 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     }
     write_run_audit(&run, &audit)?;
 
+    // 9.4. Persist the session console log alongside audit.json — the
+    // `{"console"}` claims evaluated live during the run; landing the
+    // captured messages in the run dir keeps the evidence after the
+    // session closes (mirrors how the request log lands via --har).
+    if !opts.dry_run {
+        match browser::console_messages(&opts.session_name) {
+            Ok(msgs) => {
+                let body = serde_json::json!({
+                    "session": opts.session_name,
+                    "count": msgs.len(),
+                    "messages": msgs.iter().map(|m| serde_json::json!({
+                        "type": m.level,
+                        "text": m.text,
+                    })).collect::<Vec<_>>(),
+                });
+                match serde_json::to_vec_pretty(&body) {
+                    Ok(b) => {
+                        if let Err(e) = crate::sidecar::atomic_write_file(
+                            &run.run_root.join("console.json"),
+                            &b,
+                        ) {
+                            eprintln!("[v2-replay] console.json write failed: {e}");
+                        }
+                    }
+                    Err(e) => eprintln!("[v2-replay] console.json serialize failed: {e}"),
+                }
+            }
+            Err(e) => eprintln!("[v2-replay] console.json skipped: {e}"),
+        }
+    }
+
     // 9.5. Optional --output-audit duplicate (atomic write).
     if let Some(out) = &opts.output_audit {
         let body = serde_json::to_vec_pretty(&audit)?;
