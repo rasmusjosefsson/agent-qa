@@ -39,6 +39,7 @@ mod io;
 mod list;
 mod paths;
 mod perf_snapshot;
+mod plan;
 mod plugin;
 mod profile_add;
 mod profile_bootstrap;
@@ -105,6 +106,7 @@ fn main() -> ExitCode {
         "crawl" => crawl::run(rest),
         "design" => design::run(rest),
         "audit" => audit::run(rest),
+        "plan" => plan::run(rest),
         "start" => start::run(rest),
         "browser" => browser::passthrough(rest),
         "record" => record::run(rest),
@@ -134,7 +136,7 @@ fn main() -> ExitCode {
         "init" => init::cli(rest),
         _ => {
             eprintln!(
-"agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, init."
+"agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, init."
 
             );
             eprintln!("Run `agent-qa --help` for usage.");
@@ -200,6 +202,9 @@ Verbs:
   scenario delete   <sid> --yes  Remove a scenario directory + all replays
   scenario prune-replays <sid> --keep N  Cap replay history under <sid>
   scenario prune-all --keep N    Cap replay history across every scenario
+  plan list [--json]             Workbench test plans + resolved case counts
+  plan cases <id> [--json]       Resolved member cases of one plan
+  plan run <id> [flags]          Replay every member case's scenario (CI gate)
   audit show <sid> <runId|latest>  Pretty-print one replay's audit.json
   audit list <sid>                 Table of every run under the scenario
   audit stats <sid>                Pass/fail/tag rollup across all runs

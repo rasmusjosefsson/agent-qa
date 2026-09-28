@@ -161,7 +161,7 @@ export function EditorPage() {
       </PanelGroup>
 
       {/* Bottom status stripe — scenarios root + flash */}
-      <div className="flex h-7 shrink-0 items-center justify-between gap-3 border-t border-border px-4 text-xs text-muted-foreground">
+      <div data-qa-volatile className="flex h-7 shrink-0 items-center justify-between gap-3 border-t border-border px-4 text-xs text-muted-foreground">
         <div className="truncate font-mono">{ed.scenariosRoot}</div>
         {ed.flashMsg && (
           <div className={cn('shrink-0', ed.flashMsg.error ? 'text-destructive' : 'text-emerald-400')}>
