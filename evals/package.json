@@ -165,6 +165,7 @@
     "golden:tabs-windows:tc03": "bun golden/tabs-windows-tc03.ts",
     "golden:tabs-windows:tc04": "bun golden/tabs-windows-tc04.ts",
     "golden:all": "bun golden-all.ts",
+    "golden:network:tc01": "bun golden/network-tc01.ts",
     "golden:selftest": "bun selftest/run.ts",
     "selftest:accept": "bun selftest/accept.ts"
 
