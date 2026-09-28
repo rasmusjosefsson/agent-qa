@@ -153,14 +153,13 @@ fn active_page(conn: &mut CdpConnection) -> Result<Option<(String, String)>> {
         .get("targetInfos")
         .and_then(|t| t.as_array())
         .and_then(|infos| {
-            infos
-                .iter()
-                .filter(|t| t.get("type").and_then(|v| v.as_str()) == Some("page"))
-                .filter(|t| {
-                    let u = t.get("url").and_then(|v| v.as_str()).unwrap_or("");
-                    !u.starts_with("chrome://") && !u.starts_with("devtools://") && !u.is_empty()
-                })
-                .last()
+            infos.iter().rfind(|t| {
+                if t.get("type").and_then(|v| v.as_str()) != Some("page") {
+                    return false;
+                }
+                let u = t.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                !u.starts_with("chrome://") && !u.starts_with("devtools://") && !u.is_empty()
+            })
         })
         .and_then(|t| {
             Some((
