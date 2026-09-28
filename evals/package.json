@@ -170,7 +170,8 @@
     "selftest:accept": "bun selftest/accept.ts",
     "golden:gestures:tc01": "bun run golden/gestures-tc01.ts",
     "golden:frame:tc01": "bun golden/frame-tc01.ts",
-    "golden:gestures:tc02": "bun run golden/gestures-tc02.ts"
+    "golden:gestures:tc02": "bun run golden/gestures-tc02.ts",
+    "golden:gestures:tc03": "bun run golden/gestures-tc03.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"

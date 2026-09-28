@@ -200,6 +200,13 @@ pub enum Verb {
     /// two-touch TouchEvent chain plus a ctrlKey wheel event so both
     /// native pinch handlers and desktop trackpad-zoom conventions fire.
     Pinch,
+    /// Two-finger rotate: `params.degrees` (required, signed — positive is
+    /// clockwise) and `params.radius` px (optional, default 120 — each
+    /// finger's orbit radius). `on` centers the gesture on an element;
+    /// absent `on` centers the viewport. Dispatches a two-touch TouchEvent
+    /// chain; browsers without Touch/TouchEvent fail with `no-touch`
+    /// (there is no desktop fallback convention for rotate).
+    Rotate,
     /// Switch the session's frame context: `params.selector` = a CSS
     /// selector for the iframe to enter, or `params.main = true` to return
     /// to the top document. Locators on later steps resolve inside the
