@@ -119,6 +119,12 @@ pub struct RunOptions {
     /// (urls + statuses) a HAR carries response bodies — the artifact you
     /// open in DevTools/Charles when a claim needs the payload.
     pub har: bool,
+    /// `--mock-from <runId>` — seed mock rules from that run's
+    /// `network.har` (recorded via `--har`): the app's fetch/XHR calls get
+    /// the recorded status + body instead of the real backend. Fails the
+    /// run when the HAR is absent — a partial stub silently hitting the
+    /// real backend is worse than no run.
+    pub mock_from: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -361,6 +367,16 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     // (`replay --all` suites, workbench runs) — start clean.
     crate::mock::clear(&opts.session_name, None);
 
+    // The browser's request capture is per-session: a replayed session
+    // still holds the previous run's traffic. Clear it so this run's
+    // network.json (and {"network"} claims) sees only its own requests.
+    // Best-effort — a session that doesn't exist yet just warns.
+    if !opts.dry_run {
+        if let Err(e) = crate::browser::network_clear(&opts.session_name) {
+            eprintln!("[v2-replay] network log clear skipped: {e}");
+        }
+    }
+
     // 1. Load + validate.
     let (scenario_file, scenario_dir) = resolve_source(&opts.source)?;
     let bytes =
@@ -434,6 +450,29 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     // run had only audit.json and the viewer showed it "in flight" forever (a
     // ghost). Now we finalise a done/failed status + audit first, so the run
     // surfaces as FAIL with the setup error, then propagate.
+    // Seed mock stubs BEFORE env.open launches the session: rules written
+    // as a page init script install before the *first* navigation, so even
+    // page-load fetches are stubbed. A warm session that already exists
+    // ignores init scripts — the post-navigation re-apply still covers its
+    // in-page XHR/fetch traffic.
+    if let Some(from) = &opts.mock_from {
+        if opts.dry_run {
+            eprintln!("[v2-replay] --mock-from ignored under --dry-run");
+        } else {
+            let n = crate::mock::seed_from_har(&opts.session_name, &scenario_dir, from)
+                .with_context(|| format!("--mock-from {from:?}"))?;
+            let js_path = crate::mock::write_init_script(&opts.session_name, &run.run_root)
+                .with_context(|| "--mock-from: write init script")?;
+            // Children spawned from this process inherit the var; the
+            // daemon registers the script on session launch.
+            std::env::set_var("AGENT_BROWSER_INIT_SCRIPTS", &js_path);
+            eprintln!(
+                "[v2-replay] mock-from {from}: {n} stub(s) seeded (init script {})",
+                js_path.display()
+            );
+        }
+    }
+
     let mut scope = ValueScope::new(resolved_inputs);
     // HAR recording starts before env.open so the open-phase navigation is
     // part of the captured traffic.
@@ -891,6 +930,14 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             if let Err(e) = crate::browser::network_har_stop(&opts.session_name, &dest) {
                 eprintln!("[v2-replay] har stop skipped: {e}");
             }
+        }
+
+        // Persist the session's captured network requests as
+        // <run>/network.json — the traffic list {"network"} claims queried
+        // mid-run, kept for post-hoc review/diff. Best-effort, and only
+        // when the run actually executed (a dry-run session has no traffic).
+        if !opts.dry_run {
+            crate::netlog::write_network_log_warn(&run, &opts.session_name);
         }
     }
 
@@ -2080,6 +2127,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut until_step: Option<String> = None;
     let mut update_baselines = false;
     let mut har = false;
+    let mut mock_from: Option<String> = None;
     let mut input_overrides: BTreeMap<String, String> = BTreeMap::new();
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
@@ -2120,6 +2168,10 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             s if s.starts_with("--until=") => until_step = Some(s["--until=".len()..].to_string()),
             "--update-baselines" => update_baselines = true,
             "--har" => har = true,
+            "--mock-from" => mock_from = it.next().cloned().or_else(|| bail_missing("--mock-from")),
+            s if s.starts_with("--mock-from=") => {
+                mock_from = Some(s["--mock-from=".len()..].to_string())
+            }
             "--param" | "-p" => {
                 let pair = it
                     .next()
@@ -2175,6 +2227,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         until_step,
         update_baselines,
         har,
+        mock_from,
     })
 }
 
@@ -2311,7 +2364,14 @@ replays/latest.txt.
                          response bodies for DevTools/Charles-level
                          inspection. network.json (when present) stays
                          the lightweight status list; the HAR is the
-                         deep dive."
+                         deep dive.
+--mock-from <runId>      Seed network stubs from <runId>'s
+                         network.har (record it with --har first): the
+                         page's fetch/XHR calls get the recorded
+                         status+body — a hermetic, offline-capable
+                         replay. Rules install via a page init script
+                         on fresh sessions (covers page-load fetches),
+                         else re-apply after every navigation."
 }
 
 #[cfg(all(test, unix))]
@@ -2453,6 +2513,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             har: false,
+            mock_from: None,
         };
         let summary = run(&opts).unwrap();
         assert_eq!(summary.total, 1);
@@ -2530,6 +2591,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             har: false,
+            mock_from: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2588,6 +2650,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             har: false,
+            mock_from: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2627,6 +2690,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             har: false,
+            mock_from: None,
         };
         let err = format!("{:#}", run(&opts).unwrap_err());
         assert!(err.contains("schema error"), "got: {err}");
@@ -2691,6 +2755,7 @@ esac\nexit 0\n",
             until_step: None,
             update_baselines: false,
             har: false,
+            mock_from: None,
         }
     }
 
@@ -2943,6 +3008,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             har: false,
+            mock_from: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3005,6 +3071,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             har: false,
+            mock_from: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3638,6 +3705,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             har: false,
+            mock_from: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3724,6 +3792,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             har: false,
+            mock_from: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3907,6 +3976,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             har: false,
+            mock_from: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3995,6 +4065,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             har: false,
+            mock_from: None,
         };
         // The run bails at the failing step; events/status are written
         // before the bail.
@@ -4062,6 +4133,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             har: false,
+            mock_from: None,
         };
         run(&opts).unwrap();
 
@@ -4107,6 +4179,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             har: false,
+            mock_from: None,
         };
         run(&opts).unwrap();
         let run_dir = run_dir_for(&jdir);
@@ -4289,6 +4362,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             har: false,
+            mock_from: None,
         };
         assert_eq!(resolve_progress_mode(&mk(true, false)), ProgressMode::Quiet);
         // quiet wins over plain.

@@ -38,6 +38,7 @@ mod init;
 mod io;
 mod list;
 mod mock;
+mod netlog;
 mod paths;
 mod perf_snapshot;
 mod plan;
