@@ -260,8 +260,9 @@ pub fn run(args: &[String]) -> Result<u8> {
         "flaky" => flaky(&positionals, json_out, min_flips, min_runs),
         "slow" => slow(&positionals, json_out, slow_pct, slow_min_ms, recent_n, min_runs),
         "health" => health(json_out),
+        "trend" => trend(&positionals, json_out, limit),
         other => bail!(
-            "unknown audit subverb {other:?} (try: show | list | stats | stats-all | diff | summary | exit-code | field | count | duration | flaky | slow | health)"
+            "unknown audit subverb {other:?} (try: show | list | stats | stats-all | diff | summary | exit-code | field | count | duration | flaky | slow | health | trend)"
         ),
     }
 }
@@ -1377,6 +1378,155 @@ fn collect_health(root: &std::path::Path) -> Vec<HealthRow> {
         .collect()
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TrendRun {
+    run_id: String,
+    exit_code: Option<i64>,
+    duration_secs: Option<f64>,
+    started_at: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TrendOut {
+    scenario_id: String,
+    runs: Vec<TrendRun>,
+    passed: usize,
+    failed: usize,
+    median_secs: f64,
+    outcomes: String,
+    sparkline: String,
+}
+
+fn sparkline(values: &[Option<f64>]) -> String {
+    const BARS: &[char] = &['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let present: Vec<f64> = values.iter().flatten().copied().collect();
+    if present.is_empty() {
+        return String::new();
+    }
+    let min = present.iter().cloned().fold(f64::INFINITY, f64::min);
+    let max = present.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let span = max - min;
+    values
+        .iter()
+        .map(|v| match v {
+            None => ' ',
+            Some(_) if span <= 0.0 => '▄',
+            Some(v) => {
+                let idx = ((v - min) / span * (BARS.len() - 1) as f64).round() as usize;
+                BARS[idx.min(BARS.len() - 1)]
+            }
+        })
+        .collect()
+}
+
+fn collect_trend(dir: &std::path::Path, sid: &str, limit: Option<usize>) -> TrendOut {
+    let replays_dir = dir.join("replays");
+    let mut runs: Vec<PathBuf> = fs::read_dir(&replays_dir)
+        .map(|it| {
+            it.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_dir())
+                .collect()
+        })
+        .unwrap_or_default();
+    runs.sort();
+    if let Some(n) = limit {
+        runs.drain(..runs.len().saturating_sub(n));
+    }
+
+    let mut trend_runs: Vec<TrendRun> = Vec::with_capacity(runs.len());
+    for run in &runs {
+        let audit: Option<Value> = fs::read(run.join("audit.json"))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok());
+        let duration_secs = match (
+            audit.as_ref().and_then(|a| a.get("startedAt")?.as_str()),
+            audit.as_ref().and_then(|a| a.get("finishedAt")?.as_str()),
+        ) {
+            (Some(s), Some(f)) => match (parse_iso_ms(s), parse_iso_ms(f)) {
+                (Ok(sm), Ok(fm)) => Some(fm.saturating_sub(sm) as f64 / 1000.0),
+                _ => None,
+            },
+            _ => None,
+        };
+        trend_runs.push(TrendRun {
+            run_id: run
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            exit_code: audit.as_ref().and_then(|a| a.get("exitCode")?.as_i64()),
+            duration_secs,
+            started_at: audit
+                .as_ref()
+                .and_then(|a| a.get("startedAt")?.as_str().map(str::to_string)),
+        });
+    }
+
+    let with_audit: Vec<&TrendRun> = trend_runs
+        .iter()
+        .filter(|r| r.exit_code.is_some())
+        .collect();
+    let passed = with_audit.iter().filter(|r| r.exit_code == Some(0)).count();
+    let failed = with_audit.len() - passed;
+    let outcomes: String = with_audit
+        .iter()
+        .map(|r| if r.exit_code == Some(0) { '✓' } else { '✗' })
+        .collect();
+    let spark = sparkline(
+        &with_audit
+            .iter()
+            .map(|r| r.duration_secs)
+            .collect::<Vec<_>>(),
+    );
+    let median_secs = median_ms(
+        &with_audit
+            .iter()
+            .filter_map(|r| r.duration_secs.map(|d| (d * 1000.0) as u64))
+            .collect::<Vec<_>>(),
+    ) / 1000.0;
+    TrendOut {
+        scenario_id: sid.to_string(),
+        runs: trend_runs,
+        passed,
+        failed,
+        median_secs,
+        outcomes,
+        sparkline: spark,
+    }
+}
+
+fn trend(positionals: &[String], json_out: bool, limit: Option<usize>) -> Result<u8> {
+    let sid = positionals
+        .get(1)
+        .ok_or_else(|| anyhow!("usage: audit trend <sid> [--limit N] [--json]"))?;
+    let dir = paths::scenario_dir(sid)?;
+    let out = collect_trend(&dir, sid, limit);
+
+    if json_out {
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(0);
+    }
+    if out.runs.is_empty() {
+        println!("{sid}: (no runs)");
+        return Ok(0);
+    }
+    let total = out.passed + out.failed;
+    let pct = if total > 0 {
+        (out.passed as f64 / total as f64) * 100.0
+    } else {
+        0.0
+    };
+    println!(
+        "{sid}: {total} run(s) — pass {pct:.0}% ({}/{}), median {:.2}s",
+        out.passed, total, out.median_secs
+    );
+    println!("outcomes  {}", out.outcomes);
+    println!("duration  {}", out.sparkline);
+    Ok(0)
+}
+
 fn health(json_out: bool) -> Result<u8> {
     let out = collect_health(&paths::scenarios_root());
     if json_out {
@@ -1543,7 +1693,7 @@ fn print_help() {
     println!(
                 "agent-qa audit \u{2014} inspect a replay's audit.json\n\nUsage:\n  agent-qa audit show <sid> <runId | latest> [--json | --format text|json|github]\n  agent-qa audit list <sid>                    Table view: every run's\n                                               summary / exit / profile / tag\n  agent-qa audit list <sid> --json             Structured rows on stdout\n  agent-qa audit list <sid> [--passed | --failed] [--tag <pat>] [--profile <pat>] [--limit N] [--slow <secs>] [--sort duration|runId-desc] [--since <iso-ts>] [--until <iso-ts>] [--format text|json|github]\n                                               Filters: case-insensitive substring\n                                               --passed/--failed are exit-code partitions\n  agent-qa audit stats <sid> [--since <iso-ts>] [--until <iso-ts>]\n                                               Pass/fail/tag rollup for one scenario\n  agent-qa audit stats <sid> --json            Structured rollup on stdout\n  agent-qa audit stats-all                     Per-scenario + overall pass/fail rollup\n  agent-qa audit stats-all --json              Structured rollup on stdout\n  agent-qa audit stats-all [--since <iso-ts>] [--until <iso-ts>]\n                                               Constrain to a date window\n  agent-qa audit diff <sid> <runIdA> <runIdB>  Unified diff between two replays'\n                                               audit.json (canonicalised JSON;\n                                               'latest' accepted for either side;\n                                               exit 1 on difference)\n  agent-qa audit summary <sid> <runId | latest>\n                                               Print just the summary line (one line out)\n  agent-qa audit exit-code <sid> <runId | latest>\n                                               Print just the run's exitCode (-1 if missing)\n  agent-qa audit field <sid> <runId | latest> <fieldName>\n                                               Print any top-level audit field. String/\n                                               number/bool print verbatim; null prints\n                                               empty; object/array prints compact JSON.\n  agent-qa audit count <sid>                   Print the number of runs under <sid>\n  agent-qa audit duration <sid> <runId | latest>\n                                               Print the run's duration in seconds\n                                               (finishedAt - startedAt, 3 decimals)\n  agent-qa audit flaky <sid> [--min-flips N] [--min-runs N] [--json]\n                                               Flag steps whose outcome interleaves\n                                               pass/fail across runs (outcome churn;\n                                               heal-chronic covers locator churn)\n  agent-qa audit slow <sid> [--pct N] [--min-ms N] [--recent N] [--min-runs N] [--json]\n                                               Flag steps whose recent pass median\n                                               regressed vs their earlier-run median\n                                               (default: last 2 runs >50% and >250ms\n                                               over baseline)\n  agent-qa audit health [--json]           Cross-scenario rollup of flaky + slow +
                                                heal-chronic — one row per scenario
-                                               that has silent degradation\n\n'latest' resolves to <sid>/replays/latest.txt if present, otherwise the\nhighest lex-sorted run directory (run_id is timestamp-prefixed)."
+                                               that has silent degradation\n  agent-qa audit trend <sid> [--limit N] [--json]\n                                               Outcome + duration trend for the last N\n                                               runs (default all): pass%, median secs,\n                                               a ✓/✗ outcome line + a duration sparkline\n\n'latest' resolves to <sid>/replays/latest.txt if present, otherwise the\nhighest lex-sorted run directory (run_id is timestamp-prefixed)."
     );
 }
 
@@ -2203,5 +2353,52 @@ mod tests {
         let c_row = out.iter().find(|r| r.scenario_id == "sid-c").unwrap();
         assert_eq!(c_row.slow, vec!["s9"]);
         assert!(c_row.flaky.is_empty() && c_row.chronic.is_empty());
+    }
+
+    fn write_audit_ms(dir: &std::path::Path, run_id: &str, exit: i64, dur_ms: u64) {
+        let run_dir = dir.join("replays").join(run_id);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        let body = format!(
+            r#"{{"schema":"scenario-replay-audit/v1","runId":"{run_id}","scenarioId":"j","startedAt":"2026-01-01T00:00:00.000Z","finishedAt":"2026-01-01T00:00:{secs:02}.000Z","summary":"SUMMARY: x","exitCode":{exit}}}"#,
+            secs = dur_ms / 1000
+        );
+        std::fs::write(run_dir.join("audit.json"), body).unwrap();
+    }
+
+    #[test]
+    fn trend_reports_outcomes_median_and_sparkline() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let jdir = tmp.path().join("sid");
+        write_audit_ms(&jdir, "2026-01-01__a", 0, 2000);
+        write_audit_ms(&jdir, "2026-01-02__b", 1, 5000);
+        write_audit_ms(&jdir, "2026-01-03__c", 0, 3000);
+        write_audit_ms(&jdir, "2026-01-04__d", 0, 2000);
+        let out = collect_trend(&jdir, "sid", None);
+        assert_eq!(out.passed, 3);
+        assert_eq!(out.failed, 1);
+        assert_eq!(out.outcomes, "✓✗✓✓");
+        assert_eq!(out.median_secs, 2.5);
+        // Durations 2,5,3,2 → min 2 max 5: ▁, █, ▃(idx2), ▁.
+        assert_eq!(out.sparkline, "▁█▃▁");
+    }
+
+    #[test]
+    fn trend_limit_keeps_latest_runs_and_skips_auditless_dirs() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let jdir = tmp.path().join("sid");
+        write_audit_ms(&jdir, "2026-01-01__a", 0, 1000);
+        write_audit_ms(&jdir, "2026-01-02__b", 0, 1000);
+        write_audit_ms(&jdir, "2026-01-03__c", 0, 1000);
+        // A run dir without audit.json still lists but contributes no outcome.
+        std::fs::create_dir_all(jdir.join("replays").join("2026-01-04__d")).unwrap();
+        let out = collect_trend(&jdir, "sid", Some(2));
+        assert_eq!(out.runs.len(), 2);
+        assert_eq!(out.runs[0].run_id, "2026-01-03__c");
+        assert_eq!(out.passed, 1);
+        assert_eq!(out.outcomes, "✓");
+        // Runs without audit.json are skipped in both lines — no misalignment.
+        assert_eq!(out.sparkline, "▄");
     }
 }
