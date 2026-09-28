@@ -925,7 +925,15 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                         Err(e) => Err(e),
                     }
                 }
-                Step::Check { claim, .. } => dispatch_check(claim, &check_ctx, &mut scope, None),
+                Step::Check { claim, context, .. } => dispatch_check(
+                    claim,
+                    &check_ctx,
+                    &mut scope,
+                    context
+                        .as_ref()
+                        .and_then(|c| c.timeout_ms)
+                        .map(Duration::from_millis),
+                ),
             };
             // Navigation wipes the page's JS world — reinstall registered
             // network mocks after navigation verbs so stubs survive loads.
@@ -3389,8 +3397,6 @@ mod tests {
             har: false,
             mock_from: None,
             offline: false,
-            persona: None,
-            environment: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3455,8 +3461,6 @@ mod tests {
             har: false,
             mock_from: None,
             offline: false,
-            persona: None,
-            environment: None,
         };
         let err = run(&opts).unwrap_err();
         assert!(

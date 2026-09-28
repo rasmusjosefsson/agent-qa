@@ -41,6 +41,9 @@ and optional provenance.
 Use `record-step do` and `record-step check` to create steps. The recorder assigns
 `id` and `kind`. Do not hand-edit them into drafts.
 
+A check step polls its claim for up to 5s by default; give it
+`"context": {"timeoutMs": 30000}` to wait out slow async UI (capped at 60s).
+
 `env.open` and `env.close` accept the existing generic `EnvOp` kinds. They are
 `fresh`, `useProfile`, `nav`, `cookie`, `localStorage`, `gql`, and `flag`.
 `record-setup` records one schema-valid `env.open` value.
