@@ -188,6 +188,9 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           // args[0] is the full `tab` subcommand tail: "new <url>", "list",
           // "close <ref>", or "<ref>" to switch.
           return doStep(intent, { verb: "tab", value: literal(args[0]) });
+        case "seedState":
+          // do/state seeding: args[0] = params ({cookies:[...], localStorage:{...}, ...})
+          return doStep(intent, { verb: "state", params: args[0] });
         case "clickNthOption":
           // args[0] = scoped listbox css, args[1] = 1-based option index
           return doStep(intent, {

@@ -64,6 +64,8 @@ export interface EdgeGolden extends GoldenContext {
   assertDialogClosed(intent: string): Promise<void>;
   waitMs(ms: number, intent: string): Promise<void>;
   clickSelectorForce(selector: string, intent: string): Promise<void>;
+  seedCookie(name: string, value: string, intent: string): Promise<void>;
+  gotoUrl(url: string, intent: string): Promise<void>;
   waitSelector(selector: string, intent: string): Promise<void>;
   waitSelectorAbsent(selector: string, intent: string): Promise<void>;
   waitSelectorText(selector: string, text: string, intent: string): Promise<void>;
@@ -252,6 +254,16 @@ export async function runEdgeGolden(
     },
     async assertDialogClosed(stepIntent) {
       await record(ctx, "assert", { kind: "dialogClosed", args: [], intent: stepIntent });
+    },
+    async gotoUrl(url, stepIntent) {
+      await run(ctx, `open ${url}`, [ctx.agentBrowser, "--session", ctx.session, "open", url]);
+      await record(ctx, "action", { method: "navigate", args: [url], intent: stepIntent });
+    },
+    async seedCookie(name, value, stepIntent) {
+      // do/state seeds via document.cookie — drive the live browser the
+      // same way so the recorded step replays what the run observed.
+      await run(ctx, `seedCookie ${name}`, [ctx.agentBrowser, "--session", ctx.session, "eval", `document.cookie=${JSON.stringify(`${name}=${value}; path=/`)}`]);
+      await record(ctx, "action", { method: "seedState", args: [{ cookies: [{ name, value, path: "/" }] }], intent: stepIntent });
     },
     async clickSelectorForce(selector, stepIntent) {
       // Live-drive via el.click() — replay already activates selectors with
