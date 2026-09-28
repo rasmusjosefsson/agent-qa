@@ -476,6 +476,8 @@
             "mock",
             "unmock",
             "state",
+            "hold",
+            "swipe",
             "loop",
             "group",
             "useTemplate"

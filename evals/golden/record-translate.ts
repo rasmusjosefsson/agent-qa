@@ -125,6 +125,32 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           });
         case "dblclickBySelector":
           return doStep(intent, { verb: "dblclick", on: css(args[0]) });
+        case "holdBySelector":
+          // args[0] = css, args[1] = optional hold ms (default 500).
+          return doStep(intent, {
+            verb: "hold",
+            on: css(args[0]),
+            ...(args[1] != null ? { params: { ms: args[1] } } : {}),
+          });
+        case "swipeBySelector":
+          // args[0] = css, args[1] = direction, args[2] = optional distance px.
+          return doStep(intent, {
+            verb: "swipe",
+            on: css(args[0]),
+            params: {
+              direction: args[1],
+              ...(args[2] != null ? { distance: args[2] } : {}),
+            },
+          });
+        case "swipePage":
+          // args[0] = direction, args[1] = optional distance px — no `on`.
+          return doStep(intent, {
+            verb: "swipe",
+            params: {
+              direction: args[0],
+              ...(args[1] != null ? { distance: args[1] } : {}),
+            },
+          });
         case "scrollToBySelector":
           return doStep(intent, { verb: "scrollTo", on: css(args[0]) });
         case "scrollTop":
