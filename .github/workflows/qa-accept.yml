@@ -155,7 +155,7 @@ jobs:
         run: bun selftest/run.ts
       - name: upload goldens evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ui-goldens-manual
           path: |

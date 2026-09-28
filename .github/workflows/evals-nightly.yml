@@ -49,7 +49,7 @@ jobs:
         run: bun golden-all.ts
       - name: upload golden results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: golden-results
           path: evals/results/
