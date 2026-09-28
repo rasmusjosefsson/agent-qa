@@ -57,6 +57,10 @@ export interface FileUploadGolden extends GoldenContext {
   assertUrlEquals(url: string, intent: string): Promise<void>;
   assertElementVisible(selector: string, intent: string): Promise<void>;
   setViewport(width: number, height: number, intent: string): Promise<void>;
+  assertNetworkFired(matcher: Record<string, unknown>, intent: string): Promise<void>;
+  assertNetworkSilent(matcher: Record<string, unknown>, intent: string): Promise<void>;
+  assertNetworkStatus(matcher: Record<string, unknown>, predicate: string, value: unknown, intent: string): Promise<void>;
+  assertNetworkJson(matcher: Record<string, unknown>, path: string, predicate: string, value: unknown, intent: string): Promise<void>;
 }
 
 function createContext(tc: string, intent: string): GoldenContext {
@@ -239,8 +243,20 @@ export async function runFileUploadGolden(
     },
     async setViewport(width, height, stepIntent) {
       // Record-side only — the do/viewport verb resizes the browser via CDP
-      // at replay; agent-browser exposes no live resize command.
+      // at replay; agent-browser exposes no resize command.
       await record(ctx, "action", { method: "setViewport", args: [width, height], intent: stepIntent });
+    },
+    async assertNetworkFired(matcher, stepIntent) {
+      await record(ctx, "assert", { kind: "networkFired", args: [matcher], intent: stepIntent });
+    },
+    async assertNetworkSilent(matcher, stepIntent) {
+      await record(ctx, "assert", { kind: "networkFired", args: [matcher, false], intent: stepIntent });
+    },
+    async assertNetworkStatus(matcher, predicate, value, stepIntent) {
+      await record(ctx, "assert", { kind: "networkStatus", args: [matcher, predicate, value], intent: stepIntent });
+    },
+    async assertNetworkJson(matcher, path, predicate, value, stepIntent) {
+      await record(ctx, "assert", { kind: "networkJson", args: [matcher, path, predicate, value], intent: stepIntent });
     },
   };
 

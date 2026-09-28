@@ -62,7 +62,7 @@ fn parse_index(value: &str, label: &str) -> Result<usize> {
         .map_err(|_| anyhow!("{label} must be a non-negative integer; got {value:?}"))
 }
 
-fn normalize_ids(steps: &mut [Step]) {
+pub(crate) fn normalize_ids(steps: &mut [Step]) {
     // Rewire `{"from":"step","stepId":…}` values and `opensFromStepId`
     // before renumbering so references keep pointing at the same step.
     // References to a step that no longer exists keep their old id.
@@ -106,10 +106,9 @@ fn rewrite_step_refs(step: &mut Step, renames: &HashMap<String, String>) {
             if let Some(value) = &mut claim.value {
                 rewrite_step_refs_json(value, renames);
             }
-            // A `{"shot": "<stepId>"}` claim points at a step's screenshot —
-            // renumbering without rewiring it would silently diff the wrong
-            // step's capture.
-            if let crate::scenario::ClaimSubject::Shot { shot } = &mut claim.subject {
+            // {"shot": "<stepId>"} references a step id like any other
+            // step ref — renumbering must rewire it or the claim dangles.
+            if let crate::scenario::ClaimSubject::Shot { shot, .. } = &mut claim.subject {
                 if let Some(new) = renames.get(shot.as_str()) {
                     *shot = new.clone();
                 }
