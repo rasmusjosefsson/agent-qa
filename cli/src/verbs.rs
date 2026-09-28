@@ -69,12 +69,15 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
             // Warm-page: on a reused, already-signed-in session that's ALREADY
             // on this URL, skip the reload — re-navigating a heavy SPA forces a
             // full re-hydration (~20s). Best-effort; any mismatch navigates.
-            // Visual-check scenarios always navigate: the golden diff needs a
-            // fresh document, not whatever the session last loaded.
+            // Reload anyway when (a) the scenario has visual checks — the
+            // golden diff needs a fresh document, (b) the target is a file://
+            // URL — the fixture may have been edited since the warm load, or
+            // (c) the step passes params.reload.
+            let force = goto_needs_reload(&url, ctx.visual_checks, params, scope);
             if browser::already_on(ctx.session, &url) {
-                if ctx.visual_checks {
+                if force {
                     eprintln!(
-                        "[v2-replay] goto: already on {url} — reloading anyway (visual checks need a fresh document)"
+                        "[v2-replay] goto: already on {url} — reloading anyway (fresh document required)"
                     );
                     browser::open(ctx.session, &url)?;
                     browser::wait_for_load(ctx.session, "networkidle")?;
@@ -1009,6 +1012,29 @@ fn upload_selector(loc: &Locator, scope: &mut ValueScope) -> Result<String> {
     }
 }
 
+/// Whether a `goto` onto the session's current URL must still reload.
+/// `file://` pages always reload (the fixture may have been edited since the
+/// warm load — a skipped navigation serves stale DOM); `params.reload` is the
+/// escape hatch for other origins.
+fn goto_needs_reload(
+    url: &str,
+    visual_checks: bool,
+    params: Option<&std::collections::BTreeMap<String, Json>>,
+    scope: &mut ValueScope,
+) -> bool {
+    visual_checks
+        || url.starts_with("file://")
+        || params
+            .and_then(|p| p.get("reload"))
+            .map(|v| {
+                v.as_bool() == Some(true)
+                    || v.as_str()
+                        .map(|s| crate::value::substitute_scenario_vars(s, scope) == "true")
+                        .unwrap_or(false)
+            })
+            .unwrap_or(false)
+}
+
 /// Coerce a resolved Value to a list of file paths.
 /// - JSON string → single-element list
 /// - JSON array of strings → list as-is
@@ -1708,6 +1734,49 @@ mod tests {
             out.contains("--session sess wait --load networkidle"),
             "got: {out}"
         );
+    }
+
+    #[test]
+    fn goto_needs_reload_covers_file_urls_and_reload_param() {
+        let mut scope = ValueScope::default();
+        // file:// always reloads — the fixture may have been edited on disk
+        assert!(goto_needs_reload(
+            "file:///tmp/f.html",
+            false,
+            None,
+            &mut scope
+        ));
+        // http(s) on a warm session stays warm
+        assert!(!goto_needs_reload(
+            "https://example.com/",
+            false,
+            None,
+            &mut scope
+        ));
+        // params.reload forces it either way
+        let mut p = std::collections::BTreeMap::new();
+        p.insert("reload".to_string(), json!("true"));
+        assert!(goto_needs_reload(
+            "https://example.com/",
+            false,
+            Some(&p),
+            &mut scope
+        ));
+        let mut p2 = std::collections::BTreeMap::new();
+        p2.insert("reload".to_string(), json!(false));
+        assert!(!goto_needs_reload(
+            "https://example.com/",
+            false,
+            Some(&p2),
+            &mut scope
+        ));
+        // visual checks always reload
+        assert!(goto_needs_reload(
+            "https://example.com/",
+            true,
+            None,
+            &mut scope
+        ));
     }
 
     #[test]

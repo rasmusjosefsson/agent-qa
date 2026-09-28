@@ -105,7 +105,9 @@ flake the diff:
 A scenario with shot claims opts out of the warm-page `goto` skip: the step
 always navigates, so the diff compares a fresh document — a reused session can
 otherwise hold a stale DOM (an older bundle or settled live data) that no
-amount of masking fixes.
+amount of masking fixes. `goto` to a `file://` URL also always reloads — the
+fixture may have been edited since the warm load — and any `goto` can force a
+reload with `params.reload: true`.
 
 ## Profiles
 
