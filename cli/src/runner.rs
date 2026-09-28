@@ -620,6 +620,27 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             let result = match &patched_step {
                 Step::Do { save_as, .. } => {
                     let mut outcome = dispatch_do(&patched_step, &do_ctx, &mut scope);
+                    // Per-step retry: params.retry re-dispatches the step
+                    // on failure — cheap flake absorption for one known-
+                    // flaky interaction without --retry's whole-run cost.
+                    // params.retryMs sets the inter-attempt delay
+                    // (default 300ms). Caveat: verbs whose side effect
+                    // isn't idempotent (e.g. `type` appends) can apply it
+                    // per attempt when the first attempt half-dispatched.
+                    if let Step::Do {
+                        params: Some(p), ..
+                    } = &patched_step
+                    {
+                        let retries = p.get("retry").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                        let delay = p.get("retryMs").and_then(|v| v.as_u64()).unwrap_or(300);
+                        let mut attempt = 0u32;
+                        while outcome.is_err() && attempt < retries {
+                            attempt += 1;
+                            eprintln!("[v2-replay] step {id}: retry {attempt}/{retries}");
+                            std::thread::sleep(std::time::Duration::from_millis(delay));
+                            outcome = dispatch_do(&patched_step, &do_ctx, &mut scope);
+                        }
+                    }
                     // Transient-popup recovery: an option/menuitem click that
                     // failed usually means the popup was dismissed between steps
                     // (inter-step keyframe capture, a re-render). Re-fire the
