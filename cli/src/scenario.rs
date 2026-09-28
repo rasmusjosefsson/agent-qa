@@ -284,6 +284,10 @@ pub struct NetworkMatcher {
     pub operation_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub method: Option<HttpMethod>,
+    /// Substring match on the request's POST body (fetched via
+    /// `network request <id>` per candidate — url/method narrow first).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_data_contains: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

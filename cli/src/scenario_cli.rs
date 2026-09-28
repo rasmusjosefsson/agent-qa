@@ -619,7 +619,7 @@ fn help() {
                                             Splice a validated step into a saved scenario.
                                             Draft shape matches record-step (id/kind
                                             omitted); position defaults to the end.
-  agent-qa scenario diff <a> <b>             Unified diff between two scenario.json files\n                                            (canonicalised JSON; exit 1 on difference)\n  agent-qa scenario hash <file>              SHA-256 of scenario.json bytes (same algorithm\n                                            replay + heal-promote use for the rebase guard)\n  agent-qa scenario id <file>                Print the scenario's id field (one line)\n  agent-qa scenario intent <file>            Print the scenario's intent field (one line)\n  agent-qa scenario step-ids <file>          Print every step id, one per line\n  agent-qa scenario field <file> <name>      Print any top-level scenario field (id, intent,\n                                            schema, etc.); object/array → compact JSON.\n  agent-qa scenario coverage <file> [--json] Per-step check coverage: how many do steps are\n                                            followed by a check claim, and how many are bare.\n  agent-qa scenario coverage-all [--filter <substr>] [--json]\n                                            The same ratio rolled up across every scenario under\n                                            the root — per-scenario rows sorted worst-first plus\n                                            an OVERALL rollup.\n  agent-qa scenario lint <file> [--json] [--strict] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run common lints (use '-' for stdin)\n                                            (duplicate ids, empty intent, bare do,\n                                            undeclared/unused inputs). Exit 1 iff\n                                            any errors are reported (--strict treats\n                                            warnings as errors). --rule narrows to specific\n                                            codes; --exclude-rule subtracts (both repeatable).\n                                            --format github emits GitHub Actions annotations.\n  agent-qa scenario lint --list-rules [--json]\n                                            Enumerate the lint rules + their severities.\n  agent-qa scenario lint-all [--json] [--strict] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run lints against every scenario under the\n                                            scenarios root; exit 1 iff any errors are reported\n                                            (--strict treats warnings as errors). --rule\n                                            narrows to specific codes; --exclude-rule\n                                            subtracts (both repeatable).\n  agent-qa scenario rename <sid> <new-sid>   Rename a scenario: patches scenario.json's id\n                                            field, then moves the directory under the\n                                            scenarios root. (refuses to overwrite).\n  agent-qa scenario copy <sid> <new-sid>     Copy a scenario (scenario.json with id patched);\n                                            replays are NOT copied. Refuses to overwrite.\n  agent-qa scenario delete <sid> [--yes/-y]  Remove a scenario directory + all its replays.\n                                            Dry-run by default; --yes confirms.\n  agent-qa scenario prune-replays <sid> --keep N [--yes] [--keep-failed]\n                                            Keep the N most recent replays under\n                                            <sid>/replays/; dry-run by default.\n                                            --keep-failed preserves all non-zero-exit\n                                            runs regardless of N.\n  agent-qa scenario prune-all --keep N [--yes] [--keep-failed]\n                                            Like prune-replays but across every scenario\n                                            under the scenarios root. --keep-failed\n                                            preserves failed runs per scenario."
+  agent-qa scenario diff <a> <b>             Unified diff between two scenario.json files\n                                            (canonicalised JSON; exit 1 on difference)\n  agent-qa scenario hash <file>              SHA-256 of scenario.json bytes (same algorithm\n                                            replay + heal-promote use for the rebase guard)\n  agent-qa scenario id <file>                Print the scenario's id field (one line)\n  agent-qa scenario intent <file>            Print the scenario's intent field (one line)\n  agent-qa scenario step-ids <file>          Print every step id, one per line\n  agent-qa scenario field <file> <name>      Print any top-level scenario field (id, intent,\n                                            schema, etc.); object/array → compact JSON.\n  agent-qa scenario coverage <file> [--json] Per-step check coverage: how many do steps are\n                                            followed by a check claim, and how many are bare.\n  agent-qa scenario coverage-all [--filter <substr>] [--json]\n                                            The same ratio rolled up across every scenario under\n                                            the root — per-scenario rows sorted worst-first plus\n                                            an OVERALL rollup.\n  agent-qa scenario lint <file> [--json] [--strict] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run common lints (use '-' for stdin)\n                                            (duplicate ids, empty intent, bare do,\n                                            undeclared/unused inputs). Exit 1 iff\n                                            any errors are reported (--strict treats\n                                            warnings as errors). --rule narrows to specific\n                                            codes; --exclude-rule subtracts (both repeatable).\n                                            --format github emits GitHub Actions annotations.\n  agent-qa scenario lint --list-rules [--json]\n                                            Enumerate the lint rules + their severities.\n  agent-qa scenario lint-all [--json] [--strict] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run lints against every scenario under the\n                                            scenarios root; exit 1 iff any errors are reported\n                                            (--strict treats warnings as errors). --rule\n                                            narrows to specific codes; --exclude-rule\n                                            subtracts (both repeatable).\n  agent-qa scenario rename <sid> <new-sid>   Rename a scenario: patches scenario.json's id\n                                            field, then moves the directory under the\n                                            scenarios root. (refuses to overwrite).\n  agent-qa scenario copy <sid> <new-sid>     Copy a scenario (scenario.json with id patched +\n                                            baselines/ carried; replays NOT copied). Refuses to overwrite.\n  agent-qa scenario delete <sid> [--yes/-y]  Remove a scenario directory + all its replays.\n                                            Dry-run by default; --yes confirms.\n  agent-qa scenario prune-replays <sid> --keep N [--yes] [--keep-failed]\n                                            Keep the N most recent replays under\n                                            <sid>/replays/; dry-run by default.\n                                            --keep-failed preserves all non-zero-exit\n                                            runs regardless of N.\n  agent-qa scenario prune-all --keep N [--yes] [--keep-failed]\n                                            Like prune-replays but across every scenario\n                                            under the scenarios root. --keep-failed\n                                            preserves failed runs per scenario."
     );
 }
 
@@ -771,13 +771,31 @@ fn copy(from_sid: &str, to_sid: &str) -> Result<u8> {
     let patched = serde_json::to_string_pretty(&parsed)?;
     fs::write(to_dir.join("scenario.json"), format!("{patched}\n"))
         .with_context(|| format!("write {}", to_dir.join("scenario.json").display()))?;
-    // Replays are run history — not relevant to a copy. Skip.
+    // Baselines are part of the scenario's meaning — a shot claim without its
+    // golden always fails, so the copy carries them. Replays stay run history.
+    let mut copied_baselines = 0usize;
+    let from_baselines = from_dir.join("baselines");
+    if from_baselines.is_dir() {
+        let to_baselines = to_dir.join("baselines");
+        fs::create_dir_all(&to_baselines)
+            .with_context(|| format!("create {}", to_baselines.display()))?;
+        for entry in fs::read_dir(&from_baselines)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            fs::copy(entry.path(), to_baselines.join(entry.file_name()))
+                .with_context(|| format!("copy {}", entry.path().display()))?;
+            copied_baselines += 1;
+        }
+    }
     println!(
-        "copied: {} → {}\nid: {:?} → {:?}\n(replays not copied)",
+        "copied: {} → {}\nid: {:?} → {:?}\n(replays not copied; {} baseline(s) copied)",
         scenario_file.display(),
         to_dir.join("scenario.json").display(),
         from_sid,
-        to_sid
+        to_sid,
+        copied_baselines
     );
     Ok(0)
 }
@@ -1231,12 +1249,17 @@ fn list_lint_rules(json_out: bool) -> Result<u8> {
         Rule {
             code: "wait-without-condition",
             severity: "warning",
-            description: "A do/wait step has none of params.ms/until/url/timeoutMs/locator; falls back to a networkidle wait that may miss the intended condition.",
+            description: "A do/wait step has none of params.ms/until/url/idle/idleMs/timeoutMs/locator; falls back to a networkidle wait that may miss the intended condition.",
         },
         Rule {
             code: "shot-without-baseline",
             severity: "warning",
             description: "A {shot: <stepId>} claim has no baselines/<stepId>.png beside scenario.json; replay will fail with a missing-baseline hint. Skipped for stdin input.",
+        },
+        Rule {
+            code: "orphan-baseline",
+            severity: "warning",
+            description: "baselines/<stepId>.png exists but no shot claim references <stepId> — a stale golden left by a deleted or renamed step. Skipped for stdin input.",
         },
     ];
     if json_out {
@@ -1599,6 +1622,8 @@ pub(crate) fn lint(
                         || p.get("url").is_some()
                         || p.get("timeoutMs").is_some()
                         || p.get("locator").is_some()
+                        || p.get("idle").is_some()
+                        || p.get("idleMs").is_some()
                 })
                 .unwrap_or(false);
             if !has_condition {
@@ -1606,7 +1631,7 @@ pub(crate) fn lint(
                     severity: "warning",
                     code: "wait-without-condition",
                     message: format!(
-                        "step {id:?} verb=wait has no wait condition (params.ms/until/url/timeoutMs/locator); falls back to networkidle"
+                        "step {id:?} verb=wait has no wait condition (params.ms/until/url/idle/idleMs/timeoutMs/locator); falls back to networkidle"
                     ),
                 });
             }
@@ -1656,6 +1681,29 @@ pub(crate) fn lint(
                             "check claims shot {sid:?} but baselines/{sid}.png is missing — run `agent-qa shot-accept` after a replay"
                         ),
                     });
+                }
+            }
+            // Inverse: a baseline PNG whose stepId no shot claim references
+            // is a stale golden — deleted steps and renumbered ids leave
+            // them behind, and they cost review attention forever.
+            if let Ok(rd) = fs::read_dir(&baselines) {
+                let claimed: std::collections::BTreeSet<&str> =
+                    shot_ids.iter().map(String::as_str).collect();
+                for ent in rd.flatten() {
+                    let name = ent.file_name();
+                    let name = name.to_string_lossy();
+                    let Some(stem) = name.strip_suffix(".png") else {
+                        continue;
+                    };
+                    if !claimed.contains(stem) {
+                        findings.push(Finding {
+                            severity: "warning",
+                            code: "orphan-baseline",
+                            message: format!(
+                                "baselines/{name} — no shot claim references step {stem:?}; delete it or the claim was renamed"
+                            ),
+                        });
+                    }
                 }
             }
         }
@@ -2419,6 +2467,8 @@ fn lint_collect(
                         || p.get("url").is_some()
                         || p.get("timeoutMs").is_some()
                         || p.get("locator").is_some()
+                        || p.get("idle").is_some()
+                        || p.get("idleMs").is_some()
                 })
                 .unwrap_or(false);
             if !has_condition && active("wait-without-condition") {
@@ -3405,6 +3455,43 @@ mod tests {
         fs::create_dir_all(dir.join("baselines")).unwrap();
         fs::write(dir.join("baselines/s0.png"), b"png").unwrap();
         assert_eq!(lint(&p, LintFormat::Text, false, None, None).unwrap(), 0);
+    }
+
+    #[test]
+    fn lint_orphan_baseline_warns_on_unclaimed_png() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("demo");
+        fs::create_dir_all(dir.join("baselines")).unwrap();
+        let p = dir.join("scenario.json");
+        fs::write(
+            &p,
+            r#"{
+              "schema": "scenario/2", "id": "demo", "intent": "x",
+              "steps": [
+                { "id": "s0", "intent": "go", "kind": "do", "verb": "reload" },
+                { "id": "s1", "intent": "looks", "kind": "check",
+                  "claim": { "subject": { "shot": "s0" }, "predicate": "matches" } }
+              ]
+            }"#,
+        )
+        .unwrap();
+        // Claimed baseline → clean.
+        fs::write(dir.join("baselines/s0.png"), b"png").unwrap();
+        assert_eq!(lint(&p, LintFormat::Text, false, None, None).unwrap(), 0);
+        // s9.png has no claim → warning (exit stays 0 for warnings).
+        fs::write(dir.join("baselines/s9.png"), b"png").unwrap();
+        let code = lint(&p, LintFormat::Json, false, None, None).unwrap();
+        assert_eq!(code, 0);
+        // And the rule surfaces in --only filtering.
+        let code = lint(
+            &p,
+            LintFormat::Json,
+            true, // strict: warnings fail
+            Some(&["orphan-baseline".to_string()]),
+            None,
+        )
+        .unwrap();
+        assert_eq!(code, 1);
     }
 
     #[test]
@@ -4548,6 +4635,36 @@ mod tests {
         assert!(dst.is_dir());
         let body = fs::read_to_string(dst.join("scenario.json")).unwrap();
         assert!(body.contains("\"id\": \"new\""));
+        assert!(!dst.join("replays").exists());
+        match prev {
+            Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    #[test]
+    fn copy_carries_baselines() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        let src = tmp.path().join("orig");
+        fs::create_dir_all(src.join("baselines")).unwrap();
+        fs::create_dir_all(src.join("replays").join("r1")).unwrap();
+        fs::write(
+            src.join("scenario.json"),
+            r#"{"schema":"scenario/2","id":"orig","intent":"x","steps":[]}"#,
+        )
+        .unwrap();
+        fs::write(src.join("baselines").join("s1.png"), b"golden").unwrap();
+        fs::write(src.join("baselines").join("s2.png"), b"golden2").unwrap();
+        assert_eq!(copy("orig", "new").unwrap(), 0);
+        let dst = tmp.path().join("new");
+        assert_eq!(
+            fs::read(dst.join("baselines").join("s1.png")).unwrap(),
+            b"golden"
+        );
+        assert!(dst.join("baselines").join("s2.png").is_file());
         assert!(!dst.join("replays").exists());
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
