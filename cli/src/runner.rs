@@ -114,6 +114,11 @@ pub struct RunOptions {
     /// performs). Runs even when shot claims FAILED: intentional UI
     /// changes are exactly the case where a failing diff needs re-minting.
     pub update_baselines: bool,
+    /// After a passing run, apply this run's locator-correction heal
+    /// patches back into scenario.json (heal-promote --apply for just this
+    /// run). The content-hash guard still applies: a patch recorded
+    /// against an older scenario is refused with a warning, never written.
+    pub auto_promote: bool,
     /// `--freeze <iso>` — pin `Date.now()`/`new Date()` to the instant and
     /// replace `Math.random` with a seeded LCG via a page init script, so
     /// rendered timestamps and random ordering can't flake a golden diff.
@@ -1032,7 +1037,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         audit.heal_overrides_applied = Some(applied_overrides);
     }
     if !healed_steps.is_empty() {
-        audit.auto_healed = Some(healed_steps);
+        audit.auto_healed = Some(healed_steps.clone());
     }
     if let Some(f) = &opts.from_step {
         audit.window_from = Some(f.clone());
@@ -1054,6 +1059,23 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
 
     // 9. Latest pointer.
     update_latest_pointer(&scenario_dir, &run.run_id)?;
+
+    // 9.6. `--auto-promote` — self-healing write-back. Only on a passing
+    // run: locator-correction patches this run produced are applied to
+    // scenario.json via the same hash-guarded plan `heal-promote --apply`
+    // uses. A refusal (the file changed since the run started) is a
+    // warning, never a run failure. Skipped for --dry-run (no patches can
+    // exist) and runs that wrote no corrections.
+    if opts.auto_promote && !opts.dry_run && summary.ok && !healed_steps.is_empty() {
+        match crate::heal_promote::promote_run(&scenario_file, &run.run_id) {
+            Ok(0) => {}
+            Ok(n) => eprintln!(
+                "[v2-replay] auto-promoted {n} locator patch(es) into {}",
+                scenario_file.display()
+            ),
+            Err(err) => eprintln!("[v2-replay] --auto-promote skipped: {err}"),
+        }
+    }
 
     // 10. `--update-baselines` — mint from this run's capture set. Runs
     // before the failure bail on purpose: a shot claim that correctly
@@ -2222,6 +2244,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut from_step: Option<String> = None;
     let mut until_step: Option<String> = None;
     let mut update_baselines = false;
+    let mut auto_promote = false;
     let mut freeze: Option<String> = None;
     let mut har = false;
     let mut mock_from: Option<String> = None;
@@ -2264,6 +2287,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             "--until" => until_step = it.next().cloned().or_else(|| bail_missing("--until")),
             s if s.starts_with("--until=") => until_step = Some(s["--until=".len()..].to_string()),
             "--update-baselines" => update_baselines = true,
+            "--auto-promote" => auto_promote = true,
             "--freeze" => freeze = it.next().cloned().or_else(|| bail_missing("--freeze")),
             s if s.starts_with("--freeze=") => freeze = Some(s["--freeze=".len()..].to_string()),
             "--har" => har = true,
@@ -2325,6 +2349,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         from_step,
         until_step,
         update_baselines,
+        auto_promote,
         freeze,
         har,
         mock_from,
@@ -2477,7 +2502,12 @@ replays/latest.txt.
                          script — rendered timestamps and random ordering
                          can't flake a golden diff. Fresh sessions apply
                          it on every navigation; warm sessions get the
-                         current document only."
+                         current document only
+--auto-promote           Self-healing write-back: when the run passed AND
+                         auto-heal corrected locators this run, apply those
+                         patches to scenario.json (the hash-guarded
+                         heal-promote --apply path). A stale-hash refusal
+                         is a warning, never a failure."
 }
 
 #[cfg(all(test, unix))]
@@ -2618,6 +2648,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
@@ -2697,6 +2728,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
@@ -2757,6 +2789,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
@@ -2798,6 +2831,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
@@ -2864,6 +2898,7 @@ esac\nexit 0\n",
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
@@ -3118,6 +3153,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
@@ -3182,6 +3218,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
@@ -3827,6 +3864,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
@@ -3915,6 +3953,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
@@ -4121,6 +4160,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
@@ -4211,6 +4251,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
@@ -4280,6 +4321,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
@@ -4327,6 +4369,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
@@ -4511,6 +4554,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
             freeze: None,
             har: false,
             mock_from: None,
@@ -4528,5 +4572,13 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         assert!(opts.plain);
         let opts = parse_args(&["./j.json".into()]).unwrap();
         assert!(!opts.plain);
+    }
+
+    #[test]
+    fn parse_args_auto_promote_flag() {
+        let opts = parse_args(&["sid".into(), "--auto-promote".into()]).unwrap();
+        assert!(opts.auto_promote);
+        let opts = parse_args(&["sid".into()]).unwrap();
+        assert!(!opts.auto_promote);
     }
 }
