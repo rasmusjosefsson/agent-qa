@@ -71,7 +71,9 @@ export AGENT_BROWSER_HOME="$BROWSER_HOME"
 PYTHONUNBUFFERED=1 python3 -m http.server 0 --bind 127.0.0.1 --directory "$FIXTURE_DIR" >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 for _ in $(seq 1 50); do
-  PORT=$(awk '/Serving HTTP/ { for (i = 1; i <= NF; i++) if ($i == "port") { print $(i + 1); exit } }' "$SERVER_LOG")
+  # The server log may not exist on the first poll — awk failing under
+  # `set -e` would abort before the loop ever gets a chance to retry.
+  PORT=$(awk '/Serving HTTP/ { for (i = 1; i <= NF; i++) if ($i == "port") { print $(i + 1); exit } }' "$SERVER_LOG" 2>/dev/null || true)
   if [[ -n "$PORT" ]]; then
     break
   fi

@@ -132,6 +132,7 @@ fn insert_auto_shot_claims(steps: &mut Vec<crate::scenario::Step>) {
                     subject: crate::scenario::ClaimSubject::Shot {
                         shot: id.clone(),
                         clip: None,
+                        mask: Vec::new(),
                     },
                     predicate: crate::scenario::Predicate::Matches,
                     value: None,

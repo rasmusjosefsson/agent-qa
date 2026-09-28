@@ -122,7 +122,7 @@ pub fn dispatch_check(
         ClaimSubject::Flag { flag } => {
             check_flag(flag, &claim.predicate, claim.value.as_ref(), ctx)
         }
-        ClaimSubject::Shot { shot, clip } => check_shot(
+        ClaimSubject::Shot { shot, clip, .. } => check_shot(
             shot,
             clip.as_ref(),
             &claim.predicate,
@@ -130,12 +130,128 @@ pub fn dispatch_check(
             ctx,
             scope,
         ),
+
         ClaimSubject::Dialog { dialog } => {
             if !*dialog {
                 bail!("dialog subject requires dialog=true");
             }
             check_dialog(&claim.predicate, claim.value.as_ref(), ctx, scope, timeout)
         }
+        ClaimSubject::Console { console } => check_console(
+            console,
+            &claim.predicate,
+            claim.value.as_ref(),
+            ctx,
+            scope,
+            timeout,
+        ),
+    }
+}
+
+// ---------- console ----------
+
+/// Check console messages captured this session via
+/// `agent-browser console --json`. The matcher filters which messages count:
+/// `{"console": true}` → all; `{"type": "error"}` → that level;
+/// `{"text": "<substring>"}` → message text contains it.
+///
+/// Predicates:
+///   `exists`/`isVisible`      ≥1 matching message
+///   `notExists`/`isHidden`    zero matching — the "page logged no errors" gate
+///   `countEquals`/`gt`/`gte`/`lt`/`lte`  compare the matching count to `value`
+///   text predicates           ANY matching message's text satisfies them
+fn check_console(
+    subject: &crate::scenario::ConsoleSubject,
+    predicate: &Predicate,
+    expected: Option<&Json>,
+    ctx: &CheckContext,
+    scope: &mut ValueScope,
+    timeout: Duration,
+) -> Result<()> {
+    use crate::scenario::ConsoleSubject;
+    let (want_type, want_text) = match subject {
+        ConsoleSubject::Flag(true) => (None, None),
+        ConsoleSubject::Flag(false) => bail!("console subject requires console=true or a matcher"),
+        ConsoleSubject::Matcher(m) => (
+            m.r#type
+                .as_deref()
+                .map(|t| substitute_scenario_vars(t, scope)),
+            m.text
+                .as_deref()
+                .map(|t| substitute_scenario_vars(t, scope)),
+        ),
+    };
+    let deadline = Instant::now() + timeout;
+    loop {
+        let msgs = browser::console_messages(ctx.session).unwrap_or_default();
+        let matched: Vec<&crate::browser::ConsoleMessage> = msgs
+            .iter()
+            .filter(|m| {
+                want_type.as_deref().map(|t| m.level == t).unwrap_or(true)
+                    && want_text
+                        .as_deref()
+                        .map(|t| m.text.contains(t))
+                        .unwrap_or(true)
+            })
+            .collect();
+        let done = match predicate {
+            Predicate::Exists | Predicate::IsVisible => !matched.is_empty(),
+            Predicate::NotExists | Predicate::IsHidden => matched.is_empty(),
+            Predicate::CountEquals
+            | Predicate::Gt
+            | Predicate::Gte
+            | Predicate::Lt
+            | Predicate::Lte => {
+                let need = expected.and_then(|v| v.as_u64()).ok_or_else(|| {
+                    anyhow!(
+                        "console claim with predicate '{predicate:?}' requires a numeric 'value'"
+                    )
+                })?;
+                let n = matched.len() as u64;
+                match predicate {
+                    Predicate::CountEquals => n == need,
+                    Predicate::Gt => n > need,
+                    Predicate::Gte => n >= need,
+                    Predicate::Lt => n < need,
+                    _ => n <= need,
+                }
+            }
+            other @ (Predicate::Equals
+            | Predicate::Contains
+            | Predicate::Matches
+            | Predicate::StartsWith
+            | Predicate::EndsWith) => {
+                let need = expected.ok_or_else(|| {
+                    anyhow!("console claim with predicate '{other:?}' requires 'value'")
+                })?;
+                let need = substitute_scenario_vars(&value_to_string(need), scope);
+                matched
+                    .iter()
+                    .any(|m| compare_string(other, &m.text, &need).is_ok())
+            }
+            other => bail!("console subject does not support predicate '{other:?}'"),
+        };
+        if done {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            let sample: Vec<String> = msgs
+                .iter()
+                .take(3)
+                .map(|m| format!("[{}] {}", m.level, m.text))
+                .collect();
+            bail!(
+                "console claim timed out ({} messages; {} matched; latest: {})",
+                msgs.len(),
+                matched.len(),
+                if sample.is_empty() {
+                    "<none>".to_string()
+                } else {
+                    sample.join(" | ")
+                }
+            );
+        }
+        thread::sleep(POLL_INTERVAL);
     }
 }
 
@@ -1280,6 +1396,106 @@ mod tests {
     }
 
     #[test]
+    fn console_subject_no_errors_passes_when_none_logged() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake_console(tmp.path(), &[]);
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "console": { "type": "error" } },
+            "predicate": "notExists"
+        }))
+        .unwrap();
+        let mut scope = ValueScope::default();
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: Path::new("."),
+            run_dir: None,
+        };
+        dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+        clear_console();
+    }
+
+    #[test]
+    fn console_subject_text_predicate_matches_any_message() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake_console(
+            tmp.path(),
+            &[
+                json!({ "type": "log", "text": "boot ok" }),
+                json!({ "type": "warn", "text": "deprecation: use v2" }),
+            ],
+        );
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "console": { "type": "warn" } },
+            "predicate": "contains",
+            "value": "deprecation"
+        }))
+        .unwrap();
+        let mut scope = ValueScope::default();
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: Path::new("."),
+            run_dir: None,
+        };
+        dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+        clear_console();
+    }
+
+    #[test]
+    fn console_subject_error_present_fails_not_exists() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake_console(
+            tmp.path(),
+            &[json!({ "type": "error", "text": "TypeError: x is undefined" })],
+        );
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "console": { "type": "error" } },
+            "predicate": "notExists"
+        }))
+        .unwrap();
+        let mut scope = ValueScope::default();
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: Path::new("."),
+            run_dir: None,
+        };
+        // times out fast — pass a 1ms timeout so the poll exits immediately
+        let err =
+            dispatch_check(&claim, &ctx, &mut scope, Some(Duration::from_millis(1))).unwrap_err();
+        clear_console();
+        assert!(err.to_string().contains("console claim"), "got: {err}");
+    }
+
+    fn install_fake_console(dir: &Path, messages: &[serde_json::Value]) {
+        // Respond to `console` with a canned --json payload; other verbs
+        // are no-ops.
+        let resp_path = dir.join("console.json");
+        fs::write(
+            &resp_path,
+            json!({ "success": true, "data": { "messages": messages } }).to_string(),
+        )
+        .unwrap();
+        let body = format!(
+            "#!/bin/sh\ncase \" $* \" in *\\ console\\ *) cat '{}' ;;\nesac\nexit 0\n",
+            resp_path.display()
+        );
+        let bin = dir.join("agent-browser");
+        fs::write(&bin, body).unwrap();
+        let mut perm = fs::metadata(&bin).unwrap().permissions();
+        perm.set_mode(0o755);
+        fs::set_permissions(&bin, perm).unwrap();
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+    }
+
+    fn clear_console() {
+        std::env::remove_var(ab::BIN_ENV);
+        ab::_reset_bin_cache_for_tests();
+    }
+
+    #[test]
     fn read_saved_walks_path() {
         let mut scope = ValueScope::default();
         scope
@@ -1716,7 +1932,7 @@ mod tests {
         }))
         .unwrap();
         match claim.subject {
-            ClaimSubject::Shot { shot, clip } => {
+            ClaimSubject::Shot { shot, clip, .. } => {
                 assert_eq!(shot, "s1");
                 assert!(clip.is_some());
             }

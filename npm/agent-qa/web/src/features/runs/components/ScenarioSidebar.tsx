@@ -48,7 +48,7 @@ function HealthBadges({ sid, runs }: { sid: string; runs: RunsApi }) {
   return (
     <>
       {pills.map((p) => (
-        <span key={p.tone} title={`audit ${p.label === 'chronic' ? 'heal-chronic' : p.label}: ${p.steps.join(', ')}`}>
+        <span key={p.tone} data-qa-volatile title={`audit ${p.label === 'chronic' ? 'heal-chronic' : p.label}: ${p.steps.join(', ')}`}>
           <Badge tone={p.tone}>
             {p.steps.length} {p.label}
           </Badge>
@@ -60,7 +60,7 @@ function HealthBadges({ sid, runs }: { sid: string; runs: RunsApi }) {
 
 function Badge({ tone, children }: { tone: string; children: React.ReactNode }) {
   return (
-    <span className={cn('shrink-0 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide', TONE[tone] || 'bg-muted text-muted-foreground')}>
+    <span data-qa-volatile className={cn('shrink-0 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide', TONE[tone] || 'bg-muted text-muted-foreground')}>
       {children}
     </span>
   )
@@ -172,7 +172,7 @@ export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
                     {verdict && <Badge tone={verdict}>{verdict}</Badge>}
                     <HealthBadges sid={sc.sid} runs={runs} />
                   </div>
-                  <div className="tnum mt-0.5 truncate text-[11px] text-muted-foreground/80" title={fmtRunTime(sc.sid)}>
+                  <div data-qa-volatile className="tnum mt-0.5 truncate text-[11px] text-muted-foreground/80" title={fmtRunTime(sc.sid)}>
                     {relRunTime(sc.sid)}
                   </div>
                 </button>
@@ -225,6 +225,7 @@ export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
                           >
                             <Badge tone={tone}>{label}</Badge>
                             <span
+                              data-qa-volatile
                               className="truncate text-[11px] text-muted-foreground"
                               title={fmtRunTime(r.runId)}
                             >

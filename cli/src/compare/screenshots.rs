@@ -149,6 +149,22 @@ pub(crate) fn decode_png(path: &Path) -> Result<RgbaImage> {
     Ok(img.to_rgba8())
 }
 
+/// Per-pixel channel delta above which a pixel counts as changed. Font
+/// antialiasing/hinting renders a few RGB levels differently across machines
+/// and Chromium builds — counting those ±1..±30 sub-pixel jitters would flake
+/// every text-heavy golden. 32/255 (~12.5% of a channel) swallows AA noise
+/// while still catching real layout/text/color changes (the same trade-off
+/// pixelmatch's default 0.1 threshold makes).
+const AA_DELTA: i16 = 32;
+
+fn pixel_changed(a: &Rgba<u8>, b: &Rgba<u8>) -> bool {
+    (0..4)
+        .map(|i| (a[i] as i16 - b[i] as i16).abs())
+        .max()
+        .unwrap_or(0)
+        > AA_DELTA
+}
+
 /// Returns (differing-fraction, delta-map image). Delta map shows the
 /// baseline (`a`) faded to 50% greyscale; differing pixels are red.
 pub(crate) fn pixel_diff(a: &RgbaImage, b: &RgbaImage) -> (f64, RgbaImage) {
@@ -160,7 +176,7 @@ pub(crate) fn pixel_diff(a: &RgbaImage, b: &RgbaImage) -> (f64, RgbaImage) {
         for x in 0..w {
             let pa = a.get_pixel(x, y);
             let pb = b.get_pixel(x, y);
-            if pa != pb {
+            if pixel_changed(pa, pb) {
                 differing += 1;
                 diff.put_pixel(x, y, Rgba([255, 0, 0, 255]));
             } else {
@@ -222,6 +238,21 @@ mod tests {
         b.put_pixel(0, 0, Rgba([255, 0, 0, 255]));
         let (frac, _) = pixel_diff(&a, &b);
         assert_eq!(frac, 0.25);
+    }
+
+    #[test]
+    fn pixel_diff_ignores_antialias_jitter() {
+        let mut a = RgbaImage::new(4, 4);
+        let mut b = RgbaImage::new(4, 4);
+        for (x, y) in [(0, 0), (1, 1)] {
+            a.put_pixel(x, y, Rgba([100, 100, 100, 255]));
+            b.put_pixel(x, y, Rgba([100 + AA_DELTA as u8, 100, 100, 255]));
+        }
+        // one pixel truly changed (delta > AA_DELTA)
+        a.put_pixel(3, 3, Rgba([10, 10, 10, 255]));
+        b.put_pixel(3, 3, Rgba([10 + AA_DELTA as u8 + 1, 10, 10, 255]));
+        let (frac, _map) = pixel_diff(&a, &b);
+        assert!((frac - 1.0 / 16.0).abs() < f64::EPSILON);
     }
 
     #[test]

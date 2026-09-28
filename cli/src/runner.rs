@@ -361,6 +361,12 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         .with_context(|| format!("validate {}", scenario_file.display()))?;
     let scenario: Scenario = serde_json::from_value(parsed.clone()).context("parse scenario")?;
     let hash = hash_scenario_bytes(&bytes);
+    // Union of `mask` selectors across the scenario's shot claims — hidden
+    // (visibility:hidden) around every step screenshot so volatile UI
+    // (timestamps, live badges) can't flake the visual diff. Precomputed
+    // once: a claim's mask must already be in effect when the referenced
+    // step's screenshot is captured, before the claim step itself runs.
+    let shot_masks = scenario_shot_masks(&scenario);
 
     // Native-dialog steps need `alert`/`beforeunload` kept pending instead of
     // agent-browser's default auto-accept, or a recorded `dialog` step finds
@@ -495,6 +501,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         let do_ctx = DoContext {
             session: &opts.session_name,
             scenario_dir: &scenario_dir,
+            visual_checks: scenario_has_shot_claims(&scenario),
         };
         let check_ctx = CheckContext {
             session: &opts.session_name,
@@ -739,7 +746,13 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             match result {
                 Ok(()) => {
                     if !opts.no_sidecars {
-                        capture_step_sidecars(&run, id, &opts.session_name, stabilize_shots);
+                        capture_step_sidecars(
+                            &run,
+                            id,
+                            &opts.session_name,
+                            stabilize_shots,
+                            &shot_masks,
+                        );
                     }
                     summary.passed += 1;
                     emit_step_done(progress_mode, idx, total, true, &label, step_ms);
@@ -761,7 +774,13 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 }
                 Err(e) => {
                     if !opts.no_sidecars {
-                        capture_step_sidecars(&run, id, &opts.session_name, stabilize_shots);
+                        capture_step_sidecars(
+                            &run,
+                            id,
+                            &opts.session_name,
+                            stabilize_shots,
+                            &shot_masks,
+                        );
                     }
                     summary.ok = false;
                     let reason = format!("{e:#}");
@@ -913,7 +932,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     // flagged a real UI change is the re-mint case, and requiring a
     // passing run first would force a shot-accept round trip.
     if opts.update_baselines {
-        match crate::shot_accept::mint_baselines(&scenario_dir, &run.run_id, None) {
+        match crate::shot_accept::mint_baselines(&scenario_dir, &run.run_id, None, false, false) {
             Ok(minted) => eprintln!(
                 "baselines: minted {} shot(s) from run {}: {}",
                 minted.len(),
@@ -1352,6 +1371,7 @@ fn capture_step_sidecars(
     step_id: &str,
     session: &str,
     stabilize_shots: bool,
+    shot_masks: &[String],
 ) {
     use crate::sidecar::{ensure_kind_dir, step_sidecar_path, write_step_sidecar, SidecarKind};
     if !is_safe_step_id(step_id) {
@@ -1415,6 +1435,7 @@ fn capture_step_sidecars(
         stabilize_visual(session, 1500);
     }
     if let Ok(path) = step_sidecar_path(run, SidecarKind::Screenshots, step_id) {
+        let masked = !shot_masks.is_empty() && apply_shot_mask(session, shot_masks);
         match browser::screenshot(session, &path, true, Some(cap_ms)) {
             Ok(true) => {}
             Ok(false) => eprintln!(
@@ -1422,6 +1443,97 @@ fn capture_step_sidecars(
             ),
             Err(e) => eprintln!("[v2-replay] screenshot {step_id} failed: {e}"),
         }
+        if masked {
+            clear_shot_mask(session);
+        }
+    }
+}
+
+/// Serialized `subject` objects of every `{"shot": ...}` claim in the
+/// scenario. Walks the serialized steps so claims nested inside group/loop
+/// `params.steps` or `useTemplate` bodies count too — the same trick
+/// `scenario_uses_dialog` uses.
+fn scenario_shot_subjects(scenario: &Scenario) -> Vec<serde_json::Value> {
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    let v = serde_json::to_value(&scenario.steps).unwrap_or(serde_json::Value::Null);
+    fn walk(v: &serde_json::Value, out: &mut Vec<serde_json::Value>) {
+        match v {
+            serde_json::Value::Object(map) => {
+                if let Some(subject) = map.get("claim").and_then(|c| c.get("subject")) {
+                    if subject.get("shot").and_then(|s| s.as_str()).is_some() {
+                        out.push(subject.clone());
+                    }
+                }
+                for v in map.values() {
+                    walk(v, out);
+                }
+            }
+            serde_json::Value::Array(arr) => {
+                for v in arr {
+                    walk(v, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    walk(&v, &mut out);
+    out
+}
+
+/// True when the scenario carries any `{"shot": ...}` claim. Visual scenarios
+/// opt out of the warm-page `goto` reuse: a reused session otherwise diffs a
+/// stale document (old bundle, settled live data) against a baseline minted
+/// from a fresh load — the mask injects into the wrong DOM and the shot
+/// compares apples to oranges.
+fn scenario_has_shot_claims(scenario: &Scenario) -> bool {
+    !scenario_shot_subjects(scenario).is_empty()
+}
+
+/// Union of `mask` selectors declared on the scenario's `{"shot": ...}`
+/// claims.
+fn scenario_shot_masks(scenario: &Scenario) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for subject in scenario_shot_subjects(scenario) {
+        if let Some(mask) = subject.get("mask").and_then(|m| m.as_array()) {
+            for sel in mask.iter().filter_map(|m| m.as_str()) {
+                if !out.iter().any(|o| o == sel) {
+                    out.push(sel.to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Hide the shot-mask selectors by injecting a `<style>` tag —
+/// `visibility:hidden !important` keeps layout put and, unlike inline
+/// styles, keeps hiding nodes that remount between the eval and the
+/// capture (live-updating lists reconcile into fresh DOM).
+/// `clear_shot_mask` removes the tag. Returns true when the mask was
+/// applied (restore is owed).
+fn apply_shot_mask(session: &str, masks: &[String]) -> bool {
+    let sels = serde_json::to_string(masks).unwrap_or_else(|_| "[]".to_string());
+    let js = format!(
+        "(() => {{ const sels = {sels}; document.getElementById('__qa_shot_mask')?.remove(); const st = document.createElement('style'); st.id = '__qa_shot_mask'; st.textContent = sels.map(s => s + ' {{ visibility: hidden !important; }}').join('\\n'); document.head.appendChild(st); return sels.length; }})()"
+    );
+    match browser::eval_expression(session, &js) {
+        Ok(out) => {
+            eprintln!("[v2-replay] shot mask applied: {out}");
+            true
+        }
+        Err(e) => {
+            eprintln!("[v2-replay] shot mask hide failed (capturing unmasked): {e}");
+            false
+        }
+    }
+}
+
+fn clear_shot_mask(session: &str) {
+    let js = "(() => { const st = document.getElementById('__qa_shot_mask'); if (st) { st.remove(); return 1; } return 0; })()";
+    if let Err(e) = browser::eval_expression(session, js) {
+        eprintln!(
+            "[v2-replay] shot mask restore failed (page keeps hidden elements until next nav): {e}"
+        );
     }
 }
 
@@ -1529,6 +1641,7 @@ pub fn cli(args: &[String]) -> Result<u8> {
             flags.filter.as_deref(),
             &flags.tags,
             flags.report.as_deref(),
+            flags.retry,
         );
     }
     if flags.shard.is_some() {
@@ -1545,6 +1658,30 @@ pub fn cli(args: &[String]) -> Result<u8> {
     }
 
     let parsed = parse_args(&flags.filtered)?;
+    if flags.retry > 1 {
+        // --retry N: re-run until a pass or N attempts spent. Each attempt is
+        // its own replay dir, so a pass-after-retries leaves flake evidence in
+        // `audit list`/`audit flaky` instead of hiding it.
+        for attempt in 1..=flags.retry {
+            eprintln!("[v2-replay] attempt {attempt}/{}", flags.retry);
+            match run(&parsed) {
+                Ok(summary) if summary.ok => {
+                    if attempt > 1 {
+                        eprintln!(
+                            "[v2-replay] flaky — passed on attempt {attempt}/{} after {} failure(s)",
+                            flags.retry,
+                            attempt - 1
+                        );
+                    }
+                    return Ok(0);
+                }
+                Ok(_) => {}
+                Err(e) => eprintln!("[v2-replay] attempt {attempt}/{} errored: {e}", flags.retry),
+            }
+        }
+        eprintln!("[v2-replay] failed all {} attempt(s)", flags.retry);
+        return Ok(1);
+    }
     let (code, _) = run_n(&parsed, flags.runs, None)?;
     Ok(code)
 }
@@ -1592,6 +1729,7 @@ fn cli_all(
     filter: Option<&str>,
     tags: &[String],
     report: Option<&Path>,
+    retry: u32,
 ) -> Result<u8> {
     let root = crate::paths::scenarios_root();
     let mut sids = crate::scenario_cli::all_sids(&root, filter);
@@ -1626,7 +1764,18 @@ fn cli_all(
         let mut per = filtered.to_vec();
         per.push(sid.clone());
         let parsed = parse_args(&per)?;
-        let (code, summary) = run_n(&parsed, runs, Some(&format!(" {sid}")))?;
+        // --retry under --all: re-run THIS scenario until pass or N attempts;
+        // a pass on attempt 2 still leaves the earlier failing run dir as
+        // flake evidence. (runs>1 && retry>1 is rejected at parse.)
+        let mut attempt = 0u32;
+        let (code, summary) = loop {
+            attempt += 1;
+            let r = run_n(&parsed, runs, Some(&format!(" {sid}")))?;
+            if r.0 == 0 || attempt >= retry {
+                break r;
+            }
+            eprintln!("[v2-replay] {sid}: retry {attempt}/{retry}");
+        };
         if code != 0 {
             all_ok = false;
             failed.push(sid.clone());
@@ -1695,7 +1844,7 @@ fn write_report(path: &Path, rows: &[(String, Option<RunSummary>)]) -> Result<()
     fs::write(path, out).with_context(|| format!("write report {}", path.display()))
 }
 
-/// CLI-level flags peeled off before [`parse_args`] sees `args`.},{
+/// CLI-level flags peeled off before [`parse_args`] sees `args`.
 #[derive(Debug)]
 struct CliFlags {
     /// Remaining args (positional sid + per-run flags) for parse_args.
@@ -1712,19 +1861,23 @@ struct CliFlags {
     tags: Vec<String>,
     /// `--report <path>` — write a markdown verdict table for --all.
     report: Option<PathBuf>,
+    /// `--retry N` — re-run until a pass, at most N attempts (mutually
+    /// exclusive with --runs). Under --all it applies per scenario.
+    retry: u32,
 }
 
-/// Peel the CLI-level flags `--runs N`, `--all`, `--shard k/n`, and
-/// `--filter <substr>` off `args`; the rest feed [`parse_args`].
+/// Peel the CLI-level flags `--runs N`, `--retry N`, `--all`,
+/// `--shard k/n`, `--filter <substr>`, `--tags`, `--report` off `args`;
+/// the rest feed [`parse_args`].
 fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
     let mut filtered: Vec<String> = Vec::with_capacity(args.len());
     let mut runs: u32 = 1;
+    let mut retry: u32 = 1;
     let mut all = false;
     let mut shard: Option<(u32, u32)> = None;
     let mut filter: Option<String> = None;
     let mut tags: Vec<String> = Vec::new();
     let mut report: Option<PathBuf> = None;
-
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -1796,13 +1949,36 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
             s if s.starts_with("--report=") => {
                 report = Some(PathBuf::from(&s["--report=".len()..]));
             }
-
+            "--retry" => {
+                let n = it
+                    .next()
+                    .ok_or_else(|| anyhow!("--retry requires a positive integer"))?;
+                retry = n
+                    .parse::<u32>()
+                    .map_err(|_| anyhow!("--retry must be a positive integer; got {n:?}"))?;
+                if retry == 0 {
+                    bail!("--retry must be >= 1");
+                }
+            }
+            s if s.starts_with("--retry=") => {
+                let n = &s["--retry=".len()..];
+                retry = n
+                    .parse::<u32>()
+                    .map_err(|_| anyhow!("--retry must be a positive integer; got {n:?}"))?;
+                if retry == 0 {
+                    bail!("--retry must be >= 1");
+                }
+            }
             other => filtered.push(other.to_string()),
         }
+    }
+    if runs > 1 && retry > 1 {
+        bail!("--runs and --retry are mutually exclusive (repeat-N vs until-pass)");
     }
     Ok(CliFlags {
         filtered,
         runs,
+        retry,
         all,
         shard,
         filter,
@@ -2886,6 +3062,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
     fn parse_args_cli_strips_runs_and_parses() {
         let f = parse_args_cli(&["./j.json".into(), "--runs".into(), "5".into()]).unwrap();
         assert_eq!(f.runs, 5);
+        assert_eq!(f.retry, 1);
         assert!(!f.all && f.shard.is_none() && f.filter.is_none());
         let opts = parse_args(&f.filtered).unwrap();
         assert!(matches!(opts.source, ScenarioSource::Path(_)));
@@ -2895,12 +3072,17 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
     fn parse_args_cli_eq_form() {
         let f = parse_args_cli(&["./j.json".into(), "--runs=3".into()]).unwrap();
         assert_eq!(f.runs, 3);
+        let f = parse_args_cli(&["./j.json".into(), "--retry=2".into()]).unwrap();
+        assert_eq!(f.retry, 2);
+        // --runs and --retry are mutually exclusive.
+        parse_args_cli(&["./j.json".into(), "--runs=2".into(), "--retry=2".into()]).unwrap_err();
     }
 
     #[test]
     fn parse_args_cli_default_is_one() {
         let f = parse_args_cli(&["./j.json".into()]).unwrap();
         assert_eq!(f.runs, 1);
+        assert_eq!(f.retry, 1);
     }
 
     #[test]
@@ -2982,6 +3164,73 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
     }
 
     #[test]
+    fn parse_retry_parses_both_forms() {
+        let f = parse_args_cli(&["./j.json".into(), "--retry".into(), "3".into()]).unwrap();
+        assert_eq!((f.runs, f.retry), (1, 3));
+        let f = parse_args_cli(&["./j.json".into(), "--retry=2".into()]).unwrap();
+        assert_eq!(f.retry, 2);
+        let f = parse_args_cli(&["./j.json".into()]).unwrap();
+        assert_eq!((f.runs, f.retry), (1, 1));
+        parse_args_cli(&["./j.json".into(), "--retry".into(), "0".into()]).unwrap_err();
+        parse_args_cli(&["./j.json".into(), "--retry".into(), "x".into()]).unwrap_err();
+    }
+
+    #[test]
+    fn retry_cli_returns_1_after_all_attempts_error() {
+        let _g = lock_env();
+        let work = TempDir::new().unwrap();
+        install_fake_browser(work.path(), &work.path().join("ab.log"));
+        // A scenario path that never resolves: run() errors every attempt.
+        let missing = work.path().join("nope").join("scenario.json");
+        let code = cli(&[
+            missing.to_string_lossy().to_string(),
+            "--retry".into(),
+            "3".into(),
+        ])
+        .unwrap();
+        assert_eq!(code, 1);
+        clear_fake_browser();
+    }
+
+    #[test]
+    fn retry_cli_exits_0_on_first_pass() {
+        let _g = lock_env();
+        let work = TempDir::new().unwrap();
+        install_fake_browser(work.path(), &work.path().join("ab.log"));
+        let jdir = work.path().join("sid");
+        fs::create_dir_all(&jdir).unwrap();
+        let jfile = jdir.join("scenario.json");
+        fs::write(&jfile, minimal_scenario()).unwrap();
+        let code = cli(&[
+            jfile.to_string_lossy().to_string(),
+            "--retry".into(),
+            "3".into(),
+        ])
+        .unwrap();
+        assert_eq!(code, 0);
+        // exactly one attempt — no extra run dirs minted
+        let runs = fs::read_dir(jdir.join("replays"))
+            .map(|d| d.flatten().filter(|e| e.path().is_dir()).count())
+            .unwrap_or(0);
+        assert_eq!(runs, 1);
+        clear_fake_browser();
+    }
+
+    #[test]
+    fn runs_and_retry_are_mutually_exclusive() {
+        parse_args_cli(&[
+            "./j.json".into(),
+            "--runs".into(),
+            "2".into(),
+            "--retry".into(),
+            "3".into(),
+        ])
+        .unwrap_err();
+        // retry alone with runs at its default is fine
+        parse_args_cli(&["./j.json".into(), "--retry".into(), "3".into()]).unwrap();
+    }
+
+    #[test]
     fn scenario_uses_dialog_detects_do_and_check_including_nested() {
         let j = serde_json::json!({
             "schema": "scenario/2", "id": "d", "intent": "x",
@@ -3019,6 +3268,53 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
     }
 
     #[test]
+    fn scenario_shot_masks_unions_and_dedups_nested_claims() {
+        let body = serde_json::json!([
+            {
+                "id": "s9", "intent": "visual a", "kind": "check",
+                "claim": { "subject": { "shot": "s1", "mask": [".ts", ".live"] }, "predicate": "matches" }
+            },
+            {
+                "id": "g1", "intent": "group", "kind": "do", "verb": "group",
+                "params": { "steps": [
+                    {
+                        "id": "sg1", "intent": "nested", "kind": "check",
+                        "claim": { "subject": { "shot": "sg0", "mask": [".ts", ".ad"] }, "predicate": "matches" }
+                    }
+                ]}
+            },
+            {
+                "id": "s10", "intent": "no mask", "kind": "check",
+                "claim": { "subject": { "shot": "s2" }, "predicate": "matches" }
+            },
+            {
+                "id": "s11", "intent": "not a shot", "kind": "check",
+                "claim": { "subject": { "url": true }, "predicate": "exists" }
+            }
+        ]);
+        let scenario: Scenario = serde_json::from_value(serde_json::json!({
+            "schema": "scenario/2", "id": "t", "intent": "t", "steps": body
+        }))
+        .unwrap();
+        assert_eq!(scenario_shot_masks(&scenario), vec![".ts", ".live", ".ad"]);
+        assert!(scenario_has_shot_claims(&scenario));
+    }
+
+    #[test]
+    fn scenario_has_shot_claims_false_for_non_visual() {
+        let scenario: Scenario = serde_json::from_value(serde_json::json!({
+            "schema": "scenario/2", "id": "t", "intent": "t",
+            "steps": [
+                { "id": "s1", "intent": "go", "kind": "do", "verb": "goto", "value": {"from": "literal", "literal": "https://x"} },
+                { "id": "s2", "intent": "url", "kind": "check",
+                  "claim": { "subject": { "url": true }, "predicate": "exists" } }
+            ]
+        }))
+        .unwrap();
+        assert!(!scenario_has_shot_claims(&scenario));
+    }
+
+    #[test]
     fn scenario_uses_shots_detects_claim_including_nested() {
         let j = serde_json::json!({
             "schema": "scenario/2", "id": "d", "intent": "x",
@@ -3047,6 +3343,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
     }
 
     #[test]
+
     fn flatten_groups_inlines_subdo_steps() {
         let body = serde_json::json!([
             { "id": "s0", "intent": "go", "kind": "do", "verb": "reload" },

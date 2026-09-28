@@ -32,6 +32,10 @@ use crate::verb_shape::assert_verb_shape;
 pub struct DoContext<'a> {
     pub session: &'a str,
     pub scenario_dir: &'a Path,
+    /// The scenario carries `{"shot": ...}` claims — do-steps that would
+    /// otherwise be allowed to reuse session state (the warm-page `goto`
+    /// skip) must instead produce a fresh, deterministic document.
+    pub visual_checks: bool,
 }
 
 /// Dispatch a single `do` step. Returns `Ok(Some(saved))` if the verb
@@ -61,10 +65,20 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
             // Warm-page: on a reused, already-signed-in session that's ALREADY
             // on this URL, skip the reload — re-navigating a heavy SPA forces a
             // full re-hydration (~20s). Best-effort; any mismatch navigates.
+            // Visual-check scenarios always navigate: the golden diff needs a
+            // fresh document, not whatever the session last loaded.
             if browser::already_on(ctx.session, &url) {
-                eprintln!(
-                    "[v2-replay] goto: already on {url} — reusing warm page (skipped reload)"
-                );
+                if ctx.visual_checks {
+                    eprintln!(
+                        "[v2-replay] goto: already on {url} — reloading anyway (visual checks need a fresh document)"
+                    );
+                    browser::open(ctx.session, &url)?;
+                    browser::wait_for_load(ctx.session, "networkidle")?;
+                } else {
+                    eprintln!(
+                        "[v2-replay] goto: already on {url} — reusing warm page (skipped reload)"
+                    );
+                }
             } else {
                 browser::open(ctx.session, &url)?;
                 browser::wait_for_load(ctx.session, "networkidle")?;
@@ -178,12 +192,21 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
         }
         Verb::Wait => {
             // `params.ms` → wait by ms; `params.until` → wait --load <state>;
-            // neither → soft wait for networkidle.
+            // `params.url` → poll resource timing until a matching request
+            // completed (`params.timeoutMs`, default 10s); neither → soft
+            // wait for networkidle.
             let ms = params.and_then(|p| p.get("ms")).and_then(|v| v.as_u64());
             let until = params.and_then(|p| p.get("until")).and_then(|v| v.as_str());
-            match (ms, until) {
-                (Some(ms), _) => browser::wait_ms(ctx.session, ms)?,
-                (_, Some(state)) => browser::wait_for_load(ctx.session, state)?,
+            let url = params.and_then(|p| p.get("url")).and_then(|v| v.as_str());
+            let timeout_ms = params
+                .and_then(|p| p.get("timeoutMs"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(10_000);
+            match (ms, until, url) {
+                (Some(ms), _, _) => browser::wait_ms(ctx.session, ms)?,
+                (_, Some(state), _) => browser::wait_for_load(ctx.session, state)?,
+                (_, _, Some(url)) => browser::wait_for_resource(ctx.session, url, timeout_ms)
+                    .map_err(|e| anyhow!("step '{id}' wait url {url}: {e}"))?,
                 _ => browser::wait_for_load(ctx.session, "networkidle")?,
             }
             Ok(None)
@@ -1324,6 +1347,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let _out = dispatch_do(s, &ctx, &mut scope).unwrap();
@@ -1362,6 +1386,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1395,6 +1420,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1444,6 +1470,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1500,6 +1527,60 @@ mod tests {
     }
 
     #[test]
+    fn wait_with_url_param_polls_resource_timing() {
+        // Fake binary echoes a hit ("1") for eval → the poll exits at once.
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        let body = format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\nif [ \"$1\" = \"--session\" ] && [ \"$3\" = eval ]; then printf '\"1\"'; fi\nexit 0\n",
+            log.display()
+        );
+        let bin = write_exec(tmp.path(), "agent-browser", &body);
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "wait",
+            "params": { "url": "*/api/users*" }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        assert!(out.contains("getEntriesByType('resource')"), "got: {out}");
+        assert!(out.contains("api/users"), "got: {out}");
+    }
+
+    #[test]
+    fn wait_with_url_param_times_out_when_request_never_lands() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "wait",
+            "params": { "url": "/api/missing", "timeoutMs": 1 }
+        }));
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake(tmp.path(), &log);
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+        };
+        let mut scope = ValueScope::default();
+        let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err();
+        clear_fake();
+        assert!(
+            err.to_string().contains("no resource matching"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
     fn raw_css_locator_uses_native_selector_click() {
         let s = parse(json!({
             "id": "s1", "intent": "x", "kind": "do", "verb": "click",
@@ -1525,6 +1606,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1551,6 +1633,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1631,6 +1714,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -1664,6 +1748,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let saved = dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1685,6 +1770,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -1722,6 +1808,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let saved = dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1762,6 +1849,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1787,6 +1875,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -1809,6 +1898,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1836,6 +1926,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1867,6 +1958,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1901,6 +1993,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -1929,6 +2022,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -1952,6 +2046,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -1975,6 +2070,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -2031,6 +2127,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -2054,6 +2151,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -2097,6 +2195,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -2115,6 +2214,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -2137,6 +2237,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -2174,6 +2275,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
@@ -2200,6 +2302,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         dispatch_do(&s, &ctx, &mut scope).unwrap();
@@ -2221,6 +2324,7 @@ mod tests {
         let ctx = DoContext {
             session: "sess",
             scenario_dir: tmp.path(),
+            visual_checks: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();

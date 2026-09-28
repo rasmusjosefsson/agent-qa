@@ -139,7 +139,7 @@ export function AppSidebar({ tab, ...props }: { tab: Tab } & ComponentProps<type
                 </div>
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-semibold">agent-qa</span>
-                  <span className="truncate text-xs text-muted-foreground">
+                  <span data-qa-volatile className="truncate text-xs text-muted-foreground">
                     QA workbench{version ? ` · v${version}` : ''}
                   </span>
                 </div>

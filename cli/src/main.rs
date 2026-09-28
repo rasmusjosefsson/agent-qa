@@ -34,10 +34,12 @@ mod heal_promote;
 mod heal_respond;
 mod i18n;
 mod info;
+mod init;
 mod io;
 mod list;
 mod paths;
 mod perf_snapshot;
+mod plan;
 mod plugin;
 mod profile_add;
 mod profile_bootstrap;
@@ -104,6 +106,7 @@ fn main() -> ExitCode {
         "crawl" => crawl::run(rest),
         "design" => design::run(rest),
         "audit" => audit::run(rest),
+        "plan" => plan::run(rest),
         "start" => start::run(rest),
         "browser" => browser::passthrough(rest),
         "record" => record::run(rest),
@@ -130,9 +133,11 @@ fn main() -> ExitCode {
         "heal-list" => heal_list::run(rest),
         "heal-chronic" => heal_chronic::run(rest),
         "shot-accept" => shot_accept::run(rest),
+        "init" => init::cli(rest),
         _ => {
             eprintln!(
-                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept."
+"agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, init."
+
             );
             eprintln!("Run `agent-qa --help` for usage.");
             Ok(2)
@@ -197,6 +202,9 @@ Verbs:
   scenario delete   <sid> --yes  Remove a scenario directory + all replays
   scenario prune-replays <sid> --keep N  Cap replay history under <sid>
   scenario prune-all --keep N    Cap replay history across every scenario
+  plan list [--json]             Workbench test plans + resolved case counts
+  plan cases <id> [--json]       Resolved member cases of one plan
+  plan run <id> [flags]          Replay every member case's scenario (CI gate)
   audit show <sid> <runId|latest>  Pretty-print one replay's audit.json
   audit list <sid>                 Table of every run under the scenario
   audit stats <sid>                Pass/fail/tag rollup across all runs
@@ -225,6 +233,9 @@ Verbs:
                                 is ok or accepted against current design bytes
   design verdict <sid> --step <id> (--ok | --accepted --reason <t> | --fail --reason <t> | --ask)
                                 Record a design decision in designs/verdicts.json
+  init [dir] [--force] [--ci]   Bootstrap a dir: toml + scenarios/hello + .gitignore (+ --ci PR gate)
+||||||| 7a8edfd
+
   start \"<intent>\"             Begin a new recording session
   browser <args...>             Passthrough exec of the pinned agent-browser
                                 binary (same one every other verb uses) —

@@ -106,6 +106,7 @@ fn run_step(opts: &Opts) -> Result<Outcome> {
             &DoContext {
                 session: &session,
                 scenario_dir: &scenario_dir,
+                visual_checks: false,
             },
             &mut scope,
         )
