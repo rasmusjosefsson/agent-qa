@@ -114,6 +114,10 @@ pub struct RunOptions {
     /// performs). Runs even when shot claims FAILED: intentional UI
     /// changes are exactly the case where a failing diff needs re-minting.
     pub update_baselines: bool,
+    /// `--freeze <iso>` — pin `Date.now()`/`new Date()` to the instant and
+    /// replace `Math.random` with a seeded LCG via a page init script, so
+    /// rendered timestamps and random ordering can't flake a golden diff.
+    pub freeze: Option<String>,
     /// `--har` — record a HAR file for the run via `agent-browser network
     /// har start|stop` and write `<run>/network.har`. Unlike network.json
     /// (urls + statuses) a HAR carries response bodies — the artifact you
@@ -461,6 +465,23 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     } else {
         Some(audit_params)
     };
+
+    // Determinism layer: `--freeze <iso>` pins the clock + RNG via a page
+    // init script (fresh sessions get it on every navigation; the live
+    // eval covers a warm session's current document).
+    if let Some(at) = &opts.freeze {
+        if opts.dry_run {
+            eprintln!("[v2-replay] --freeze ignored under --dry-run");
+        } else {
+            let js_path = run.run_root.join("freeze.js");
+            fs::write(&js_path, freeze_js(at))
+                .with_context(|| format!("write {}", js_path.display()))?;
+            std::env::set_var("AGENT_BROWSER_INIT_SCRIPTS", &js_path);
+            let src = fs::read_to_string(&js_path)?;
+            let _ = browser::eval_expression(&opts.session_name, &src);
+            eprintln!("[v2-replay] freeze {at} → {}", js_path.display());
+        }
+    }
 
     // 5. env.open setup. Skipped under --dry-run.
     //
@@ -1687,6 +1708,34 @@ fn stabilize_visual(session: &str, cap_ms: u64) {
     }
 }
 
+/// The `--freeze` init script: pin `Date.now`/`new Date()` to `at` and
+/// replace `Math.random` with a seeded LCG (mulberry32-style) — same
+/// instant, same random stream, every run.
+fn freeze_js(at: &str) -> String {
+    format!(
+        r#"(() => {{
+  const T = Date.parse({});
+  const R = Date;
+  class F extends R {{
+    constructor(...a) {{ super(...(a.length ? a : [T])); }}
+    static now() {{ return T; }}
+    static parse(s) {{ return R.parse(s); }}
+    static UTC(...a) {{ return R.UTC(...a); }}
+  }}
+  window.Date = F;
+  let s = 0x9E3779B9;
+  Math.random = () => {{
+    s = (s + 0x6D2B79F5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }};
+}})()"#,
+        serde_json::to_string(at).unwrap_or_else(|_| "\"2026-01-01\"".into())
+    )
+}
+
 /// Whether the scenario contains a `check` claim on the `shot` subject
 /// (`{"shot": "<stepId>"}`) — anywhere, including steps nested in
 /// `group`/`loop` params and `useTemplate` bodies. Serialized-JSON walk
@@ -2173,6 +2222,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut from_step: Option<String> = None;
     let mut until_step: Option<String> = None;
     let mut update_baselines = false;
+    let mut freeze: Option<String> = None;
     let mut har = false;
     let mut mock_from: Option<String> = None;
     let mut input_overrides: BTreeMap<String, String> = BTreeMap::new();
@@ -2214,6 +2264,8 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             "--until" => until_step = it.next().cloned().or_else(|| bail_missing("--until")),
             s if s.starts_with("--until=") => until_step = Some(s["--until=".len()..].to_string()),
             "--update-baselines" => update_baselines = true,
+            "--freeze" => freeze = it.next().cloned().or_else(|| bail_missing("--freeze")),
+            s if s.starts_with("--freeze=") => freeze = Some(s["--freeze=".len()..].to_string()),
             "--har" => har = true,
             "--mock-from" => mock_from = it.next().cloned().or_else(|| bail_missing("--mock-from")),
             s if s.starts_with("--mock-from=") => {
@@ -2273,6 +2325,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         from_step,
         until_step,
         update_baselines,
+        freeze,
         har,
         mock_from,
     })
@@ -2340,7 +2393,7 @@ Usage:
                   [--no-sidecars] [--quiet | -q] [--plain]
                   [--tag <label>] [--output-audit <path>]
                   [--from <stepId>] [--until <stepId>]
-                  [--update-baselines] [--runs <N>]
+                  [--update-baselines] [--freeze <iso>] [--runs <N>]
 
 Loads + validates the scenario, mints a run id, prepares
 <sid>/replays/<runId>/, writes audit.json, runs env.open, iterates
@@ -2418,7 +2471,13 @@ replays/latest.txt.
                          status+body — a hermetic, offline-capable
                          replay. Rules install via a page init script
                          on fresh sessions (covers page-load fetches),
-                         else re-apply after every navigation."
+                         else re-apply after every navigation
+--freeze <iso>           Pin Date.now()/new Date() to <iso> and replace
+                         Math.random with a seeded LCG via a page init
+                         script — rendered timestamps and random ordering
+                         can't flake a golden diff. Fresh sessions apply
+                         it on every navigation; warm sessions get the
+                         current document only."
 }
 
 #[cfg(all(test, unix))]
@@ -2559,6 +2618,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -2637,6 +2697,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -2696,6 +2757,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -2736,6 +2798,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -2801,6 +2864,7 @@ esac\nexit 0\n",
             from_step: None,
             until_step: None,
             update_baselines: false,
+            freeze: None,
             har: false,
             mock_from: None,
         }
@@ -3054,6 +3118,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -3117,6 +3182,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -3761,6 +3827,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -3848,6 +3915,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -3970,6 +4038,27 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
     }
 
     #[test]
+    fn parse_args_freeze_flag() {
+        let opts = parse_args(&["x".into(), "--freeze".into(), "2026-01-01".into()]).unwrap();
+        assert_eq!(opts.freeze.as_deref(), Some("2026-01-01"));
+        let opts = parse_args(&["x".into(), "--freeze=2026-06-30T00:00Z".into()]).unwrap();
+        assert_eq!(opts.freeze.as_deref(), Some("2026-06-30T00:00Z"));
+        let opts = parse_args(&["x".into()]).unwrap();
+        assert_eq!(opts.freeze, None);
+    }
+
+    #[test]
+    fn freeze_js_pins_clock_and_seeds_rng() {
+        let js = freeze_js("2026-01-01T00:00:00Z");
+        assert!(
+            js.contains("Date.parse(\"2026-01-01T00:00:00Z\")"),
+            "got: {js}"
+        );
+        assert!(js.contains("static now()"), "got: {js}");
+        assert!(js.contains("Math.random ="), "got: {js}");
+    }
+
+    #[test]
     fn render_summary_formats_pass_and_fail() {
         let s = RunSummary {
             passed: 3,
@@ -4032,6 +4121,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -4121,6 +4211,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -4189,6 +4280,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -4235,6 +4327,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -4418,6 +4511,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            freeze: None,
             har: false,
             mock_from: None,
         };
