@@ -72,15 +72,17 @@ export interface EdgeGolden extends GoldenContext {
   assertUrlContains(fragment: string, intent: string): Promise<void>;
   assertConsole(matcher: true | { type?: string; text?: string }, predicate: string, value: string | undefined, intent: string): Promise<void>;
   assertPageError(matcher: true | { text?: string; url?: string }, predicate: string, value: string | undefined, intent: string): Promise<void>;
+  assertNetworkStatus(matcher: Record<string, unknown>, predicate: string, value: string | undefined, intent: string): Promise<void>;
+  assertNetworkFired(matcher: Record<string, unknown>, mustFire: boolean, intent: string): Promise<void>;
   a11yAudit(matcher: true | Record<string, unknown>, predicate: string, value: number | undefined, intent: string): Promise<void>;
 }
 
-function createContext(tc: string, intent: string, keepDialogs: boolean): GoldenContext {
-  const runId = `golden-edge-${tc}-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+function createContext(tc: string, intent: string, keepDialogs: boolean, label = "edge"): GoldenContext {
+  const runId = `golden-${label}-${tc}-${new Date().toISOString().replace(/[:.]/g, "-")}`;
   const resultRoot = resolve(evalsRoot, "results", runId);
   const scenariosRoot = resolve(resultRoot, "scenarios");
   const recordRoot = resolve(resultRoot, "record");
-  const session = `golden-edge-${tc}-${Math.random().toString(16).slice(2, 8)}`;
+  const session = `golden-${label}-${tc}-${Math.random().toString(16).slice(2, 8)}`;
   const agentQa = existsSync(resolve(repoRoot, "cli/target/debug/agent-qa"))
     ? resolve(repoRoot, "cli/target/debug/agent-qa")
     : "agent-qa";
@@ -148,9 +150,9 @@ export async function runEdgeGolden(
   pagePath: string,
   readySelector: string,
   steps: (golden: EdgeGolden) => Promise<void>,
-  opts: { keepDialogs?: boolean } = {},
+  opts: { keepDialogs?: boolean; label?: string } = {},
 ): Promise<void> {
-  const ctx = createContext(tc, intent, opts.keepDialogs ?? false);
+  const ctx = createContext(tc, intent, opts.keepDialogs ?? false, opts.label ?? "edge");
   const pageUrl = edgeUrl(pagePath);
   let sid = "";
   let pass = false;
@@ -298,6 +300,20 @@ export async function runEdgeGolden(
       await record(ctx, "assert", {
         kind: "pageError",
         args: [matcher, predicate, value],
+        intent: stepIntent,
+      });
+    },
+    async assertNetworkStatus(matcher, predicate, value, stepIntent) {
+      await record(ctx, "assert", {
+        kind: "networkStatus",
+        args: [matcher, predicate, value],
+        intent: stepIntent,
+      });
+    },
+    async assertNetworkFired(matcher, mustFire, stepIntent) {
+      await record(ctx, "assert", {
+        kind: "networkFired",
+        args: [matcher, mustFire],
         intent: stepIntent,
       });
     },
