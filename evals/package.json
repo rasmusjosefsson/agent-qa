@@ -194,7 +194,8 @@
     "golden:edge:tc24": "bun golden/edge-tc24.ts",
     "golden:edge:tc25": "bun golden/edge-tc25.ts",
     "golden:edge:tc26": "bun golden/edge-tc26.ts",
-    "golden:edge:tc27": "bun golden/edge-tc27.ts"
+    "golden:edge:tc27": "bun golden/edge-tc27.ts",
+    "golden:frame:tc01": "bun golden/frame-tc01.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"
