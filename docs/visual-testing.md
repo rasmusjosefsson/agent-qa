@@ -67,6 +67,39 @@ agent-qa replay my-flow --update-baselines
 `--update-baselines` mints even when shot claims failed — a failing diff is
 exactly the re-mint case, so the flag runs before the summary exits.
 
+## Masking volatile UI
+
+`{"shot": "<stepId>", "mask": ["<css>", ...]}` hides volatile regions —
+clocks, live badges, randomized ids — during screenshot capture. All masks in
+the scenario union into one injected stylesheet (`visibility: hidden`) applied
+around every step screenshot and removed after, so it survives DOM remounts.
+A scenario with shot claims always performs a real `goto` — the warm-page
+reuse would leave a stale document where masked elements don't exist.
+
+```json
+{ "claim": { "subject": { "shot": "s3", "mask": ["[data-qa-volatile]"] },
+             "predicate": "matches" } }
+```
+
+Mark stable-but-variable markup with `data-qa-volatile` once and every golden
+ignores it.
+
+## Responsive goldens
+
+A `do/viewport` step resizes mid-scenario, so one scenario holds desktop and
+mobile goldens: `viewport 1280x800 → shot s3`, then `viewport 375x812 → shot
+s5` mints two baselines in one run (`evals/selftest/scenarios/
+selftest-responsive` demonstrates it).
+
+## Before you mint
+
+`shot-accept --dry-run` reports per candidate step `new` / `identical` /
+`update <diffPct>` — the review step before re-minting. The diff itself
+ignores sub-pixel antialias jitter (a pixel counts only when a channel moves
+more than 32/255), the same threshold pixelmatch uses; fonts render a few
+levels differently across hosts and Chromium builds and shouldn't flake
+goldens.
+
 ## In the workbench
 
 - The Runs pane renders the red diff map inline on a failed shot claim and
@@ -81,6 +114,12 @@ exactly the re-mint case, so the flag runs before the summary exits.
 (`evals/selftest`) on PRs that touch the UI, uploads screenshots + diff maps as
 artifacts, and comments the result on the PR. Pair it with the visual-evidence
 gate so UI PRs must carry before/after screenshots.
+
+Baselines are environment-bound — a laptop's font stack differs from CI's.
+Mint them on the same image that gates: `Actions → ui-goldens → Run workflow`
+re-mints off main and opens a PR; on a feature PR a maintainer comments
+`/qa accept` and the `qa-accept` workflow re-mints *on the PR's own head*,
+pushing the new goldens to the branch so the gate goes green.
 
 ## Authoring tips
 
