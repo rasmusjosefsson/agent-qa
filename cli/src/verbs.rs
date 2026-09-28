@@ -2678,6 +2678,7 @@ mod tests {
             session: "sess",
             scenario_dir: tmp.path(),
             visual_checks: false,
+            uses_dialog: false,
         };
         let mut scope = ValueScope::default();
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
