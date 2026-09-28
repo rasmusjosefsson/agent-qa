@@ -305,6 +305,14 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           return checkStep(intent, { dialog: true }, "notExists");
         case "dialogText":
           return checkStep(intent, { dialog: true }, "contains", args[0]);
+        case "stepTiming":
+          // args: [stepId, predicate, ms]
+          return checkStep(
+            intent,
+            { timing: args[0] },
+            args[1] ?? "lt",
+            args[2],
+          );
         case "networkFired":
           // args[0] = matcher {urlMatches?, operationName?, method?};
           // args[1] === false flips to "must not have fired".
