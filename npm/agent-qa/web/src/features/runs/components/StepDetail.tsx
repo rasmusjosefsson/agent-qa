@@ -4,7 +4,7 @@ import { BugIcon, WrenchIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { acceptShot, artifactUrl, fetchArtifactText, getScenarioDef, promoteHeal } from '@/lib/runs-api'
 import { collapseEvents, fmtMs, icon } from '../rows'
-import type { DetailTab, HealRow, RunEvent, ScenarioDef, ScenarioStep } from '../types'
+import type { DetailTab, HealRow, RunDetail, RunEvent, ScenarioDef, ScenarioStep } from '../types'
 import type { RunsApi as Api } from '../useRuns'
 
 const TABS: { id: DetailTab; label: string }[] = [
@@ -150,7 +150,7 @@ export function StepDetail({ runs, onLightbox }: { runs: Api; onLightbox: (url: 
             {step.error}
           </pre>
         )}
-        <TabBody sid={sid} runId={runId} step={step} tab={sel.tab} defStep={defStep} scenario={scenario} />
+        <TabBody sid={sid} runId={runId} step={step} tab={sel.tab} defStep={defStep} scenario={scenario} runNetwork={detail.network} />
       </div>
     </section>
   )
@@ -198,6 +198,7 @@ function TabBody({
   tab,
   defStep,
   scenario,
+  runNetwork,
 }: {
   sid: string
   runId: string
@@ -205,6 +206,7 @@ function TabBody({
   tab: DetailTab
   defStep?: ScenarioStep
   scenario: ScenarioDef | null
+  runNetwork?: RunDetail['network']
 }) {
   const [text, setText] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -272,9 +274,68 @@ function TabBody({
   if (tab === 'console') {
     return <div className="text-xs text-muted-foreground">Console output is not captured for this step.</div>
   }
+  if (tab === 'network') {
+    // Two artifacts share this tab: the run-level request log (network.json,
+    // written for every run) and this step's {"network"} claim probe
+    // (per-step capture, only present when the scenario asserts on traffic).
+    return (
+      <div className="space-y-4">
+        <RunTraffic network={runNetwork} />
+        {(loading || text != null) && (
+          <div>
+            <div className="mb-1 text-xs font-medium text-muted-foreground">This step's network probe</div>
+            {loading ? (
+              <div className="text-xs text-muted-foreground">Loading…</div>
+            ) : (
+              <pre className="whitespace-pre-wrap break-all font-mono text-xs leading-relaxed">{text}</pre>
+            )}
+          </div>
+        )}
+      </div>
+    )
+  }
   if (loading) return <div className="text-xs text-muted-foreground">Loading…</div>
   if (text == null) return <div className="text-xs text-muted-foreground">Not captured for this step.</div>
   return <pre className="whitespace-pre-wrap break-all font-mono text-xs leading-relaxed">{text}</pre>
+}
+
+// The run's captured request log (network.json) as a table — method, URL,
+// status. Rendered on the Network tab above the per-step claim probe.
+export function RunTraffic({ network }: { network?: RunDetail['network'] }) {
+  const reqs = network?.requests || []
+  return (
+    <div>
+      <div className="mb-1 text-xs font-medium text-muted-foreground">
+        Run traffic{network ? ` · ${network.requestCount ?? reqs.length} request(s)` : ''}
+      </div>
+      {reqs.length > 0 ? (
+        <ul className="divide-y divide-border rounded-md border border-border">
+          {reqs.map((r) => (
+            <li key={r.requestId} className="flex items-center gap-2 px-2 py-1 text-xs">
+              <span className="w-14 shrink-0 font-mono text-muted-foreground">{r.method}</span>
+              <span className="min-w-0 flex-1 truncate font-mono" title={r.url}>
+                {r.url}
+              </span>
+              {r.status != null && (
+                <span
+                  className={cn(
+                    'shrink-0 font-mono',
+                    r.status >= 400 ? 'text-destructive' : 'text-muted-foreground'
+                  )}
+                >
+                  {r.status}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="text-xs text-muted-foreground">
+          {network ? 'No requests captured.' : 'network.json not written for this run.'}
+        </div>
+      )}
+    </div>
+  )
 }
 
 // A locator the auto-heal loop rewrote mid-run, or a failure it classified as
