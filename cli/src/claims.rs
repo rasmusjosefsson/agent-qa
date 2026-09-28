@@ -787,9 +787,9 @@ fn check_timing(
         }
         (Some(n), _) => n,
     };
-    let need = expected
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| anyhow!("timing claim with predicate '{predicate:?}' requires a numeric 'value'"))?;
+    let need = expected.and_then(|v| v.as_u64()).ok_or_else(|| {
+        anyhow!("timing claim with predicate '{predicate:?}' requires a numeric 'value'")
+    })?;
     let ok = match predicate {
         Predicate::Equals | Predicate::CountEquals => n == need,
         Predicate::Gt => n > need,
@@ -2535,9 +2535,7 @@ mod tests {
 
         #[test]
         fn missing_step_bails_and_not_exists_passes() {
-            let (_t, ctx) = ctx_with_events(&[
-                json!({"idx":1,"id":"s0","status":"pass","ms":100}),
-            ]);
+            let (_t, ctx) = ctx_with_events(&[json!({"idx":1,"id":"s0","status":"pass","ms":100})]);
             let mut scope = ValueScope::default();
             let missing: Claim = serde_json::from_value(json!({
                 "subject": {"timing": "s9"}, "predicate": "lt", "value": 1000
