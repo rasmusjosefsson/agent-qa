@@ -25,10 +25,11 @@
 //! `scenario.json` is NEVER mutated. Sidecars are written atomically.
 #![allow(dead_code)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -120,6 +121,11 @@ pub struct RunOptions {
     /// One <testcase> per step so any CI's test-result ingestion renders
     /// a replay like a unit-test run.
     pub junit: Option<PathBuf>,
+    /// `--base-url <origin>` — retarget the scenario onto another deploy
+    /// (e.g. a PR preview): every `env` nav url and `goto` literal rooted
+    /// at the recorded origin is rewritten to this origin. See
+    /// [`crate::scenario::retarget_origin`].
+    pub base_url: Option<String>,
     /// After a passing run, apply this run's locator-correction heal
     /// patches back into scenario.json (heal-promote --apply for just this
     /// run). The content-hash guard still applies: a patch recorded
@@ -418,7 +424,18 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         fs::read(&scenario_file).with_context(|| format!("read {}", scenario_file.display()))?;
     let parsed = schema::validate_bytes(&bytes)
         .with_context(|| format!("validate {}", scenario_file.display()))?;
-    let scenario: Scenario = serde_json::from_value(parsed.clone()).context("parse scenario")?;
+    let mut scenario: Scenario =
+        serde_json::from_value(parsed.clone()).context("parse scenario")?;
+    if let Some(to) = &opts.base_url {
+        match crate::scenario::retarget_origin(&mut scenario, to) {
+            Some(from) => {
+                eprintln!("[v2-replay] --base-url: retargeted {from} → {to}");
+            }
+            None => {
+                eprintln!("[v2-replay] --base-url: scenario has no recorded origin — flag ignored")
+            }
+        }
+    }
     let hash = hash_scenario_bytes(&bytes);
     // Union of `mask` selectors across the scenario's shot claims — hidden
     // (visibility:hidden) around every step screenshot so volatile UI
@@ -1912,6 +1929,7 @@ pub fn cli(args: &[String]) -> Result<u8> {
             &flags.tags,
             flags.report.as_deref(),
             flags.retry,
+            flags.jobs,
         );
     }
     if flags.shard.is_some() {
@@ -1925,6 +1943,9 @@ pub fn cli(args: &[String]) -> Result<u8> {
     }
     if flags.report.is_some() {
         bail!("--report requires --all");
+    }
+    if flags.jobs > 1 {
+        bail!("--jobs requires --all");
     }
 
     let parsed = parse_args(&flags.filtered)?;
@@ -1992,6 +2013,57 @@ fn run_n(parsed: &RunOptions, runs: u32, label: Option<&str>) -> Result<(u8, Opt
 /// `replay --all`: every scenario under the scenarios root, optionally
 /// sharded (`--shard k/n` keeps the sids whose sorted index % n == k-1)
 /// and/or name-filtered (`--filter <substr>`).
+/// Drop a caller's `--session`/`--session=` from forwarded args: under
+/// --jobs>1 every scenario must drive its own browser session or parallel
+/// workers would fight over one tab set.
+fn strip_session_flag(args: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(args.len());
+    let mut it = args.iter().peekable();
+    while let Some(a) = it.next() {
+        if a == "--session" {
+            it.next(); // swallow the value
+            continue;
+        }
+        if a.starts_with("--session=") {
+            continue;
+        }
+        out.push(a.clone());
+    }
+    out
+}
+
+/// One sid through its full run_n loop (parse → replay → retry ladder).
+/// Returns the exit code + last summary, same contract as the serial path.
+fn cli_all_one(
+    filtered: &[String],
+    sid: &str,
+    session_override: Option<&str>,
+    runs: u32,
+    retry: u32,
+) -> Result<(u8, Option<RunSummary>)> {
+    let mut per = filtered.to_vec();
+    if let Some(sess) = session_override {
+        per.push("--session".to_string());
+        per.push(sess.to_string());
+    }
+    per.push(sid.to_string());
+    let parsed = parse_args(&per)?;
+    // --retry under --all: re-run THIS scenario until pass or N attempts;
+    // a pass on attempt 2 still leaves the earlier failing run dir as
+    // flake evidence. (runs>1 && retry>1 is rejected at parse.)
+    let mut attempt = 0u32;
+    let res = loop {
+        attempt += 1;
+        let r = run_n(&parsed, runs, Some(&format!(" {sid}")))?;
+        if r.0 == 0 || attempt >= retry {
+            break r;
+        }
+        eprintln!("[v2-replay] {sid}: retry {attempt}/{retry}");
+    };
+    Ok(res)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn cli_all(
     filtered: &[String],
     runs: u32,
@@ -2000,6 +2072,7 @@ fn cli_all(
     tags: &[String],
     report: Option<&Path>,
     retry: u32,
+    jobs: u32,
 ) -> Result<u8> {
     let root = crate::paths::scenarios_root();
     let mut sids = crate::scenario_cli::all_sids(&root, filter);
@@ -2027,30 +2100,63 @@ fn cli_all(
             .map(|f| format!(" matching {f:?}"))
             .unwrap_or_default(),
     );
+    // Rows arrive in completion order under --jobs; report + failed list
+    // are re-sorted by sid afterwards so output stays deterministic.
+    let mut results: Vec<(String, u8, Option<RunSummary>)> = Vec::new();
+    if jobs > 1 {
+        let filtered = strip_session_flag(filtered);
+        eprintln!(
+            "[v2-replay] --jobs {jobs}: {} workers, per-scenario sessions (suite-<sid>)",
+            jobs.min(sids.len() as u32)
+        );
+        let queue: Mutex<VecDeque<String>> = Mutex::new(sids.iter().cloned().collect());
+        let results_mtx: Mutex<Vec<(String, u8, Option<RunSummary>)>> = Mutex::new(Vec::new());
+        let worker_count = (jobs as usize).min(sids.len());
+        thread::scope(|scope| {
+            for _ in 0..worker_count {
+                let queue = &queue;
+                let results_mtx = &results_mtx;
+                let filtered = &filtered;
+                scope.spawn(move || loop {
+                    let sid = match queue.lock().unwrap().pop_front() {
+                        Some(s) => s,
+                        None => break,
+                    };
+                    let session = format!("suite-{sid}");
+                    let res = cli_all_one(filtered, &sid, Some(&session), runs, retry);
+                    let (code, summary) = match res {
+                        Ok(pair) => pair,
+                        Err(e) => {
+                            eprintln!("[v2-replay] {sid}: errored: {e:#}");
+                            (1, None)
+                        }
+                    };
+                    results_mtx.lock().unwrap().push((sid, code, summary));
+                });
+            }
+        });
+        results = results_mtx.into_inner().unwrap();
+        results.sort_by(|a, b| a.0.cmp(&b.0));
+    } else {
+        for sid in &sids {
+            match cli_all_one(filtered, sid, None, runs, retry) {
+                Ok((code, summary)) => results.push((sid.clone(), code, summary)),
+                Err(e) => {
+                    eprintln!("[v2-replay] {sid}: errored: {e:#}");
+                    results.push((sid.clone(), 1, None));
+                }
+            }
+        }
+    }
     let mut all_ok = true;
     let mut failed: Vec<String> = Vec::new();
     let mut rows: Vec<(String, Option<RunSummary>)> = Vec::new();
-    for sid in &sids {
-        let mut per = filtered.to_vec();
-        per.push(sid.clone());
-        let parsed = parse_args(&per)?;
-        // --retry under --all: re-run THIS scenario until pass or N attempts;
-        // a pass on attempt 2 still leaves the earlier failing run dir as
-        // flake evidence. (runs>1 && retry>1 is rejected at parse.)
-        let mut attempt = 0u32;
-        let (code, summary) = loop {
-            attempt += 1;
-            let r = run_n(&parsed, runs, Some(&format!(" {sid}")))?;
-            if r.0 == 0 || attempt >= retry {
-                break r;
-            }
-            eprintln!("[v2-replay] {sid}: retry {attempt}/{retry}");
-        };
+    for (sid, code, summary) in results {
         if code != 0 {
             all_ok = false;
             failed.push(sid.clone());
         }
-        rows.push((sid.clone(), summary));
+        rows.push((sid, summary));
     }
     if let Some(path) = report {
         write_report(path, &rows)?;
@@ -2131,6 +2237,10 @@ struct CliFlags {
     tags: Vec<String>,
     /// `--report <path>` — write a markdown verdict table for --all.
     report: Option<PathBuf>,
+    /// `--jobs N` — run --all scenarios on N parallel workers, each with
+    /// its own `suite-<sid>` browser session (any --session is ignored:
+    /// parallel workers sharing one session would collide).
+    jobs: u32,
     /// `--retry N` — re-run until a pass, at most N attempts (mutually
     /// exclusive with --runs). Under --all it applies per scenario.
     retry: u32,
@@ -2148,6 +2258,7 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
     let mut filter: Option<String> = None;
     let mut tags: Vec<String> = Vec::new();
     let mut report: Option<PathBuf> = None;
+    let mut jobs: u32 = 1;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -2210,6 +2321,26 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
                         .filter(|t| !t.is_empty()),
                 );
             }
+            "--jobs" => {
+                let n = it
+                    .next()
+                    .ok_or_else(|| anyhow!("--jobs requires a positive integer"))?;
+                jobs = n
+                    .parse::<u32>()
+                    .map_err(|_| anyhow!("--jobs must be a positive integer; got {n:?}"))?;
+                if jobs == 0 {
+                    bail!("--jobs must be >= 1");
+                }
+            }
+            s if s.starts_with("--jobs=") => {
+                let n = &s["--jobs=".len()..];
+                jobs = n
+                    .parse::<u32>()
+                    .map_err(|_| anyhow!("--jobs must be a positive integer; got {n:?}"))?;
+                if jobs == 0 {
+                    bail!("--jobs must be >= 1");
+                }
+            }
             "--report" => {
                 let v = it
                     .next()
@@ -2267,6 +2398,7 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
         filter,
         tags,
         report,
+        jobs,
     })
 }
 
@@ -2331,6 +2463,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut until_step: Option<String> = None;
     let mut update_baselines = false;
     let mut junit: Option<PathBuf> = None;
+    let mut base_url: Option<String> = None;
     let mut auto_promote = false;
     let mut freeze: Option<String> = None;
     let mut har = false;
@@ -2376,6 +2509,10 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             "--update-baselines" => update_baselines = true,
             "--junit" => junit = Some(PathBuf::new()),
             s if s.starts_with("--junit=") => junit = Some(PathBuf::from(&s["--junit=".len()..])),
+            "--base-url" => base_url = it.next().cloned().or_else(|| bail_missing("--base-url")),
+            s if s.starts_with("--base-url=") => {
+                base_url = Some(s["--base-url=".len()..].to_string())
+            }
             "--auto-promote" => auto_promote = true,
             "--freeze" => freeze = it.next().cloned().or_else(|| bail_missing("--freeze")),
             s if s.starts_with("--freeze=") => freeze = Some(s["--freeze=".len()..].to_string()),
@@ -2439,11 +2576,26 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         until_step,
         update_baselines,
         junit,
+        base_url: normalize_base_url(base_url)?,
         auto_promote,
         freeze,
         har,
         mock_from,
     })
+}
+
+/// `--base-url` must be a bare origin — `scheme://host[:port]`, no path or
+/// query: a path here would silently corrupt every rewritten URL.
+fn normalize_base_url(raw: Option<String>) -> Result<Option<String>> {
+    let Some(u) = raw else { return Ok(None) };
+    let u = u.trim_end_matches('/').to_string();
+    let Some((scheme, hostport)) = u.split_once("://") else {
+        bail!("--base-url expects scheme://host[:port], got {u:?}");
+    };
+    if scheme.is_empty() || hostport.is_empty() || hostport.contains(['/', '?']) {
+        bail!("--base-url expects scheme://host[:port], got {u:?}");
+    }
+    Ok(Some(u))
 }
 
 /// Narrow a flattened step list to the `--from`/`--until` dispatch window.
@@ -2508,8 +2660,8 @@ Usage:
                   [--no-sidecars] [--quiet | -q] [--plain]
                   [--tag <label>] [--output-audit <path>]
                   [--from <stepId>] [--until <stepId>]
-                  [--update-baselines] [--freeze <iso>] [--runs <N>]
-                  [--junit [path]]
+                  [--update-baselines] [--freeze <iso>] [--base-url <origin>]
+                  [--runs <N>] [--junit [path]]
 
 Loads + validates the scenario, mints a run id, prepares
 <sid>/replays/<runId>/, writes audit.json, runs env.open, iterates
@@ -2549,6 +2701,11 @@ replays/latest.txt.
 --report <path>          With --all: write a markdown verdict table
                          (per-scenario PASS/FAIL + step counts) — the
                          shape a CI step drops into a PR comment.
+--jobs N                 With --all: run scenarios on N parallel
+                         workers. Each scenario gets its own browser
+                         session (suite-<sid>) — a user --session is
+                         ignored. Progress lines interleave; --report
+                         output stays sorted.
                          (case-insensitive).
 
 --no-sidecars            Skip per-step ARIA snapshot + screenshot
@@ -2599,6 +2756,12 @@ replays/latest.txt.
                          patches to scenario.json (the hash-guarded
                          heal-promote --apply path). A stale-hash refusal
                          is a warning, never a failure
+--base-url <origin>      Retarget the run onto another deploy (e.g. a
+                         PR preview): every env nav url + goto literal
+                         rooted at the recorded origin is rewritten to
+                         <origin> (scheme://host[:port] only). Claim
+                         patterns are left untouched — use inputs for
+                         scenario-authored variability.
 --junit [path]           Write the run's terminal step outcomes as JUnit
                          XML — one <testcase> per step. Bare flag writes
                          <run>/junit.xml; --junit=<path> writes that
@@ -2746,6 +2909,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             junit: None,
+            base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
@@ -2827,6 +2991,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             junit: None,
+            base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
@@ -2889,6 +3054,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             junit: None,
+            base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
@@ -2932,6 +3098,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             junit: None,
+            base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
@@ -3000,6 +3167,7 @@ esac\nexit 0\n",
             until_step: None,
             update_baselines: false,
             junit: None,
+            base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
@@ -3256,6 +3424,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             junit: None,
+            base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
@@ -3322,6 +3491,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             junit: None,
+            base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
@@ -3503,6 +3673,77 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             .map(|s| s.to_string())
             .collect();
         assert!(cli(&args).is_err());
+    }
+
+    #[test]
+    fn parse_args_cli_jobs() {
+        let f = parse_args_cli(&["--all".into(), "--jobs".into(), "4".into()]).unwrap();
+        assert_eq!(f.jobs, 4);
+        let f = parse_args_cli(&["--all".into(), "--jobs=2".into()]).unwrap();
+        assert_eq!(f.jobs, 2);
+        parse_args_cli(&["--all".into(), "--jobs".into(), "0".into()]).unwrap_err();
+        parse_args_cli(&["--all".into(), "--jobs".into(), "x".into()]).unwrap_err();
+        let args: Vec<String> = ["sid-x", "--jobs", "2"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(cli(&args).is_err(), "--jobs without --all must bail");
+    }
+
+    #[test]
+    fn strip_session_flag_drops_both_forms() {
+        let out = strip_session_flag(&[
+            "--session".into(),
+            "shared".into(),
+            "--quiet".into(),
+            "--session=other".into(),
+            "--tags".into(),
+            "smoke".into(),
+        ]);
+        assert_eq!(out, vec!["--quiet", "--tags", "smoke"]);
+    }
+
+    #[test]
+    fn cli_all_jobs_runs_scenarios_in_parallel_sessions() {
+        let _g = lock_env();
+        let work = TempDir::new().unwrap();
+        let log = work.path().join("ab.log");
+        install_fake_browser(work.path(), &log);
+        std::env::set_var(paths::SCENARIOS_DIR_ENV, work.path());
+        for sid in ["za", "zb"] {
+            let d = work.path().join(sid);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(
+                d.join("scenario.json"),
+                minimal_scenario().replace("\"smoke\"", &format!("\"{sid}\"")),
+            )
+            .unwrap();
+        }
+        // A user --session is ignored under --jobs — each worker needs its
+        // own browser session or the two runs would share one browser.
+        let args: Vec<String> = ["--all", "--jobs", "2", "--session", "shared"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let code = cli(&args).unwrap();
+        std::env::remove_var(paths::SCENARIOS_DIR_ENV);
+        clear_fake_browser();
+        assert_eq!(code, 0);
+        assert!(work.path().join("za/replays").is_dir());
+        assert!(work.path().join("zb/replays").is_dir());
+        let inv = fs::read_to_string(&log).unwrap();
+        assert!(
+            inv.contains("--session suite-za"),
+            "za must run on its own session: {inv}"
+        );
+        assert!(
+            inv.contains("--session suite-zb"),
+            "zb must run on its own session: {inv}"
+        );
+        assert!(
+            !inv.contains("--session shared"),
+            "user --session must be stripped under --jobs: {inv}"
+        );
     }
 
     #[test]
@@ -3969,6 +4210,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             junit: None,
+            base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
@@ -4059,6 +4301,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             junit: None,
+            base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
@@ -4119,6 +4362,20 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         ])
         .unwrap();
         assert_eq!(opts.session_name, "explicit");
+    }
+
+    #[test]
+    fn parse_args_base_url_flag_and_origin_validation() {
+        let opts =
+            parse_args(&["x".into(), "--base-url".into(), "https://pr-7.io/".into()]).unwrap();
+        assert_eq!(opts.base_url.as_deref(), Some("https://pr-7.io")); // trailing / stripped
+        let opts = parse_args(&["x".into(), "--base-url=http://localhost:3000".into()]).unwrap();
+        assert_eq!(opts.base_url.as_deref(), Some("http://localhost:3000"));
+        assert!(parse_args(&["x".into()]).unwrap().base_url.is_none());
+        // Path/query/no-scheme are rejected — they'd corrupt rewrites.
+        parse_args(&["x".into(), "--base-url".into(), "https://a.io/p".into()]).unwrap_err();
+        parse_args(&["x".into(), "--base-url".into(), "a.io".into()]).unwrap_err();
+        parse_args(&["x".into(), "--base-url".into(), "https://a.io/?q=1".into()]).unwrap_err();
     }
 
     #[test]
@@ -4267,6 +4524,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             junit: None,
+            base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
@@ -4359,6 +4617,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             junit: None,
+            base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
@@ -4430,6 +4689,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             junit: None,
+            base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
@@ -4479,6 +4739,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             junit: None,
+            base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
@@ -4665,6 +4926,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             junit: None,
+            base_url: None,
             auto_promote: false,
             freeze: None,
             har: false,
