@@ -142,6 +142,15 @@ export function CaseList() {
                           {t}
                         </span>
                       ))}
+                      {(c.scenario?.tags ?? []).slice(0, 3).map((t) => (
+                        <span
+                          key={`s-${t}`}
+                          title={`scenario tag — replay --tags ${t} selects it`}
+                          className="rounded border border-border px-1 py-px text-[10px] leading-tight text-muted-foreground"
+                        >
+                          {t}
+                        </span>
+                      ))}
                     </div>
                   </td>
                   <td className="px-3 py-2.5 text-muted-foreground">{c.steps.length}</td>

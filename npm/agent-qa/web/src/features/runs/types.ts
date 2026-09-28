@@ -63,6 +63,9 @@ export interface ScenarioSummary {
     ratio: number
     shotRatio: number
   } | null
+  // scenario.json's tags[] — `replay --tags` selects on these.
+  tags: string[]
+
   latestRunId: string | null
   activeRunId: string | null
   latestRun: RunSummary | null
@@ -135,6 +138,17 @@ export interface RunDetail {
   // run.webm exists in the run dir (replay ran with --record-video) —
   // servable via runFileUrl(sid, runId, 'run.webm').
   video?: boolean
+  // The run's captured request log (network.json): every fetch/XHR/etc the
+  // browser made during replay. Absent on runs that predate the artifact.
+  network?: { requestCount?: number; requests?: RunNetworkRequest[] } | null
+}
+export interface RunNetworkRequest {
+  requestId: string
+  url: string
+  method: string
+  status?: number
+  resourceType?: string
+  mimeType?: string
 }
 
 export type DetailTab = 'step' | 'scenario' | 'context' | 'network' | 'html' | 'console'
@@ -154,6 +168,13 @@ export interface CompareShot {
   hasDiffPng: boolean
 }
 
+export interface CompareNetEntry {
+  request: string
+  outcome: 'SAME' | 'CHANGED' | 'ONLY-A' | 'ONLY-B' | string
+  statusA: string
+  statusB: string
+}
+
 export interface CompareReport {
   sid: string
   folder: string
@@ -161,6 +182,7 @@ export interface CompareReport {
   runB: string | null
   snapshots: CompareEntry[]
   screenshots: CompareShot[]
+  network: CompareNetEntry[]
 }
 
 export interface Selection {

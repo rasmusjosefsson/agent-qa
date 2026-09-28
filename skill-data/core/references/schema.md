@@ -77,8 +77,25 @@ menu that only renders below a breakpoint).
   UI instead of guessing a fixed delay — e.g. click a filter, wait for the
   results call, then assert the table. `timeoutMs` defaults to 10s and the
   step fails when nothing matching lands in time.
-- No `params` — soft `networkidle` wait (use `url` when the app keeps
+- `{"idle": true}` or `{"idleMs": 500, "timeoutMs": 10000}` — wait for
+  network quiescence at the session level: zero in-flight requests for
+  `idleMs` (default 500) straight. This is the stability gate before a
+  screenshot or DOM read after async work — unlike `url` it waits for
+  silence rather than one named call. Fails at `timeoutMs` listing what's
+  still pending (long-polls/websockets will hit this — give them `url`
+  waits instead).
+- No `params` — soft `networkidle` wait (use `url`/`idle` when the app keeps
   long-lived connections open and never goes idle).
+
+### Per-step retry
+
+Any do-step may carry `params.retry` (attempt count) and
+`params.retryMs` (delay between attempts, default 300): the runner
+re-dispatches the step on failure before the run's failure handling kicks
+in. Use for one known-flaky interaction; whole-run flake belongs to
+`replay --retry`. Caveat: a partially-dispatched retry re-fires the side
+effect — prefer idempotent verbs (click, select) over append-style ones
+(type).
 
 ### Native dialogs (alert/confirm/prompt)
 
@@ -190,6 +207,41 @@ bytes, and string predicates match the file name — or the file's UTF-8
 text when `"attribute": "content"` is set (files over 1 MiB are rejected
 for content claims). Relative paths resolve against the scenario dir.
 
+### Network mocks
+
+`do/mock` stubs matching `fetch` and `XMLHttpRequest` calls in the live
+page — edge cases (5xx, error payloads, latency) that the real backend
+won't produce on demand. `params.url` is a glob matched on the request
+URL (`*` is the only wildcard):
+
+```json
+{
+  "id": "s4",
+  "intent": "the API is down",
+  "kind": "do",
+  "verb": "mock",
+  "params": { "url": "*/api/users*", "status": 503, "json": { "error": "unavailable" }, "delayMs": 50 }
+}
+```
+
+`params.abort: true` rejects instead of responding — the page sees a real
+network failure (`fetch` rejects `TypeError: Failed to fetch`, XHR fires
+`error`), modeling a backend that's unreachable rather than erroring.
+
+Registered rules re-apply automatically after `goto`/`reload`/`back`/
+`forward` (navigation wipes the page's JS world, so the runner reinstalls
+the wrapper). A click that navigates still drops them — put `mock` steps
+after unpredictable navigations. `do/unmock` removes a rule
+(`params.url` = the same glob) or clears all without it. Combine with
+`{"network": {"urlMatches": ...}}` claims to prove the stub fired, or a
+`{"shot": ...}` claim to golden the error UI.
+
+For hermetic replay, `agent-qa replay <sid> --mock-from <runId>` seeds
+stubs from a previous run's `network.har` (recorded via `--har`): every
+URL the page fetched gets its recorded status+body back — no backend
+needed. Seeded rules install as a page init script on a fresh session,
+covering even the page's load-time fetches.
+
 ### Console claims
 
 Assert on messages the page logged this session with the `{"console"}`
@@ -216,6 +268,45 @@ pass when ANY matching message's text satisfies them.
 
 Messages accumulate for the whole session — on a reused session, entries
 from earlier steps count too.
+
+### Network claims
+
+Assert on the browser's captured request log with the `{"network"}`
+subject — matcher fields AND together:
+
+- `urlMatches` — regex on the request URL
+- `operationName` — substring on the URL (GraphQL-style operation names)
+- `method` — `"GET"`/`"POST"`/`"PUT"`/`"PATCH"`/`"DELETE"`/`"HEAD"`
+- `postDataContains` — substring on the request's POST body (fetches the
+  request detail per candidate — keep a url/method matcher alongside so the
+  narrowing runs on a small set)
+
+`ofKind` picks what the predicate applies to:
+
+- `fired` (default) — `exists`/`isVisible` pass once a matching request
+  occurred; `notExists`/`isHidden` pass while none has.
+- `status` — predicates on the latest matching response's HTTP status
+  (string predicates on `"200"`, `gt`/`gte`/`lt`/`lte` numerically).
+- `responseJsonPath` — `path` + predicates evaluate inside the latest
+  match's JSON response body (e.g. `$.data.user.name`).
+
+```json
+{
+  "id": "s7",
+  "intent": "the save call carried the new title",
+  "kind": "check",
+  "claim": {
+    "subject": {
+      "network": { "urlMatches": "/api/save", "method": "POST", "postDataContains": "Quarterly" }
+    },
+    "predicate": "exists"
+  }
+}
+```
+
+Every completed run also writes `replays/<run>/network.json` — the whole
+request list — and `agent-qa compare <sid> <runA> <runB>` diffs it (the
+`## network` section in compare.md).
 
 Use `agent-qa scenario check <scenario.json>` before replay. It validates the
 schema and runs the scenario linter.

@@ -37,6 +37,8 @@ mod info;
 mod init;
 mod io;
 mod list;
+mod mock;
+mod netlog;
 mod paths;
 mod perf_snapshot;
 mod plan;
@@ -50,6 +52,7 @@ mod record_setup;
 mod record_step;
 mod recorder_contract;
 mod recorder_state;
+mod run_report;
 mod run_step;
 mod runner;
 mod scenario;
@@ -98,6 +101,7 @@ fn main() -> ExitCode {
         "plugins" => plugin::cli::run(rest),
         "scenario" => scenario_cli::run(rest),
         "replay" => runner::cli(rest),
+        "run-report" => run_report::run(rest),
         "doctor" => doctor::run(rest),
         "info" => info::run(rest),
         "config" => config::run(rest),
@@ -136,7 +140,7 @@ fn main() -> ExitCode {
         "init" => init::cli(rest),
         _ => {
             eprintln!(
-"agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, init."
+"agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, run-report, init."
 
             );
             eprintln!("Run `agent-qa --help` for usage.");
@@ -233,7 +237,9 @@ Verbs:
                                 is ok or accepted against current design bytes
   design verdict <sid> --step <id> (--ok | --accepted --reason <t> | --fail --reason <t> | --ask)
                                 Record a design decision in designs/verdicts.json
-  init [dir] [--force]          Bootstrap a dir: agent-qa.toml + scenarios/hello + .gitignore
+  init [dir] [--force] [--ci]   Bootstrap a dir: toml + scenarios/hello + .gitignore (+ --ci PR gate)
+||||||| 7a8edfd
+
   start \"<intent>\"             Begin a new recording session
   browser <args...>             Passthrough exec of the pinned agent-browser
                                 binary (same one every other verb uses) —
