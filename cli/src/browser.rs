@@ -567,6 +567,49 @@ pub struct DialogStatus {
     pub default_prompt: String,
 }
 
+/// One console message as reported by `agent-browser console --json`.
+#[derive(Debug)]
+pub struct ConsoleMessage {
+    /// "log" | "info" | "warn" | "error" | "debug" | ... (verbatim).
+    pub level: String,
+    /// The message's rendered text.
+    pub text: String,
+}
+
+/// Messages the page logged to the console so far this session
+/// (`agent-browser console --json` → `data.messages[]`).
+pub fn console_messages(session: &str) -> Result<Vec<ConsoleMessage>, AgentBrowserError> {
+    let r = run(session, ["--json", "console"], RunOpts::new().capture())?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(r.stdout.trim()).map_err(|e| AgentBrowserError::NonZero {
+            verb: "console".to_string(),
+            exit_code: 0,
+            stderr: format!("unparseable console JSON: {e}: {:?}", r.stdout.trim()),
+            hint: String::new(),
+        })?;
+    Ok(parsed
+        .get("data")
+        .and_then(|d| d.get("messages"))
+        .and_then(|m| m.as_array())
+        .map(|msgs| {
+            msgs.iter()
+                .map(|m| ConsoleMessage {
+                    level: m
+                        .get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    text: m
+                        .get("text")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                })
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
 /// Poll `agent-browser --json dialog status`. Returns `DialogStatus` with
 /// `open=false` when no dialog is pending.
 pub fn dialog_status(session: &str) -> Result<DialogStatus, AgentBrowserError> {
