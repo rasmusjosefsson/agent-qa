@@ -37,6 +37,7 @@ mod info;
 mod init;
 mod io;
 mod list;
+mod mock;
 mod paths;
 mod perf_snapshot;
 mod plan;
