@@ -193,6 +193,9 @@ describe("toRecordDraft — every shipped verb is reachable or triaged", () => {
       "fileChooser",
       ["action", { method: "fileChooserFiles", args: [["a.txt"]] }],
     ],
+    ["hold", ["action", { method: "holdBySelector", args: ["#h", 800] }]],
+    ["swipe", ["action", { method: "swipeBySelector", args: [".card", "left", 160] }]],
+    ["swipe", ["action", { method: "swipePage", args: ["up"] }]],
   ];
 
   const emitted = new Set<string>();
