@@ -505,6 +505,34 @@ test('report viewer endpoints', async (t) => {
     );
   });
 
+  await t.test('POST shot-accept {all:true} promotes every run screenshot', async () => {
+    // Seed a second screenshot so all-mode has more than one mint candidate.
+    const extra = path.join(fx.root, fx.sid, 'replays', fx.runId, 'screenshots', 'aSecond.png');
+    fs.writeFileSync(extra, Buffer.from('PNGDATA-aSecond'));
+    const res = await fetch(`${base}/api/scenarios/${fx.sid}/runs/${fx.runId}/shot-accept`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ all: true }),
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.ok, true);
+    assert.deepEqual(body.minted, ['aSecond', 'navHome']);
+    assert.equal(
+      fs.readFileSync(path.join(fx.root, fx.sid, 'baselines', 'aSecond.png'), 'utf8'),
+      'PNGDATA-aSecond',
+    );
+  });
+
+  await t.test('POST shot-accept {all:true} 404s when the run has no screenshots', async () => {
+    const res = await fetch(`${base}/api/scenarios/${fx.sid}/runs/noShots/shot-accept`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ all: true }),
+    });
+    assert.equal(res.status, 404);
+  });
+
   await t.test('POST shot-accept rejects a missing stepId / absent screenshot', async () => {
     const res1 = await fetch(`${base}/api/scenarios/${fx.sid}/runs/${fx.runId}/shot-accept`, {
       method: 'POST',
