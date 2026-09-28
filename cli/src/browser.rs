@@ -739,6 +739,19 @@ pub fn network_requests(session: &str) -> Result<Vec<CapturedRequest>, AgentBrow
     })
 }
 
+/// `agent-browser network requests --clear` — drop the session's captured
+/// request log. Called at run start so a replayed session's network.json
+/// covers this run only (the capture is per-session and otherwise
+/// accumulates across replays sharing a session).
+pub fn network_clear(session: &str) -> Result<(), AgentBrowserError> {
+    run(
+        session,
+        ["network", "requests", "--clear"],
+        RunOpts::new().capture(),
+    )?;
+    Ok(())
+}
+
 /// `agent-browser --json network request <id>` — full record for one
 /// exchange, including `responseBody`.
 pub fn network_request(
