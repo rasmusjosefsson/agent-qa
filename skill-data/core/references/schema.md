@@ -199,5 +199,11 @@ after unpredictable navigations. `do/unmock` removes a rule
 `{"network": {"urlMatches": ...}}` claims to prove the stub fired, or a
 `{"shot": ...}` claim to golden the error UI.
 
+For hermetic replay, `agent-qa replay <sid> --mock-from <runId>` seeds
+stubs from a previous run's `network.har` (recorded via `--har`): every
+URL the page fetched gets its recorded status+body back — no backend
+needed. Seeded rules install as a page init script on a fresh session,
+covering even the page's load-time fetches.
+
 Use `agent-qa scenario check <scenario.json>` before replay. It validates the
 schema and runs the scenario linter.
