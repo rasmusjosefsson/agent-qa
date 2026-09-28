@@ -109,6 +109,17 @@ export async function replay(sid: string, e: Record<string, string>): Promise<vo
   );
 }
 
+/** Lint a scenario (schema + rules). Returns the failure output or null. */
+export async function lint(sid: string, e: Record<string, string>): Promise<string | null> {
+  const scenarioPath = resolve(scenariosRoot, sid, "scenario.json");
+  try {
+    await sh([agentQa, "scenario", "check", scenarioPath], e, `lint ${sid}`);
+    return null;
+  } catch (err) {
+    return String(err);
+  }
+}
+
 /** Re-mint every shot baseline for a scenario from its latest run. */
 export async function accept(sid: string, e: Record<string, string>): Promise<void> {
   await sh([agentQa, "shot-accept", sid, "--json"], e, `shot-accept ${sid}`);

@@ -1,0 +1,112 @@
+{
+  "schema": "scenario/2",
+  "id": "selftest-responsive",
+  "intent": "Workbench settings pane renders at desktop and mobile widths",
+  "env": {
+    "open": [
+      {
+        "kind": "fresh"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "id": "s1",
+      "kind": "do",
+      "verb": "viewport",
+      "params": {
+        "width": 1280,
+        "height": 800
+      },
+      "intent": "pin desktop viewport"
+    },
+    {
+      "id": "s2",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4899/settings"
+      },
+      "intent": "open /settings"
+    },
+    {
+      "id": "s3",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "header"
+            },
+            "reason": "selftest"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "app shell rendered (desktop)"
+    },
+    {
+      "id": "s4",
+      "kind": "do",
+      "verb": "viewport",
+      "params": {
+        "width": 375,
+        "height": 812
+      },
+      "intent": "resize to mobile"
+    },
+    {
+      "id": "s5",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "header"
+            },
+            "reason": "selftest"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "app shell rendered (mobile)"
+    },
+    {
+      "id": "s8",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s3",
+          "mask": [
+            "[data-qa-volatile]"
+          ]
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "desktop golden"
+    },
+    {
+      "id": "s9",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s5",
+          "mask": [
+            "[data-qa-volatile]"
+          ]
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "mobile golden"
+    }
+  ]
+}
