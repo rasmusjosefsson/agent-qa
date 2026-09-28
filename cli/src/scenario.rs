@@ -173,6 +173,14 @@ pub enum Verb {
     /// Remove mock rules: `params.url` (optional) drops that rule, absent
     /// clears all.
     Unmock,
+    /// Seed page state without a UI round-trip: `params` may carry
+    /// `localStorage`/`sessionStorage` objects (key→value), a `cookies`
+    /// array (`{"name","value","path"?,"domain"?,"maxAge"?}` — set via
+    /// `document.cookie`, so httpOnly entries can't be seeded), and the
+    /// `clearCookies`/`clearLocalStorage`/`clearSessionStorage` boolean
+    /// clears. Values go through scenario-var substitution. Apply before
+    /// `goto` (or before `reload`) for the app to observe the state.
+    State,
     #[serde(rename = "loop")]
     Loop,
     Group,
@@ -327,6 +335,23 @@ pub enum ConsoleSubject {
     Matcher(ConsoleMatcher),
 }
 
+/// `storage` accepts `"key"` (localStorage) or a matcher object.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum StorageSubject {
+    Key(String),
+    Matcher(StorageMatcher),
+}
+
+/// `{"key": "k", "scope": "local"|"session"}` — scope defaults to "local".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageMatcher {
+    pub key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ClaimSubject {
@@ -396,6 +421,21 @@ pub enum ClaimSubject {
         clip: Option<Locator>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         mask: Vec<String>,
+    },
+    /// `{"storage": "key"}` or `{"storage": {"key": "k", "scope":
+    /// "local"|"session"}}` — assert on a web-storage entry. `exists`/
+    /// `notExists` check key presence; string predicates compare the
+    /// stored value; `path` walks into a JSON-encoded value.
+    Storage {
+        storage: StorageSubject,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
+    /// `{"cookie": "<name>"}` — assert on a cookie visible to the page
+    /// (`document.cookie`; httpOnly cookies never appear here). `exists`/
+    /// `notExists` for presence; string predicates compare the value.
+    Cookie {
+        cookie: String,
     },
     /// `{"console": true}` or `{"console": {"type": "error"}}` — assert on
     /// messages the page logged this session. `exists`/`notExists` on

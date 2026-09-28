@@ -45,6 +45,30 @@ Use `record-step do` and `record-step check` to create steps. The recorder assig
 `fresh`, `useProfile`, `nav`, `cookie`, `localStorage`, `gql`, and `flag`.
 `record-setup` records one schema-valid `env.open` value.
 
+### Mid-scenario state seeding
+
+`env.open` seeds at bootstrap; a `state` do-step does it mid-scenario —
+flip a flag between pages, expire a session mid-flow, pre-seed storage
+before a `goto`/`reload`:
+
+```json
+{
+  "id": "s2", "intent": "seed an authenticated cart", "kind": "do", "verb": "state",
+  "params": {
+    "localStorage": { "token": "eyJ…" },
+    "cookies": [{ "name": "session", "value": "abc", "path": "/" }],
+    "clearCookies": true
+  }
+}
+```
+
+Recognized `params` keys: `localStorage`, `sessionStorage`, `cookies`
+(each entry `{"name","value","path"?,"domain"?,"maxAge"?,"secure"?,"sameSite"?}`),
+`clearCookies`, `clearLocalStorage`, `clearSessionStorage`. Cookies go through
+`document.cookie`, so `httpOnly` values cannot be seeded — auth plugins cover
+that. Assert the result with `{"storage": "key"}` / `{"storage": {"key": "k",
+"scope": "session"}, "path": "$.json.path"}` or `{"cookie": "name"}` claims.
+
 ### Viewport resizing
 
 Resize the browser viewport mid-scenario with a `viewport` do-step:

@@ -89,3 +89,47 @@ matching message satisfies them.
 
 `crawl` drafts each route as goto + `{"shot"}` + a `no console errors` check
 (`--no-console-checks` opts out) — see `visual-testing.md`.
+
+## `do/state` — seed page state mid-scenario
+
+`env.open` seeds cookies/storage at session bootstrap; `do/state` does it
+*inside* the step list — flip a feature flag between pages, expire a
+session mid-flow, pre-seed a cart before checkout:
+
+```json
+{ "id": "s2", "kind": "do", "verb": "state",
+  "params": {
+    "localStorage": { "token": "eyJ…", "cart": "{ \"items\": 3 }" },
+    "sessionStorage": { "returnUrl": "/orders" },
+    "cookies": [
+      { "name": "session", "value": "abc", "path": "/", "sameSite": "Lax" }
+    ],
+    "clearCookies": true
+  },
+  "intent": "seed an authenticated cart state" }
+```
+
+Keys: `localStorage`/`sessionStorage` (objects of key→value), `cookies`
+(array of `{"name","value","path"?,"domain"?,"maxAge"?,"secure"?,"sameSite"?}`),
+and the `clearCookies`/`clearLocalStorage`/`clearSessionStorage` clears.
+Values run through scenario-var substitution. Cookies are set via
+`document.cookie` — `httpOnly` entries can't be seeded (that's what the
+auth plugins are for). Order a `goto`/`reload` after it so the app reads
+the fresh state.
+
+## `{"storage"}` / `{"cookie"}` claim subjects
+
+Assert the state an app actually wrote — token minted, preference
+persisted, logout cleared the session cookie:
+
+```json
+{ "claim": { "subject": { "storage": "session" }, "predicate": "exists" } }
+{ "claim": {
+    "subject": { "storage": { "key": "cart", "scope": "session" }, "path": "$.total" },
+    "predicate": "gte", "value": 1 } }
+{ "claim": { "subject": { "cookie": "session" }, "predicate": "notExists" } }
+```
+
+`storage` takes `"key"` (localStorage) or `{ "key": "…", "scope":
+"local"|"session" }`; `path` walks a JSON-encoded value. `cookie` reads
+`document.cookie` — `httpOnly` cookies are invisible there.

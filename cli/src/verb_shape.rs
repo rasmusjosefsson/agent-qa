@@ -94,6 +94,13 @@ fn rule_for(verb: &Verb) -> VerbRule {
             forbidden: &[DoField::On, DoField::Value],
             ..VerbRule::default()
         },
+        // `params` carries the state spec; which keys are valid is checked
+        // in dispatch (localStorage / sessionStorage / cookies / clears).
+        Verb::State => VerbRule {
+            required: &[DoField::Params],
+            forbidden: &[DoField::On, DoField::Value],
+            ..VerbRule::default()
+        },
         // `on` is the drag source; `params.to` is the drop target locator.
         Verb::Drag => VerbRule {
             required: &[DoField::On, DoField::Params],
@@ -392,6 +399,36 @@ mod tests {
         let s = parse(json!({
             "id": "s1", "intent": "x", "kind": "do", "verb": "dialog",
             "params": { "action": "accept", "text": "John Doe" }
+        }));
+        assert_verb_shape(&s).unwrap();
+    }
+
+    #[test]
+    fn state_requires_params_and_rejects_on_value() {
+        let s = parse(json!({ "id": "s1", "intent": "x", "kind": "do", "verb": "state" }));
+        assert!(assert_verb_shape(&s)
+            .unwrap_err()
+            .to_string()
+            .contains("requires 'params'"));
+
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "state",
+            "params": { "localStorage": { "token": "abc" } },
+            "value": { "from": "literal", "literal": "x" }
+        }));
+        assert!(assert_verb_shape(&s)
+            .unwrap_err()
+            .to_string()
+            .contains("must not carry 'value'"));
+
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "state",
+            "params": {
+                "localStorage": { "token": "abc" },
+                "sessionStorage": { "cart": "{}" },
+                "cookies": [{ "name": "session", "value": "v", "path": "/" }],
+                "clearCookies": true
+            }
         }));
         assert_verb_shape(&s).unwrap();
     }
