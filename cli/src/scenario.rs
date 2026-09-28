@@ -335,6 +335,35 @@ pub enum ConsoleSubject {
     Matcher(ConsoleMatcher),
 }
 
+/// `{"a11y": true}` audits the whole page; the matcher narrows which axe
+/// findings count:
+///   `{"impact": "serious"}`       violations at that impact or worse
+///                                 (minor < moderate < serious < critical)
+///   `{"rule": "color-contrast"}`  only findings of that axe rule id
+///   `{"within": "#app"}`          scope the audit to a subtree
+///   `{"incomplete": true}`        also count axe's `incomplete` results
+///                                 (rules needing manual review)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct A11yMatcher {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub impact: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub within: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
+    #[serde(default)]
+    pub incomplete: bool,
+}
+
+/// `a11y` accepts either `true` (all violations) or a matcher object.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum A11ySubject {
+    Flag(bool),
+    Matcher(A11yMatcher),
+}
+
 /// `storage` accepts `"key"` (localStorage) or a matcher object.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -444,6 +473,15 @@ pub enum ClaimSubject {
     /// predicates pass when ANY matching message's text satisfies them.
     Console {
         console: ConsoleSubject,
+    },
+    /// `{"a11y": true}` or `{"a11y": {"impact": "serious"}}` — run an
+    /// axe-core accessibility audit (`agent-browser a11y`) and count the
+    /// matching violations. `exists`/`notExists` on ≥1/zero violations;
+    /// numeric predicates (`countEquals`/`gt`/`gte`/`lt`/`lte`) compare the
+    /// count. The matcher filters findings: `impact` floor, `rule` id,
+    /// `within` CSS scope, `incomplete` to include axe's incomplete results.
+    A11y {
+        a11y: A11ySubject,
     },
     Var {
         kind: String, // always "var" — kept literal to disambiguate untagged

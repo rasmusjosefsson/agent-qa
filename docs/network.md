@@ -85,6 +85,24 @@ A page can render fine while its JS crashes. Assert on console output:
 predicates compare the message count; text predicates pass when **any**
 matching message satisfies them.
 
+## `{"a11y"}` claim subject
+
+Gate a step on an axe-core accessibility audit (`agent-browser a11y`):
+
+```json
+{ "claim": {
+    "subject": { "a11y": { "impact": "serious" } },
+    "predicate": "notExists" } }
+```
+
+`a11y` accepts `true` (every violation counts) or a matcher:
+`{"impact": "minor"|"moderate"|"serious"|"critical"}` is a floor (keeps
+that level and everything worse), `"rule": "<axe rule id>"` keeps only that
+rule's findings, `"within": "<css>"` scopes the audit to a subtree, and
+`"incomplete": true` also counts axe's `incomplete` results (rules needing
+manual review). `exists`/`notExists` check presence; numeric predicates
+compare the matching count. A failure lists the offending rule ids.
+
 ## `crawl` uses both by default
 
 `crawl` drafts each route as goto + `{"shot"}` + a `no console errors` check

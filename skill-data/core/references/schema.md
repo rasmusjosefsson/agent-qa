@@ -298,6 +298,29 @@ pass when ANY matching message's text satisfies them.
 Messages accumulate for the whole session — on a reused session, entries
 from earlier steps count too.
 
+### Accessibility claims
+
+`{"a11y": true}` runs an axe-core audit (`agent-browser a11y`) and counts
+violations; a matcher narrows which findings count:
+
+```json
+{
+  "id": "s10",
+  "intent": "no serious accessibility violations",
+  "kind": "check",
+  "claim": {
+    "subject": { "a11y": { "impact": "serious" } },
+    "predicate": "notExists"
+  }
+}
+```
+
+Matcher fields: `impact` (a floor — `serious` also counts `critical`),
+`rule` (one axe rule id), `within` (CSS selector, scopes the audit to a
+subtree), `incomplete` (also count axe's `incomplete` results). Predicates:
+`exists`/`notExists` on presence, `countEquals`/`gt`/`gte`/`lt`/`lte` on the
+count. A failing check lists the offending rule ids.
+
 ### Network claims
 
 Assert on the browser's captured request log with the `{"network"}`
