@@ -34,6 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write  # push diff images to the ui-goldens-diffs scratch branch
+      pull-requests: write  # post the sticky verdict comment
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
