@@ -39,6 +39,26 @@ writes this run's locator-correction patches back into `scenario.json` when
 the run passed — the self-healing loop that keeps a drifting app green
 without a `heal-promote` step.
 
+| Command | Purpose |
+| --- | --- |
+| `replay <sid> --from <stepId> [--until <stepId>]` | Partial replay over a step window (debugging one region). |
+| `run-step <do\|check> '<draft-json>' [--session <n>]` | Dispatch one unsealed draft against the live session — probe a step before recording it. |
+| `diff <sid> <runA> <runB>` | Diff two runs of a scenario (steps, timings, screenshots). |
+| `scenario check <file>` | Schema + lint validation of a scenario doc. |
+| `scenario insert <sid> --step '<json>' [--after <stepId> \| --at <index>]` | Splice a validated step into a saved scenario. |
+| `scenario coverage <file>` / `scenario coverage-all` | Per-scenario and whole-suite do→check coverage rolls. |
+| `scenario lint <file> [--strict]` / `scenario lint-all` | Common lints (duplicate ids, bare do, …); `--format github` emits CI annotations. |
+| `audit health` | Suite rollup: flaky + slow + heal-chronic step ids per scenario. |
+| `audit flaky <sid> [--min-runs N]` / `audit slow <sid>` | Steps whose pass/fail interleaves; steps whose duration regressed. |
+| `audit show <sid> <runId\|latest>` / `audit list <sid>` | One run's audit.json; every recorded run. |
+| `heal-list <sid>` / `heal-chronic <sid>` / `heal-promote <sid> --apply` | Pending suggested patches; steps re-healing every run; absorb patches into `scenario.json`. |
+| `doctor` | Environment sanity (binary, browser, config). |
+`replay <sid-or-path> [--session <name>] [--profile <name>] [--update-baselines]`
+replays a sealed `scenario/2` document. It writes its audit and sidecars below
+`replays/`; `--update-baselines` mints `baselines/` PNGs from the run's
+screenshots afterwards (visual baselines — see `visual.md`).
+
+
 ## Connection settings (BYO only — skip this by default)
 
 Only needed when attaching to an external, already-running Chrome. If you did
