@@ -174,6 +174,14 @@ fn rule_for(verb: &Verb) -> VerbRule {
             params_required: &["direction"],
             ..VerbRule::default()
         },
+        // `on` optional (default: viewport center); `params.degrees`
+        // required (signed; + = clockwise); `params.radius` optional.
+        Verb::Rotate => VerbRule {
+            required: &[DoField::Params],
+            forbidden: &[DoField::Value],
+            params_required: &["degrees"],
+            ..VerbRule::default()
+        },
         Verb::Loop => VerbRule {
             required: &[DoField::Params],
             forbidden: &[DoField::On, DoField::Value],
@@ -684,5 +692,33 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("must not carry 'value'"));
+    }
+
+    #[test]
+    fn rotate_requires_degrees_allows_no_on() {
+        let s = parse(json!({ "id": "s1", "intent": "x", "kind": "do", "verb": "rotate" }));
+        assert!(assert_verb_shape(&s)
+            .unwrap_err()
+            .to_string()
+            .contains("requires 'params'"));
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "rotate",
+            "params": {}
+        }));
+        assert!(assert_verb_shape(&s)
+            .unwrap_err()
+            .to_string()
+            .contains("degrees"));
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "rotate",
+            "params": { "degrees": 90 }
+        }));
+        assert!(assert_verb_shape(&s).is_ok());
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "rotate",
+            "on": { "raw": { "kind": "css", "value": "#dial" }, "reason": "r" },
+            "params": { "degrees": -45, "radius": 60 }
+        }));
+        assert!(assert_verb_shape(&s).is_ok());
     }
 }

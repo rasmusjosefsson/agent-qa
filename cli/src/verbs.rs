@@ -513,6 +513,51 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                 other => bail!("step '{id}' pinch: unexpected result {other:?}"),
             }
         }
+        Verb::Rotate => {
+            let p = params.ok_or_else(|| anyhow!("step '{id}' rotate: params required"))?;
+            let mut num = |key: &str| -> Result<Option<f64>> {
+                p.get(key)
+                    .map(|v| match v {
+                        serde_json::Value::Number(n) => n.as_f64().ok_or_else(|| {
+                            anyhow!("step '{id}' rotate: params.{key} must be a number")
+                        }),
+                        serde_json::Value::String(s) => {
+                            let s = crate::value::substitute_scenario_vars(s, scope);
+                            s.parse::<f64>().map_err(|_| {
+                                anyhow!("step '{id}' rotate: params.{key} must be a number")
+                            })
+                        }
+                        _ => bail!("step '{id}' rotate: params.{key} must be a number"),
+                    })
+                    .transpose()
+            };
+            let degrees = num("degrees")?
+                .ok_or_else(|| anyhow!("step '{id}' rotate: params.degrees is required"))?;
+            let radius = num("radius")?.unwrap_or(120.0);
+            let ep = match on {
+                Some(loc) => Some(
+                    drag_endpoint(loc, scope, ctx.scenario_dir)
+                        .map_err(|e| anyhow!("step '{id}' rotate: {e}"))?,
+                ),
+                None => None,
+            };
+            let out = browser::eval_expression(
+                ctx.session,
+                &crate::dom_activate::build_rotate_js(ep.as_ref(), degrees, radius),
+            )
+            .map_err(|e| anyhow!("step '{id}' rotate: {e}"))?;
+            let trimmed = out.trim();
+            let code: String =
+                serde_json::from_str(trimmed).unwrap_or_else(|_| trimmed.to_string());
+            match code.as_str() {
+                "true" => Ok(None),
+                "el-miss" => bail!("step '{id}' rotate: origin element not found"),
+                "no-touch" => bail!(
+                    "step '{id}' rotate: browser lacks Touch/TouchEvent — rotate can't be synthesized"
+                ),
+                other => bail!("step '{id}' rotate: unexpected result {other:?}"),
+            }
+        }
         Verb::Frame => {
             let p = params.ok_or_else(|| anyhow!("step '{id}' frame: params required"))?;
             let sel = if p.get("main").and_then(|v| v.as_bool()) == Some(true) {

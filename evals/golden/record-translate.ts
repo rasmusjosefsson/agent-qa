@@ -171,6 +171,26 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
               ...(args[1] != null ? { distance: args[1] } : {}),
             },
           });
+        case "rotateBySelector":
+          // args[0] = css, args[1] = signed degrees (+ cw), args[2] =
+          // optional orbit radius px.
+          return doStep(intent, {
+            verb: "rotate",
+            on: css(args[0]),
+            params: {
+              degrees: args[1],
+              ...(args[2] != null ? { radius: args[2] } : {}),
+            },
+          });
+        case "rotatePage":
+          // args[0] = signed degrees, args[1] = optional radius px — no `on`.
+          return doStep(intent, {
+            verb: "rotate",
+            params: {
+              degrees: args[0],
+              ...(args[1] != null ? { radius: args[1] } : {}),
+            },
+          });
         case "scrollToBySelector":
           return doStep(intent, { verb: "scrollTo", on: css(args[0]) });
         case "scrollTop":
