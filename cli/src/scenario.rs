@@ -181,6 +181,11 @@ pub enum Verb {
     /// clears. Values go through scenario-var substitution. Apply before
     /// `goto` (or before `reload`) for the app to observe the state.
     State,
+    /// Switch the session's frame context: `params.selector` = a CSS
+    /// selector for the iframe to enter, or `params.main = true` to return
+    /// to the top document. Locators on later steps resolve inside the
+    /// selected frame.
+    Frame,
     /// Browser emulation — maps onto `agent-browser set …`. `params` may
     /// carry any of: `device` (preset name, e.g. "iPhone 12"), `geo`
     /// `{lat,lng}`, `offline` (bool), `colorScheme` ("dark"|"light"),

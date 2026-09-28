@@ -57,6 +57,14 @@ pub struct RunOptions {
     /// to `<scenarios_root>/<sid>/scenario.json`.
     pub source: ScenarioSource,
     pub profile: Option<String>,
+    /// `--persona <id>` — a `_personas/<id>/persona.json` record under the
+    /// scenarios root; resolved before dispatch into `profile` + credential
+    /// env vars (CLI mirror of the workbench's persona picker).
+    pub persona: Option<String>,
+    /// `--environment <id>` — a `_environments/<id>/environment.json`
+    /// record; its `params`/`baseUrl` merge under `--param` overrides and
+    /// its `auth.*` config lands as `AGENT_QA_ENV_*` vars.
+    pub environment: Option<String>,
     pub session_name: String,
     /// `--heal-from-run <runId>` — pre-load caller-driven heal overrides
     /// from a prior run's `replays/<runId>/heal-responses/<stepId>.json`
@@ -1998,7 +2006,8 @@ pub fn cli(args: &[String]) -> Result<u8> {
         bail!("--watch already re-runs on every save; --runs N inside it is redundant");
     }
 
-    let parsed = parse_args(&flags.filtered)?;
+    let mut parsed = parse_args(&flags.filtered)?;
+    crate::run_auth::apply(&mut parsed)?;
     if flags.watch {
         return cli_watch(&parsed, &flags);
     }
@@ -2618,6 +2627,8 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     }
     let mut positional: Option<String> = None;
     let mut profile: Option<String> = None;
+    let mut persona: Option<String> = None;
+    let mut environment: Option<String> = None;
     let mut session: Option<String> = None;
     let mut heal_from_run: Option<String> = None;
     let mut headed = false;
@@ -2645,6 +2656,15 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         match a.as_str() {
             "--profile" => profile = it.next().cloned().or_else(|| bail_missing("--profile")),
             s if s.starts_with("--profile=") => profile = Some(s["--profile=".len()..].to_string()),
+            "--persona" => persona = it.next().cloned().or_else(|| bail_missing("--persona")),
+            s if s.starts_with("--persona=") => persona = Some(s["--persona=".len()..].to_string()),
+            "--environment" | "--env" => {
+                environment = it.next().cloned().or_else(|| bail_missing("--environment"))
+            }
+            s if s.starts_with("--environment=") => {
+                environment = Some(s["--environment=".len()..].to_string())
+            }
+            s if s.starts_with("--env=") => environment = Some(s["--env=".len()..].to_string()),
             "--session" => session = it.next().cloned().or_else(|| bail_missing("--session")),
             s if s.starts_with("--session=") => session = Some(s["--session=".len()..].to_string()),
             "--heal-from-run" => {
@@ -2740,6 +2760,8 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     Ok(RunOptions {
         source,
         profile,
+        persona,
+        environment,
         session_name,
         heal_from_run,
         headed,
@@ -2835,7 +2857,8 @@ fn help_text() -> &'static str {
 
 Usage:
   agent-qa replay <sid | path/to/scenario.json>
-                  [--profile <p>] [--session <name>]
+                  [--profile <p>] [--persona <id>] [--environment <id>]
+                  [--session <name>]
                   [--param name=value] [-p name=value]
                   [--heal-from-run <runId>] [--dry-run]
                   [--no-sidecars] [--quiet | -q] [--plain]
@@ -2860,6 +2883,21 @@ replays/latest.txt.
                          Duplicate name is last-wins. Recorded in
                          audit.parameters[] (sensitive=true →
                          [REDACTED]).
+--persona <id>           Replay as a persona — reads
+                         <scenarios>/_personas/<id>/persona.json, injects
+                         its credentials (literal or vault: refs resolved
+                         via $VAULT_ADDR) into env, and sets the profile
+                         (session <profile>-session) so env.open's
+                         useProfile op authenticates. CLI mirror of the
+                         workbench persona picker.
+--environment <id>, --env <id>
+                         Replay against a named environment —
+                         <scenarios>/_environments/<id>/environment.json.
+                         Its params + baseUrl merge under --param
+                         overrides; auth.config lands as AGENT_QA_ENV_*
+                         vars; auth.creds merge under the persona's
+                         credentials. With --persona and no flag, the
+                         default (or sole) environment is used.
 --dry-run                load + validate + mint run id + write the
                          initial audit row, but skip env.open /
                          env.close and step dispatch entirely. The
@@ -3099,6 +3137,8 @@ mod tests {
         let opts = RunOptions {
             source: ScenarioSource::Path(jfile.clone()),
             profile: None,
+            persona: None,
+            environment: None,
             session_name: "test".into(),
             heal_from_run: None,
             headed: false,
@@ -3184,6 +3224,8 @@ mod tests {
         let opts = RunOptions {
             source: ScenarioSource::Path(jfile),
             profile: None,
+            persona: None,
+            environment: None,
             session_name: "vp".into(),
             heal_from_run: None,
             headed: false,
@@ -3250,6 +3292,8 @@ mod tests {
         let opts = RunOptions {
             source: ScenarioSource::Path(jfile),
             profile: None,
+            persona: None,
+            environment: None,
             session_name: "fc".into(),
             heal_from_run: None,
             headed: false,
@@ -3426,6 +3470,8 @@ mod tests {
         let opts = RunOptions {
             source: ScenarioSource::Path(jfile),
             profile: None,
+            persona: None,
+            environment: None,
             session_name: "x".into(),
             heal_from_run: None,
             headed: false,
@@ -3498,6 +3544,8 @@ esac\nexit 0\n",
         RunOptions {
             source: ScenarioSource::Path(jfile),
             profile: None,
+            persona: None,
+            environment: None,
             session_name: "sx".into(),
             heal_from_run: None,
             headed: false,
@@ -3758,6 +3806,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         let opts = RunOptions {
             source: ScenarioSource::Path(jfile),
             profile: None,
+            persona: None,
+            environment: None,
             session_name: "sx".into(),
             heal_from_run: None,
             headed: false,
@@ -3828,6 +3878,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         let opts = RunOptions {
             source: ScenarioSource::Path(jfile),
             profile: None,
+            persona: None,
+            environment: None,
             session_name: "x".into(),
             heal_from_run: None,
             headed: false,
@@ -4614,6 +4666,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         let opts = RunOptions {
             source: ScenarioSource::Path(jfile),
             profile: None,
+            persona: None,
+            environment: None,
             session_name: "sx".into(),
             heal_from_run: None,
             headed: false,
@@ -4708,6 +4762,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         let opts = RunOptions {
             source: ScenarioSource::Path(jfile),
             profile: None,
+            persona: None,
+            environment: None,
             session_name: "sx".into(),
             heal_from_run: Some("rPRIOR".into()),
             headed: false,
@@ -4786,6 +4842,32 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         ])
         .unwrap();
         assert_eq!(opts.session_name, "explicit");
+    }
+
+    #[test]
+    fn parse_args_persona_and_environment_flags() {
+        let opts = parse_args(&[
+            "mysid".into(),
+            "--persona".into(),
+            "admin".into(),
+            "--environment".into(),
+            "staging".into(),
+        ])
+        .unwrap();
+        assert_eq!(opts.persona.as_deref(), Some("admin"));
+        assert_eq!(opts.environment.as_deref(), Some("staging"));
+        // = forms + --env alias
+        let opts = parse_args(&[
+            "mysid".into(),
+            "--persona=viewer".into(),
+            "--env=prod".into(),
+        ])
+        .unwrap();
+        assert_eq!(opts.persona.as_deref(), Some("viewer"));
+        assert_eq!(opts.environment.as_deref(), Some("prod"));
+        // neither set by default
+        let opts = parse_args(&["mysid".into()]).unwrap();
+        assert!(opts.persona.is_none() && opts.environment.is_none());
     }
 
     #[test]
@@ -4934,6 +5016,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         let opts = RunOptions {
             source: ScenarioSource::Path(jfile),
             profile: None,
+            persona: None,
+            environment: None,
             session_name: "evt".into(),
             heal_from_run: None,
             headed: false,
@@ -5030,6 +5114,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         let opts = RunOptions {
             source: ScenarioSource::Path(jfile),
             profile: None,
+            persona: None,
+            environment: None,
             session_name: "evtf".into(),
             heal_from_run: None,
             headed: false,
@@ -5105,6 +5191,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         let opts = RunOptions {
             source: ScenarioSource::Path(jfile),
             profile: None,
+            persona: None,
+            environment: None,
             session_name: "evtn".into(),
             heal_from_run: None,
             headed: false,
@@ -5158,6 +5246,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         let opts = RunOptions {
             source: ScenarioSource::Path(jfile),
             profile: None,
+            persona: None,
+            environment: None,
             session_name: "evtd".into(),
             heal_from_run: None,
             headed: false,
@@ -5348,6 +5438,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         let mk = |quiet: bool, plain: bool| RunOptions {
             source: ScenarioSource::Path("j.json".into()),
             profile: None,
+            persona: None,
+            environment: None,
             session_name: "s".into(),
             heal_from_run: None,
             headed: false,
