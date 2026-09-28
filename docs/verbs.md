@@ -18,7 +18,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `smart-click` | High-level click that resolves a label to a unique locator |
 | `truncate` | Drop the trailing N steps from the in-flight scenario |
 | `flush` | Persist the recorder buffer to `scenario.json` |
-| `verify` | Cross-check the on-disk scenario against recorder sidecars |
+| `verify [--fix]` | Check the active recording — dense step ids + paired snapshot/screenshot sidecars. `--fix` renumbers to dense s0.. ids, rewiring `{"from":"step"}` refs and moving sidecar files to match. |
 
 > `run-step`, `aria-snapshot`, and `buffer` are the primitives the local
 > **authoring editor** (`agent-qa web` → the *Editor* tab) shells
