@@ -60,12 +60,15 @@ the picture shifts materially.
 
 ### P2 — platform coverage
 
-9. **Mobile/touch**: `do/viewport` + `emulate` give layout, but no swipe/
-   tap-hold/pinch verbs; edge pages have no touch cases yet.
-10. **Geolocation/timezone**: #242 ships `geo`/`device` (device presets
-    bundle timezone+locale), but geolocation is *blocked on a permission
-    grant* — see P1 #3's finding. Timezone has no `set` subcommand in
-    agent-browser at all (documented gap in #242).
+9. ~~**Mobile/touch**~~ — gesture verbs shipped: `hold`/`swipe` (#259),
+   `pinch` (#262), `rotate` (#267); `contextmenu` recording catches real
+   right-clicks (#268). Remaining: no multi-touch *record* path (verbs
+   are authored, not captured).
+10. ~~**Geolocation/timezone**~~ — geo landed in #277 (origin-scoped
+    permission grant + flat-session override); `timezone`/`locale` ride
+    the same path (setTimezoneOverride + setLocaleOverride +
+    UA acceptLanguage — navigator.language, Intl, and the wire header
+    all covered; emulate-tc03 proves all three).
 11. ~~**WebSocket/SSE**~~ **done in #278** — sockets and event-streams
     fold into the network claims surface as `cdpws-*` entries (method
     `WS`, status 101, `wsFrames[]` per frame, `wsPayloadContains`
@@ -75,11 +78,10 @@ the picture shifts materially.
 
 ### P3 — ecosystem polish
 
-12. **`run-report` in CI** — the HTML report exists (#224) but no workflow
-    uploads it as an artifact yet.
-13. **Skill docs for edge sweeps** — the qaplayground skill covers the
-    Playground flow but not the edge-pages-lib pattern a new-site sweep
-    follows.
+12. ~~**`run-report` in CI**~~ — qa-gate renders + uploads per-run
+    `run-report.html` artifacts (#260).
+13. ~~**Skill docs for edge sweeps**~~ — the qaplayground skill documents
+    the edge-pages-lib + fixture-server pattern (#261).
 
 ## Recently closed (for orientation)
 

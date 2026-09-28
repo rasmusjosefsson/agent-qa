@@ -887,6 +887,8 @@ fn emulate_apply(
         "headers",
         "credentials",
         "permissions",
+        "timezone",
+        "locale",
     ];
     for k in params.keys() {
         if !KEYS.contains(&k.as_str()) {
@@ -989,6 +991,31 @@ fn emulate_apply(
                 .map_err(|e| anyhow!("resolve page origin: {e}"))?;
             crate::cdp::grant_permissions(session, &refs, origin.as_deref())
                 .map_err(|e| anyhow!("grant permissions {names:?}: {e}"))?;
+        }
+    }
+    // Timezone + locale have no `set` subcommand in agent-browser —
+    // they ride the same pooled flat-session Emulation.* path as geo.
+    // No page target → nothing to override on → bail with the fix.
+    if let Some(v) = params.get("timezone") {
+        let tz = subst(v, scope)?;
+        if !crate::cdp::emulate_override(
+            session,
+            "Emulation.setTimezoneOverride",
+            serde_json::json!({ "timezoneId": tz }),
+        )
+        .map_err(|e| anyhow!("set timezone override: {e}"))?
+        {
+            bail!("emulate timezone needs a page target — place the step after a goto");
+        }
+    }
+    if let Some(v) = params.get("locale") {
+        let loc = subst(v, scope)?;
+        // Locale is Intl + navigator.language + Accept-Language — the
+        // helper applies all three (see cdp::set_locale_override).
+        if !crate::cdp::set_locale_override(session, &loc)
+            .map_err(|e| anyhow!("set locale override: {e}"))?
+        {
+            bail!("emulate locale needs a page target — place the step after a goto");
         }
     }
     if let Some(v) = params.get("offline") {

@@ -135,7 +135,9 @@ HTTP auth. Keys map onto `agent-browser set …`:
     "reducedMotion": true,
     "headers": { "X-QA-Suite": "golden" },
     "credentials": { "user": "admin", "pass": "{{adminPass}}" },
-    "offline": false
+    "offline": false,
+    "timezone": "Europe/Stockholm",
+    "locale": "sv-SE"
   }
 }
 ```
@@ -149,12 +151,15 @@ HTTP auth. Keys map onto `agent-browser set …`:
 | `reducedMotion` | adds `reduced-motion` to the media call when true             |
 | `headers`       | `set headers {json}` — extra headers on subsequent requests   |
 | `credentials`   | `set credentials <user> <pass>` — HTTP auth for this + new tabs|
+| `permissions`   | array of CDP permission names granted for the page's origin    |
+| `timezone`      | IANA name — `Emulation.setTimezoneOverride` (place after goto) |
+| `locale`        | BCP-47 tag — `Emulation.setLocaleOverride` (place after goto)  |
 
 At least one key is required; unknown keys fail at dispatch. Strings go
 through `{{var}}` substitution. Apply BEFORE the `goto`/`reload` you want
 to observe — emulation set mid-page doesn't retroactively change requests
-already made. Timezone/locale emulation isn't reachable through
-agent-browser's `set` surface yet.
+already made — except `timezone`/`locale`, which need a live page target
+(place them after a `goto`; they apply immediately via CDP).
 
 ### Waits
 
