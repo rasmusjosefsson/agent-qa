@@ -288,27 +288,33 @@ function coverageOf(steps) {
   let doSteps = 0;
   let checked = 0;
   let bare = 0;
-  let prevWasDo = false;
+  let shotCovered = 0;
+  let prevDoId = null;
   for (const s of steps) {
     const isDo = s && s.kind === 'do';
     const isCheck = s && s.kind === 'check';
     if (isDo) {
-      if (prevWasDo) bare += 1;
+      if (prevDoId) bare += 1;
       doSteps += 1;
-      prevWasDo = true;
+      prevDoId = s.id;
     } else if (isCheck) {
-      if (prevWasDo) {
+      if (prevDoId) {
         checked += 1;
-        prevWasDo = false;
+        if (s.claim && s.claim.subject && s.claim.subject.shot === prevDoId) {
+          shotCovered += 1;
+        }
+        prevDoId = null;
       }
     }
   }
-  if (prevWasDo) bare += 1;
+  if (prevDoId) bare += 1;
   return {
     doSteps,
     checked,
     bare,
+    shotCovered,
     ratio: doSteps === 0 ? 1 : checked / doSteps,
+    shotRatio: doSteps === 0 ? 1 : shotCovered / doSteps,
   };
 }
 
@@ -3890,19 +3896,69 @@ function createRequestHandler(root, deps, chat) {
         const runId = decodeURIComponent(segAll[4]);
         if (!isSafeSegment(sid) || !isSafeSegment(runId)) return badRequest(res, 'unsafe id');
         const body = await readJsonBody(req);
+        const runDir = path.join(root, sid, 'replays', runId);
+        const baselineDir = path.join(root, sid, 'baselines');
+        // {all:true} promotes EVERY screenshot captured this run — the
+        // "apply new goldens" path after an intentional UI change.
+        if (body.all === true) {
+          let names = [];
+          try {
+            names = await fsp.readdir(path.join(runDir, 'screenshots'));
+          } catch {
+            return notFound(res, 'no screenshots captured in this run');
+          }
+          const stepIds = names
+            .filter((n) => n.endsWith('.png') && isSafeSegment(n.slice(0, -4)))
+            .map((n) => n.slice(0, -4))
+            .sort();
+          if (!stepIds.length) return notFound(res, 'no screenshots captured in this run');
+          await fsp.mkdir(baselineDir, { recursive: true });
+          for (const stepId of stepIds) {
+            await fsp.copyFile(
+              path.join(runDir, 'screenshots', `${stepId}.png`),
+              path.join(baselineDir, `${stepId}.png`),
+            );
+          }
+          return sendJson(res, 200, { ok: true, minted: stepIds });
+        }
         const stepId = typeof body.stepId === 'string' ? body.stepId : '';
         if (!isSafeSegment(stepId)) return badRequest(res, 'stepId (safe segment) is required');
-        const runDir = path.join(root, sid, 'replays', runId);
         const shot = path.join(runDir, 'screenshots', `${stepId}.png`);
         try {
           await fsp.stat(shot);
         } catch {
           return notFound(res, 'no screenshot for this step in this run');
         }
-        const baselineDir = path.join(root, sid, 'baselines');
         await fsp.mkdir(baselineDir, { recursive: true });
         await fsp.copyFile(shot, path.join(baselineDir, `${stepId}.png`));
         return sendJson(res, 200, { ok: true, minted: [stepId] });
+      }
+
+      // POST /api/scenarios/crawl {url, session?, sid?, max?} — spawn
+      // `agent-qa crawl` to draft a coverage scenario from a live page.
+      // The crawl is synchronous (one page visit + a DOM eval) so a plain
+      // runCli await is the right shape.
+      if (req.method === 'POST' && p === '/api/scenarios/crawl') {
+        if (!deps || !deps.runCli) {
+          return sendJson(res, 503, { error: 'crawl unavailable: agent-qa CLI not resolved' });
+        }
+        const body = await readJsonBody(req);
+        const url = typeof body.url === 'string' ? body.url.trim() : '';
+        if (!/^https?:\/\//.test(url)) return badRequest(res, 'url (http/https) is required');
+        const args = ['crawl', url];
+        if (typeof body.session === 'string' && body.session.trim()) {
+          args.push('--session', body.session.trim());
+        }
+        if (typeof body.sid === 'string' && body.sid.trim()) {
+          if (!isSafeSegment(body.sid.trim())) return badRequest(res, 'unsafe sid');
+          args.push('--sid', body.sid.trim());
+        }
+        const max = Number(body.max);
+        if (Number.isInteger(max) && max > 0) args.push('--max', String(max));
+        const r = await deps.runCli(args);
+        if (r.spawnError) return sendJson(res, 503, { error: 'agent-qa CLI not runnable' });
+        if (r.code !== 0) return sendJson(res, 500, { error: (r.stderr || '').trim() || 'crawl failed' });
+        return sendJson(res, 200, { ok: true, stdout: (r.stdout || '').trim() });
       }
 
       if (req.method !== 'GET' && req.method !== 'HEAD') {

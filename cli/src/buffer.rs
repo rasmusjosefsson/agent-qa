@@ -62,7 +62,7 @@ fn parse_index(value: &str, label: &str) -> Result<usize> {
         .map_err(|_| anyhow!("{label} must be a non-negative integer; got {value:?}"))
 }
 
-fn normalize_ids(steps: &mut [Step]) {
+pub(crate) fn normalize_ids(steps: &mut [Step]) -> HashMap<String, String> {
     // Rewire `{"from":"step","stepId":…}` values and `opensFromStepId`
     // before renumbering so references keep pointing at the same step.
     // References to a step that no longer exists keep their old id.
@@ -80,6 +80,7 @@ fn normalize_ids(steps: &mut [Step]) {
     for (index, step) in steps.iter_mut().enumerate() {
         step.set_id(format!("s{index}"));
     }
+    renames
 }
 
 fn rewrite_step_refs(step: &mut Step, renames: &HashMap<String, String>) {
@@ -105,6 +106,13 @@ fn rewrite_step_refs(step: &mut Step, renames: &HashMap<String, String>) {
         Step::Check { claim, context, .. } => {
             if let Some(value) = &mut claim.value {
                 rewrite_step_refs_json(value, renames);
+            }
+            // {"shot": "<stepId>"} references a step id like any other
+            // step ref — renumbering must rewire it or the claim dangles.
+            if let crate::scenario::ClaimSubject::Shot { shot, .. } = &mut claim.subject {
+                if let Some(new) = renames.get(shot.as_str()) {
+                    *shot = new.clone();
+                }
             }
             rewrite_context_refs(context, renames);
         }
@@ -356,6 +364,16 @@ fn cmd_load(args: &[String]) -> Result<u8> {
         }
     }
     let sid = sid.ok_or_else(|| anyhow!("usage: buffer load <sid> [--force]"))?;
+    let steps = load_into_buffer(sid, "default", force)?;
+    println!("loaded {sid} into the buffer ({steps} step(s))");
+    Ok(0)
+}
+
+/// Seed the active recorder state with a saved scenario's steps (same sid,
+/// so `flush` writes back to it). `session` is the browser session the
+/// caller intends to keep driving — record-step captures sidecars there.
+/// Returns the number of seeded steps. Reused by `record continue`.
+pub(crate) fn load_into_buffer(sid: &str, session: &str, force: bool) -> Result<usize> {
     if let Some(existing) = RecorderState::try_load_active()? {
         if !existing.steps.is_empty() && !force {
             bail!(
@@ -375,7 +393,7 @@ fn cmd_load(args: &[String]) -> Result<u8> {
     let mut state = RecorderState::new(
         sid.to_string(),
         sc.intent.clone(),
-        "default".into(),
+        session.to_string(),
         crate::recorder_state::RecorderBaseline::KeepSession,
         Some(format!("scenario:{sid}")),
         crate::browser::BrowserConnection::default(),
@@ -392,8 +410,7 @@ fn cmd_load(args: &[String]) -> Result<u8> {
     state.original = Some(value);
     let steps = state.steps.len();
     state.save()?;
-    println!("loaded {sid} into the buffer ({steps} step(s))");
-    Ok(0)
+    Ok(steps)
 }
 
 #[cfg(test)]
@@ -460,6 +477,28 @@ mod tests {
         assert_eq!(check["context"]["tab"]["opensFromStepId"], "s2");
         let last = serde_json::to_value(&steps[2]).unwrap();
         assert_eq!(last["value"]["stepId"], "s1"); // old s0 → new s1
+        std::env::remove_var(crate::paths::RECORD_DIR_ENV);
+    }
+
+    #[test]
+    fn delete_rewires_shot_claim_refs() {
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var(crate::paths::RECORD_DIR_ENV, tmp.path());
+        let mut state = state();
+        state.steps = serde_json::from_value(serde_json::json!([
+            {"id":"s0","intent":"drop","kind":"do","verb":"reload"},
+            {"id":"s1","intent":"capture","kind":"do","verb":"reload"},
+            {"id":"s2","intent":"assert visual","kind":"check",
+             "claim":{"subject":{"shot":"s1"},"predicate":"matches"}}
+        ]))
+        .unwrap();
+        state.save().unwrap();
+        // Removing s0 renumbers s1→s0; the shot claim must follow it.
+        cmd_delete(&["0".into()]).unwrap();
+        let steps = RecorderState::load_active().unwrap().steps;
+        let check = serde_json::to_value(&steps[1]).unwrap();
+        assert_eq!(check["claim"]["subject"]["shot"], "s0");
         std::env::remove_var(crate::paths::RECORD_DIR_ENV);
     }
 

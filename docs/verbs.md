@@ -7,9 +7,11 @@ The full set of CLI verbs at a glance. Every verb also responds to
 
 | Verb | What it does |
 | --- | --- |
+| `init [dir] [--force]` | Bootstrap a directory: `agent-qa.toml` (`scenarios_root = ./scenarios`), a `scenarios/hello` smoke scenario, `.gitignore` for run artifacts. Idempotent. |
 | `start` | Mint a new scenario directory + skeleton `scenario.json` |
 | `record-step` | Append one step to the in-flight scenario via the recorder |
 | `record pause \| resume \| status` | Freeze capture while you set up page state — record append paths (`record-step`, `smart-click`, `fill-unique`, the editor's auto-record) drop steps while paused instead of writing them. `status --json` emits `{sid, intent, session, paused, steps, startedAt}`. |
+| `record continue <sid>` | Extend an existing scenario: replay it to its end state in `--session` (default `default`), seed the buffer with its steps, keep recording — `flush` writes the extended scenario back to the same sid. `--skip-replay` when hand-driving to the end state. |
 | `run-step <do|check> <draft-json>` | Dispatch ONE trigger payload against the live session for author-time feedback, without recording. Same direct draft shapes as `record-step`; prints a `{ok,…}` JSON line. `--session`. |
 | `aria-snapshot` | Dump the live page's accessibility tree as structured picker rows (a thin adapter over `agent-browser snapshot`). Flags: `--interactive`, `--session`. |
 | `cdp-url [--session] [--json]` | Print the live session's CDP WebSocket endpoint. Powers the editor's inline live-browser pane (screencast + drive-to-record: clicks, typing, select commits, checkbox/radio toggles, and named-key presses all land as steps). Read-only. |
@@ -18,7 +20,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `smart-click` | High-level click that resolves a label to a unique locator |
 | `truncate` | Drop the trailing N steps from the in-flight scenario |
 | `flush` | Persist the recorder buffer to `scenario.json` |
-| `verify` | Cross-check the on-disk scenario against recorder sidecars |
+| `verify [--fix]` | Check the active recording — dense step ids + paired snapshot/screenshot sidecars. `--fix` renumbers to dense s0.. ids, rewiring `{"from":"step"}` refs and moving sidecar files to match. |
 
 > `run-step`, `aria-snapshot`, and `buffer` are the primitives the local
 > **authoring editor** (`agent-qa web` → the *Editor* tab) shells
@@ -32,6 +34,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `replay <sid \| path>` | Run a scenario. Flags: `--profile`, `--session`, `--param name=value`, `--heal-from-run <runId>`, `--dry-run`, `--no-sidecars`, `--runs <N>`, `--quiet`/`-q`, `--tag <label>`, `--output-audit <path>`, `--from <stepId>` (skip earlier steps — needs a warm session at that state), `--until <stepId>` (stop after it, inclusive) |
 | `list` | Enumerate scenarios (root mode) or one scenario's replays. Flags: `--json`, `--filter <substr>`, `--limit <N>` |
 | `compare <a> <b>` | Diff two replay run directories. Alias `diff`. |
+| `crawl <url>` | Coverage scaffolding — enumerate same-origin links + interactive elements and write a draft scenario (goto + shot claim per route) to `<scenarios_root>/crawl-<host>/` plus a `crawl-report.json` authoring inventory. Flags: `--session`, `--out`, `--max`, `--sid`. |
 | `audit show <sid> <runId \| latest>` | Pretty-print one replay's audit.json. `--json` for raw. |
 | `audit list <sid>` | Table of every run (incl. \`dur(s)\` column). Flags: `--json`, `--passed` / `--failed`, `--tag <substr>`, `--profile <substr>`, `--limit <N>`, `--slow <secs>`, `--sort duration\|runId-desc`, `--since <iso-ts>`, `--until <iso-ts>` |
 | `audit stats <sid>` | Pass/fail/tag rollup for one scenario, incl. avg duration. Flags: `--json`, `--since`, `--until`. |
@@ -46,6 +49,10 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `audit slow <sid>` | Flag steps whose duration regressed — every one of the last `--recent` pass runs (default 2) exceeds the earlier-run median by `+--pct%` (default 50) and `--min-ms` (default 250). Pass rows only; a fail's `ms` is the timeout budget, not step cost. |
 | `audit health` | Cross-scenario rollup of `flaky` + `slow` + `heal-chronic` at their defaults — one row per scenario with silent degradation, none when the suite is quiet. `--json` emits one compact line (the workbench consumes it to badge scenario rows). |
 | `audit trend <sid>` | Outcome + duration trend over the scenario's runs — pass%, median secs, a `✓/✗` outcome line, and a duration sparkline. `--limit N` (default: all runs) windows to the latest N; `--json` emits the same data structured. |
+| `audit cluster` | Group step failures across every scenario's runs by normalized error signature (quoted literals + digit runs stripped) — one root cause across N runs reads as one cluster with its member list. `--min-size N` (default 2) hides lone failures; `--json` for the structured list. |
+| `audit verdict <sid> <runId \| latest>` | One-word triage for the run: `PASS` (exit 0) green and clean, `FIX` (exit 2) green but self-corrected (auto-heals or value-rejections — review heal.jsonl + promote), `BLOCK` (exit 1) failed. `--json` for the structured verdict incl. the offending stepIds. |
+
+
 
 ## Heal
 
