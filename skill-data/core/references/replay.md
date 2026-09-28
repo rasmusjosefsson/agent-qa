@@ -53,6 +53,16 @@ so the auto-heal ladder does not engage on them.
 Store translated labels there instead of hard-coding display strings in the
 contract; a missing file or key fails the step with the available keys.
 
+`--har` records the run's traffic as `<run>/network.har` (HAR 1.2 — open in
+DevTools/Charles when a claim needs the full payload). Harnesses and CI jobs
+can force replay flags without editing call sites via the
+`AGENT_QA_REPLAY_ARGS` env var — whitespace-separated flags applied before
+argv, so an explicit command-line flag still wins:
+
+```bash
+AGENT_QA_REPLAY_ARGS="--har" bun golden:all
+```
+
 If replay fails because a captured value changed (a value rejection, not a
 locator miss — auto-heal never retries those), use the audited correction
 flow. Do not mutate a scenario during replay.

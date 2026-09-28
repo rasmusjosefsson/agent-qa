@@ -1757,6 +1757,20 @@ fn parse_args_with_runs(args: &[String]) -> Result<(RunOptions, u32, u32)> {
     if runs > 1 && retry > 1 {
         bail!("--runs and --retry are mutually exclusive (repeat-N vs until-pass)");
     }
+    // AGENT_QA_REPLAY_ARGS: whitespace-separated flags applied BEFORE the
+    // command line, so an explicit argv flag still overrides it. Lets
+    // harnesses (golden libs, CI jobs) force flags like --har without
+    // editing every replay call site.
+    let mut filtered = filtered;
+    if let Ok(extra) = std::env::var("AGENT_QA_REPLAY_ARGS") {
+        let extra = extra.trim();
+        if !extra.is_empty() {
+            let mut merged: Vec<String> = extra.split_whitespace().map(str::to_string).collect();
+            merged.extend(filtered);
+            filtered = merged;
+            eprintln!("[v2-replay] AGENT_QA_REPLAY_ARGS applied: {extra}");
+        }
+    }
     let opts = parse_args(&filtered)?;
     Ok((opts, runs, retry))
 }
@@ -2758,6 +2772,16 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
     fn parse_args_with_runs_rejects_zero_and_non_int() {
         parse_args_with_runs(&["./j.json".into(), "--runs".into(), "0".into()]).unwrap_err();
         parse_args_with_runs(&["./j.json".into(), "--runs".into(), "x".into()]).unwrap_err();
+    }
+
+    #[test]
+    fn replay_args_env_applies_and_argv_overrides() {
+        std::env::set_var("AGENT_QA_REPLAY_ARGS", "--har --dry-run");
+        let res = parse_args_with_runs(&["./j.json".into()]);
+        std::env::remove_var("AGENT_QA_REPLAY_ARGS");
+        let (opts, _runs, _retry) = res.unwrap();
+        assert!(opts.har, "--har from AGENT_QA_REPLAY_ARGS applied");
+        assert!(opts.dry_run, "--dry-run from the env applied");
     }
 
     #[test]
