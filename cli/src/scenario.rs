@@ -186,6 +186,14 @@ pub enum Verb {
     /// to the top document. Locators on later steps resolve inside the
     /// selected frame.
     Frame,
+    /// Browser emulation — maps onto `agent-browser set …`. `params` may
+    /// carry any of: `device` (preset name, e.g. "iPhone 12"), `geo`
+    /// `{lat,lng}`, `offline` (bool), `colorScheme` ("dark"|"light"),
+    /// `reducedMotion` (bool), `headers` ({name:value}), `credentials`
+    /// `{user,pass}` (HTTP auth). Applied in a fixed order (device first,
+    /// since it resets viewport+UA). String values go through
+    /// scenario-var substitution.
+    Emulate,
     #[serde(rename = "loop")]
     Loop,
     Group,
