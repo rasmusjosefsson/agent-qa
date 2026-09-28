@@ -1,6 +1,7 @@
 // web/src/lib/runs-api.ts
 // Typed wrappers for the read-only /api/scenarios/* endpoints.
 import type {
+  AuditTrend,
   CompareReport,
   RunDetail,
   RunSummary,
@@ -28,6 +29,13 @@ export function getHealth(): Promise<{ health: ScenarioHealth[] }> {
 
 export function getScenarioDef(sid: string): Promise<{ sid: string; scenario: ScenarioDef }> {
   return getJson(`/api/scenarios/${encodeURIComponent(sid)}/scenario`)
+}
+
+// `audit trend` rollup for one scenario — outcome glyphs + duration
+// sparkline for the Runs header. trend is null when the scenario has
+// no replayed runs or the CLI is unavailable.
+export function getTrend(sid: string, limit = 20): Promise<{ sid: string; trend: AuditTrend | null }> {
+  return getJson(`/api/scenarios/${encodeURIComponent(sid)}/audit/trend?limit=${limit}`)
 }
 
 export function getRuns(sid: string): Promise<{ sid: string; replays: RunSummary[] }> {
@@ -126,6 +134,25 @@ export async function acceptShot(
   return { ok: false, error: j.error || String(res.status) }
 }
 
+
+// POST .../runs/:runId/heal-promote — absorb the run's suggested locator
+// patch for stepId into scenario.json (the web-side `heal-promote --apply`).
+// 409 means the rebase guard fired (scenario.json drifted since the patch
+// was written — surface the stderr so the user re-runs to re-derive it).
+export async function promoteHeal(
+  sid: string,
+  runId: string,
+  stepId: string
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch(
+    `/api/scenarios/${encodeURIComponent(sid)}/runs/${encodeURIComponent(runId)}/heal-promote`,
+    { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stepId }) }
+  )
+  if (res.ok) return { ok: true }
+  const j = (await res.json().catch(() => ({}))) as { error?: string }
+  return { ok: false, error: j.error || String(res.status) }
+}
+
 // Same route with {all:true} — promote every screenshot captured in the run
 // (the "apply new goldens" path after an intentional UI change).
 export async function acceptAllShots(
@@ -140,6 +167,7 @@ export async function acceptAllShots(
   if (res.ok && j.ok) return { ok: true, minted: j.minted || [] }
   return { ok: false, error: j.error || String(res.status) }
 }
+
 
 export async function deleteRun(sid: string, runId: string): Promise<{ ok: boolean; error?: string }> {
   const res = await fetch(
