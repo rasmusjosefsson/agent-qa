@@ -351,6 +351,11 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                 .map_err(|e| anyhow!("step '{id}' unmock: {e}"))?;
             Ok(None)
         }
+        Verb::State => {
+            let p = params.ok_or_else(|| anyhow!("step '{id}' state: params required"))?;
+            state_apply(ctx.session, p, scope).map_err(|e| anyhow!("step '{id}' state: {e}"))?;
+            Ok(None)
+        }
         Verb::Group => {
             bail!(
                 "step '{id}' verb=group should be flattened by the runner before dispatch_do is called"
@@ -695,6 +700,116 @@ fn scroll_to(session: &str, on: Option<&Locator>, scope: &mut ValueScope) -> any
 
 fn json_str(s: &str) -> String {
     serde_json::to_string(s).expect("string serializes")
+}
+
+/// `state` verb — seed web storage and cookies inside the live page.
+/// Cookies go through `document.cookie`, so `httpOnly` values can't be
+/// set (the JS world never sees them). Scenario-var substitution runs on
+/// every string value in the spec.
+fn state_apply(
+    session: &str,
+    params: &std::collections::BTreeMap<String, Json>,
+    scope: &mut ValueScope,
+) -> Result<()> {
+    let obj = params;
+    const KEYS: &[&str] = &[
+        "localStorage",
+        "sessionStorage",
+        "cookies",
+        "clearCookies",
+        "clearLocalStorage",
+        "clearSessionStorage",
+    ];
+    for k in obj.keys() {
+        if !KEYS.contains(&k.as_str()) {
+            bail!("unknown state key {k:?} (known: {})", KEYS.join(", "));
+        }
+    }
+    if obj.is_empty() {
+        bail!("params has no state to apply");
+    }
+
+    let mut body = String::new();
+    if obj
+        .get("clearLocalStorage")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        body.push_str("localStorage.clear();");
+    }
+    if obj
+        .get("clearSessionStorage")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        body.push_str("sessionStorage.clear();");
+    }
+    if obj
+        .get("clearCookies")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        // Expire every cookie name visible to JS (httpOnly cookies are
+        // invisible here, matching the seed limitation).
+        body.push_str(
+            "for (const c of document.cookie.split(';')) { const n = c.split('=')[0].trim(); \
+             if (n) document.cookie = n + '=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/'; }",
+        );
+    }
+    for (key, store) in [
+        ("localStorage", "localStorage"),
+        ("sessionStorage", "sessionStorage"),
+    ] {
+        if let Some(entries) = obj.get(key) {
+            let map = entries
+                .as_object()
+                .ok_or_else(|| anyhow!("params.{key} must be an object of key→value"))?;
+            for (k, v) in map {
+                let value = crate::value::substitute_scenario_vars(&value_to_string(v), scope);
+                body.push_str(&format!(
+                    "{store}.setItem({}, {});",
+                    json_str(k),
+                    json_str(&value)
+                ));
+            }
+        }
+    }
+    if let Some(cookies) = obj.get("cookies") {
+        let list = cookies
+            .as_array()
+            .ok_or_else(|| anyhow!("params.cookies must be an array of cookie objects"))?;
+        for c in list {
+            let name = c
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("params.cookies[].name is required"))?;
+            let value = c
+                .get("value")
+                .ok_or_else(|| anyhow!("params.cookies[{name:?}].value is required"))?;
+            let value = crate::value::substitute_scenario_vars(&value_to_string(value), scope);
+            let mut assignment = format!("{name}={value}");
+            if let Some(path) = c.get("path").and_then(|v| v.as_str()) {
+                assignment.push_str(&format!("; path={path}"));
+            }
+            if let Some(domain) = c.get("domain").and_then(|v| v.as_str()) {
+                assignment.push_str(&format!("; domain={domain}"));
+            }
+            if let Some(max_age) = c.get("maxAge").and_then(|v| v.as_u64()) {
+                assignment.push_str(&format!("; max-age={max_age}"));
+            }
+            if c.get("secure").and_then(|v| v.as_bool()).unwrap_or(false) {
+                assignment.push_str("; secure");
+            }
+            if c.get("sameSite").and_then(|v| v.as_str()).is_some() {
+                let ss = c.get("sameSite").and_then(|v| v.as_str()).unwrap();
+                assignment.push_str(&format!("; samesite={ss}"));
+            }
+            body.push_str(&format!("document.cookie = {};", json_str(&assignment)));
+        }
+    }
+    let expr = format!("(() => {{ {body} }})()");
+    browser::eval_expression(session, &expr)?;
+    Ok(())
 }
 
 // ---------- end helpers ----------

@@ -145,6 +145,17 @@ pub fn dispatch_check(
             scope,
             timeout,
         ),
+        ClaimSubject::Storage { storage, path } => check_storage(
+            storage,
+            path.as_deref(),
+            &claim.predicate,
+            claim.value.as_ref(),
+            ctx,
+            scope,
+        ),
+        ClaimSubject::Cookie { cookie } => {
+            check_cookie(cookie, &claim.predicate, claim.value.as_ref(), ctx, scope)
+        }
     }
 }
 
@@ -394,6 +405,79 @@ fn check_flag(
         }
         other => bail!("flag subject does not support predicate '{other:?}'"),
     }
+}
+
+// ---------- storage / cookie ----------
+
+fn check_storage(
+    storage: &crate::scenario::StorageSubject,
+    path: Option<&str>,
+    predicate: &Predicate,
+    expected: Option<&Json>,
+    ctx: &CheckContext,
+    scope: &mut ValueScope,
+) -> Result<()> {
+    let (key, store) = match storage {
+        crate::scenario::StorageSubject::Key(k) => (k.clone(), "local"),
+        crate::scenario::StorageSubject::Matcher(m) => {
+            let scope_name = m.scope.as_deref().unwrap_or("local");
+            if !matches!(scope_name, "local" | "session") {
+                bail!("storage scope must be \"local\" or \"session\", got {scope_name:?}");
+            }
+            (m.key.clone(), scope_name)
+        }
+    };
+    let key = substitute_scenario_vars(&key, scope);
+    let expr = format!(
+        "(() => {{ try {{ return {}.getItem({}); }} catch {{ return null; }} }})()",
+        if store == "session" {
+            "sessionStorage"
+        } else {
+            "localStorage"
+        },
+        serde_json::to_string(&key)?,
+    );
+    let raw = browser::eval_expression(ctx.session, &expr)?;
+    let raw = raw.trim();
+    let actual: Json = if raw.is_empty() || raw == "null" {
+        Json::Null
+    } else {
+        // getItem returns a string; the eval layer JSON-encodes it once,
+        // so decode first, then try parsing the stored text as JSON so
+        // `path` can walk structured values.
+        let decoded: String = serde_json::from_str(raw).unwrap_or_else(|_| raw.to_string());
+        serde_json::from_str(&decoded).unwrap_or(Json::String(decoded))
+    };
+    let actual = match path {
+        Some(p) if !actual.is_null() => select_json_path(&actual, p)?,
+        _ => actual,
+    };
+    check_value(&actual, predicate, expected, scope)
+        .map_err(|e| anyhow!("storage {store} key {key:?}: {e:#}"))
+}
+
+fn check_cookie(
+    cookie: &str,
+    predicate: &Predicate,
+    expected: Option<&Json>,
+    ctx: &CheckContext,
+    scope: &mut ValueScope,
+) -> Result<()> {
+    let name = substitute_scenario_vars(cookie, scope);
+    let expr = format!(
+        "(() => {{ const n = {}; for (const c of document.cookie.split(';')) {{ \
+         const i = c.indexOf('='); if (i > 0 && c.slice(0, i).trim() === n) \
+         return decodeURIComponent(c.slice(i + 1).trim()); }} return null; }})()",
+        serde_json::to_string(&name)?,
+    );
+    let raw = browser::eval_expression(ctx.session, &expr)?;
+    let raw = raw.trim();
+    let actual: Json = if raw.is_empty() || raw == "null" {
+        Json::Null
+    } else {
+        Json::String(serde_json::from_str(raw).unwrap_or_else(|_| raw.to_string()))
+    };
+    check_value(&actual, predicate, expected, scope).map_err(|e| anyhow!("cookie {name:?}: {e:#}"))
 }
 
 // ---------- file ----------
@@ -1685,6 +1769,83 @@ mod tests {
                 "subject": { "flag": "my-flag" },
                 "predicate": "equals",
                 "value": true
+            }))
+            .unwrap();
+            let mut scope = ValueScope::default();
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: Path::new("."),
+                run_dir: None,
+            };
+            dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+            clear();
+        }
+
+        #[test]
+        fn storage_subject_parses_key_and_matcher_forms() {
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "storage": "token" },
+                "predicate": "exists"
+            }))
+            .unwrap();
+            assert!(matches!(
+                claim.subject,
+                ClaimSubject::Storage {
+                    storage: crate::scenario::StorageSubject::Key(_),
+                    ..
+                }
+            ));
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "storage": { "key": "cart", "scope": "session" }, "path": "$.total" },
+                "predicate": "gte",
+                "value": 0
+            }))
+            .unwrap();
+            match claim.subject {
+                ClaimSubject::Storage { storage, path } => {
+                    let crate::scenario::StorageSubject::Matcher(m) = storage else {
+                        panic!("expected matcher form");
+                    };
+                    assert_eq!(m.key, "cart");
+                    assert_eq!(m.scope.as_deref(), Some("session"));
+                    assert_eq!(path.as_deref(), Some("$.total"));
+                }
+                _ => panic!("expected storage subject"),
+            }
+        }
+
+        #[test]
+        fn cookie_subject_exists_reads_document_cookie() {
+            let _g = lock_env();
+            let tmp = TempDir::new().unwrap();
+            install_fake_eval(tmp.path(), "\"abc\"");
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "cookie": "session" },
+                "predicate": "equals",
+                "value": "abc"
+            }))
+            .unwrap();
+            let mut scope = ValueScope::default();
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: Path::new("."),
+                run_dir: None,
+            };
+            dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+            clear();
+        }
+
+        #[test]
+        fn storage_subject_walks_json_value_by_path() {
+            let _g = lock_env();
+            let tmp = TempDir::new().unwrap();
+            // localStorage returns the stored JSON text; the eval layer
+            // wraps it once, so the payload is a quoted string.
+            install_fake_eval(tmp.path(), "\"{\\\"profile\\\":{\\\"id\\\":\\\"u1\\\"}}\"");
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "storage": { "key": "user" }, "path": "$.profile.id" },
+                "predicate": "equals",
+                "value": "u1"
             }))
             .unwrap();
             let mut scope = ValueScope::default();

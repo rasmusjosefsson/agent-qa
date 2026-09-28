@@ -298,6 +298,38 @@
         },
         {
           "type": "object",
+          "required": ["storage"],
+          "additionalProperties": false,
+          "properties": {
+            "storage": {
+              "oneOf": [
+                { "type": "string", "minLength": 1 },
+                {
+                  "type": "object",
+                  "required": ["key"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "key": { "type": "string", "minLength": 1 },
+                    "scope": { "enum": ["local", "session"] }
+                  }
+                }
+              ]
+            },
+            "path": { "type": "string" }
+          },
+          "$comment": "storage claim subject — assert on a web-storage entry (localStorage by default; scope='session' for sessionStorage). exists/notExists for key presence; string predicates compare the value; 'path' walks into a JSON-encoded value."
+        },
+        {
+          "type": "object",
+          "required": ["cookie"],
+          "additionalProperties": false,
+          "properties": {
+            "cookie": { "type": "string", "minLength": 1 }
+          },
+          "$comment": "cookie claim subject — assert on a cookie visible to document.cookie (httpOnly cookies never appear). exists/notExists for presence; string predicates compare the value."
+        },
+        {
+          "type": "object",
           "required": ["console"],
           "additionalProperties": false,
           "properties": {
@@ -417,6 +449,7 @@
             "drag",
             "mock",
             "unmock",
+            "state",
             "loop",
             "group",
             "useTemplate"
