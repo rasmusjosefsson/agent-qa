@@ -27,13 +27,14 @@ pub fn run(args: &[String]) -> Result<u8> {
     let mut out_dir: Option<PathBuf> = None;
     let mut max_links = MAX_DEFAULT;
     let mut sid_override: Option<String> = None;
+    let mut console_checks = true;
 
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
         match a.as_str() {
             "-h" | "--help" | "help" => {
                 println!(
-                    "agent-qa crawl — draft a coverage scenario from a live page\n\nUsage:\n  agent-qa crawl <url> [options]\n\nOptions:\n  --session <name>   Browser session to drive (default: default)\n  --out <dir>        Output dir for scenario.json + crawl-report.json\n                     (default: <scenarios_root>/crawl-<host>)\n  --max <N>          Max same-origin links to cover (default {MAX_DEFAULT})\n  --sid <name>       Scenario id (default: crawl-<host>)\n\nThe draft is a goto + shot claim per discovered route — run `replay`,\nthen `shot-accept` to mint baselines."
+                    "agent-qa crawl — draft a coverage scenario from a live page\n\nUsage:\n  agent-qa crawl <url> [options]\n\nOptions:\n  --session <name>   Browser session to drive (default: default)\n  --out <dir>        Output dir for scenario.json + crawl-report.json\n                     (default: <scenarios_root>/crawl-<host>)\n  --max <N>          Max same-origin links to cover (default {MAX_DEFAULT})\n  --sid <name>       Scenario id (default: crawl-<host>)\n  --no-console-checks\n                     Skip the per-page 'no console errors' claims\n                     (on by default — a page that crashes JS isn't green).\n\nThe draft is a goto + shot claim + console check per discovered route —\nrun `replay`, then `shot-accept` to mint baselines."
                 );
                 return Ok(0);
             }
@@ -63,6 +64,7 @@ pub fn run(args: &[String]) -> Result<u8> {
                         .ok_or_else(|| anyhow::anyhow!("--sid requires a value"))?,
                 );
             }
+            "--no-console-checks" => console_checks = false,
             other if other.starts_with("--") => bail!("unknown flag {other:?}"),
             other => url = Some(other.to_string()),
         }
@@ -106,26 +108,25 @@ pub fn run(args: &[String]) -> Result<u8> {
     links.truncate(max_links);
 
     let mut steps: Vec<Value> = Vec::new();
-    let mut i = 0usize;
-    let mut push = |intent: &str, step: Value| {
-        i += 1;
-        let id = format!("s{i}");
-        let mut s = step;
-        s["id"] = json!(id);
-        s["intent"] = json!(intent);
-        steps.push(s);
-        i // caller uses the returned counter for shot refs
+    // One coverage unit: goto + shot claim (+ optional console-error check).
+    let cover = |steps: &mut Vec<Value>,
+                 i: &mut usize,
+                 label: &str,
+                 link: &str,
+                 console_checks: bool| {
+        *i += 1;
+        steps.push(json!({"id":format!("s{}",*i),"intent":format!("open {link}"),"kind":"do","verb":"goto","value":{"from":"literal","literal":link}}));
+        let n = *i;
+        *i += 1;
+        steps.push(json!({"id":format!("s{}",*i),"intent":format!("{label} renders"),"kind":"check","claim":{"subject":{"shot":format!("s{n}")},"predicate":"matches"}}));
+        if console_checks {
+            *i += 1;
+            steps.push(json!({"id":format!("s{}",*i),"intent":format!("{label}: no console errors"),"kind":"check","claim":{"subject":{"console":{"type":"error"}},"predicate":"notExists"}}));
+        }
     };
 
-    let goto = |intent: &str, href: &str| -> Value {
-        json!({"kind":"do","verb":"goto","value":{"from":"literal","literal":href},"intent":intent})
-    };
-    let shot = |of: usize, intent: &str| -> Value {
-        json!({"kind":"check","claim":{"subject":{"shot":format!("s{of}")},"predicate":"matches"},"intent":intent})
-    };
-
-    let n = push(&format!("open {url}"), goto(&format!("open {url}"), &url));
-    push("entry page renders", shot(n, "entry page renders"));
+    let mut idx = 0usize;
+    cover(&mut steps, &mut idx, "entry page", &url, console_checks);
 
     let mut covered = 0usize;
     for link in &links {
@@ -136,11 +137,7 @@ pub fn run(args: &[String]) -> Result<u8> {
         if link.contains('#') || pathish.contains('.') && !pathish.ends_with(".html") {
             continue;
         }
-        let n = push(&format!("open {link}"), goto(&format!("open {link}"), link));
-        push(
-            &format!("{link} renders"),
-            shot(n, &format!("{link} renders")),
-        );
+        cover(&mut steps, &mut idx, link, link, console_checks);
         covered += 1;
     }
 
@@ -171,8 +168,13 @@ pub fn run(args: &[String]) -> Result<u8> {
     .with_context(|| format!("crawl: write {}", report_path.display()))?;
 
     println!(
-        "crawl: {sid} — {covered} route(s) + entry, {} shot claim(s)",
-        steps.len() / 2
+        "crawl: {sid} — {covered} route(s) + entry, {} shot claim(s){}",
+        steps.len() / if console_checks { 3 } else { 2 },
+        if console_checks {
+            " + console-error checks"
+        } else {
+            ""
+        }
     );
     println!("  scenario: {}", scenario_path.display());
     println!(

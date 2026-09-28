@@ -3934,6 +3934,43 @@ function createRequestHandler(root, deps, chat) {
         return sendJson(res, 200, { ok: true, minted: [stepId] });
       }
 
+      // POST /api/scenarios/:sid/runs/:runId/heal-promote {stepId} — absorb the
+      // run's suggested locator patch for one step into scenario.json. Runs the
+      // CLI's `heal-promote --apply` so the rebase guard stays authoritative:
+      // exit 3 (scenario drifted since the patch was written) → 409.
+      if (
+        req.method === 'POST' &&
+        segAll[0] === 'api' &&
+        segAll[1] === 'scenarios' &&
+        segAll[3] === 'runs' &&
+        segAll[5] === 'heal-promote' &&
+        segAll.length === 6
+      ) {
+        const sid = decodeURIComponent(segAll[2]);
+        const runId = decodeURIComponent(segAll[4]);
+        if (!isSafeSegment(sid) || !isSafeSegment(runId)) return badRequest(res, 'unsafe id');
+        const body = await readJsonBody(req);
+        const stepId = typeof body.stepId === 'string' ? body.stepId : '';
+        if (!isSafeSegment(stepId)) return badRequest(res, 'stepId (safe segment) is required');
+        if (!deps || typeof deps.runCli !== 'function') {
+          return sendJson(res, 503, { error: 'heal-promote unavailable: agent-qa CLI not resolved' });
+        }
+        const r = await deps.runCli(
+          ['heal-promote', sid, '--run', runId, '--steps', stepId, '--apply'],
+          {}
+        );
+        if (r.spawnError) return sendJson(res, 500, { error: 'heal-promote failed to start' });
+        if (r.code === 3) {
+          return sendJson(res, 409, {
+            error: (r.stderr || 'scenario.json drifted since this patch was written — re-run to re-derive it').trim().slice(0, 2000),
+          });
+        }
+        if (r.code !== 0) {
+          return sendJson(res, 422, { error: (r.stderr || r.stdout || 'heal-promote failed').trim().slice(0, 2000) });
+        }
+        return sendJson(res, 200, { ok: true, promoted: stepId });
+      }
+
       // POST /api/scenarios/crawl {url, session?, sid?, max?} — spawn
       // `agent-qa crawl` to draft a coverage scenario from a live page.
       // The crawl is synchronous (one page visit + a DOM eval) so a plain
@@ -3960,6 +3997,7 @@ function createRequestHandler(root, deps, chat) {
         if (r.code !== 0) return sendJson(res, 500, { error: (r.stderr || '').trim() || 'crawl failed' });
         return sendJson(res, 200, { ok: true, stdout: (r.stdout || '').trim() });
       }
+
 
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         return sendJson(res, 405, { error: 'method not allowed' });
@@ -4033,6 +4071,29 @@ function createRequestHandler(root, deps, chat) {
           bridge.subscribe(res);
           req.on('close', () => bridge.unsubscribe(res));
           return undefined;
+        }
+        // /api/scenarios/:sid/audit/trend → the CLI's `audit trend` rollup:
+        // outcome glyph line + duration sparkline + pass/median counts for
+        // the Runs-pane header. ?limit=N windows to the latest N runs.
+        if (seg[3] === 'audit' && seg.length === 5 && seg[4] === 'trend') {
+          if (!deps || typeof deps.runCli !== 'function') {
+            return sendJson(res, 503, { error: 'audit trend unavailable: agent-qa CLI not resolved' });
+          }
+          const limitParam = url.searchParams.get('limit');
+          const args = ['audit', 'trend', sid, '--json'];
+          if (limitParam && /^\d+$/.test(limitParam)) {
+            args.push('--limit', limitParam);
+          }
+          try {
+            const r = await deps.runCli(args);
+            const parsed = lastJsonLine(r.stdout);
+            if (!parsed || typeof parsed !== 'object') {
+              return sendJson(res, 200, { sid, trend: null });
+            }
+            return sendJson(res, 200, { sid, trend: parsed });
+          } catch {
+            return sendJson(res, 200, { sid, trend: null });
+          }
         }
         // GET /api/scenarios/:sid/compare/<folder>/shots/<stepId> → that
         // step's pixel-diff png written by a `compare` run (the POST compare
