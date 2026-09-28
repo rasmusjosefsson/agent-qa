@@ -1,6 +1,7 @@
 // web/src/lib/runs-api.ts
 // Typed wrappers for the read-only /api/scenarios/* endpoints.
 import type {
+  AuditTrend,
   CompareReport,
   RunDetail,
   RunSummary,
@@ -28,6 +29,13 @@ export function getHealth(): Promise<{ health: ScenarioHealth[] }> {
 
 export function getScenarioDef(sid: string): Promise<{ sid: string; scenario: ScenarioDef }> {
   return getJson(`/api/scenarios/${encodeURIComponent(sid)}/scenario`)
+}
+
+// `audit trend` rollup for one scenario — outcome glyphs + duration
+// sparkline for the Runs header. trend is null when the scenario has
+// no replayed runs or the CLI is unavailable.
+export function getTrend(sid: string, limit = 20): Promise<{ sid: string; trend: AuditTrend | null }> {
+  return getJson(`/api/scenarios/${encodeURIComponent(sid)}/audit/trend?limit=${limit}`)
 }
 
 export function getRuns(sid: string): Promise<{ sid: string; replays: RunSummary[] }> {

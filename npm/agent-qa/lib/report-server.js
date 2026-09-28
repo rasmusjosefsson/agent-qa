@@ -3978,6 +3978,29 @@ function createRequestHandler(root, deps, chat) {
           req.on('close', () => bridge.unsubscribe(res));
           return undefined;
         }
+        // /api/scenarios/:sid/audit/trend → the CLI's `audit trend` rollup:
+        // outcome glyph line + duration sparkline + pass/median counts for
+        // the Runs-pane header. ?limit=N windows to the latest N runs.
+        if (seg[3] === 'audit' && seg.length === 5 && seg[4] === 'trend') {
+          if (!deps || typeof deps.runCli !== 'function') {
+            return sendJson(res, 503, { error: 'audit trend unavailable: agent-qa CLI not resolved' });
+          }
+          const limitParam = url.searchParams.get('limit');
+          const args = ['audit', 'trend', sid, '--json'];
+          if (limitParam && /^\d+$/.test(limitParam)) {
+            args.push('--limit', limitParam);
+          }
+          try {
+            const r = await deps.runCli(args);
+            const parsed = lastJsonLine(r.stdout);
+            if (!parsed || typeof parsed !== 'object') {
+              return sendJson(res, 200, { sid, trend: null });
+            }
+            return sendJson(res, 200, { sid, trend: parsed });
+          } catch {
+            return sendJson(res, 200, { sid, trend: null });
+          }
+        }
         // GET /api/scenarios/:sid/compare/<folder>/shots/<stepId> → that
         // step's pixel-diff png written by a `compare` run (the POST compare
         // route lives with the other POST dispatches, earlier in this handler).
