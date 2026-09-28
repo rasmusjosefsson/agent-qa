@@ -499,6 +499,7 @@
             "dialog",
             "download",
             "dblclick",
+            "rightclick",
             "tab",
             "viewport",
             "fileChooser",

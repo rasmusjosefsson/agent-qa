@@ -66,6 +66,11 @@ fn rule_for(verb: &Verb) -> VerbRule {
             forbidden: &[DoField::Value],
             ..VerbRule::default()
         },
+        Verb::RightClick => VerbRule {
+            required: &[DoField::On],
+            forbidden: &[DoField::Value],
+            ..VerbRule::default()
+        },
         Verb::Tab => VerbRule {
             required: &[DoField::Value],
             forbidden: &[DoField::On],

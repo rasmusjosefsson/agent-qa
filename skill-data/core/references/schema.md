@@ -306,6 +306,21 @@ headless too — no mobile emulation needed. Pages that only listen to
 `click`/`scroll` won't see them; a real `scrollTo`/`click` verb is still the
 right tool there.
 
+### Secondary click (rightclick)
+
+`do/rightclick` fires a secondary-button pointer+mouse chain on `on`
+(`pointerdown`/`mousedown` `button: 2` → `pointerup`/`mouseup` →
+`contextmenu`) — the gesture that opens context menus. Never fires a primary
+`click`, so handlers keyed on `click` stay quiet. It accepts every locator
+shape (role/css/testid/xpath/text, scope chains included). If the page opens a
+native dialog from the contextmenu handler, resolve it with the usual
+`dialog` step.
+
+```json
+{ "id": "s3", "intent": "open the context menu", "kind": "do", "verb": "rightclick",
+  "on": { "role": "button", "name": "Actions" } }
+```
+
 ### Downloads and file claims
 
 `do/download` clicks a trigger (`on` locator) and saves the browser download

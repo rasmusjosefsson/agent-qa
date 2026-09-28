@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head><title>Context Menu Fixture</title></head>
+<body>
+<main>
+  <div id="hot-spot" style="border:1px dashed #888; padding:24px">right-click the box</div>
+  <ul id="menu" role="menu" style="border:1px solid #333; padding:8px; display:none">
+    <li data-item="copy">Copy</li>
+    <li data-item="paste">Paste</li>
+  </ul>
+  <div id="out"></div>
+  <button id="alert-btn">right-click for a native alert</button>
+</main>
+<script>
+  const menu = document.getElementById('menu');
+  const out = document.getElementById('out');
+  document.getElementById('hot-spot').addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    menu.style.display = 'block';
+    menu.classList.add('open');
+  });
+  menu.querySelectorAll('li').forEach((li) => {
+    li.addEventListener('click', () => {
+      out.textContent = 'picked: ' + li.dataset.item;
+      menu.classList.remove('open');
+      menu.style.display = 'none';
+    });
+  });
+  document.getElementById('alert-btn').addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    alert('ctx alert');
+  });
+</script>
+</body>
+</html>
