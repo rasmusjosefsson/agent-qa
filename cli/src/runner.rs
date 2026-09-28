@@ -490,6 +490,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         let do_ctx = DoContext {
             session: &opts.session_name,
             scenario_dir: &scenario_dir,
+            visual_checks: scenario_has_shot_claims(&scenario),
         };
         let check_ctx = CheckContext {
             session: &opts.session_name,
@@ -1403,26 +1404,19 @@ fn capture_step_sidecars(
     }
 }
 
-/// Union of `mask` selectors declared on the scenario's `{"shot": ...}`
-/// claims. Walks the serialized steps so claims nested inside group/loop
+/// Serialized `subject` objects of every `{"shot": ...}` claim in the
+/// scenario. Walks the serialized steps so claims nested inside group/loop
 /// `params.steps` or `useTemplate` bodies count too — the same trick
 /// `scenario_uses_dialog` uses.
-fn scenario_shot_masks(scenario: &Scenario) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+fn scenario_shot_subjects(scenario: &Scenario) -> Vec<serde_json::Value> {
+    let mut out: Vec<serde_json::Value> = Vec::new();
     let v = serde_json::to_value(&scenario.steps).unwrap_or(serde_json::Value::Null);
-    fn walk(v: &serde_json::Value, out: &mut Vec<String>) {
+    fn walk(v: &serde_json::Value, out: &mut Vec<serde_json::Value>) {
         match v {
             serde_json::Value::Object(map) => {
                 if let Some(subject) = map.get("claim").and_then(|c| c.get("subject")) {
-                    let has_shot = subject.get("shot").and_then(|s| s.as_str()).is_some();
-                    if has_shot {
-                        if let Some(mask) = subject.get("mask").and_then(|m| m.as_array()) {
-                            for sel in mask.iter().filter_map(|m| m.as_str()) {
-                                if !out.iter().any(|o| o == sel) {
-                                    out.push(sel.to_string());
-                                }
-                            }
-                        }
+                    if subject.get("shot").and_then(|s| s.as_str()).is_some() {
+                        out.push(subject.clone());
                     }
                 }
                 for v in map.values() {
@@ -1441,6 +1435,31 @@ fn scenario_shot_masks(scenario: &Scenario) -> Vec<String> {
     out
 }
 
+/// True when the scenario carries any `{"shot": ...}` claim. Visual scenarios
+/// opt out of the warm-page `goto` reuse: a reused session otherwise diffs a
+/// stale document (old bundle, settled live data) against a baseline minted
+/// from a fresh load — the mask injects into the wrong DOM and the shot
+/// compares apples to oranges.
+fn scenario_has_shot_claims(scenario: &Scenario) -> bool {
+    !scenario_shot_subjects(scenario).is_empty()
+}
+
+/// Union of `mask` selectors declared on the scenario's `{"shot": ...}`
+/// claims.
+fn scenario_shot_masks(scenario: &Scenario) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for subject in scenario_shot_subjects(scenario) {
+        if let Some(mask) = subject.get("mask").and_then(|m| m.as_array()) {
+            for sel in mask.iter().filter_map(|m| m.as_str()) {
+                if !out.iter().any(|o| o == sel) {
+                    out.push(sel.to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Hide the shot-mask selectors by injecting a `<style>` tag —
 /// `visibility:hidden !important` keeps layout put and, unlike inline
 /// styles, keeps hiding nodes that remount between the eval and the
@@ -1453,7 +1472,10 @@ fn apply_shot_mask(session: &str, masks: &[String]) -> bool {
         "(() => {{ const sels = {sels}; document.getElementById('__qa_shot_mask')?.remove(); const st = document.createElement('style'); st.id = '__qa_shot_mask'; st.textContent = sels.map(s => s + ' {{ visibility: hidden !important; }}').join('\\n'); document.head.appendChild(st); return sels.length; }})()"
     );
     match browser::eval_expression(session, &js) {
-        Ok(_) => true,
+        Ok(out) => {
+            eprintln!("[v2-replay] shot mask applied: {out}");
+            true
+        }
         Err(e) => {
             eprintln!("[v2-replay] shot mask hide failed (capturing unmasked): {e}");
             false
@@ -2597,6 +2619,21 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         }))
         .unwrap();
         assert_eq!(scenario_shot_masks(&scenario), vec![".ts", ".live", ".ad"]);
+        assert!(scenario_has_shot_claims(&scenario));
+    }
+
+    #[test]
+    fn scenario_has_shot_claims_false_for_non_visual() {
+        let scenario: Scenario = serde_json::from_value(serde_json::json!({
+            "schema": "scenario/2", "id": "t", "intent": "t",
+            "steps": [
+                { "id": "s1", "intent": "go", "kind": "do", "verb": "goto", "value": {"from": "literal", "literal": "https://x"} },
+                { "id": "s2", "intent": "url", "kind": "check",
+                  "claim": { "subject": { "url": true }, "predicate": "exists" } }
+            ]
+        }))
+        .unwrap();
+        assert!(!scenario_has_shot_claims(&scenario));
     }
 
     #[test]

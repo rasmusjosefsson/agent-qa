@@ -75,6 +75,11 @@ flake the diff:
 {"check": {"shot": "s3", "mask": ["[data-qa-volatile]", "time"]}, "predicate": "matches"}
 ```
 
+A scenario with shot claims opts out of the warm-page `goto` skip: the step
+always navigates, so the diff compares a fresh document — a reused session can
+otherwise hold a stale DOM (an older bundle or settled live data) that no
+amount of masking fixes.
+
 ## Profiles
 
 | Verb | What it does |
