@@ -84,6 +84,16 @@ fn rule_for(verb: &Verb) -> VerbRule {
             params_required: &["files"],
             ..VerbRule::default()
         },
+        Verb::Mock => VerbRule {
+            required: &[DoField::Params],
+            forbidden: &[DoField::On, DoField::Value],
+            params_required: &["url"],
+            ..VerbRule::default()
+        },
+        Verb::Unmock => VerbRule {
+            forbidden: &[DoField::On, DoField::Value],
+            ..VerbRule::default()
+        },
         // `on` is the drag source; `params.to` is the drop target locator.
         Verb::Drag => VerbRule {
             required: &[DoField::On, DoField::Params],

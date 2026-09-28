@@ -739,6 +739,19 @@ pub fn network_requests(session: &str) -> Result<Vec<CapturedRequest>, AgentBrow
     })
 }
 
+/// `agent-browser network requests --clear` — drop the session's captured
+/// request log. Called at run start so a replayed session's network.json
+/// covers this run only (the capture is per-session and otherwise
+/// accumulates across replays sharing a session).
+pub fn network_clear(session: &str) -> Result<(), AgentBrowserError> {
+    run(
+        session,
+        ["network", "requests", "--clear"],
+        RunOpts::new().capture(),
+    )?;
+    Ok(())
+}
+
 /// `agent-browser --json network request <id>` — full record for one
 /// exchange, including `responseBody`.
 pub fn network_request(
@@ -751,6 +764,28 @@ pub fn network_request(
         RunOpts::new().capture(),
     )?;
     json_data("network request", &r.stdout)
+}
+
+/// `agent-browser network har start` — begin a HAR recording on the
+/// session. The daemon keeps accumulating entries until `har stop`.
+pub fn network_har_start(session: &str) -> Result<(), AgentBrowserError> {
+    run(
+        session,
+        ["network", "har", "start"],
+        RunOpts::new().capture(),
+    )?;
+    Ok(())
+}
+
+/// `agent-browser network har stop <path>` — flush the recording to
+/// `path` (a HAR 1.2 file) and end it.
+pub fn network_har_stop(session: &str, dest: &Path) -> Result<(), AgentBrowserError> {
+    run(
+        session,
+        ["network", "har", "stop", &dest.to_string_lossy()],
+        RunOpts::new().capture(),
+    )?;
+    Ok(())
 }
 
 pub fn open(session: &str, url: &str) -> Result<(), AgentBrowserError> {

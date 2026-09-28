@@ -355,6 +355,10 @@ async function scenarioSummary(root, sid) {
     hasScenario: !!scenario,
     intent: scenario?.intent ?? null,
     steps: Array.isArray(scenario?.steps) ? scenario.steps.length : null,
+    // scenario.json's tags[] — the field `replay --tags` selects on.
+    tags: Array.isArray(scenario?.tags)
+      ? scenario.tags.filter((t) => typeof t === 'string')
+      : [],
     // Same do→check heuristic as `scenario coverage`/`coverage-all`: a do is
     // covered iff the next step is a check. Lets case/plan dashboards flag
     // thin scenarios without a CLI round-trip.
@@ -1820,6 +1824,12 @@ async function handleCompare(req, res, deps, root, sid) {
     differingPixels: row[2] && row[2] !== '-' ? Number(row[2]) : null,
     hasDiffPng: row[1] === 'CHANGED',
   }));
+  const network = parseCompareTable(md, 'network').map((row) => ({
+    request: row[0],
+    outcome: row[1],
+    statusA: row[2],
+    statusB: row[3],
+  }));
   return sendJson(res, 200, {
     sid,
     folder,
@@ -1827,6 +1837,7 @@ async function handleCompare(req, res, deps, root, sid) {
     runB: head ? head[2] : null,
     snapshots,
     screenshots,
+    network,
   });
 }
 
