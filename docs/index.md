@@ -140,6 +140,7 @@ Never heal an explicit assertion to hide a regression. If the contract failed, r
 - [`architecture.md`](architecture.md) — codemap and runtime flows.
 - [`verbs.md`](verbs.md) — complete CLI verb reference.
 - [`visual-testing.md`](visual-testing.md) — golden screenshots: shot claims, baselines, re-mint loop.
+- [`github-action.md`](github-action.md) — `uses:` replay-on-PR gate for an app repo.
 - [`templates.md`](templates.md) — reusable sub-scenarios.
 - [`decisions/0002-agent-qa-wraps-agent-browser.md`](adr/0002-agent-qa-wraps-agent-browser.md) — the boundary decision.
 - `agent-qa skills core` — when you're about to record.
