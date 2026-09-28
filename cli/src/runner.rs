@@ -1520,7 +1520,30 @@ fn is_safe_step_id(s: &str) -> bool {
 // ---------- CLI verb ----------
 
 pub fn cli(args: &[String]) -> Result<u8> {
-    let (parsed, runs) = parse_args_with_runs(args)?;
+    let (parsed, runs, retry) = parse_args_with_runs(args)?;
+    if retry > 1 {
+        // --retry N: re-run until a pass or N attempts spent. Each attempt is
+        // its own replay dir, so a pass-after-retries leaves flake evidence in
+        // `audit list`/`audit flaky` instead of hiding it.
+        for attempt in 1..=retry {
+            eprintln!("[v2-replay] attempt {attempt}/{retry}");
+            match run(&parsed) {
+                Ok(summary) if summary.ok => {
+                    if attempt > 1 {
+                        eprintln!(
+                            "[v2-replay] flaky — passed on attempt {attempt}/{retry} after {} failure(s)",
+                            attempt - 1
+                        );
+                    }
+                    return Ok(0);
+                }
+                Ok(_) => {}
+                Err(e) => eprintln!("[v2-replay] attempt {attempt}/{retry} errored: {e}"),
+            }
+        }
+        eprintln!("[v2-replay] failed all {retry} attempt(s)");
+        return Ok(1);
+    }
     if runs <= 1 {
         let summary = run(&parsed)?;
         return Ok(if summary.ok { 0 } else { 1 });
@@ -1543,11 +1566,14 @@ pub fn cli(args: &[String]) -> Result<u8> {
     Ok(if all_ok { 0 } else { 1 })
 }
 
-/// Wrapper around [`parse_args`] that also peels off `--runs N` (a CLI
-/// loop count) before resolution. Defaults to 1.
-fn parse_args_with_runs(args: &[String]) -> Result<(RunOptions, u32)> {
+/// Wrapper around [`parse_args`] that also peels off `--runs N` (repeat N
+/// times regardless of outcome) and `--retry N` (re-run until pass, max N
+/// attempts) before resolution. They are mutually exclusive: --runs counts
+/// total executions for soak/perf collection; --retry bounds a flake hunt.
+fn parse_args_with_runs(args: &[String]) -> Result<(RunOptions, u32, u32)> {
     let mut filtered: Vec<String> = Vec::with_capacity(args.len());
     let mut runs: u32 = 1;
+    let mut retry: u32 = 1;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -1571,11 +1597,34 @@ fn parse_args_with_runs(args: &[String]) -> Result<(RunOptions, u32)> {
                     bail!("--runs must be >= 1");
                 }
             }
+            "--retry" => {
+                let n = it
+                    .next()
+                    .ok_or_else(|| anyhow!("--retry requires a positive integer"))?;
+                retry = n
+                    .parse::<u32>()
+                    .map_err(|_| anyhow!("--retry must be a positive integer; got {n:?}"))?;
+                if retry == 0 {
+                    bail!("--retry must be >= 1");
+                }
+            }
+            s if s.starts_with("--retry=") => {
+                let n = &s["--retry=".len()..];
+                retry = n
+                    .parse::<u32>()
+                    .map_err(|_| anyhow!("--retry must be a positive integer; got {n:?}"))?;
+                if retry == 0 {
+                    bail!("--retry must be >= 1");
+                }
+            }
             other => filtered.push(other.to_string()),
         }
     }
+    if runs > 1 && retry > 1 {
+        bail!("--runs and --retry are mutually exclusive (repeat-N vs until-pass)");
+    }
     let opts = parse_args(&filtered)?;
-    Ok((opts, runs))
+    Ok((opts, runs, retry))
 }
 
 fn parse_args(args: &[String]) -> Result<RunOptions> {
@@ -2536,7 +2585,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
 
     #[test]
     fn parse_args_with_runs_strips_and_parses() {
-        let (opts, runs) =
+        let (opts, runs, _retry) =
             parse_args_with_runs(&["./j.json".into(), "--runs".into(), "5".into()]).unwrap();
         assert_eq!(runs, 5);
         assert!(matches!(opts.source, ScenarioSource::Path(_)));
@@ -2544,13 +2593,14 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
 
     #[test]
     fn parse_args_with_runs_eq_form() {
-        let (_opts, runs) = parse_args_with_runs(&["./j.json".into(), "--runs=3".into()]).unwrap();
+        let (_opts, runs, _retry) =
+            parse_args_with_runs(&["./j.json".into(), "--runs=3".into()]).unwrap();
         assert_eq!(runs, 3);
     }
 
     #[test]
     fn parse_args_with_runs_default_is_one() {
-        let (_opts, runs) = parse_args_with_runs(&["./j.json".into()]).unwrap();
+        let (_opts, runs, _retry) = parse_args_with_runs(&["./j.json".into()]).unwrap();
         assert_eq!(runs, 1);
     }
 
@@ -2558,6 +2608,75 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
     fn parse_args_with_runs_rejects_zero_and_non_int() {
         parse_args_with_runs(&["./j.json".into(), "--runs".into(), "0".into()]).unwrap_err();
         parse_args_with_runs(&["./j.json".into(), "--runs".into(), "x".into()]).unwrap_err();
+    }
+
+    #[test]
+    fn parse_retry_parses_both_forms() {
+        let (_o, runs, retry) =
+            parse_args_with_runs(&["./j.json".into(), "--retry".into(), "3".into()]).unwrap();
+        assert_eq!((runs, retry), (1, 3));
+        let (_o, _r, retry) =
+            parse_args_with_runs(&["./j.json".into(), "--retry=2".into()]).unwrap();
+        assert_eq!(retry, 2);
+        let (_o, runs, retry) = parse_args_with_runs(&["./j.json".into()]).unwrap();
+        assert_eq!((runs, retry), (1, 1));
+        parse_args_with_runs(&["./j.json".into(), "--retry".into(), "0".into()]).unwrap_err();
+        parse_args_with_runs(&["./j.json".into(), "--retry".into(), "x".into()]).unwrap_err();
+    }
+
+    #[test]
+    fn retry_cli_returns_1_after_all_attempts_error() {
+        let _g = lock_env();
+        let work = TempDir::new().unwrap();
+        install_fake_browser(work.path(), &work.path().join("ab.log"));
+        // A scenario path that never resolves: run() errors every attempt.
+        let missing = work.path().join("nope").join("scenario.json");
+        let code = cli(&[
+            missing.to_string_lossy().to_string(),
+            "--retry".into(),
+            "3".into(),
+        ])
+        .unwrap();
+        assert_eq!(code, 1);
+        clear_fake_browser();
+    }
+
+    #[test]
+    fn retry_cli_exits_0_on_first_pass() {
+        let _g = lock_env();
+        let work = TempDir::new().unwrap();
+        install_fake_browser(work.path(), &work.path().join("ab.log"));
+        let jdir = work.path().join("sid");
+        fs::create_dir_all(&jdir).unwrap();
+        let jfile = jdir.join("scenario.json");
+        fs::write(&jfile, minimal_scenario()).unwrap();
+        let code = cli(&[
+            jfile.to_string_lossy().to_string(),
+            "--retry".into(),
+            "3".into(),
+        ])
+        .unwrap();
+        assert_eq!(code, 0);
+        // exactly one attempt — no extra run dirs minted
+        let runs = fs::read_dir(jdir.join("replays"))
+            .map(|d| d.flatten().filter(|e| e.path().is_dir()).count())
+            .unwrap_or(0);
+        assert_eq!(runs, 1);
+        clear_fake_browser();
+    }
+
+    #[test]
+    fn runs_and_retry_are_mutually_exclusive() {
+        parse_args_with_runs(&[
+            "./j.json".into(),
+            "--runs".into(),
+            "2".into(),
+            "--retry".into(),
+            "3".into(),
+        ])
+        .unwrap_err();
+        // retry alone with runs at its default is fine
+        parse_args_with_runs(&["./j.json".into(), "--retry".into(), "3".into()]).unwrap();
     }
 
     #[test]
