@@ -53,6 +53,17 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `audit verdict <sid> <runId \| latest>` | One-word triage for the run: `PASS` (exit 0) green and clean, `FIX` (exit 2) green but self-corrected (auto-heals or value-rejections — review heal.jsonl + promote), `BLOCK` (exit 1) failed. `--json` for the structured verdict incl. the offending stepIds. |
 
 
+## Plans
+
+Plans/cases/sets are the workbench's run-scope records under `<root>/_plans`, `_sets`, `_cases` (created/edited in the UI); `plan` is their terminal + CI twin.
+
+| Verb | What it does |
+| --- | --- |
+| `plan list` | Every plan with its resolved member count. `--json` emits one compact line. |
+| `plan cases <planId>` | Resolved member cases (caseId → scenario sid → title), in run order. `--json`. |
+| `plan run <planId>` | Replay every member case's linked scenario and roll up pass/fail/skip — the PR/CI gate entrypoint (`plan run regression --json`). Cases with no recorded scenario or a missing scenario dir are `SKIP`ped. Flags: `--profile <p>`, `--param k=v` (repeatable), `--headed`/`--headless`, `--dry-run`, `--no-sidecars`, `--json` (single-line rollup as the last line). Exit 0 iff every started run passed. |
+
+
 
 ## Heal
 
