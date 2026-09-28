@@ -373,6 +373,45 @@ pub fn run(args: &[String]) -> Result<u8> {
                 .ok_or_else(|| anyhow!("usage: scenario copy <sid> <new-sid>"))?;
             copy(from, to)
         }
+        Some("extract") => {
+            let sid = args.get(1).ok_or_else(|| {
+                anyhow!(
+                    "usage: scenario extract <sid> [--run <runId|latest>] [--through <stepId>] [--to <new-sid>] [--json]"
+                )
+            })?;
+            let mut run: Option<String> = None;
+            let mut through: Option<String> = None;
+            let mut to: Option<String> = None;
+            let mut json = false;
+            let mut i = 2;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--run" => {
+                        run = Some(args.get(i + 1).cloned().ok_or_else(|| anyhow!("--run expects a run id"))?);
+                        i += 1;
+                    }
+                    "--through" => {
+                        through = Some(
+                            args.get(i + 1).cloned().ok_or_else(|| anyhow!("--through expects a step id"))?,
+                        );
+                        i += 1;
+                    }
+                    "--to" => {
+                        to = Some(args.get(i + 1).cloned().ok_or_else(|| anyhow!("--to expects a new sid"))?);
+                        i += 1;
+                    }
+                    "--json" => json = true,
+                    s if s.starts_with("--run=") => run = Some(s["--run=".len()..].to_string()),
+                    s if s.starts_with("--through=") => {
+                        through = Some(s["--through=".len()..].to_string())
+                    }
+                    s if s.starts_with("--to=") => to = Some(s["--to=".len()..].to_string()),
+                    other => bail!("unexpected arg {other:?}; usage: scenario extract <sid> [--run <runId|latest>] [--through <stepId>] [--to <new-sid>] [--json]"),
+                }
+                i += 1;
+            }
+            extract(sid, run.as_deref(), through.as_deref(), to.as_deref(), json)
+        }
         Some("tag") => {
             let sid = args
                 .get(1)
@@ -771,9 +810,22 @@ fn copy(from_sid: &str, to_sid: &str) -> Result<u8> {
     let patched = serde_json::to_string_pretty(&parsed)?;
     fs::write(to_dir.join("scenario.json"), format!("{patched}\n"))
         .with_context(|| format!("write {}", to_dir.join("scenario.json").display()))?;
-    // Baselines are part of the scenario's meaning — a shot claim without its
-    // golden always fails, so the copy carries them. Replays stay run history.
-    let mut copied_baselines = 0usize;
+    let copied_baselines = copy_baselines(&from_dir, &to_dir)?;
+    println!(
+        "copied: {} → {}\nid: {:?} → {:?}\n(replays not copied; {} baseline(s) copied)",
+        scenario_file.display(),
+        to_dir.join("scenario.json").display(),
+        from_sid,
+        to_sid,
+        copied_baselines
+    );
+    Ok(0)
+}
+
+/// Baselines are part of a scenario's meaning — a shot claim without its
+/// golden always fails, so clones carry them. Replays stay run history.
+fn copy_baselines(from_dir: &Path, to_dir: &Path) -> Result<usize> {
+    let mut copied = 0usize;
     let from_baselines = from_dir.join("baselines");
     if from_baselines.is_dir() {
         let to_baselines = to_dir.join("baselines");
@@ -786,17 +838,187 @@ fn copy(from_sid: &str, to_sid: &str) -> Result<u8> {
             }
             fs::copy(entry.path(), to_baselines.join(entry.file_name()))
                 .with_context(|| format!("copy {}", entry.path().display()))?;
-            copied_baselines += 1;
+            copied += 1;
         }
     }
-    println!(
-        "copied: {} → {}\nid: {:?} → {:?}\n(replays not copied; {} baseline(s) copied)",
-        scenario_file.display(),
-        to_dir.join("scenario.json").display(),
-        from_sid,
-        to_sid,
-        copied_baselines
-    );
+    Ok(copied)
+}
+
+/// `scenario extract <sid>` — clone a scenario truncated at a run's failing
+/// step, so a replay failure becomes a minimal standalone repro. `--through
+/// <stepId>` cuts at an arbitrary step instead (e.g. extract a passing prefix
+/// to seed `record continue`).
+fn extract(
+    sid: &str,
+    run: Option<&str>,
+    through: Option<&str>,
+    to: Option<&str>,
+    json: bool,
+) -> Result<u8> {
+    let from_dir = crate::paths::scenario_dir(sid)?;
+    let scenario_file = from_dir.join("scenario.json");
+    if !scenario_file.is_file() {
+        bail!(
+            "scenario extract: no scenario.json at {} (corrupt directory?)",
+            scenario_file.display()
+        );
+    }
+    let replays = from_dir.join("replays");
+    let run_id = match run {
+        Some(r) if r != "latest" => r.to_string(),
+        _ => fs::read_to_string(replays.join("latest.txt"))
+            .map(|s| s.trim().to_string())
+            .ok()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| anyhow!("scenario extract: no runs for {sid:?} — replay it first"))?,
+    };
+    let events_path = replays.join(&run_id).join("events.jsonl");
+    if !events_path.is_file() {
+        bail!(
+            "scenario extract: no events.jsonl for run {run_id:?} at {}",
+            events_path.display()
+        );
+    }
+    // Last write wins per idx — a step logs `running` then its outcome.
+    let mut outcome: std::collections::BTreeMap<usize, (String, String)> =
+        std::collections::BTreeMap::new();
+    for line in fs::read_to_string(&events_path)
+        .with_context(|| format!("read {}", events_path.display()))?
+        .lines()
+    {
+        let Ok(ev) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let (Some(idx), Some(id), Some(status)) =
+            (ev["idx"].as_u64(), ev["id"].as_str(), ev["status"].as_str())
+        else {
+            continue;
+        };
+        if status == "running" && outcome.contains_key(&(idx as usize)) {
+            continue;
+        }
+        outcome.insert(idx as usize, (id.to_string(), status.to_string()));
+    }
+    if outcome.is_empty() {
+        bail!("scenario extract: run {run_id:?} recorded no step events");
+    }
+
+    let body = fs::read_to_string(&scenario_file)
+        .with_context(|| format!("read {}", scenario_file.display()))?;
+    let mut parsed: serde_json::Value = serde_json::from_str(&body)
+        .with_context(|| format!("parse {}", scenario_file.display()))?;
+    let steps_len = parsed["steps"].as_array().map(|a| a.len()).unwrap_or(0);
+
+    // events idx is the 1-based position in the steps array.
+    let (cut_idx, cut_reason) = if let Some(step_id) = through {
+        let pos = parsed["steps"]
+            .as_array()
+            .and_then(|a| a.iter().position(|s| s["id"].as_str() == Some(step_id)))
+            .ok_or_else(|| anyhow!("no step with id {step_id:?} in {sid}"))?;
+        (pos + 1, format!("through step {step_id:?}"))
+    } else {
+        let fail_idx = outcome
+            .iter()
+            .find(|(_, (_, status))| status == "fail")
+            .map(|(idx, _)| *idx)
+            .ok_or_else(|| {
+                anyhow!(
+                    "run {run_id:?} has no failing step — pass --through <stepId> to cut elsewhere"
+                )
+            })?;
+        let step_id = outcome
+            .get(&fail_idx)
+            .map(|(id, _)| id.clone())
+            .unwrap_or_default();
+        (fail_idx, format!("failing step {step_id:?}"))
+    };
+    if cut_idx > steps_len {
+        bail!("run events exceed the scenario's {steps_len} step(s) — stale run?")
+    }
+
+    // Mint a free sid: <sid>-extract, then -2, -3, …
+    let to_sid = match to {
+        Some(t) => {
+            if t.is_empty() || t.contains('/') || t.contains('\\') || t.starts_with('.') {
+                bail!("scenario extract: --to {t:?} must be a non-empty, slash-free, non-dotfile name");
+            }
+            t.to_string()
+        }
+        None => {
+            let mut candidate = format!("{sid}-extract");
+            let mut n = 2;
+            while crate::paths::scenario_dir(&candidate)
+                .map(|p| p.exists())
+                .unwrap_or(false)
+            {
+                candidate = format!("{sid}-extract-{n}");
+                n += 1;
+            }
+            candidate
+        }
+    };
+    let to_dir = crate::paths::scenario_dir(&to_sid)?;
+    if to_dir.exists() {
+        bail!(
+            "scenario extract: destination already exists at {} (refusing to overwrite)",
+            to_dir.display()
+        );
+    }
+    fs::create_dir_all(&to_dir).with_context(|| format!("create {}", to_dir.display()))?;
+
+    let total = steps_len;
+    if let Some(arr) = parsed["steps"].as_array_mut() {
+        arr.truncate(cut_idx);
+    }
+    let kept = parsed["steps"].as_array().map(|a| a.len()).unwrap_or(0);
+    if let Some(obj) = parsed.as_object_mut() {
+        obj.insert("id".into(), serde_json::Value::String(to_sid.clone()));
+        let intent = obj["intent"].as_str().unwrap_or("").to_string();
+        obj.insert(
+            "intent".into(),
+            serde_json::Value::String(format!("{intent} [extract: run {run_id}, {cut_reason}]")),
+        );
+        let tags = obj
+            .entry("tags")
+            .or_insert_with(|| serde_json::Value::Array(vec![]));
+        if let Some(arr) = tags.as_array_mut() {
+            arr.push(serde_json::Value::String("extract".into()));
+        }
+    }
+    schema::validate_value(&parsed).context("extracted scenario failed schema validation")?;
+    fs::write(
+        to_dir.join("scenario.json"),
+        format!("{}\n", serde_json::to_string_pretty(&parsed)?),
+    )
+    .with_context(|| format!("write {}", to_dir.join("scenario.json").display()))?;
+    let copied_baselines = copy_baselines(&from_dir, &to_dir)?;
+
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "ok": true,
+                "from": sid,
+                "to": to_sid,
+                "run": run_id,
+                "cutAt": cut_idx,
+                "keptSteps": kept,
+                "droppedSteps": total - kept,
+                "baselines": copied_baselines,
+            })
+        );
+    } else {
+        println!(
+            "extracted: {} → {}\nrun: {} ({})\nsteps: kept {}/{} ({} baseline(s) copied)",
+            scenario_file.display(),
+            to_dir.join("scenario.json").display(),
+            run_id,
+            cut_reason,
+            kept,
+            total,
+            copied_baselines
+        );
+    }
     Ok(0)
 }
 
@@ -4902,6 +5124,103 @@ mod tests {
         std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
         let err = delete("nope", true).unwrap_err().to_string();
         assert!(err.contains("not found"));
+        match prev {
+            Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    /// Write a scenario dir with `n` steps plus a run dir containing the
+    /// given events lines; returns the scenario dir.
+    fn extract_fixture(root: &Path, sid: &str, n: usize, events: &str) -> std::path::PathBuf {
+        let d = root.join(sid);
+        fs::create_dir_all(d.join("replays").join("r1")).unwrap();
+        let steps: Vec<serde_json::Value> = (1..=n)
+            .map(|i| {
+                serde_json::json!({"id": format!("s{i}"), "intent": format!("step {i}"), "kind": "do", "verb": "reload"})
+            })
+            .collect();
+        fs::write(
+            d.join("scenario.json"),
+            serde_json::json!({
+                "schema": "scenario/2",
+                "id": sid,
+                "intent": "the thing",
+                "env": {"open": [{"kind": "nav", "url": "https://example.com"}]},
+                "steps": steps,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(d.join("replays").join("latest.txt"), "r1").unwrap();
+        fs::write(d.join("replays").join("r1").join("events.jsonl"), events).unwrap();
+        d
+    }
+
+    #[test]
+    fn extract_truncates_at_first_failed_step() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        extract_fixture(
+            tmp.path(),
+            "login",
+            3,
+            concat!(
+                "{\"idx\":1,\"total\":3,\"id\":\"s1\",\"kind\":\"do:reload\",\"status\":\"running\"}\n",
+                "{\"idx\":1,\"total\":3,\"id\":\"s1\",\"kind\":\"do:reload\",\"status\":\"pass\",\"ms\":10}\n",
+                "{\"idx\":2,\"total\":3,\"id\":\"s2\",\"kind\":\"do:reload\",\"status\":\"running\"}\n",
+                "{\"idx\":2,\"total\":3,\"id\":\"s2\",\"kind\":\"do:reload\",\"status\":\"fail\",\"ms\":50}\n",
+            ),
+        );
+        assert_eq!(extract("login", None, None, None, false).unwrap(), 0);
+        let out = tmp.path().join("login-extract").join("scenario.json");
+        let sc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+        assert_eq!(sc["id"], "login-extract");
+        assert_eq!(sc["steps"].as_array().unwrap().len(), 2);
+        assert_eq!(sc["steps"][1]["id"], "s2");
+        assert!(sc["intent"].as_str().unwrap().contains("[extract: run r1"));
+        assert!(sc["tags"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("extract")));
+        // env.open survives — the extract replays standalone.
+        assert_eq!(sc["env"]["open"][0]["url"], "https://example.com");
+        match prev {
+            Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    #[test]
+    fn extract_through_cuts_at_named_step_and_requires_args() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        extract_fixture(
+            tmp.path(),
+            "shop",
+            4,
+            "{\"idx\":1,\"id\":\"s1\",\"kind\":\"do:reload\",\"status\":\"pass\"}\n",
+        );
+        // No failure in the run → bails without --through.
+        let err = extract("shop", None, None, None, false)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no failing step"), "{err}");
+        // --through cuts at the named step.
+        assert_eq!(
+            extract("shop", None, Some("s2"), Some("shop-prefix"), false).unwrap(),
+            0
+        );
+        let sc: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(tmp.path().join("shop-prefix/scenario.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(sc["steps"].as_array().unwrap().len(), 2);
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),

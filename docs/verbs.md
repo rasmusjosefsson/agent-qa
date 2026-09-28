@@ -146,6 +146,7 @@ amount of masking fixes.
 | `scenario field <file> <name>` | Print any top-level scenario field (scalars verbatim; object/array as compact JSON) |
 | `scenario rename <sid> <new>` | Rename a scenario directory + id field |
 | `scenario copy <sid> <new>` | Copy a scenario (replays not copied) |
+| `scenario extract <sid>` | Clone a scenario truncated at a run's first failing step — a minimal standalone repro. Defaults to the latest run; `--run <runId>` picks another, `--through <stepId>` cuts at an arbitrary step, `--to <new-sid>` names the clone (default `<sid>-extract`). Baselines carry over; the extract gets an `extract` tag. |
 | `scenario tag <sid>` | List or mutate a scenario's `tags[]` — the field `replay --tags` selects on. Flags: `--add <a,b>`, `--remove <c,d>`, `--json` |
 | `scenario delete <sid>` | Remove a scenario directory. `--yes` / `-y` confirms; otherwise dry-run. |
 | `scenario prune-replays <sid> --keep N` | Keep most recent N replays. `--yes` / `-y` confirms. |
