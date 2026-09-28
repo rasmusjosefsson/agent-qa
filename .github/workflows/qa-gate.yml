@@ -51,6 +51,16 @@ jobs:
           # carries per-run network.har + network.json for debugging.
           AGENT_QA_REPLAY_ARGS: "--har"
         run: bun golden:all
+      - name: render run reports
+        # One self-contained report.html per replayed run — dropped next to the
+        # run's artifacts so the qa-gate upload (and the dedicated reports
+        # artifact below) carries it. Failures here must not flip the gate.
+        if: always()
+        run: |
+          for d in evals/results/*/scenarios/*/; do
+            AGENT_QA_SCENARIOS_DIR="$(dirname "$d")" \
+              cli/target/debug/agent-qa run-report "$(basename "$d")" || true
+          done
       - name: upload gate evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -59,6 +69,13 @@ jobs:
           path: |
             evals/results/
             evals/scenarios/*/replays/
+          retention-days: 30
+      - name: upload run reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qa-gate-reports
+          path: evals/results/*/scenarios/*/replays/*/report.html
           retention-days: 30
       - name: post sticky verdict comment
         if: always()
