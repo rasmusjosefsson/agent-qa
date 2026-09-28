@@ -24,6 +24,7 @@ pub fn run(args: &[String]) -> Result<u8> {
     let mut sort_by_duration_desc = false;
     let mut sort_runid_desc = false;
     let mut since_ms: Option<u64> = None;
+    let mut trend_all = false;
     let mut until_ms: Option<u64> = None;
     let mut min_flips: usize = 2;
     let mut min_runs: usize = 3;
@@ -38,6 +39,7 @@ pub fn run(args: &[String]) -> Result<u8> {
                 return Ok(0);
             }
             "--json" => json_out = true,
+            "--all" => trend_all = true,
             "--format" => {
                 let v = it
                     .next()
@@ -260,7 +262,7 @@ pub fn run(args: &[String]) -> Result<u8> {
         "flaky" => flaky(&positionals, json_out, min_flips, min_runs),
         "slow" => slow(&positionals, json_out, slow_pct, slow_min_ms, recent_n, min_runs),
         "health" => health(json_out),
-        "trend" => trend(&positionals, json_out, limit),
+        "trend" => trend(&positionals, json_out, limit, trend_all),
         other => bail!(
             "unknown audit subverb {other:?} (try: show | list | stats | stats-all | diff | summary | exit-code | field | count | duration | flaky | slow | health | trend)"
         ),
@@ -1497,10 +1499,55 @@ fn collect_trend(dir: &std::path::Path, sid: &str, limit: Option<usize>) -> Tren
     }
 }
 
-fn trend(positionals: &[String], json_out: bool, limit: Option<usize>) -> Result<u8> {
+// Suite board: one trend row per scenario that has a replays/ dir.
+fn collect_trend_all(root: &std::path::Path, limit: Option<usize>) -> Vec<TrendOut> {
+    let mut sids: Vec<(String, PathBuf)> = match fs::read_dir(root) {
+        Ok(it) => it
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .filter_map(|p| {
+                let sid = p.file_name()?.to_string_lossy().into_owned();
+                p.join("replays").is_dir().then_some((sid, p))
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    sids.sort_by(|a, b| a.0.cmp(&b.0));
+    sids.iter()
+        .map(|(sid, dir)| collect_trend(dir, sid, limit))
+        .collect()
+}
+
+fn trend(positionals: &[String], json_out: bool, limit: Option<usize>, all: bool) -> Result<u8> {
+    if all {
+        let rows = collect_trend_all(&paths::scenarios_root(), limit);
+        if json_out {
+            println!("{}", serde_json::to_string(&rows)?);
+            return Ok(0);
+        }
+        println!(
+            "{:<24} {:>5} {:>5} {:>8}  outcomes / duration",
+            "scenario", "pass%", "runs", "median"
+        );
+        println!("{}", "-".repeat(100));
+        for r in &rows {
+            let total = r.passed + r.failed;
+            let pct = if total > 0 {
+                (r.passed as f64 / total as f64) * 100.0
+            } else {
+                0.0
+            };
+            println!(
+                "{:<24} {:>4.0}% {:>5} {:>7.2}s  {} {}",
+                r.scenario_id, pct, total, r.median_secs, r.outcomes, r.sparkline
+            );
+        }
+        return Ok(0);
+    }
     let sid = positionals
         .get(1)
-        .ok_or_else(|| anyhow!("usage: audit trend <sid> [--limit N] [--json]"))?;
+        .ok_or_else(|| anyhow!("usage: audit trend <sid> [--limit N] [--json] | audit trend --all [--limit N] [--json]"))?;
     let dir = paths::scenario_dir(sid)?;
     let out = collect_trend(&dir, sid, limit);
 
@@ -1695,7 +1742,7 @@ fn print_help() {
     println!(
                 "agent-qa audit \u{2014} inspect a replay's audit.json\n\nUsage:\n  agent-qa audit show <sid> <runId | latest> [--json | --format text|json|github]\n  agent-qa audit list <sid>                    Table view: every run's\n                                               summary / exit / profile / tag\n  agent-qa audit list <sid> --json             Structured rows on stdout\n  agent-qa audit list <sid> [--passed | --failed] [--tag <pat>] [--profile <pat>] [--limit N] [--slow <secs>] [--sort duration|runId-desc] [--since <iso-ts>] [--until <iso-ts>] [--format text|json|github]\n                                               Filters: case-insensitive substring\n                                               --passed/--failed are exit-code partitions\n  agent-qa audit stats <sid> [--since <iso-ts>] [--until <iso-ts>]\n                                               Pass/fail/tag rollup for one scenario\n  agent-qa audit stats <sid> --json            Structured rollup on stdout\n  agent-qa audit stats-all                     Per-scenario + overall pass/fail rollup\n  agent-qa audit stats-all --json              Structured rollup on stdout\n  agent-qa audit stats-all [--since <iso-ts>] [--until <iso-ts>]\n                                               Constrain to a date window\n  agent-qa audit diff <sid> <runIdA> <runIdB>  Unified diff between two replays'\n                                               audit.json (canonicalised JSON;\n                                               'latest' accepted for either side;\n                                               exit 1 on difference)\n  agent-qa audit summary <sid> <runId | latest>\n                                               Print just the summary line (one line out)\n  agent-qa audit exit-code <sid> <runId | latest>\n                                               Print just the run's exitCode (-1 if missing)\n  agent-qa audit field <sid> <runId | latest> <fieldName>\n                                               Print any top-level audit field. String/\n                                               number/bool print verbatim; null prints\n                                               empty; object/array prints compact JSON.\n  agent-qa audit count <sid>                   Print the number of runs under <sid>\n  agent-qa audit duration <sid> <runId | latest>\n                                               Print the run's duration in seconds\n                                               (finishedAt - startedAt, 3 decimals)\n  agent-qa audit flaky <sid> [--min-flips N] [--min-runs N] [--json]\n                                               Flag steps whose outcome interleaves\n                                               pass/fail across runs (outcome churn;\n                                               heal-chronic covers locator churn)\n  agent-qa audit slow <sid> [--pct N] [--min-ms N] [--recent N] [--min-runs N] [--json]\n                                               Flag steps whose recent pass median\n                                               regressed vs their earlier-run median\n                                               (default: last 2 runs >50% and >250ms\n                                               over baseline)\n  agent-qa audit health [--json]           Cross-scenario rollup of flaky + slow +
                                                heal-chronic — one row per scenario
-                                               that has silent degradation\n  agent-qa audit trend <sid> [--limit N] [--json]\n                                               Outcome + duration trend for the last N\n                                               runs (default all): pass%, median secs,\n                                               a ✓/✗ outcome line + a duration sparkline\n\n'latest' resolves to <sid>/replays/latest.txt if present, otherwise the\nhighest lex-sorted run directory (run_id is timestamp-prefixed)."
+                                               that has silent degradation\n  agent-qa audit trend <sid> [--limit N] [--json]\n                                               Outcome + duration trend for the last N\n                                               runs (default all): pass%, median secs,\n                                               a ✓/✗ outcome line + a duration sparkline\n  agent-qa audit trend --all [--limit N] [--json]\n                                               Suite board: one trend row per scenario\n\n'latest' resolves to <sid>/replays/latest.txt if present, otherwise the\nhighest lex-sorted run directory (run_id is timestamp-prefixed)."
     );
 }
 
@@ -2402,5 +2449,24 @@ mod tests {
         assert_eq!(out.outcomes, "✓");
         // Runs without audit.json are skipped in both lines — no misalignment.
         assert_eq!(out.sparkline, "▄");
+    }
+
+    #[test]
+    fn trend_all_rows_every_scenario_with_replays() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let a = tmp.path().join("sid-a");
+        write_audit_ms(&a, "2026-01-01__a", 0, 1000);
+        write_audit_ms(&a, "2026-01-02__b", 1, 4000);
+        let b = tmp.path().join("sid-b");
+        write_audit_ms(&b, "2026-01-01__a", 0, 9000);
+        // A scenario dir with no replays/ contributes no row.
+        std::fs::create_dir_all(tmp.path().join("sid-c")).unwrap();
+        let rows = collect_trend_all(tmp.path(), None);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].scenario_id, "sid-a");
+        assert_eq!(rows[0].outcomes, "✓✗");
+        assert_eq!(rows[1].scenario_id, "sid-b");
+        assert_eq!(rows[1].median_secs, 9.0);
     }
 }

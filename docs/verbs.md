@@ -46,6 +46,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `audit slow <sid>` | Flag steps whose duration regressed — every one of the last `--recent` pass runs (default 2) exceeds the earlier-run median by `+--pct%` (default 50) and `--min-ms` (default 250). Pass rows only; a fail's `ms` is the timeout budget, not step cost. |
 | `audit health` | Cross-scenario rollup of `flaky` + `slow` + `heal-chronic` at their defaults — one row per scenario with silent degradation, none when the suite is quiet. `--json` emits one compact line (the workbench consumes it to badge scenario rows). |
 | `audit trend <sid>` | Outcome + duration trend over the scenario's runs — pass%, median secs, a `✓/✗` outcome line, and a duration sparkline. `--limit N` (default: all runs) windows to the latest N; `--json` emits the same data structured. |
+| `audit trend --all` | Suite board: one trend row per scenario that has replays (sid, pass%, run count, median, outcomes, sparkline). `--limit N` windows each row to the latest N runs; `--json` emits the rows array. |
 
 ## Heal
 
