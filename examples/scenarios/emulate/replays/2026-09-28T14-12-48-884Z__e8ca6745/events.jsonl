@@ -1,6 +1,0 @@
-{"idx":1,"total":5,"id":"s1","intent":"emulate an iPhone 12 with a tagged header","kind":"do:emulate","status":"running"}
-{"idx":1,"total":5,"id":"s1","intent":"emulate an iPhone 12 with a tagged header","kind":"do:emulate","status":"pass","ms":200,"screenshot":"screenshots/s1.png","snapshot":"snapshots/s1.txt"}
-{"idx":2,"total":5,"id":"s2","intent":"reload the echo endpoint under emulation","kind":"do:goto","status":"running"}
-{"idx":2,"total":5,"id":"s2","intent":"reload the echo endpoint under emulation","kind":"do:goto","status":"pass","ms":100,"screenshot":"screenshots/s2.png","snapshot":"snapshots/s2.txt"}
-{"idx":3,"total":5,"id":"s3","intent":"the server saw the iPhone UA","kind":"check","status":"running"}
-{"idx":3,"total":5,"id":"s3","intent":"the server saw the iPhone UA","kind":"check","status":"fail","ms":0,"error":"element subject does not yet support predicate 'Contains'","screenshot":"screenshots/s3.png","snapshot":"snapshots/s3.txt"}
