@@ -29,6 +29,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 
@@ -369,6 +371,10 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         crate::browser::set_no_auto_dialog(true);
         let _ = crate::browser::eval_expression(&opts.session_name, "1");
     }
+    // Shot claims diff pixels — kill capture-time noise first (fonts still
+    // decoding, images mid-fetch, layout mid-frame) rather than absorbing
+    // it in tolerance. Bounded ~1.5s so it never meaningfully slows a run.
+    let stabilize_shots = scenario_uses_shots(&scenario);
 
     // 2. Mint run + prepare root.
     let run_id = mint_run_id(opts.profile.as_deref());
@@ -733,7 +739,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             match result {
                 Ok(()) => {
                     if !opts.no_sidecars {
-                        capture_step_sidecars(&run, id, &opts.session_name);
+                        capture_step_sidecars(&run, id, &opts.session_name, stabilize_shots);
                     }
                     summary.passed += 1;
                     emit_step_done(progress_mode, idx, total, true, &label, step_ms);
@@ -755,7 +761,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 }
                 Err(e) => {
                     if !opts.no_sidecars {
-                        capture_step_sidecars(&run, id, &opts.session_name);
+                        capture_step_sidecars(&run, id, &opts.session_name, stabilize_shots);
                     }
                     summary.ok = false;
                     let reason = format!("{e:#}");
@@ -1341,7 +1347,12 @@ fn apply_heal_override(step: &Step, corrected: &str) -> Step {
 /// Capture the post-step ARIA snapshot + screenshot keyed by literal
 /// stepId. Best-effort: any failure logs to stderr but does not fail
 /// the step. Mirrors the TS runner's sidecar-after-each-step shape.
-fn capture_step_sidecars(run: &crate::sidecar::RunPaths, step_id: &str, session: &str) {
+fn capture_step_sidecars(
+    run: &crate::sidecar::RunPaths,
+    step_id: &str,
+    session: &str,
+    stabilize_shots: bool,
+) {
     use crate::sidecar::{ensure_kind_dir, step_sidecar_path, write_step_sidecar, SidecarKind};
     if !is_safe_step_id(step_id) {
         eprintln!("[v2-replay] skip sidecars for unsafe stepId {step_id:?}");
@@ -1398,6 +1409,11 @@ fn capture_step_sidecars(run: &crate::sidecar::RunPaths, step_id: &str, session:
     if let Ok(dir) = ensure_kind_dir(run, SidecarKind::Screenshots) {
         let _ = dir; // keep the directory creation eager
     }
+    // Shot claims diff this image pixel-wise — wait for fonts/images/
+    // layout to settle first so a mid-decode frame doesn't read as drift.
+    if stabilize_shots {
+        stabilize_visual(session, 1500);
+    }
     if let Ok(path) = step_sidecar_path(run, SidecarKind::Screenshots, step_id) {
         match browser::screenshot(session, &path, true, Some(cap_ms)) {
             Ok(true) => {}
@@ -1407,6 +1423,65 @@ fn capture_step_sidecars(run: &crate::sidecar::RunPaths, step_id: &str, session:
             Err(e) => eprintln!("[v2-replay] screenshot {step_id} failed: {e}"),
         }
     }
+}
+
+/// Poll the page until fonts have decoded, all `<img>`s have completed,
+/// and `document.readyState` is `complete` — or `cap_ms` elapses. Sync-eval
+/// based (agent-browser `eval` doesn't await Promises): each poll returns a
+/// JSON status, and a settled status ends the wait. Soft-fail: any error
+/// or timeout just stops waiting — artifact fidelity only.
+fn stabilize_visual(session: &str, cap_ms: u64) {
+    let deadline = Instant::now() + Duration::from_millis(cap_ms);
+    loop {
+        let status = browser::eval_expression(
+            session,
+            "(() => { const imgs = Array.from(document.images || []).filter(i => !i.complete).length; return JSON.stringify({fonts: document.fonts ? document.fonts.status : 'loaded', imgs, ready: document.readyState}); })()",
+        );
+        match status {
+            Ok(raw) => {
+                // eval stdout may wrap the JSON in a quoted string — peel once.
+                let peeled = raw.trim().trim_matches('"').replace("\\\"", "\"");
+                let settled = serde_json::from_str::<serde_json::Value>(raw.trim())
+                    .or_else(|_| serde_json::from_str::<serde_json::Value>(&peeled))
+                    .map(|v| {
+                        v.get("fonts").and_then(|f| f.as_str()) == Some("loaded")
+                            && v.get("imgs").and_then(|i| i.as_u64()) == Some(0)
+                            && v.get("ready").and_then(|r| r.as_str()) == Some("complete")
+                    })
+                    .unwrap_or(false);
+                if settled {
+                    return;
+                }
+            }
+            Err(_) => return,
+        }
+        if Instant::now() >= deadline {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Whether the scenario contains a `check` claim on the `shot` subject
+/// (`{"shot": "<stepId>"}`) — anywhere, including steps nested in
+/// `group`/`loop` params and `useTemplate` bodies. Serialized-JSON walk
+/// like [`scenario_uses_dialog`] so nesting can't hide it.
+fn scenario_uses_shots(scenario: &Scenario) -> bool {
+    fn contains_shot_marker(v: &serde_json::Value) -> bool {
+        match v {
+            serde_json::Value::Object(map) => {
+                if map.contains_key("shot") {
+                    return true;
+                }
+                map.values().any(contains_shot_marker)
+            }
+            serde_json::Value::Array(items) => items.iter().any(contains_shot_marker),
+            _ => false,
+        }
+    }
+    let steps = serde_json::to_value(&scenario.steps).unwrap_or(serde_json::Value::Null);
+    let templates = serde_json::to_value(&scenario.templates).unwrap_or(serde_json::Value::Null);
+    contains_shot_marker(&steps) || contains_shot_marker(&templates)
 }
 
 /// Whether the scenario contains a `do` step with `verb: dialog` or a
@@ -2520,6 +2595,34 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         });
         let s: Scenario = serde_json::from_value(j).unwrap();
         assert!(!scenario_uses_dialog(&s));
+    }
+
+    #[test]
+    fn scenario_uses_shots_detects_claim_including_nested() {
+        let j = serde_json::json!({
+            "schema": "scenario/2", "id": "d", "intent": "x",
+            "steps": [
+                { "id": "s0", "intent": "open", "kind": "do", "verb": "goto",
+                  "value": { "from": "literal", "literal": "https://x" } },
+                { "id": "g1", "intent": "grp", "kind": "do", "verb": "group",
+                  "params": { "steps": [
+                      { "id": "sc", "intent": "visual", "kind": "check",
+                        "claim": { "subject": { "shot": "s0" }, "predicate": "matches" } }
+                  ]}}
+            ]
+        });
+        let s: Scenario = serde_json::from_value(j).unwrap();
+        assert!(scenario_uses_shots(&s));
+
+        let j = serde_json::json!({
+            "schema": "scenario/2", "id": "d", "intent": "x",
+            "steps": [
+                { "id": "c1", "intent": "url", "kind": "check",
+                  "claim": { "subject": { "url": true }, "predicate": "exists" } }
+            ]
+        });
+        let s: Scenario = serde_json::from_value(j).unwrap();
+        assert!(!scenario_uses_shots(&s));
     }
 
     #[test]
