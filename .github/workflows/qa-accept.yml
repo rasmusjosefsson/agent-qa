@@ -41,7 +41,7 @@ jobs:
         run: |
           echo "::error::cannot push goldens to a fork branch — run the ui-goldens dispatch job instead"
           exit 1
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ steps.pr.outputs.head_sha }}
       - uses: dtolnay/rust-toolchain@stable
@@ -120,7 +120,7 @@ jobs:
         run: |
           sha=$(gh pr view ${{ github.event.issue.number }} --json headRefOid --jq .headRefOid)
           echo "head_sha=$sha" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ steps.pr.outputs.head_sha }}
       - uses: dtolnay/rust-toolchain@stable
