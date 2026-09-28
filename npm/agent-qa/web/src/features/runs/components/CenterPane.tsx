@@ -242,7 +242,7 @@ export function CenterPane({
 
     return (
       <Pane>
-        <div className="border-b border-border px-4 py-3">
+        <div className="border-b border-border px-4 py-3" data-qa-volatile>
           <div className="flex items-center gap-2">
             <span
               className={cn(
@@ -360,7 +360,7 @@ export function CenterPane({
                     pending ? 'opacity-50' : !selected && 'hover:bg-muted/60'
                   )}
                 >
-                  <span className={cn('w-4 text-center', STATUS_TONE[st.status || ''] || 'text-muted-foreground')}>
+                  <span data-qa-volatile className={cn('w-4 text-center', STATUS_TONE[st.status || ''] || 'text-muted-foreground')}>
                     {icon(st.status)}
                   </span>
                   <span className="w-12 shrink-0 text-xs text-muted-foreground">
@@ -387,7 +387,7 @@ export function CenterPane({
                     )
                   })()}
                   {st.kind && <span className="shrink-0 text-xs text-muted-foreground">({st.kind})</span>}
-                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">{pending ? '' : fmtMs(st.ms)}</span>
+                  <span data-qa-volatile className="ml-auto shrink-0 text-xs text-muted-foreground">{pending ? '' : fmtMs(st.ms)}</span>
                 </button>
                 {st.id && !live && (
                   <button
