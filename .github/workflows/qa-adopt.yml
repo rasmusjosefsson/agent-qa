@@ -61,7 +61,7 @@ jobs:
           open('/tmp/scenario.json', 'w').write(scenario.strip() + '\n')
           print('extracted', len(scenario), 'bytes')
           PY
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ steps.pr.outputs.head_sha }}
       - uses: dtolnay/rust-toolchain@stable
