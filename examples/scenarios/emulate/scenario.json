@@ -1,0 +1,69 @@
+{
+  "schema": "scenario/2",
+  "id": "emulate",
+  "intent": "device + header emulation, proven by the page's own echo",
+  "env": {
+    "open": [{ "kind": "nav", "url": "https://httpbingo.org/user-agent", "intent": "land" }]
+  },
+  "steps": [
+    {
+      "id": "s1",
+      "intent": "emulate an iPhone 12 with a tagged header",
+      "kind": "do",
+      "verb": "emulate",
+      "params": {
+        "device": "iPhone 12",
+        "headers": { "X-QA-Suite": "golden" }
+      }
+    },
+    {
+      "id": "s2",
+      "intent": "reload the echo endpoint under emulation",
+      "kind": "do",
+      "verb": "reload"
+    },
+    {
+      "id": "s3",
+      "intent": "capture the echoed UA",
+      "kind": "do",
+      "verb": "read",
+      "on": { "raw": { "kind": "css", "value": "body" }, "reason": "echo endpoint body" },
+      "saveAs": "echoed_ua"
+    },
+    {
+      "id": "s4",
+      "intent": "the server saw the iPhone UA",
+      "kind": "check",
+      "claim": {
+        "subject": { "kind": "var", "name": "echoed_ua" },
+        "predicate": "contains",
+        "value": "iPhone"
+      }
+    },
+    {
+      "id": "s5",
+      "intent": "echo the request headers",
+      "kind": "do",
+      "verb": "goto",
+      "value": { "from": "literal", "literal": "https://httpbingo.org/headers" }
+    },
+    {
+      "id": "s6",
+      "intent": "capture the echoed headers",
+      "kind": "do",
+      "verb": "read",
+      "on": { "raw": { "kind": "css", "value": "body" }, "reason": "echo endpoint body" },
+      "saveAs": "echoed_headers"
+    },
+    {
+      "id": "s7",
+      "intent": "the X-QA-Suite header rode along",
+      "kind": "check",
+      "claim": {
+        "subject": { "kind": "var", "name": "echoed_headers" },
+        "predicate": "contains",
+        "value": "golden"
+      }
+    }
+  ]
+}

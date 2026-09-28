@@ -3284,6 +3284,135 @@ mod tests {
     }
 
     #[test]
+    fn replay_emulate_step_invokes_agent_browser_set() {
+        let _g = lock_env();
+        let work = TempDir::new().unwrap();
+        let log = work.path().join("ab.log");
+        install_fake_browser(work.path(), &log);
+
+        let jdir = work.path().join("sid");
+        fs::create_dir_all(&jdir).unwrap();
+        let jfile = jdir.join("scenario.json");
+        fs::write(
+            &jfile,
+            r#"{
+            "schema": "scenario/2",
+            "id": "emulate-smoke",
+            "intent": "apply emulate params",
+            "env": {
+                "open": [
+                    { "kind": "nav", "url": "https://example.com/", "intent": "land" }
+                ]
+            },
+            "steps": [
+                { "id": "s1", "intent": "emulate", "kind": "do",
+                  "verb": "emulate", "params": {
+                    "device": "iPhone 12",
+                    "geo": { "lat": 37.7749, "lng": -122.4194 },
+                    "colorScheme": "dark", "reducedMotion": true,
+                    "headers": { "X-Test": "yes" } } }
+            ]
+        }"#,
+        )
+        .unwrap();
+
+        let opts = RunOptions {
+            source: ScenarioSource::Path(jfile),
+            profile: None,
+            session_name: "em".into(),
+            heal_from_run: None,
+            headed: false,
+            input_overrides: BTreeMap::new(),
+            dry_run: false,
+            no_sidecars: true,
+            quiet: false,
+            plain: false,
+            tag: None,
+            output_audit: None,
+            from_step: None,
+            until_step: None,
+            update_baselines: false,
+            keep_going: false,
+            record_video: None,
+            junit: None,
+            base_url: None,
+            auto_promote: false,
+            freeze: None,
+            har: false,
+            mock_from: None,
+            offline: false,
+        };
+        let summary = run(&opts).unwrap();
+        assert!(summary.ok);
+        let ab = fs::read_to_string(&log).unwrap();
+        assert!(
+            ab.contains("--session em set device iPhone 12"),
+            "got: {ab}"
+        );
+        assert!(ab.contains("set geo 37.7749 -122.4194"), "got: {ab}");
+        assert!(ab.contains("set media dark reduced-motion"), "got: {ab}");
+        assert!(ab.contains("set headers"), "got: {ab}");
+        assert!(ab.contains("X-Test"), "got: {ab}");
+        clear_fake_browser();
+    }
+
+    #[test]
+    fn emulate_unknown_key_errors() {
+        let _g = lock_env();
+        let work = TempDir::new().unwrap();
+        install_fake_browser(work.path(), &work.path().join("ab.log"));
+        let jdir = work.path().join("sid");
+        fs::create_dir_all(&jdir).unwrap();
+        let jfile = jdir.join("scenario.json");
+        fs::write(
+            &jfile,
+            r#"{
+            "schema": "scenario/2",
+            "id": "emulate-bad",
+            "intent": "bad key",
+            "env": { "open": [ { "kind": "nav", "url": "https://example.com/", "intent": "land" } ] },
+            "steps": [
+                { "id": "s1", "intent": "emulate", "kind": "do",
+                  "verb": "emulate", "params": { "timzone": "UTC" } }
+            ]
+        }"#,
+        )
+        .unwrap();
+        let opts = RunOptions {
+            source: ScenarioSource::Path(jfile),
+            profile: None,
+            session_name: "em".into(),
+            heal_from_run: None,
+            headed: false,
+            input_overrides: BTreeMap::new(),
+            dry_run: false,
+            no_sidecars: true,
+            quiet: false,
+            plain: false,
+            tag: None,
+            output_audit: None,
+            from_step: None,
+            until_step: None,
+            update_baselines: false,
+            keep_going: false,
+            record_video: None,
+            junit: None,
+            base_url: None,
+            auto_promote: false,
+            freeze: None,
+            har: false,
+            mock_from: None,
+            offline: false,
+        };
+        let err = run(&opts).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown emulate key"),
+            "got: {err}"
+        );
+        clear_fake_browser();
+    }
+
+    #[test]
     fn replay_invalid_scenario_errors_with_schema_messages() {
         let _g = lock_env();
         let work = TempDir::new().unwrap();

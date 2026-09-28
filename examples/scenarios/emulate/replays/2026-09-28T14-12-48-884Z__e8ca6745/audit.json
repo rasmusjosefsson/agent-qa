@@ -1,0 +1,11 @@
+{
+  "schema": "scenario-replay-audit/v1",
+  "runId": "2026-09-28T14-12-48-884Z__e8ca6745",
+  "scenarioId": "emulate",
+  "startedAt": "2026-09-28T14:12:48.884Z",
+  "finishedAt": "2026-09-28T14:12:56.013Z",
+  "exitCode": 1,
+  "summary": "SUMMARY: 2/3 (FAIL)",
+  "sessionName": "em-live",
+  "scenarioContentHash": "8cbc913f6519ec25e3ae598b69448e089591e9453c32ae0b4e121b150937106c"
+}

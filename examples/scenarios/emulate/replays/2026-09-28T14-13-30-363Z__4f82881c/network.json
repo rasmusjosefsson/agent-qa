@@ -1,0 +1,29 @@
+{
+  "requestCount": 3,
+  "requests": [
+    {
+      "requestId": "5FCBF554FFA876BD387308426D9B819A",
+      "url": "https://httpbingo.org/user-agent",
+      "method": "GET",
+      "status": 200,
+      "resourceType": "Document",
+      "mimeType": "application/json"
+    },
+    {
+      "requestId": "83EE28132FA85928BCAD71752174B08C",
+      "url": "https://httpbingo.org/user-agent",
+      "method": "GET",
+      "status": 200,
+      "resourceType": "Document",
+      "mimeType": "application/json"
+    },
+    {
+      "requestId": "EDE6BF1C8B3B9F73AF9CF22D75E21CF6",
+      "url": "https://httpbingo.org/headers",
+      "method": "GET",
+      "status": 200,
+      "resourceType": "Document",
+      "mimeType": "application/json"
+    }
+  ]
+}
