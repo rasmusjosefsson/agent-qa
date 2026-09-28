@@ -4,7 +4,8 @@ name: qa-accept
 # the PR: this replays the selftest scenarios against the PR's own build,
 # promotes the fresh captures to baselines/ (agent-qa shot-accept), commits
 # them, and pushes to the PR's head branch — the gate then goes green on the
-# same image that produces the goldens.
+# same image that produces the goldens. `/qa run` re-verifies without minting
+# (for PRs the ui-goldens path filter skips).
 on:
   issue_comment:
     types: [created]
@@ -95,3 +96,80 @@ jobs:
           PR_NUMBER: ${{ github.event.issue.number }}
         run: |
           gh pr comment "$PR_NUMBER" --body "🏅 \`/qa accept\` — replays finished; any baseline changes were pushed to this branch in a \`chore(evals)\` commit. [Run log](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+
+  rerun:
+    name: re-run goldens on PR
+    # `/qa run` — the manual kick for PRs the path filter skips (e.g. a cli
+    # change that alters capture output): verify the goldens on the PR head
+    # and comment the verdict. Same job the ui-goldens workflow runs; the
+    # issue_comment event just needs the head resolved by hand.
+    if: >-
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/qa run') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: resolve the PR head
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sha=$(gh pr view ${{ github.event.issue.number }} --json headRefOid --jq .headRefOid)
+          echo "head_sha=$sha" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.head_sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+      - name: build cli
+        working-directory: cli
+        run: cargo build --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: launcher install (resolves agent-browser)
+        working-directory: npm/agent-qa
+        run: npm install --no-audit --no-fund
+      - name: build web bundle (lib/public is not committed)
+        working-directory: npm/agent-qa
+        run: npm run build:web
+      - name: browser install
+        working-directory: npm/agent-qa
+        env:
+          AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+        run: ./node_modules/.bin/agent-browser install
+      - uses: oven-sh/setup-bun@v2
+      - name: replay selftest goldens
+        id: selftest
+        working-directory: evals
+        env:
+          AGENT_QA_EVAL_AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
+          AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
+          AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+        run: bun selftest/run.ts
+      - name: upload goldens evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-goldens-manual
+          path: |
+            evals/selftest/results/
+            evals/selftest/scenarios/*/replays/*/screenshots/
+            evals/selftest/scenarios/*/replays/*/shots-diff/
+          retention-days: 30
+      - name: comment the goldens verdict
+        if: always()
+        working-directory: evals
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          bun selftest/pr-comment.ts --run-url "$RUN_URL" --out /tmp/ui-goldens.md
+          gh pr comment "$PR_NUMBER" --body-file /tmp/ui-goldens.md
