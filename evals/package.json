@@ -209,6 +209,7 @@
     "golden:sauce:s05": "bun golden/sauce-tc05.ts",
     "golden:sauce:s06": "bun golden/sauce-tc06.ts",
     "golden:edge:tc35": "bun golden/edge-tc35.ts",
+    "golden:struct:tc01": "bun golden/struct-tc01.ts",
     "selftest:accept": "bun selftest/accept.ts",
     "golden:frame:tc01": "bun golden/frame-tc01.ts"
   },
