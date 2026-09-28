@@ -32,6 +32,8 @@ jobs:
     name: workbench goldens
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # push diff images to the ui-goldens-diffs scratch branch
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -75,6 +77,54 @@ jobs:
             evals/selftest/scenarios/*/replays/*/screenshots/
             evals/selftest/scenarios/*/replays/*/shots-diff/
           retention-days: 30
+      - name: publish diff images to the scratch branch
+        if: always()
+        id: diffs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -u
+          STAGE="$(mktemp -d)/pr-$PR_NUMBER"
+          mkdir -p "$STAGE"
+          found=0
+          for sid_dir in evals/selftest/scenarios/*/; do
+            sid="$(basename "$sid_dir")"
+            latest="$(cat "$sid_dir/replays/latest.txt" 2>/dev/null || true)"
+            [ -n "$latest" ] || continue
+            run_dir="$sid_dir/replays/$latest"
+            for d in "$run_dir"/shots-diff/*.diff.png; do
+              [ -f "$d" ] || continue
+              found=1
+              step="$(basename "$d" .diff.png)"
+              mkdir -p "$STAGE/$sid"
+              cp "$d" "$STAGE/$sid/$step.diff.png"
+              [ -f "$run_dir/screenshots/$step.png" ] && cp "$run_dir/screenshots/$step.png" "$STAGE/$sid/$step.current.png"
+              [ -f "$sid_dir/baselines/$step.png" ] && cp "$sid_dir/baselines/$step.png" "$STAGE/$sid/$step.baseline.png"
+            done
+          done
+          if [ "$found" = 0 ]; then
+            echo "no shot diffs — nothing to publish"
+            exit 0
+          fi
+          WORK="$(mktemp -d)"
+          git -C "$WORK" init -q
+          git -C "$WORK" config user.email "agent-qa-ci@users.noreply.github.com"
+          git -C "$WORK" config user.name "agent-qa ci"
+          git -C "$WORK" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          if git -C "$WORK" fetch -q --depth 1 origin ui-goldens-diffs; then
+            git -C "$WORK" checkout -q -B ui-goldens-diffs FETCH_HEAD
+          else
+            git -C "$WORK" checkout -q --orphan ui-goldens-diffs
+          fi
+          rm -rf "$WORK/pr-$PR_NUMBER"
+          cp -r "$STAGE" "$WORK/"
+          git -C "$WORK" add -A
+          git -C "$WORK" commit -qm "ui-goldens diffs for PR #$PR_NUMBER (run ${{ github.run_id }})" || exit 0
+          git -C "$WORK" push -q origin ui-goldens-diffs
+          echo "base=https://raw.githubusercontent.com/${REPO}/ui-goldens-diffs/pr-${PR_NUMBER}" >> "$GITHUB_OUTPUT"
       - name: comment the goldens verdict
         if: always()
         working-directory: evals
@@ -82,8 +132,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DIFF_BASE: ${{ steps.diffs.outputs.base }}
         run: |
-          bun selftest/pr-comment.ts --run-url "$RUN_URL" --out /tmp/ui-goldens.md
+          bun selftest/pr-comment.ts --run-url "$RUN_URL" ${DIFF_BASE:+--diff-base "$DIFF_BASE"} --out /tmp/ui-goldens.md
           gh pr comment "$PR_NUMBER" --body-file /tmp/ui-goldens.md
 
   update-goldens:

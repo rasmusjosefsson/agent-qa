@@ -146,6 +146,11 @@ pub struct RunOptions {
     /// run when the HAR is absent — a partial stub silently hitting the
     /// real backend is worse than no run.
     pub mock_from: Option<String>,
+    /// `--offline` — fetch/XHR requests matching no mock rule get a network
+    /// rejection instead of reaching the real backend. With `--mock-from`
+    /// this is the full hermetic guarantee: only recorded traffic replays.
+    /// Alone it stubs every request (UI-only replays on static pages).
+    pub offline: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -524,21 +529,24 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     // page-load fetches are stubbed. A warm session that already exists
     // ignores init scripts — the post-navigation re-apply still covers its
     // in-page XHR/fetch traffic.
-    if let Some(from) = &opts.mock_from {
+    if opts.mock_from.is_some() || opts.offline {
         if opts.dry_run {
-            eprintln!("[v2-replay] --mock-from ignored under --dry-run");
+            eprintln!("[v2-replay] --mock-from/--offline ignored under --dry-run");
         } else {
-            let n = crate::mock::seed_from_har(&opts.session_name, &scenario_dir, from)
-                .with_context(|| format!("--mock-from {from:?}"))?;
+            if opts.offline {
+                crate::mock::set_strict(&opts.session_name, true);
+            }
+            if let Some(from) = &opts.mock_from {
+                let n = crate::mock::seed_from_har(&opts.session_name, &scenario_dir, from)
+                    .with_context(|| format!("--mock-from {from:?}"))?;
+                eprintln!("[v2-replay] mock-from {from}: {n} stub(s) seeded");
+            }
             let js_path = crate::mock::write_init_script(&opts.session_name, &run.run_root)
-                .with_context(|| "--mock-from: write init script")?;
+                .with_context(|| "mock seed: write init script")?;
             // Children spawned from this process inherit the var; the
             // daemon registers the script on session launch.
             std::env::set_var("AGENT_BROWSER_INIT_SCRIPTS", &js_path);
-            eprintln!(
-                "[v2-replay] mock-from {from}: {n} stub(s) seeded (init script {})",
-                js_path.display()
-            );
+            eprintln!("[v2-replay] mock init script {}", js_path.display());
         }
     }
 
@@ -2463,6 +2471,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut freeze: Option<String> = None;
     let mut har = false;
     let mut mock_from: Option<String> = None;
+    let mut offline = false;
     let mut input_overrides: BTreeMap<String, String> = BTreeMap::new();
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
@@ -2514,6 +2523,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             "--freeze" => freeze = it.next().cloned().or_else(|| bail_missing("--freeze")),
             s if s.starts_with("--freeze=") => freeze = Some(s["--freeze=".len()..].to_string()),
             "--har" => har = true,
+            "--offline" => offline = true,
             "--mock-from" => mock_from = it.next().cloned().or_else(|| bail_missing("--mock-from")),
             s if s.starts_with("--mock-from=") => {
                 mock_from = Some(s["--mock-from=".len()..].to_string())
@@ -2578,6 +2588,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         freeze,
         har,
         mock_from,
+        offline,
     })
 }
 
@@ -2756,13 +2767,17 @@ replays/latest.txt.
                          auto-heal corrected locators this run, apply those
                          patches to scenario.json (the hash-guarded
                          heal-promote --apply path). A stale-hash refusal
-                         is a warning, never a failure
+                         is a warning, never a failure.
 --base-url <origin>      Retarget the run onto another deploy (e.g. a
                          PR preview): every env nav url + goto literal
                          rooted at the recorded origin is rewritten to
                          <origin> (scheme://host[:port] only). Claim
                          patterns are left untouched — use inputs for
-                         scenario-authored variability."
+                         scenario-authored variability.
+--offline                Reject every fetch/XHR that matches no mock rule
+                         instead of reaching the real backend. With
+                         --mock-from that's the full hermetic guarantee;
+                         alone it stubs everything (static-page replays)."
 }
 
 #[cfg(all(test, unix))]
@@ -2909,6 +2924,7 @@ mod tests {
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         let summary = run(&opts).unwrap();
         assert_eq!(summary.total, 1);
@@ -2991,6 +3007,7 @@ mod tests {
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3054,6 +3071,7 @@ mod tests {
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3098,6 +3116,7 @@ mod tests {
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         let err = format!("{:#}", run(&opts).unwrap_err());
         assert!(err.contains("schema error"), "got: {err}");
@@ -3167,6 +3186,7 @@ esac\nexit 0\n",
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         }
     }
 
@@ -3424,6 +3444,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3491,6 +3512,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -4226,6 +4248,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -4317,6 +4340,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -4540,6 +4564,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -4633,6 +4658,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         // The run bails at the failing step; events/status are written
         // before the bail.
@@ -4705,6 +4731,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         run(&opts).unwrap();
 
@@ -4755,6 +4782,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         run(&opts).unwrap();
         let run_dir = run_dir_for(&jdir);
@@ -4942,6 +4970,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         assert_eq!(resolve_progress_mode(&mk(true, false)), ProgressMode::Quiet);
         // quiet wins over plain.
