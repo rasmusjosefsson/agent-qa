@@ -1338,8 +1338,9 @@ fn read_element_attribute(
             // `text` reads textContent; value/checked/disabled/selected/readOnly
             // read the live IDL property (getAttribute would return the stale
             // default value, and boolean states often have no attribute at all);
-            // `focused` is `document.activeElement === el`; any other name is a
-            // getAttribute read (missing attributes read as the empty string).
+            // `focused` is `document.activeElement === el`; `style:<prop>`
+            // reads getComputedStyle; any other name is a getAttribute read
+            // (missing attributes read as the empty string).
             let prop_attrs = [
                 "value", "checked", "disabled", "selected", "readOnly", "required",
             ];
@@ -1352,6 +1353,15 @@ fn read_element_attribute(
                 format!(
                     "(() => {{ const el = document.querySelector({q}); if (!el) throw new Error('selector not found: ' + {q}); return String(document.activeElement === el); }})()",
                     q = serde_json::to_string(&selector).expect("string serializes")
+                )
+            } else if let Some(prop) = attribute.strip_prefix("style:") {
+                // style:<css-property> reads getComputedStyle — assertions
+                // on rendered styles (color, display, ...) that neither
+                // getAttribute nor IDL properties can express.
+                format!(
+                    "(() => {{ const el = document.querySelector({q}); if (!el) throw new Error('selector not found: ' + {q}); return getComputedStyle(el).getPropertyValue({a}) || ''; }})()",
+                    q = serde_json::to_string(&selector).expect("string serializes"),
+                    a = serde_json::to_string(prop).expect("string serializes")
                 )
             } else if prop_attrs.contains(&attribute) {
                 format!(

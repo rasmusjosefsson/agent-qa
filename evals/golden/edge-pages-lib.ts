@@ -81,6 +81,7 @@ export interface EdgeGolden extends GoldenContext {
   assertNetworkFired(matcher: Record<string, unknown>, mustFire: boolean, intent: string): Promise<void>;
   assertCookie(name: string, expectPresent: boolean, intent: string): Promise<void>;
   assertStorage(keyOrMatcher: string | { key: string; scope?: string }, expectPresent: boolean, intent: string): Promise<void>;
+  assertStyle(selector: string, cssProperty: string, expected: string, intent: string): Promise<void>;
   a11yAudit(matcher: true | Record<string, unknown>, predicate: string, value: number | undefined, intent: string): Promise<void>;
 }
 
@@ -363,6 +364,9 @@ export async function runEdgeGolden(
         args: [matcher, mustFire],
         intent: stepIntent,
       });
+    },
+    async assertStyle(selector, cssProperty, expected, stepIntent) {
+      await record(ctx, "assert", { kind: "elementAttribute", args: [selector, `style:${cssProperty}`, "equals", expected], intent: stepIntent });
     },
     async a11yAudit(matcher, predicate, value, stepIntent) {
       await record(ctx, "assert", {
