@@ -296,6 +296,7 @@ fn run_plan(root: &Path, plan: &PlanFile, opts: &RunOpts) -> Result<(Vec<RunRow>
             freeze: None,
             har: false,
             mock_from: None,
+            offline: false,
         };
         match crate::runner::run(&run_opts) {
             Ok(summary) => {
