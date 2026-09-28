@@ -373,6 +373,42 @@ pub fn run(args: &[String]) -> Result<u8> {
                 .ok_or_else(|| anyhow!("usage: scenario copy <sid> <new-sid>"))?;
             copy(from, to)
         }
+        Some("tag") => {
+            let sid = args
+                .get(1)
+                .ok_or_else(|| anyhow!("usage: scenario tag <sid> [--add <a,b>] [--remove <c,d>] [--json]"))?;
+            let mut add: Vec<String> = Vec::new();
+            let mut remove: Vec<String> = Vec::new();
+            let mut json = false;
+            let mut it = args.iter().skip(2);
+            while let Some(a) = it.next() {
+                match a.as_str() {
+                    "--add" => {
+                        let v = it
+                            .next()
+                            .cloned()
+                            .ok_or_else(|| anyhow!("--add requires a comma-separated value"))?;
+                        add.extend(v.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()));
+                    }
+                    s if s.starts_with("--add=") => {
+                        add.extend(s["--add=".len()..].split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()));
+                    }
+                    "--remove" => {
+                        let v = it
+                            .next()
+                            .cloned()
+                            .ok_or_else(|| anyhow!("--remove requires a comma-separated value"))?;
+                        remove.extend(v.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()));
+                    }
+                    s if s.starts_with("--remove=") => {
+                        remove.extend(s["--remove=".len()..].split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()));
+                    }
+                    "--json" => json = true,
+                    other => bail!("unexpected arg {other:?}; usage: scenario tag <sid> [--add <a,b>] [--remove <c,d>] [--json]"),
+                }
+            }
+            tag(sid, &add, &remove, json)
+        }
         Some("delete") => {
             let sid = args
                 .get(1)
@@ -807,6 +843,87 @@ fn rename(from_sid: &str, to_sid: &str) -> Result<u8> {
         old_id,
         to_sid
     );
+    Ok(0)
+}
+
+/// `scenario tag` — list or mutate a scenario's `tags[]` (the field
+/// `replay --tags` selects on). With no --add/--remove it prints the
+/// current set. An emptied set drops the field entirely.
+fn tag(sid: &str, add: &[String], remove: &[String], json_out: bool) -> Result<u8> {
+    let dir = crate::paths::scenario_dir(sid)?;
+    if !dir.is_dir() {
+        bail!("scenario tag: not found at {}", dir.display());
+    }
+    let scenario_file = dir.join("scenario.json");
+    let body = fs::read_to_string(&scenario_file)
+        .with_context(|| format!("read {}", scenario_file.display()))?;
+    let mut parsed: serde_json::Value = serde_json::from_str(&body)
+        .with_context(|| format!("parse {}", scenario_file.display()))?;
+    let obj = parsed
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("scenario.json root must be an object"))?;
+
+    let mut tags: Vec<String> = obj
+        .get("tags")
+        .and_then(|t| t.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| t.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if add.is_empty() && remove.is_empty() {
+        if json_out {
+            println!("{}", serde_json::to_string(&tags)?);
+        } else if tags.is_empty() {
+            println!("(no tags)");
+        } else {
+            for t in &tags {
+                println!("{t}");
+            }
+        }
+        return Ok(0);
+    }
+
+    for t in add {
+        if !tags.contains(t) {
+            tags.push(t.clone());
+        }
+    }
+    tags.retain(|t| !remove.contains(t));
+    tags.sort();
+    tags.dedup();
+
+    if tags.is_empty() {
+        obj.remove("tags");
+    } else {
+        obj.insert(
+            "tags".into(),
+            serde_json::Value::Array(
+                tags.iter()
+                    .cloned()
+                    .map(serde_json::Value::String)
+                    .collect(),
+            ),
+        );
+    }
+    let patched = serde_json::to_string_pretty(&parsed)?;
+    fs::write(&scenario_file, format!("{patched}\n"))
+        .with_context(|| format!("write {}", scenario_file.display()))?;
+
+    if json_out {
+        println!("{}", serde_json::to_string(&tags)?);
+    } else {
+        println!(
+            "tags: {}",
+            if tags.is_empty() {
+                "(none)".to_string()
+            } else {
+                tags.join(", ")
+            }
+        );
+    }
     Ok(0)
 }
 
@@ -3900,6 +4017,61 @@ mod tests {
         );
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    #[test]
+    fn tag_adds_lists_and_removes() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        let dir = tmp.path().join("s1");
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("scenario.json");
+        fs::write(
+            &file,
+            r#"{"schema":"scenario/2","id":"s1","intent":"x","steps":[]}"#,
+        )
+        .unwrap();
+
+        // add creates + dedups + sorts
+        tag(
+            "s1",
+            &["smoke".into(), "ci".into(), "smoke".into()],
+            &[],
+            false,
+        )
+        .unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(
+            v["tags"].as_array().unwrap(),
+            &vec![
+                serde_json::Value::String("ci".into()),
+                serde_json::Value::String("smoke".into())
+            ]
+        );
+
+        // remove + list path leaves the rest
+        tag("s1", &[], &["ci".into()], false).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(
+            v["tags"].as_array().unwrap(),
+            &vec![serde_json::Value::String("smoke".into())]
+        );
+        tag("s1", &[], &[], true).unwrap(); // list-only run doesn't touch the file
+
+        // removing the last tag drops the field entirely
+        tag("s1", &[], &["smoke".into()], false).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert!(v.get("tags").is_none());
+
+        match prev {
+            Some(val) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", val),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
         }
     }
