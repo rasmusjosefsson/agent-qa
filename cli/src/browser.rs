@@ -791,7 +791,9 @@ fn json_data(verb: &str, stdout: &str) -> Result<serde_json::Value, AgentBrowser
 }
 
 /// `agent-browser --json network requests` — captured exchanges in
-/// chronological order.
+/// chronological order, plus requests the in-page mock stub answered (those
+/// never reach the wire, so CDP capture can't see them — the stub mirrors
+/// them into `window.__aqMockLog`).
 pub fn network_requests(session: &str) -> Result<Vec<CapturedRequest>, AgentBrowserError> {
     let r = run(
         session,
@@ -803,33 +805,108 @@ pub fn network_requests(session: &str) -> Result<Vec<CapturedRequest>, AgentBrow
         .get("requests")
         .cloned()
         .unwrap_or(serde_json::Value::Array(vec![]));
-    serde_json::from_value(list).map_err(|e| AgentBrowserError::NonZero {
-        verb: "network requests".to_string(),
-        exit_code: 0,
-        stderr: format!("unparseable requests array: {e}"),
-        hint: String::new(),
-    })
+    let mut reqs: Vec<CapturedRequest> =
+        serde_json::from_value(list).map_err(|e| AgentBrowserError::NonZero {
+            verb: "network requests".to_string(),
+            exit_code: 0,
+            stderr: format!("unparseable requests array: {e}"),
+            hint: String::new(),
+        })?;
+    reqs.extend(mocked_requests(session));
+    Ok(reqs)
+}
+
+/// Requests the in-page mock intercepted (ids `mock-*`). Best-effort — a
+/// dead page or absent buffer yields an empty list, never an error.
+fn mocked_requests(session: &str) -> Vec<CapturedRequest> {
+    let Ok(raw) = eval_expression(session, "JSON.stringify(window.__aqMockLog || [])") else {
+        return vec![];
+    };
+    let parsed: Vec<serde_json::Value> =
+        serde_json::from_str(&decode_eval_string(raw.trim())).unwrap_or_default();
+    parsed
+        .into_iter()
+        .map(|e| CapturedRequest {
+            request_id: e
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("mock-?")
+                .to_string(),
+            url: e
+                .get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            method: e
+                .get("method")
+                .and_then(|v| v.as_str())
+                .unwrap_or("GET")
+                .to_string(),
+            status: e.get("status").and_then(|v| v.as_i64()),
+            resource_type: Some("fetch".to_string()),
+            mime_type: Some("application/json".to_string()),
+            post_data: e
+                .get("postData")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+        })
+        .collect()
 }
 
 /// `agent-browser network requests --clear` — drop the session's captured
 /// request log. Called at run start so a replayed session's network.json
 /// covers this run only (the capture is per-session and otherwise
-/// accumulates across replays sharing a session).
+/// accumulates across replays sharing a session). Also resets the in-page
+/// mock buffer, which survives on `window` until the next navigation.
 pub fn network_clear(session: &str) -> Result<(), AgentBrowserError> {
     run(
         session,
         ["network", "requests", "--clear"],
         RunOpts::new().capture(),
     )?;
+    let _ = eval_expression(
+        session,
+        "window.__aqMockLog = []; window.__aqMockSeq = 0; 1",
+    );
     Ok(())
 }
 
+/// eval stdout wraps strings one extra level (`"\"[...]\""`) — peel the
+/// outer quotes before parsing the payload.
+fn decode_eval_string(raw: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_else(|| raw.to_string())
+}
+
 /// `agent-browser --json network request <id>` — full record for one
-/// exchange, including `responseBody`.
+/// exchange, including `responseBody`. `mock-*` ids come from the in-page
+/// stub's `__aqMockLog` instead — the request never hit the wire.
 pub fn network_request(
     session: &str,
     request_id: &str,
 ) -> Result<serde_json::Value, AgentBrowserError> {
+    if request_id.starts_with("mock-") {
+        if let Ok(raw) = eval_expression(
+            session,
+            &format!(
+                "JSON.stringify((window.__aqMockLog || []).find(e => e.id === {request_id:?}) || null)"
+            ),
+        ) {
+            let entry: serde_json::Value =
+                serde_json::from_str(&decode_eval_string(raw.trim())).unwrap_or_default();
+            return Ok(serde_json::json!({
+                "url": entry.get("url"),
+                "method": entry.get("method"),
+                "status": entry.get("status"),
+                "postData": entry.get("postData"),
+                "responseBody": entry.get("responseBody"),
+                "mocked": true,
+            }));
+        }
+        return Ok(serde_json::json!({ "mocked": true }));
+    }
     let r = run(
         session,
         ["--json", "network", "request", request_id],
