@@ -114,6 +114,11 @@ pub struct RunOptions {
     /// performs). Runs even when shot claims FAILED: intentional UI
     /// changes are exactly the case where a failing diff needs re-minting.
     pub update_baselines: bool,
+    /// `--har` — record a HAR file for the run via `agent-browser network
+    /// har start|stop` and write `<run>/network.har`. Unlike network.json
+    /// (urls + statuses) a HAR carries response bodies — the artifact you
+    /// open in DevTools/Charles when a claim needs the payload.
+    pub har: bool,
     /// `--mock-from <runId>` — seed mock rules from that run's
     /// `network.har` (recorded via `--har`): the app's fetch/XHR calls get
     /// the recorded status + body instead of the real backend. Fails the
@@ -367,6 +372,16 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     // (`replay --all` suites, workbench runs) — start clean.
     crate::mock::clear(&opts.session_name, None);
 
+    // The browser's request capture is per-session: a replayed session
+    // still holds the previous run's traffic. Clear it so this run's
+    // network.json (and {"network"} claims) sees only its own requests.
+    // Best-effort — a session that doesn't exist yet just warns.
+    if !opts.dry_run {
+        if let Err(e) = crate::browser::network_clear(&opts.session_name) {
+            eprintln!("[v2-replay] network log clear skipped: {e}");
+        }
+    }
+
     // 1. Load + validate.
     let (scenario_file, scenario_dir) = resolve_source(&opts.source)?;
     let bytes =
@@ -467,6 +482,13 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     }
 
     let mut scope = ValueScope::new(resolved_inputs);
+    // HAR recording starts before env.open so the open-phase navigation is
+    // part of the captured traffic.
+    if opts.har && !opts.dry_run {
+        if let Err(e) = crate::browser::network_har_start(&opts.session_name) {
+            eprintln!("[v2-replay] har start skipped: {e}");
+        }
+    }
     if !opts.dry_run {
         if let Some(env) = &scenario.env {
             if let Some(open_ops) = &env.open {
@@ -906,6 +928,24 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             },
         ) {
             eprintln!("[v2-replay] status.json finalise failed: {e}");
+        }
+
+        // Flush the HAR recording before env.close (teardown traffic —
+        // profile saves, cleanup navigations — isn't part of the scenario's
+        // network evidence).
+        if opts.har {
+            let dest = run.run_root.join("network.har");
+            if let Err(e) = crate::browser::network_har_stop(&opts.session_name, &dest) {
+                eprintln!("[v2-replay] har stop skipped: {e}");
+            }
+        }
+
+        // Persist the session's captured network requests as
+        // <run>/network.json — the traffic list {"network"} claims queried
+        // mid-run, kept for post-hoc review/diff. Best-effort, and only
+        // when the run actually executed (a dry-run session has no traffic).
+        if !opts.dry_run {
+            crate::netlog::write_network_log_warn(&run, &opts.session_name);
         }
     }
 
@@ -1679,60 +1719,252 @@ fn is_safe_step_id(s: &str) -> bool {
 // ---------- CLI verb ----------
 
 pub fn cli(args: &[String]) -> Result<u8> {
-    let (parsed, runs, retry) = parse_args_with_runs(args)?;
-    if retry > 1 {
+    let flags = parse_args_cli(args)?;
+    if flags.all {
+        return cli_all(
+            &flags.filtered,
+            flags.runs,
+            flags.shard,
+            flags.filter.as_deref(),
+            &flags.tags,
+            flags.report.as_deref(),
+            flags.retry,
+        );
+    }
+    if flags.shard.is_some() {
+        bail!("--shard requires --all");
+    }
+    if flags.filter.is_some() {
+        bail!("--filter requires --all");
+    }
+    if !flags.tags.is_empty() {
+        bail!("--tags requires --all");
+    }
+    if flags.report.is_some() {
+        bail!("--report requires --all");
+    }
+
+    let parsed = parse_args(&flags.filtered)?;
+    if flags.retry > 1 {
         // --retry N: re-run until a pass or N attempts spent. Each attempt is
         // its own replay dir, so a pass-after-retries leaves flake evidence in
         // `audit list`/`audit flaky` instead of hiding it.
-        for attempt in 1..=retry {
-            eprintln!("[v2-replay] attempt {attempt}/{retry}");
+        for attempt in 1..=flags.retry {
+            eprintln!("[v2-replay] attempt {attempt}/{}", flags.retry);
             match run(&parsed) {
                 Ok(summary) if summary.ok => {
                     if attempt > 1 {
                         eprintln!(
-                            "[v2-replay] flaky — passed on attempt {attempt}/{retry} after {} failure(s)",
+                            "[v2-replay] flaky — passed on attempt {attempt}/{} after {} failure(s)",
+                            flags.retry,
                             attempt - 1
                         );
                     }
                     return Ok(0);
                 }
                 Ok(_) => {}
-                Err(e) => eprintln!("[v2-replay] attempt {attempt}/{retry} errored: {e}"),
+                Err(e) => eprintln!("[v2-replay] attempt {attempt}/{} errored: {e}", flags.retry),
             }
         }
-        eprintln!("[v2-replay] failed all {retry} attempt(s)");
+        eprintln!("[v2-replay] failed all {} attempt(s)", flags.retry);
         return Ok(1);
     }
+    let (code, _) = run_n(&parsed, flags.runs, None)?;
+    Ok(code)
+}
+
+/// Replay `parsed` `runs` times; `label` prefixes the per-run banner.
+/// Returns the exit code (0 iff every run is ok) and the last run's
+/// summary for reporting (None when every run errored before producing
+/// one).
+fn run_n(parsed: &RunOptions, runs: u32, label: Option<&str>) -> Result<(u8, Option<RunSummary>)> {
     if runs <= 1 {
-        let summary = run(&parsed)?;
-        return Ok(if summary.ok { 0 } else { 1 });
+        let summary = run(parsed)?;
+        let code = if summary.ok { 0 } else { 1 };
+        return Ok((code, Some(summary)));
     }
     let mut all_ok = true;
+    let mut last: Option<RunSummary> = None;
     for i in 1..=runs {
-        eprintln!("[v2-replay] run {i}/{runs}");
-        match run(&parsed) {
+        eprintln!("[v2-replay]{} run {i}/{runs}", label.unwrap_or(""));
+        match run(parsed) {
             Ok(summary) => {
                 if !summary.ok {
                     all_ok = false;
                 }
+                last = Some(summary);
             }
             Err(e) => {
-                eprintln!("[v2-replay] run {i}/{runs} errored: {e}");
+                eprintln!(
+                    "[v2-replay]{} run {i}/{runs} errored: {e}",
+                    label.unwrap_or("")
+                );
                 all_ok = false;
             }
         }
     }
+    Ok((if all_ok { 0 } else { 1 }, last))
+}
+
+/// `replay --all`: every scenario under the scenarios root, optionally
+/// sharded (`--shard k/n` keeps the sids whose sorted index % n == k-1)
+/// and/or name-filtered (`--filter <substr>`).
+fn cli_all(
+    filtered: &[String],
+    runs: u32,
+    shard: Option<(u32, u32)>,
+    filter: Option<&str>,
+    tags: &[String],
+    report: Option<&Path>,
+    retry: u32,
+) -> Result<u8> {
+    let root = crate::paths::scenarios_root();
+    let mut sids = crate::scenario_cli::all_sids(&root, filter);
+    if !tags.is_empty() {
+        sids.retain(|sid| scenario_has_any_tag(&root, sid, tags));
+    }
+    if let Some((k, n)) = shard {
+        sids = sids
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| (*i as u32) % n == k - 1)
+            .map(|(_, sid)| sid)
+            .collect();
+    }
+    if sids.is_empty() {
+        bail!("replay --all: no scenarios under {}", root.display());
+    }
+    eprintln!(
+        "[v2-replay] --all{}: {} scenario(s){}",
+        shard
+            .map(|(k, n)| format!(" --shard {k}/{n}"))
+            .unwrap_or_default(),
+        sids.len(),
+        filter
+            .map(|f| format!(" matching {f:?}"))
+            .unwrap_or_default(),
+    );
+    let mut all_ok = true;
+    let mut failed: Vec<String> = Vec::new();
+    let mut rows: Vec<(String, Option<RunSummary>)> = Vec::new();
+    for sid in &sids {
+        let mut per = filtered.to_vec();
+        per.push(sid.clone());
+        let parsed = parse_args(&per)?;
+        // --retry under --all: re-run THIS scenario until pass or N attempts;
+        // a pass on attempt 2 still leaves the earlier failing run dir as
+        // flake evidence. (runs>1 && retry>1 is rejected at parse.)
+        let mut attempt = 0u32;
+        let (code, summary) = loop {
+            attempt += 1;
+            let r = run_n(&parsed, runs, Some(&format!(" {sid}")))?;
+            if r.0 == 0 || attempt >= retry {
+                break r;
+            }
+            eprintln!("[v2-replay] {sid}: retry {attempt}/{retry}");
+        };
+        if code != 0 {
+            all_ok = false;
+            failed.push(sid.clone());
+        }
+        rows.push((sid.clone(), summary));
+    }
+    if let Some(path) = report {
+        write_report(path, &rows)?;
+        eprintln!("[v2-replay] report → {}", path.display());
+    }
+    eprintln!(
+        "[v2-replay] --all done: {} passed, {} failed{}",
+        sids.len() - failed.len(),
+        failed.len(),
+        if failed.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", failed.join(", "))
+        }
+    );
     Ok(if all_ok { 0 } else { 1 })
 }
 
-/// Wrapper around [`parse_args`] that also peels off `--runs N` (repeat N
-/// times regardless of outcome) and `--retry N` (re-run until pass, max N
-/// attempts) before resolution. They are mutually exclusive: --runs counts
-/// total executions for soak/perf collection; --retry bounds a flake hunt.
-fn parse_args_with_runs(args: &[String]) -> Result<(RunOptions, u32, u32)> {
+/// `--report` — a markdown verdict table for the suite run, the shape a
+/// CI step drops into a PR comment: header counts, one row per scenario,
+/// and a failing-scenario list at the bottom.
+fn write_report(path: &Path, rows: &[(String, Option<RunSummary>)]) -> Result<()> {
+    let passed = rows
+        .iter()
+        .filter(|(_, s)| s.as_ref().map(|s| s.ok).unwrap_or(false))
+        .count();
+    let failed = rows.len() - passed;
+    let mut out = String::new();
+    out.push_str("### agent-qa replay\n\n");
+    if failed == 0 {
+        out.push_str(&format!("✅ {passed}/{} scenarios pass.\n\n", rows.len()));
+    } else {
+        out.push_str(&format!(
+            "❌ {failed}/{} scenarios fail ({passed} pass).\n\n",
+            rows.len()
+        ));
+    }
+    out.push_str("| scenario | result | steps |\n| --- | --- | --- |\n");
+    for (sid, summary) in rows {
+        let (verdict, steps) = match summary {
+            Some(s) if s.ok => ("PASS".to_string(), format!("{}/{}", s.passed, s.total)),
+            Some(s) => ("FAIL".to_string(), format!("{}/{}", s.passed, s.total)),
+            None => ("ERROR".to_string(), "—".to_string()),
+        };
+        out.push_str(&format!("| `{sid}` | {verdict} | {steps} |\n"));
+    }
+    let failing: Vec<&str> = rows
+        .iter()
+        .filter(|(_, s)| !s.as_ref().map(|s| s.ok).unwrap_or(false))
+        .map(|(sid, _)| sid.as_str())
+        .collect();
+    if !failing.is_empty() {
+        out.push_str(&format!(
+            "\nFailing: {} — run artifacts live under `scenarios/<sid>/replays/`.\n",
+            failing.join(", ")
+        ));
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    fs::write(path, out).with_context(|| format!("write report {}", path.display()))
+}
+
+/// CLI-level flags peeled off before [`parse_args`] sees `args`.
+#[derive(Debug)]
+struct CliFlags {
+    /// Remaining args (positional sid + per-run flags) for parse_args.
+    filtered: Vec<String>,
+    /// `--runs N` repeat count.
+    runs: u32,
+    /// `--all` — replay every scenario under the root.
+    all: bool,
+    /// `--shard k/n` — 1-based shard of the sorted sid list.
+    shard: Option<(u32, u32)>,
+    /// `--filter <substr>` — sid substring filter for --all.
+    filter: Option<String>,
+    /// `--tags <a,b>` — keep scenarios carrying any of these tags (OR).
+    tags: Vec<String>,
+    /// `--report <path>` — write a markdown verdict table for --all.
+    report: Option<PathBuf>,
+    /// `--retry N` — re-run until a pass, at most N attempts (mutually
+    /// exclusive with --runs). Under --all it applies per scenario.
+    retry: u32,
+}
+
+/// Peel the CLI-level flags `--runs N`, `--retry N`, `--all`,
+/// `--shard k/n`, `--filter <substr>`, `--tags`, `--report` off `args`;
+/// the rest feed [`parse_args`].
+fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
     let mut filtered: Vec<String> = Vec::with_capacity(args.len());
     let mut runs: u32 = 1;
     let mut retry: u32 = 1;
+    let mut all = false;
+    let mut shard: Option<(u32, u32)> = None;
+    let mut filter: Option<String> = None;
+    let mut tags: Vec<String> = Vec::new();
+    let mut report: Option<PathBuf> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -1755,6 +1987,54 @@ fn parse_args_with_runs(args: &[String]) -> Result<(RunOptions, u32, u32)> {
                 if runs == 0 {
                     bail!("--runs must be >= 1");
                 }
+            }
+            "--all" => all = true,
+            "--shard" => {
+                let v = it
+                    .next()
+                    .ok_or_else(|| anyhow!("--shard requires k/n (e.g. --shard 2/4)"))?;
+                shard = Some(parse_shard(v)?);
+            }
+            s if s.starts_with("--shard=") => {
+                shard = Some(parse_shard(&s["--shard=".len()..])?);
+            }
+            "--filter" => {
+                filter = Some(
+                    it.next()
+                        .cloned()
+                        .ok_or_else(|| anyhow!("--filter requires a value"))?,
+                );
+            }
+            s if s.starts_with("--filter=") => {
+                filter = Some(s["--filter=".len()..].to_string());
+            }
+            "--tags" => {
+                let v = it
+                    .next()
+                    .cloned()
+                    .ok_or_else(|| anyhow!("--tags requires a comma-separated value"))?;
+                tags.extend(
+                    v.split(',')
+                        .map(|t| t.trim().to_string())
+                        .filter(|t| !t.is_empty()),
+                );
+            }
+            s if s.starts_with("--tags=") => {
+                tags.extend(
+                    s["--tags=".len()..]
+                        .split(',')
+                        .map(|t| t.trim().to_string())
+                        .filter(|t| !t.is_empty()),
+                );
+            }
+            "--report" => {
+                let v = it
+                    .next()
+                    .ok_or_else(|| anyhow!("--report requires a file path"))?;
+                report = Some(PathBuf::from(v));
+            }
+            s if s.starts_with("--report=") => {
+                report = Some(PathBuf::from(&s["--report=".len()..]));
             }
             "--retry" => {
                 let n = it
@@ -1782,8 +2062,54 @@ fn parse_args_with_runs(args: &[String]) -> Result<(RunOptions, u32, u32)> {
     if runs > 1 && retry > 1 {
         bail!("--runs and --retry are mutually exclusive (repeat-N vs until-pass)");
     }
-    let opts = parse_args(&filtered)?;
-    Ok((opts, runs, retry))
+    Ok(CliFlags {
+        filtered,
+        runs,
+        retry,
+        all,
+        shard,
+        filter,
+        tags,
+        report,
+    })
+}
+
+/// True when `<root>/<sid>/scenario.json` declares any of `tags`. A scenario
+/// with no `tags` field — or one that fails to parse — never matches.
+fn scenario_has_any_tag(root: &std::path::Path, sid: &str, tags: &[String]) -> bool {
+    let bytes = match std::fs::read(root.join(sid).join("scenario.json")) {
+        Ok(b) => b,
+        Err(_) => return false,
+    };
+    let doc: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+    doc.get("tags")
+        .and_then(|t| t.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| t.as_str())
+                .any(|t| tags.iter().any(|want| want == t))
+        })
+        .unwrap_or(false)
+}
+
+/// `k/n` — k is 1-based and must be <= n; both must be positive.
+fn parse_shard(v: &str) -> Result<(u32, u32)> {
+    let (k, n) = v
+        .split_once('/')
+        .ok_or_else(|| anyhow!("--shard expects k/n (e.g. 2/4); got {v:?}"))?;
+    let k: u32 = k
+        .parse()
+        .map_err(|_| anyhow!("--shard k must be a positive integer; got {v:?}"))?;
+    let n: u32 = n
+        .parse()
+        .map_err(|_| anyhow!("--shard n must be a positive integer; got {v:?}"))?;
+    if n == 0 || k == 0 || k > n {
+        bail!("--shard expects 1 <= k <= n; got {v:?}");
+    }
+    Ok((k, n))
 }
 
 fn parse_args(args: &[String]) -> Result<RunOptions> {
@@ -1808,6 +2134,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut from_step: Option<String> = None;
     let mut until_step: Option<String> = None;
     let mut update_baselines = false;
+    let mut har = false;
     let mut mock_from: Option<String> = None;
     let mut offline = false;
     let mut input_overrides: BTreeMap<String, String> = BTreeMap::new();
@@ -1849,7 +2176,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             "--until" => until_step = it.next().cloned().or_else(|| bail_missing("--until")),
             s if s.starts_with("--until=") => until_step = Some(s["--until=".len()..].to_string()),
             "--update-baselines" => update_baselines = true,
-            "--offline" => offline = true,
+            "--har" => har = true,
             "--mock-from" => mock_from = it.next().cloned().or_else(|| bail_missing("--mock-from")),
             s if s.starts_with("--mock-from=") => {
                 mock_from = Some(s["--mock-from=".len()..].to_string())
@@ -1908,6 +2235,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         from_step,
         until_step,
         update_baselines,
+        har,
         mock_from,
         offline,
     })
@@ -2001,6 +2329,22 @@ replays/latest.txt.
 --runs <N>               Repeat the replay N times in one invocation
                          (each run mints its own runId). Useful for
                          flake detection. Exit 0 iff every run is OK.
+--all                    Replay every scenario under the scenarios root
+                         (sorted sid order), printing a per-run banner
+                         plus a final pass/fail rollup. Combines with
+                         every flag except a positional sid.
+--shard k/n              With --all: run only the sids whose index in
+                         the sorted list mod n == k-1 (k is 1-based).
+                         For CI matrix jobs, e.g. shard 1/4 + 2/4 + …
+--filter <substr>        With --all: keep sids containing <substr>
+                         (case-insensitive).
+--tags <a,b>             With --all: keep scenarios whose `tags` list
+                         contains any of the comma-separated names (OR).
+--report <path>          With --all: write a markdown verdict table
+                         (per-scenario PASS/FAIL + step counts) — the
+                         shape a CI step drops into a PR comment.
+                         (case-insensitive).
+
 --no-sidecars            Skip per-step ARIA snapshot + screenshot
                          capture. audit.json is still written. Useful
                          when running with --runs N.
@@ -2025,6 +2369,12 @@ replays/latest.txt.
                          intentional UI changes are the re-mint case.
                          Skips with a warning when the run captured no
                          screenshots (e.g. --no-sidecars).
+--har                    Record a HAR file for the run and write
+                         <sid>/replays/<runId>/network.har — request +
+                         response bodies for DevTools/Charles-level
+                         inspection. network.json (when present) stays
+                         the lightweight status list; the HAR is the
+                         deep dive.
 --mock-from <runId>      Seed network stubs from <runId>'s
                          network.har (record it with --har first): the
                          page's fetch/XHR calls get the recorded
@@ -2032,7 +2382,7 @@ replays/latest.txt.
                          replay. Rules install via a page init script
                          on fresh sessions (covers page-load fetches),
                          else re-apply after every navigation.
---offline               Reject every fetch/XHR that matches no mock rule
+--offline                Reject every fetch/XHR that matches no mock rule
                          instead of reaching the real backend. With
                          --mock-from that's the full hermetic guarantee;
                          alone it stubs everything (static-page replays)."
@@ -2047,6 +2397,67 @@ mod tests {
 
     // env mutation isn't thread-safe; serialize via the shared lock.
     use crate::test_util::lock_env;
+
+    #[test]
+    fn parse_shard_validates_bounds() {
+        assert_eq!(parse_shard("1/4").unwrap(), (1, 4));
+        assert_eq!(parse_shard("4/4").unwrap(), (4, 4));
+        assert!(parse_shard("0/4").is_err());
+        assert!(parse_shard("5/4").is_err());
+        assert!(parse_shard("1/0").is_err());
+        assert!(parse_shard("x").is_err());
+        assert!(parse_shard("1/").is_err());
+    }
+
+    #[test]
+    fn cli_shard_without_all_errors() {
+        let args: Vec<String> = ["sid-x", "--shard", "1/2"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(cli(&args).is_err());
+    }
+
+    #[test]
+    fn write_report_renders_verdict_table() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("report.md");
+        let rows = vec![
+            (
+                "alpha".to_string(),
+                Some(RunSummary {
+                    passed: 3,
+                    total: 3,
+                    ok: true,
+                }),
+            ),
+            (
+                "beta".to_string(),
+                Some(RunSummary {
+                    passed: 1,
+                    total: 4,
+                    ok: false,
+                }),
+            ),
+            ("gamma".to_string(), None),
+        ];
+        write_report(&path, &rows).unwrap();
+        let md = fs::read_to_string(&path).unwrap();
+        assert!(md.contains("❌ 2/3 scenarios fail (1 pass)"));
+        assert!(md.contains("| `alpha` | PASS | 3/3 |"));
+        assert!(md.contains("| `beta` | FAIL | 1/4 |"));
+        assert!(md.contains("| `gamma` | ERROR | — |"));
+        assert!(md.contains("Failing: beta, gamma"));
+    }
+
+    #[test]
+    fn cli_report_without_all_errors() {
+        let args: Vec<String> = ["sid-x", "--report", "/tmp/r.md"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(cli(&args).is_err());
+    }
 
     fn write_exec(dir: &Path, name: &str, body: &str) -> PathBuf {
         let p = dir.join(name);
@@ -2115,6 +2526,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
             offline: false,
         };
@@ -2193,6 +2605,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
             offline: false,
         };
@@ -2252,6 +2665,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
             offline: false,
         };
@@ -2292,6 +2706,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
             offline: false,
         };
@@ -2357,6 +2772,7 @@ esac\nexit 0\n",
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
             offline: false,
         }
@@ -2610,6 +3026,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
             offline: false,
         };
@@ -2673,6 +3090,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
             offline: false,
         };
@@ -2777,44 +3195,120 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
     }
 
     #[test]
-    fn parse_args_with_runs_strips_and_parses() {
-        let (opts, runs, _retry) =
-            parse_args_with_runs(&["./j.json".into(), "--runs".into(), "5".into()]).unwrap();
-        assert_eq!(runs, 5);
+    fn parse_args_cli_strips_runs_and_parses() {
+        let f = parse_args_cli(&["./j.json".into(), "--runs".into(), "5".into()]).unwrap();
+        assert_eq!(f.runs, 5);
+        assert_eq!(f.retry, 1);
+        assert!(!f.all && f.shard.is_none() && f.filter.is_none());
+        let opts = parse_args(&f.filtered).unwrap();
         assert!(matches!(opts.source, ScenarioSource::Path(_)));
     }
 
     #[test]
-    fn parse_args_with_runs_eq_form() {
-        let (_opts, runs, _retry) =
-            parse_args_with_runs(&["./j.json".into(), "--runs=3".into()]).unwrap();
-        assert_eq!(runs, 3);
+    fn parse_args_cli_eq_form() {
+        let f = parse_args_cli(&["./j.json".into(), "--runs=3".into()]).unwrap();
+        assert_eq!(f.runs, 3);
+        let f = parse_args_cli(&["./j.json".into(), "--retry=2".into()]).unwrap();
+        assert_eq!(f.retry, 2);
+        // --runs and --retry are mutually exclusive.
+        parse_args_cli(&["./j.json".into(), "--runs=2".into(), "--retry=2".into()]).unwrap_err();
     }
 
     #[test]
-    fn parse_args_with_runs_default_is_one() {
-        let (_opts, runs, _retry) = parse_args_with_runs(&["./j.json".into()]).unwrap();
-        assert_eq!(runs, 1);
+    fn parse_args_cli_default_is_one() {
+        let f = parse_args_cli(&["./j.json".into()]).unwrap();
+        assert_eq!(f.runs, 1);
+        assert_eq!(f.retry, 1);
     }
 
     #[test]
-    fn parse_args_with_runs_rejects_zero_and_non_int() {
-        parse_args_with_runs(&["./j.json".into(), "--runs".into(), "0".into()]).unwrap_err();
-        parse_args_with_runs(&["./j.json".into(), "--runs".into(), "x".into()]).unwrap_err();
+    fn parse_args_cli_rejects_zero_and_non_int() {
+        parse_args_cli(&["./j.json".into(), "--runs".into(), "0".into()]).unwrap_err();
+        parse_args_cli(&["./j.json".into(), "--runs".into(), "x".into()]).unwrap_err();
+    }
+
+    #[test]
+    fn parse_args_cli_all_shard_filter() {
+        let f = parse_args_cli(&[
+            "--all".into(),
+            "--shard".into(),
+            "2/4".into(),
+            "--filter=login".into(),
+            "--quiet".into(),
+        ])
+        .unwrap();
+        assert!(f.all);
+        assert_eq!(f.shard, Some((2, 4)));
+        assert_eq!(f.filter.as_deref(), Some("login"));
+        assert_eq!(f.filtered, vec!["--quiet".to_string()]);
+    }
+
+    #[test]
+    fn parse_args_cli_tag_repeatable() {
+        let f = parse_args_cli(&[
+            "--all".into(),
+            "--tags".into(),
+            "smoke,checkout".into(),
+            "--tags=nightly".into(),
+        ])
+        .unwrap();
+        assert!(f.all);
+        assert_eq!(
+            f.tags,
+            vec![
+                "smoke".to_string(),
+                "checkout".to_string(),
+                "nightly".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn cli_tag_without_all_errors() {
+        let args: Vec<String> = ["sid-x", "--tags", "smoke"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(cli(&args).is_err());
+    }
+
+    #[test]
+    fn scenario_has_any_tag_matches_declared_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = dir.path().join("s1");
+        fs::create_dir_all(&sid).unwrap();
+        fs::write(
+            sid.join("scenario.json"),
+            r#"{"schema":"scenario/2","id":"s1","intent":"x","tags":["smoke","ci"],"steps":[]}"#,
+        )
+        .unwrap();
+        let root = dir.path();
+        let smoke = vec!["smoke".to_string()];
+        let nope = vec!["nightly".to_string()];
+        assert!(scenario_has_any_tag(root, "s1", &smoke));
+        assert!(!scenario_has_any_tag(root, "s1", &nope));
+        // no tags field → never matches
+        fs::write(
+            sid.join("scenario.json"),
+            r#"{"schema":"scenario/2","id":"s1","intent":"x","steps":[]}"#,
+        )
+        .unwrap();
+        assert!(!scenario_has_any_tag(root, "s1", &smoke));
+        // malformed json → never matches
+        fs::write(sid.join("scenario.json"), b"not json").unwrap();
+        assert!(!scenario_has_any_tag(root, "s1", &smoke));
     }
 
     #[test]
     fn parse_retry_parses_both_forms() {
-        let (_o, runs, retry) =
-            parse_args_with_runs(&["./j.json".into(), "--retry".into(), "3".into()]).unwrap();
-        assert_eq!((runs, retry), (1, 3));
-        let (_o, _r, retry) =
-            parse_args_with_runs(&["./j.json".into(), "--retry=2".into()]).unwrap();
-        assert_eq!(retry, 2);
-        let (_o, runs, retry) = parse_args_with_runs(&["./j.json".into()]).unwrap();
-        assert_eq!((runs, retry), (1, 1));
-        parse_args_with_runs(&["./j.json".into(), "--retry".into(), "0".into()]).unwrap_err();
-        parse_args_with_runs(&["./j.json".into(), "--retry".into(), "x".into()]).unwrap_err();
+        let f = parse_args_cli(&["./j.json".into(), "--retry".into(), "3".into()]).unwrap();
+        assert_eq!((f.runs, f.retry), (1, 3));
+        let f = parse_args_cli(&["./j.json".into(), "--retry=2".into()]).unwrap();
+        assert_eq!(f.retry, 2);
+        let f = parse_args_cli(&["./j.json".into()]).unwrap();
+        assert_eq!((f.runs, f.retry), (1, 1));
+        parse_args_cli(&["./j.json".into(), "--retry".into(), "0".into()]).unwrap_err();
+        parse_args_cli(&["./j.json".into(), "--retry".into(), "x".into()]).unwrap_err();
     }
 
     #[test]
@@ -2860,7 +3354,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
 
     #[test]
     fn runs_and_retry_are_mutually_exclusive() {
-        parse_args_with_runs(&[
+        parse_args_cli(&[
             "./j.json".into(),
             "--runs".into(),
             "2".into(),
@@ -2869,7 +3363,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         ])
         .unwrap_err();
         // retry alone with runs at its default is fine
-        parse_args_with_runs(&["./j.json".into(), "--retry".into(), "3".into()]).unwrap();
+        parse_args_cli(&["./j.json".into(), "--retry".into(), "3".into()]).unwrap();
     }
 
     #[test]
@@ -3231,6 +3725,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
             offline: false,
         };
@@ -3318,6 +3813,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
             offline: false,
         };
@@ -3502,6 +3998,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
             offline: false,
         };
@@ -3591,6 +4088,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
             offline: false,
         };
@@ -3659,6 +4157,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
             offline: false,
         };
@@ -3705,6 +4204,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
             offline: false,
         };
@@ -3888,6 +4388,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            har: false,
             mock_from: None,
             offline: false,
         };
