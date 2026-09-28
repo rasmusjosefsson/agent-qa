@@ -26,6 +26,8 @@ import {
 } from '@/components/ui/select'
 import { insertStep } from '@/lib/runs-api'
 
+type SubjectKind = 'element' | 'url' | 'shot' | 'console' | 'network' | 'dialog'
+
 const PREDICATES = [
   'isVisible',
   'exists',
@@ -38,13 +40,29 @@ const PREDICATES = [
   'endsWith',
 ] as const
 
+// Predicates that make sense per subject — the backend re-validates anyway,
+// but offering `matches` on a url claim would just bounce.
+const PREDICATES_BY_KIND: Record<SubjectKind, readonly string[]> = {
+  element: PREDICATES,
+  url: PREDICATES,
+  dialog: ['exists', 'notExists', 'equals', 'contains', 'matches'],
+  shot: ['matches'],
+  console: ['exists', 'notExists', 'equals', 'contains', 'countEquals'],
+  network: ['exists', 'notExists', 'equals', 'contains'],
+}
+
 const VALUE_PREDICATES = new Set([
   'equals',
   'contains',
   'matches',
   'startsWith',
   'endsWith',
+  'countEquals',
 ])
+
+const NETWORK_KINDS = ['fired', 'status', 'responseJsonPath'] as const
+const METHODS = ['any', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const
+const CONSOLE_TYPES = ['error', 'warning', 'log', 'any'] as const
 
 // `role=name`-style shorthand? No — keep it explicit: role + optional name
 // fields produce `{role, name}`; "css selector" produces the raw escape hatch.
@@ -73,11 +91,19 @@ export function InsertCheckDialog({
   onDone: () => void
 }) {
   const [intent, setIntent] = useState('')
-  const [subjectKind, setSubjectKind] = useState<'element' | 'url'>('element')
+  const [subjectKind, setSubjectKind] = useState<SubjectKind>('element')
   const [useCss, setUseCss] = useState(false)
   const [role, setRole] = useState('')
   const [name, setName] = useState('')
   const [css, setCss] = useState('')
+  const [shotStep, setShotStep] = useState('')
+  const [shotTolerance, setShotTolerance] = useState('')
+  const [consoleType, setConsoleType] = useState('error')
+  const [consoleText, setConsoleText] = useState('')
+  const [netUrl, setNetUrl] = useState('')
+  const [netMethod, setNetMethod] = useState('')
+  const [netKind, setNetKind] = useState<string>('fired')
+  const [netPath, setNetPath] = useState('')
   const [predicate, setPredicate] = useState<string>('isVisible')
   const [value, setValue] = useState('')
   const [busy, setBusy] = useState(false)
@@ -86,24 +112,77 @@ export function InsertCheckDialog({
   useEffect(() => {
     if (open) {
       setIntent(`check after ${afterStepId}`)
+      setShotStep(afterStepId)
       setError(null)
     }
   }, [open, afterStepId])
 
+  const pickKind = (v: SubjectKind) => {
+    setSubjectKind(v)
+    const defaults: Record<SubjectKind, string> = {
+      element: 'isVisible',
+      url: 'contains',
+      shot: 'matches',
+      console: 'notExists',
+      network: 'exists',
+      dialog: 'exists',
+    }
+    setPredicate(defaults[v])
+  }
+
+  const subject = (): Record<string, unknown> => {
+    switch (subjectKind) {
+      case 'url':
+        return { url: true }
+      case 'dialog':
+        return { dialog: true }
+      case 'shot':
+        return { shot: shotStep.trim() }
+      case 'console': {
+        const m: Record<string, unknown> = {}
+        if (consoleType && consoleType !== 'any') m.type = consoleType
+        if (consoleText.trim()) m.text = consoleText.trim()
+        return { console: Object.keys(m).length ? m : true }
+      }
+      case 'network': {
+        const m: Record<string, unknown> = {}
+        if (netUrl.trim()) m.urlMatches = netUrl.trim()
+        if (netMethod && netMethod !== 'any') m.method = netMethod
+        const sub: Record<string, unknown> = { network: m }
+        if (netKind !== 'fired') sub.ofKind = netKind
+        if (netKind === 'responseJsonPath' && netPath.trim()) sub.path = netPath.trim()
+        return sub
+      }
+      default:
+        return elementSubject(role, name, css, useCss)
+    }
+  }
+
   const valid =
     !!intent.trim() &&
     (subjectKind === 'url' ||
-      (useCss ? !!css.trim() : !!role.trim()))
+      subjectKind === 'dialog' ||
+      (subjectKind === 'shot' && !!shotStep.trim()) ||
+      subjectKind === 'console' ||
+      (subjectKind === 'network' &&
+        (!!netUrl.trim() || (!!netMethod && netMethod !== 'any')) &&
+        (netKind !== 'responseJsonPath' || !!netPath.trim())) ||
+      (subjectKind === 'element' && (useCss ? !!css.trim() : !!role.trim())))
 
   const submit = async () => {
     if (!valid || busy) return
     setBusy(true)
     setError(null)
     const claim: Record<string, unknown> = {
-      subject: subjectKind === 'url' ? { url: true } : elementSubject(role, name, css, useCss),
+      subject: subject(),
       predicate,
     }
-    if (VALUE_PREDICATES.has(predicate as never) && value.trim()) claim.value = value.trim()
+    if (VALUE_PREDICATES.has(predicate as never) && value.trim())
+      claim.value = value.trim()
+    if (subjectKind === 'shot' && shotTolerance.trim()) {
+      const px = Number(shotTolerance)
+      if (!Number.isNaN(px)) claim.tolerance = { pixels: px }
+    }
     const r = await insertStep(sid, 'check', { intent: intent.trim(), claim }, { after: afterStepId })
     setBusy(false)
     if (!r.ok) {
@@ -113,6 +192,8 @@ export function InsertCheckDialog({
     onOpenChange(false)
     onDone()
   }
+
+  const predicates = PREDICATES_BY_KIND[subjectKind]
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -137,13 +218,17 @@ export function InsertCheckDialog({
           <div className="flex gap-3">
             <div className="w-36 space-y-2">
               <Label>Subject</Label>
-              <Select value={subjectKind} onValueChange={(v) => setSubjectKind(v as 'element' | 'url')}>
+              <Select value={subjectKind} onValueChange={(v) => pickKind(v as SubjectKind)}>
                 <SelectTrigger size="sm" className="h-8 text-xs" aria-label="Subject">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="element">element</SelectItem>
                   <SelectItem value="url">url</SelectItem>
+                  <SelectItem value="shot">screenshot</SelectItem>
+                  <SelectItem value="console">console</SelectItem>
+                  <SelectItem value="network">network</SelectItem>
+                  <SelectItem value="dialog">dialog</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -154,7 +239,7 @@ export function InsertCheckDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {PREDICATES.map((p) => (
+                  {predicates.map((p) => (
                     <SelectItem key={p} value={p}>
                       {p}
                     </SelectItem>
@@ -186,6 +271,94 @@ export function InsertCheckDialog({
                   <Input value={role} onChange={(e) => setRole(e.target.value)} placeholder="role (button)" />
                   <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="name (optional)" />
                 </div>
+              )}
+            </div>
+          )}
+          {subjectKind === 'shot' && (
+            <div className="space-y-2">
+              <Label>Screenshot step</Label>
+              <div className="flex gap-2">
+                <Input
+                  value={shotStep}
+                  onChange={(e) => setShotStep(e.target.value)}
+                  placeholder="step id whose screenshot to compare"
+                />
+                <Input
+                  className="w-28"
+                  value={shotTolerance}
+                  onChange={(e) => setShotTolerance(e.target.value)}
+                  placeholder="tolerance 0.01"
+                />
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Pixel-diffs that step's screenshot vs baselines/&lt;id&gt;.png (mint with shot-accept).
+              </p>
+            </div>
+          )}
+          {subjectKind === 'console' && (
+            <div className="space-y-2">
+              <Label>Matcher</Label>
+              <div className="flex gap-2">
+                <Select value={consoleType} onValueChange={setConsoleType}>
+                  <SelectTrigger size="sm" className="h-8 w-28 text-xs" aria-label="Console level">
+                    <SelectValue placeholder="any level" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CONSOLE_TYPES.map((t) => (
+                      <SelectItem key={t} value={t}>
+                        {t === 'any' ? 'any level' : t}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Input
+                  value={consoleText}
+                  onChange={(e) => setConsoleText(e.target.value)}
+                  placeholder="text contains… (optional)"
+                />
+              </div>
+            </div>
+          )}
+          {subjectKind === 'network' && (
+            <div className="space-y-2">
+              <Label>Matcher</Label>
+              <div className="flex gap-2">
+                <Input
+                  value={netUrl}
+                  onChange={(e) => setNetUrl(e.target.value)}
+                  placeholder="url matches, e.g. /api/users"
+                />
+                <Select value={netMethod || 'any'} onValueChange={setNetMethod}>
+                  <SelectTrigger size="sm" className="h-8 w-24 text-xs" aria-label="Method">
+                    <SelectValue placeholder="method" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {METHODS.map((m) => (
+                      <SelectItem key={m} value={m}>
+                        {m}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select value={netKind} onValueChange={setNetKind}>
+                  <SelectTrigger size="sm" className="h-8 w-36 text-xs" aria-label="Kind">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {NETWORK_KINDS.map((k) => (
+                      <SelectItem key={k} value={k}>
+                        {k}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {netKind === 'responseJsonPath' && (
+                <Input
+                  value={netPath}
+                  onChange={(e) => setNetPath(e.target.value)}
+                  placeholder="json path, e.g. data.users[0].id"
+                />
               )}
             </div>
           )}

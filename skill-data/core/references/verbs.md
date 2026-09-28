@@ -50,6 +50,11 @@ screenshots afterwards (visual baselines — see `visual.md`).
 | `audit show <sid> <runId\|latest>` / `audit list <sid>` | One run's audit.json; every recorded run. |
 | `heal-list <sid>` / `heal-chronic <sid>` / `heal-promote <sid> --apply` | Pending suggested patches; steps re-healing every run; absorb patches into `scenario.json`. |
 | `doctor` | Environment sanity (binary, browser, config). |
+`replay <sid-or-path> [--session <name>] [--profile <name>] [--update-baselines]`
+replays a sealed `scenario/2` document. It writes its audit and sidecars below
+`replays/`; `--update-baselines` mints `baselines/` PNGs from the run's
+screenshots afterwards (visual baselines — see `visual.md`).
+
 
 ## Connection settings (BYO only — skip this by default)
 
