@@ -188,9 +188,7 @@ export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
                       )}
                     </div>
                   )}
-                  <div className="tnum mt-0.5 truncate text-[11px] text-muted-foreground/80" title={fmtRunTime(sc.sid)}>
                   <div data-qa-volatile className="tnum mt-0.5 truncate text-[11px] text-muted-foreground/80" title={fmtRunTime(sc.sid)}>
-
                     {relRunTime(sc.sid)}
                   </div>
                 </button>
