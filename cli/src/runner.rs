@@ -114,6 +114,11 @@ pub struct RunOptions {
     /// performs). Runs even when shot claims FAILED: intentional UI
     /// changes are exactly the case where a failing diff needs re-minting.
     pub update_baselines: bool,
+    /// `--base-url <origin>` — retarget the scenario onto another deploy
+    /// (e.g. a PR preview): every `env` nav url and `goto` literal rooted
+    /// at the recorded origin is rewritten to this origin. See
+    /// [`crate::scenario::retarget_origin`].
+    pub base_url: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -359,7 +364,18 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         fs::read(&scenario_file).with_context(|| format!("read {}", scenario_file.display()))?;
     let parsed = schema::validate_bytes(&bytes)
         .with_context(|| format!("validate {}", scenario_file.display()))?;
-    let scenario: Scenario = serde_json::from_value(parsed.clone()).context("parse scenario")?;
+    let mut scenario: Scenario =
+        serde_json::from_value(parsed.clone()).context("parse scenario")?;
+    if let Some(to) = &opts.base_url {
+        match crate::scenario::retarget_origin(&mut scenario, to) {
+            Some(from) => {
+                eprintln!("[v2-replay] --base-url: retargeted {from} → {to}");
+            }
+            None => {
+                eprintln!("[v2-replay] --base-url: scenario has no recorded origin — flag ignored")
+            }
+        }
+    }
     let hash = hash_scenario_bytes(&bytes);
     // Union of `mask` selectors across the scenario's shot claims — hidden
     // (visibility:hidden) around every step screenshot so volatile UI
@@ -2047,6 +2063,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut from_step: Option<String> = None;
     let mut until_step: Option<String> = None;
     let mut update_baselines = false;
+    let mut base_url: Option<String> = None;
     let mut input_overrides: BTreeMap<String, String> = BTreeMap::new();
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
@@ -2086,6 +2103,10 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             "--until" => until_step = it.next().cloned().or_else(|| bail_missing("--until")),
             s if s.starts_with("--until=") => until_step = Some(s["--until=".len()..].to_string()),
             "--update-baselines" => update_baselines = true,
+            "--base-url" => base_url = it.next().cloned().or_else(|| bail_missing("--base-url")),
+            s if s.starts_with("--base-url=") => {
+                base_url = Some(s["--base-url=".len()..].to_string())
+            }
             "--param" | "-p" => {
                 let pair = it
                     .next()
@@ -2140,7 +2161,22 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         from_step,
         until_step,
         update_baselines,
+        base_url: normalize_base_url(base_url)?,
     })
+}
+
+/// `--base-url` must be a bare origin — `scheme://host[:port]`, no path or
+/// query: a path here would silently corrupt every rewritten URL.
+fn normalize_base_url(raw: Option<String>) -> Result<Option<String>> {
+    let Some(u) = raw else { return Ok(None) };
+    let u = u.trim_end_matches('/').to_string();
+    let Some((scheme, hostport)) = u.split_once("://") else {
+        bail!("--base-url expects scheme://host[:port], got {u:?}");
+    };
+    if scheme.is_empty() || hostport.is_empty() || hostport.contains(['/', '?']) {
+        bail!("--base-url expects scheme://host[:port], got {u:?}");
+    }
+    Ok(Some(u))
 }
 
 /// Narrow a flattened step list to the `--from`/`--until` dispatch window.
@@ -2205,7 +2241,8 @@ Usage:
                   [--no-sidecars] [--quiet | -q] [--plain]
                   [--tag <label>] [--output-audit <path>]
                   [--from <stepId>] [--until <stepId>]
-                  [--update-baselines] [--runs <N>]
+                  [--update-baselines] [--base-url <origin>]
+                  [--runs <N>]
 
 Loads + validates the scenario, mints a run id, prepares
 <sid>/replays/<runId>/, writes audit.json, runs env.open, iterates
@@ -2270,7 +2307,13 @@ replays/latest.txt.
                          performs). Runs even when shot claims fail —
                          intentional UI changes are the re-mint case.
                          Skips with a warning when the run captured no
-                         screenshots (e.g. --no-sidecars)."
+                         screenshots (e.g. --no-sidecars).
+--base-url <origin>      Retarget the run onto another deploy (e.g. a
+                         PR preview): every env nav url + goto literal
+                         rooted at the recorded origin is rewritten to
+                         <origin> (scheme://host[:port] only). Claim
+                         patterns are left untouched — use inputs for
+                         scenario-authored variability."
 }
 
 #[cfg(all(test, unix))]
@@ -2411,6 +2454,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            base_url: None,
         };
         let summary = run(&opts).unwrap();
         assert_eq!(summary.total, 1);
@@ -2487,6 +2531,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            base_url: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2544,6 +2589,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            base_url: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2582,6 +2628,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            base_url: None,
         };
         let err = format!("{:#}", run(&opts).unwrap_err());
         assert!(err.contains("schema error"), "got: {err}");
@@ -2645,6 +2692,7 @@ esac\nexit 0\n",
             from_step: None,
             until_step: None,
             update_baselines: false,
+            base_url: None,
         }
     }
 
@@ -2896,6 +2944,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            base_url: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2957,6 +3006,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            base_url: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3589,6 +3639,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            base_url: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3674,6 +3725,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            base_url: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3730,6 +3782,20 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         ])
         .unwrap();
         assert_eq!(opts.session_name, "explicit");
+    }
+
+    #[test]
+    fn parse_args_base_url_flag_and_origin_validation() {
+        let opts =
+            parse_args(&["x".into(), "--base-url".into(), "https://pr-7.io/".into()]).unwrap();
+        assert_eq!(opts.base_url.as_deref(), Some("https://pr-7.io")); // trailing / stripped
+        let opts = parse_args(&["x".into(), "--base-url=http://localhost:3000".into()]).unwrap();
+        assert_eq!(opts.base_url.as_deref(), Some("http://localhost:3000"));
+        assert!(parse_args(&["x".into()]).unwrap().base_url.is_none());
+        // Path/query/no-scheme are rejected — they'd corrupt rewrites.
+        parse_args(&["x".into(), "--base-url".into(), "https://a.io/p".into()]).unwrap_err();
+        parse_args(&["x".into(), "--base-url".into(), "a.io".into()]).unwrap_err();
+        parse_args(&["x".into(), "--base-url".into(), "https://a.io/?q=1".into()]).unwrap_err();
     }
 
     #[test]
@@ -3856,6 +3922,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            base_url: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3943,6 +4010,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            base_url: None,
         };
         // The run bails at the failing step; events/status are written
         // before the bail.
@@ -4009,6 +4077,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            base_url: None,
         };
         run(&opts).unwrap();
 
@@ -4053,6 +4122,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            base_url: None,
         };
         run(&opts).unwrap();
         let run_dir = run_dir_for(&jdir);
@@ -4234,6 +4304,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            base_url: None,
         };
         assert_eq!(resolve_progress_mode(&mk(true, false)), ProgressMode::Quiet);
         // quiet wins over plain.
