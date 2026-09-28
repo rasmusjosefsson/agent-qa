@@ -67,6 +67,20 @@ export async function startReplay(
   return { ok: false, error: j.error || String(res.status) }
 }
 
+export async function crawlScenario(
+  url: string,
+  opts?: { sid?: string; max?: number },
+): Promise<{ ok: boolean; stdout?: string; error?: string }> {
+  const res = await fetch('/api/scenarios/crawl', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ url, ...(opts?.sid ? { sid: opts.sid } : {}), ...(opts?.max ? { max: opts.max } : {}) }),
+  })
+  const j = (await res.json().catch(() => ({}))) as { stdout?: string; error?: string }
+  if (res.ok) return { ok: true, stdout: j.stdout }
+  return { ok: false, error: j.error || String(res.status) }
+}
+
 export async function deleteScenario(sid: string): Promise<{ ok: boolean; error?: string }> {
   const res = await fetch(`/api/scenarios/${encodeURIComponent(sid)}/delete`, {
     method: 'POST',

@@ -548,6 +548,36 @@ test('report viewer endpoints', async (t) => {
     assert.equal(res2.status, 404);
   });
 
+  await t.test('POST /api/scenarios/crawl spawns the crawl verb with flags', async () => {
+    const calls = [];
+    const { server: cSrv, base: cBase } = await boot(fx.root, {
+      runCli: async (args) => {
+        calls.push(args);
+        return { code: 0, stdout: 'crawl: crawl-app — 3 route(s)\n', stderr: '' };
+      },
+    });
+    try {
+      const res = await fetch(`${cBase}/api/scenarios/crawl`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ url: 'https://app.example.com/', sid: 'crawl-app', max: 5 }),
+      });
+      assert.equal(res.status, 200);
+      const j = await res.json();
+      assert.equal(j.ok, true);
+      assert.match(j.stdout, /3 route/);
+      assert.deepEqual(calls, [['crawl', 'https://app.example.com/', '--sid', 'crawl-app', '--max', '5']]);
+      const bad = await fetch(`${cBase}/api/scenarios/crawl`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ url: 'notaurl' }),
+      });
+      assert.equal(bad.status, 400);
+    } finally {
+      cSrv.close();
+    }
+  });
+
   await t.test('GET artifact streams a captured screenshot', async () => {
     const res = await fetch(
       `${base}/api/scenarios/${fx.sid}/runs/${fx.runId}/artifact/screenshots/navHome`,
