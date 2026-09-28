@@ -1,0 +1,94 @@
+name: qa-gate
+# The PR validation loop: replay the fixture-backed golden cases (downloads +
+# dialogs — deterministic, no live-site flake) against the PR's own build and
+# post a per-case verdict table as a sticky PR comment. The full live-site
+# suite stays on the nightly schedule; this gate answers "did my change break
+# replay?" in a few minutes.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  golden-fixtures:
+    name: golden fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+      - name: build cli
+        working-directory: cli
+        run: cargo build --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: launcher install (resolves agent-browser)
+        working-directory: npm/agent-qa
+        run: npm install --no-audit --no-fund
+      - name: browser install
+        working-directory: npm/agent-qa
+        env:
+          AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+        run: ./node_modules/.bin/agent-browser install
+      - uses: oven-sh/setup-bun@v2
+      - name: replay fixture goldens
+        id: gate
+        working-directory: evals
+        env:
+          AGENT_QA_EVAL_AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
+          AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
+          AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+          # Fixture-backed cases only: downloads fixture (13) + dialogs
+          # fixture (TC01-06; TC07+ hit the live practice page).
+          GOLDEN_ONLY: "golden:file-upload:download,golden:alerts-dialogs:tc01,golden:alerts-dialogs:tc02,golden:alerts-dialogs:tc03,golden:alerts-dialogs:tc04,golden:alerts-dialogs:tc05,golden:alerts-dialogs:tc06"
+        run: bun golden:all
+      - name: upload gate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-gate
+          path: |
+            evals/results/
+            evals/scenarios/*/replays/
+          retention-days: 30
+      - name: post sticky verdict comment
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const { execSync } = require("child_process");
+            const body = execSync(
+              `bun golden/pr-comment.ts --run-url "${process.env.RUN_URL}"`,
+              { cwd: "evals", encoding: "utf8" },
+            );
+            const marker = "<!-- qa-gate -->";
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }

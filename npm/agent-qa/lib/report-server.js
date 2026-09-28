@@ -3965,6 +3965,34 @@ function createRequestHandler(root, deps, chat) {
         return sendJson(res, 200, { ok: true, promoted: stepId });
       }
 
+      // POST /api/scenarios/crawl {url, session?, sid?, max?} — spawn
+      // `agent-qa crawl` to draft a coverage scenario from a live page.
+      // The crawl is synchronous (one page visit + a DOM eval) so a plain
+      // runCli await is the right shape.
+      if (req.method === 'POST' && p === '/api/scenarios/crawl') {
+        if (!deps || !deps.runCli) {
+          return sendJson(res, 503, { error: 'crawl unavailable: agent-qa CLI not resolved' });
+        }
+        const body = await readJsonBody(req);
+        const url = typeof body.url === 'string' ? body.url.trim() : '';
+        if (!/^https?:\/\//.test(url)) return badRequest(res, 'url (http/https) is required');
+        const args = ['crawl', url];
+        if (typeof body.session === 'string' && body.session.trim()) {
+          args.push('--session', body.session.trim());
+        }
+        if (typeof body.sid === 'string' && body.sid.trim()) {
+          if (!isSafeSegment(body.sid.trim())) return badRequest(res, 'unsafe sid');
+          args.push('--sid', body.sid.trim());
+        }
+        const max = Number(body.max);
+        if (Number.isInteger(max) && max > 0) args.push('--max', String(max));
+        const r = await deps.runCli(args);
+        if (r.spawnError) return sendJson(res, 503, { error: 'agent-qa CLI not runnable' });
+        if (r.code !== 0) return sendJson(res, 500, { error: (r.stderr || '').trim() || 'crawl failed' });
+        return sendJson(res, 200, { ok: true, stdout: (r.stdout || '').trim() });
+      }
+
+
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         return sendJson(res, 405, { error: 'method not allowed' });
       }
