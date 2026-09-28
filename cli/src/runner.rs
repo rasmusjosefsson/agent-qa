@@ -1656,6 +1656,12 @@ fn stabilize_visual(session: &str, cap_ms: u64) {
             session,
             "(() => { const imgs = Array.from(document.images || []).filter(i => !i.complete).length; return JSON.stringify({fonts: document.fonts ? document.fonts.status : 'loaded', imgs, ready: document.readyState}); })()",
         );
+        // In-flight fetches don't show up in readyState/images — a lazy data
+        // load can still repaint after the screenshot. Require the session's
+        // request log to be quiet too.
+        let pending = browser::network_requests(session)
+            .map(|rs| rs.iter().filter(|r| r.status.is_none()).count())
+            .unwrap_or(0);
         match status {
             Ok(raw) => {
                 // eval stdout may wrap the JSON in a quoted string — peel once.
@@ -1668,7 +1674,7 @@ fn stabilize_visual(session: &str, cap_ms: u64) {
                             && v.get("ready").and_then(|r| r.as_str()) == Some("complete")
                     })
                     .unwrap_or(false);
-                if settled {
+                if settled && pending == 0 {
                     return;
                 }
             }
