@@ -440,22 +440,7 @@ pub fn build_drag_js(src: &DragEndpoint, dst: &DragEndpoint) -> String {
         r#"(() => {{ const __aqDrag = true;
 {prelude}
 {find}
-  const __aqDragFind = (d) => {{
-    let root = document;
-    for (const s of (d.scope || [])) {{
-      if (!root || !root.querySelectorAll) return null;
-      if (s.css != null) root = root.querySelector(s.css);
-      else if (s.xpath != null) {{ const r = document.evaluate(s.xpath, root, null, 9, null); root = r && r.singleNodeValue; }}
-      else if (s.role != null) root = __aqScopedFind(s.role, s.name || '', root);
-      else if (s.text != null) {{ const want = __aqText(s.text); const hits = Array.from(root.querySelectorAll('*')).filter((n) => __aqVisible(n) && __aqName(n).some((c) => __aqText(c).includes(want))); const inter = hits.filter(__aqIsInteractive); root = inter[0] || hits.sort((a, b) => (a.textContent || '').length - (b.textContent || '').length)[0] || null; }}
-      if (!root) return null;
-    }}
-    if (d.kind === 'role') return __aqScopedFind(d.role, d.name || '', root);
-    if (d.kind === 'css') return root.querySelector(d.value);
-    if (d.kind === 'xpath') {{ const r = document.evaluate(d.value, root, null, 9, null); return r && r.singleNodeValue; }}
-    if (d.kind === 'text') {{ const want = __aqText(d.value); const hits = Array.from(root.querySelectorAll('*')).filter((n) => __aqVisible(n) && __aqName(n).some((c) => __aqText(c).includes(want))); const inter = hits.filter(__aqIsInteractive); return inter[0] || hits.sort((a, b) => (a.textContent || '').length - (b.textContent || '').length)[0] || null; }}
-    return null;
-  }};
+{finder}
   const src = __aqDragFind({src});
   if (!src) return "src-miss";
   const dst = __aqDragFind({dst});
@@ -486,8 +471,70 @@ pub fn build_drag_js(src: &DragEndpoint, dst: &DragEndpoint) -> String {
 }})()"#,
         prelude = activation_prelude(),
         find = scoped_find_helper_js(),
+        finder = endpoint_finder_js(),
         src = drag_endpoint_json(src),
         dst = drag_endpoint_json(dst),
+    )
+}
+
+/// The endpoint resolver shared by `drag`, `contextmenu`, and friends:
+/// `__aqDragFind({kind, value?|role?|…, scope})` → the node or null. Pair it
+/// with `activation_prelude()` + `scoped_find_helper_js()`.
+fn endpoint_finder_js() -> String {
+    r#"  const __aqDragFind = (d) => {
+    let root = document;
+    for (const s of (d.scope || [])) {
+      if (!root || !root.querySelectorAll) return null;
+      if (s.css != null) root = root.querySelector(s.css);
+      else if (s.xpath != null) { const r = document.evaluate(s.xpath, root, null, 9, null); root = r && r.singleNodeValue; }
+      else if (s.role != null) root = __aqScopedFind(s.role, s.name || '', root);
+      else if (s.text != null) { const want = __aqText(s.text); const hits = Array.from(root.querySelectorAll('*')).filter((n) => __aqVisible(n) && __aqName(n).some((c) => __aqText(c).includes(want))); const inter = hits.filter(__aqIsInteractive); root = inter[0] || hits.sort((a, b) => (a.textContent || '').length - (b.textContent || '').length)[0] || null; }
+      if (!root) return null;
+    }
+    if (d.kind === 'role') return __aqScopedFind(d.role, d.name || '', root);
+    if (d.kind === 'css') return root.querySelector(d.value);
+    if (d.kind === 'xpath') { const r = document.evaluate(d.value, root, null, 9, null); return r && r.singleNodeValue; }
+    if (d.kind === 'text') { const want = __aqText(d.value); const hits = Array.from(root.querySelectorAll('*')).filter((n) => __aqVisible(n) && __aqName(n).some((c) => __aqText(c).includes(want))); const inter = hits.filter(__aqIsInteractive); return inter[0] || hits.sort((a, b) => (a.textContent || '').length - (b.textContent || '').length)[0] || null; }
+    return null;
+  };"#
+        .to_string()
+}
+
+/// JS resolving one endpoint and dispatching a secondary-button click on it:
+/// `pointerdown{button:2} → mousedown{button:2} → pointerup{button:2} →
+/// mouseup{button:2} → contextmenu{button:2}` — no `click` (a real right
+/// click never fires one). Returns `"true"` / `"miss"`.
+/// `__aqCtx` marker for test doubles.
+pub fn build_contextmenu_js(ep: &DragEndpoint) -> String {
+    format!(
+        r#"(() => {{ const __aqCtx = true;
+{prelude}
+{find}
+{finder}
+  const el = __aqDragFind({ep});
+  if (!el) return "miss";
+  try {{ el.scrollIntoView({{ block: 'center', inline: 'center' }}); }} catch (e) {{}}
+  const r = el.getBoundingClientRect();
+  const x = r.left + r.width / 2, y = r.top + r.height / 2;
+  const dn = {{ bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y, button: 2, buttons: 2 }};
+  const up = {{ bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y, button: 2, buttons: 0 }};
+  // Defer past the eval's response window — a contextmenu handler can open a
+  // native dialog which blocks the JS thread and eats the eval result.
+  setTimeout(() => {{
+    try {{
+      el.dispatchEvent(new PointerEvent('pointerdown', dn));
+      el.dispatchEvent(new MouseEvent('mousedown', dn));
+      el.dispatchEvent(new PointerEvent('pointerup', up));
+      el.dispatchEvent(new MouseEvent('mouseup', up));
+      el.dispatchEvent(new MouseEvent('contextmenu', dn));
+    }} catch (e) {{}}
+  }}, 150);
+  return "true";
+}})()"#,
+        prelude = activation_prelude(),
+        find = scoped_find_helper_js(),
+        finder = endpoint_finder_js(),
+        ep = drag_endpoint_json(ep),
     )
 }
 
@@ -764,6 +811,17 @@ mod tests {
     fn popup_opener_roles() {
         assert!(is_popup_opener_role("combobox"));
         assert!(!is_popup_opener_role("button"));
+    }
+
+    #[test]
+    fn contextmenu_js_dispatches_secondary_button_chain() {
+        let ep = DragEndpoint::Css("#hot-spot".to_string());
+        let js = build_contextmenu_js(&ep);
+        assert!(js.contains("__aqCtx"), "marker");
+        assert!(js.contains("#hot-spot"), "selector embedded");
+        assert!(js.contains("button: 2"), "secondary button");
+        assert!(js.contains("contextmenu"), "contextmenu event");
+        assert!(js.contains("setTimeout"), "deferred past eval window");
     }
 
     #[test]
