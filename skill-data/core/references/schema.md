@@ -190,6 +190,41 @@ bytes, and string predicates match the file name — or the file's UTF-8
 text when `"attribute": "content"` is set (files over 1 MiB are rejected
 for content claims). Relative paths resolve against the scenario dir.
 
+### Network mocks
+
+`do/mock` stubs matching `fetch` and `XMLHttpRequest` calls in the live
+page — edge cases (5xx, error payloads, latency) that the real backend
+won't produce on demand. `params.url` is a glob matched on the request
+URL (`*` is the only wildcard):
+
+```json
+{
+  "id": "s4",
+  "intent": "the API is down",
+  "kind": "do",
+  "verb": "mock",
+  "params": { "url": "*/api/users*", "status": 503, "json": { "error": "unavailable" }, "delayMs": 50 }
+}
+```
+
+`params.abort: true` rejects instead of responding — the page sees a real
+network failure (`fetch` rejects `TypeError: Failed to fetch`, XHR fires
+`error`), modeling a backend that's unreachable rather than erroring.
+
+Registered rules re-apply automatically after `goto`/`reload`/`back`/
+`forward` (navigation wipes the page's JS world, so the runner reinstalls
+the wrapper). A click that navigates still drops them — put `mock` steps
+after unpredictable navigations. `do/unmock` removes a rule
+(`params.url` = the same glob) or clears all without it. Combine with
+`{"network": {"urlMatches": ...}}` claims to prove the stub fired, or a
+`{"shot": ...}` claim to golden the error UI.
+
+For hermetic replay, `agent-qa replay <sid> --mock-from <runId>` seeds
+stubs from a previous run's `network.har` (recorded via `--har`): every
+URL the page fetched gets its recorded status+body back — no backend
+needed. Seeded rules install as a page init script on a fresh session,
+covering even the page's load-time fetches.
+
 ### Console claims
 
 Assert on messages the page logged this session with the `{"console"}`

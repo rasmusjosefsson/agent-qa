@@ -766,6 +766,28 @@ pub fn network_request(
     json_data("network request", &r.stdout)
 }
 
+/// `agent-browser network har start` — begin a HAR recording on the
+/// session. The daemon keeps accumulating entries until `har stop`.
+pub fn network_har_start(session: &str) -> Result<(), AgentBrowserError> {
+    run(
+        session,
+        ["network", "har", "start"],
+        RunOpts::new().capture(),
+    )?;
+    Ok(())
+}
+
+/// `agent-browser network har stop <path>` — flush the recording to
+/// `path` (a HAR 1.2 file) and end it.
+pub fn network_har_stop(session: &str, dest: &Path) -> Result<(), AgentBrowserError> {
+    run(
+        session,
+        ["network", "har", "stop", &dest.to_string_lossy()],
+        RunOpts::new().capture(),
+    )?;
+    Ok(())
+}
+
 pub fn open(session: &str, url: &str) -> Result<(), AgentBrowserError> {
     let mut last_err = None;
     for attempt in 1..=OPEN_MAX_ATTEMPTS {
