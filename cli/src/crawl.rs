@@ -28,13 +28,14 @@ pub fn run(args: &[String]) -> Result<u8> {
     let mut max_links = MAX_DEFAULT;
     let mut sid_override: Option<String> = None;
     let mut console_checks = true;
+    let mut network_checks = true;
 
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
         match a.as_str() {
             "-h" | "--help" | "help" => {
                 println!(
-                    "agent-qa crawl — draft a coverage scenario from a live page\n\nUsage:\n  agent-qa crawl <url> [options]\n\nOptions:\n  --session <name>   Browser session to drive (default: default)\n  --out <dir>        Output dir for scenario.json + crawl-report.json\n                     (default: <scenarios_root>/crawl-<host>)\n  --max <N>          Max same-origin links to cover (default {MAX_DEFAULT})\n  --sid <name>       Scenario id (default: crawl-<host>)\n  --no-console-checks\n                     Skip the per-page 'no console errors' claims\n                     (on by default — a page that crashes JS isn't green).\n\nThe draft is a goto + shot claim + console check per discovered route —\nrun `replay`, then `shot-accept` to mint baselines."
+                    "agent-qa crawl — draft a coverage scenario from a live page\n\nUsage:\n  agent-qa crawl <url> [options]\n\nOptions:\n  --session <name>   Browser session to drive (default: default)\n  --out <dir>        Output dir for scenario.json + crawl-report.json\n                     (default: <scenarios_root>/crawl-<host>)\n  --max <N>          Max same-origin links to cover (default {MAX_DEFAULT})\n  --sid <name>       Scenario id (default: crawl-<host>)\n  --no-console-checks\n                     Skip the per-page 'no console errors' claims\n                     (on by default — a page that crashes JS isn't green).\n  --no-network-checks\n                     Skip 'fired' claims for the API calls the entry page\n                     made (on by default — a draft that never asserts its\n                     network contract can pass while the data layer broke).\n\nThe draft is a goto + shot claim + console check per discovered route —\nrun `replay`, then `shot-accept` to mint baselines."
                 );
                 return Ok(0);
             }
@@ -65,6 +66,7 @@ pub fn run(args: &[String]) -> Result<u8> {
                 );
             }
             "--no-console-checks" => console_checks = false,
+            "--no-network-checks" => network_checks = false,
             other if other.starts_with("--") => bail!("unknown flag {other:?}"),
             other => url = Some(other.to_string()),
         }
@@ -79,6 +81,11 @@ pub fn run(args: &[String]) -> Result<u8> {
     let sid = sid_override.unwrap_or_else(|| format!("crawl-{}", sanitize(&host)));
     let dir = out_dir.unwrap_or_else(|| paths::scenarios_root().join(&sid));
 
+    // Baseline count before navigation — a warm session's log already holds
+    // earlier traffic; only requests arriving after `open` become claims.
+    let baseline = browser::network_requests(&session)
+        .map(|v| v.len())
+        .unwrap_or(0);
     browser::open(&session, &url).with_context(|| format!("crawl: open {url}"))?;
     browser::wait_for_load_capped(&session, "networkidle", 5000).ok();
 
@@ -128,6 +135,18 @@ pub fn run(args: &[String]) -> Result<u8> {
     let mut idx = 0usize;
     cover(&mut steps, &mut idx, "entry page", &url, console_checks);
 
+    // API calls the entry page fired become `fired` claims — the draft
+    // covers the network contract, not just the render. XHR/fetch only;
+    // document/sub-resource loads are noise here.
+    let net_steps = if network_checks {
+        let reqs = browser::network_requests(&session).unwrap_or_default();
+        network_claim_steps(&reqs[baseline.min(reqs.len())..], &mut idx)
+    } else {
+        Vec::new()
+    };
+    let net_count = net_steps.len();
+    steps.extend(net_steps);
+
     let mut covered = 0usize;
     for link in &links {
         // Skip non-navigable links (mailto/tel/javascript: are filtered
@@ -168,12 +187,17 @@ pub fn run(args: &[String]) -> Result<u8> {
     .with_context(|| format!("crawl: write {}", report_path.display()))?;
 
     println!(
-        "crawl: {sid} — {covered} route(s) + entry, {} shot claim(s){}",
-        steps.len() / if console_checks { 3 } else { 2 },
+        "crawl: {sid} — {covered} route(s) + entry, {} shot claim(s){}{}",
+        covered + 1,
         if console_checks {
             " + console-error checks"
         } else {
             ""
+        },
+        if network_checks && net_count > 0 {
+            format!(" + {net_count} network claim(s)")
+        } else {
+            String::new()
         }
     );
     println!("  scenario: {}", scenario_path.display());
@@ -187,6 +211,43 @@ pub fn run(args: &[String]) -> Result<u8> {
     );
     println!("  next:     agent-qa replay {sid} && agent-qa shot-accept {sid}");
     Ok(0)
+}
+
+/// One `fired` claim per distinct XHR/fetch the entry page made (deduped
+/// by method+URL, capped so a chatty page doesn't drown the draft).
+/// `urlMatches` is a regex — the literal URL is escaped.
+fn network_claim_steps(reqs: &[crate::browser::CapturedRequest], idx: &mut usize) -> Vec<Value> {
+    use std::collections::BTreeSet;
+    const CAP: usize = 10;
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    for r in reqs {
+        let is_api = r
+            .resource_type
+            .as_deref()
+            .map(|t| matches!(t.to_ascii_lowercase().as_str(), "xhr" | "fetch"))
+            .unwrap_or(false);
+        if !is_api || !seen.insert((r.method.clone(), r.url.clone())) {
+            continue;
+        }
+        if out.len() >= CAP {
+            break;
+        }
+        *idx += 1;
+        let escaped: String = r
+            .url
+            .chars()
+            .flat_map(|c| {
+                if "\\.^$+?()[]{}|*".contains(c) {
+                    vec!['\\', c]
+                } else {
+                    vec![c]
+                }
+            })
+            .collect();
+        out.push(json!({"id":format!("s{}",*idx),"intent":format!("{} {} fired",r.method,r.url),"kind":"check","claim":{"subject":{"network":{"urlMatches":escaped,"method":r.method}},"predicate":"exists"}}));
+    }
+    out
 }
 
 fn sanitize(host: &str) -> String {
@@ -229,5 +290,41 @@ mod tests {
         assert_eq!(url::host_of("example.com/path"), "example.com");
         assert_eq!(sanitize("app.example.com"), "app-example-com");
         assert_eq!(sanitize("localhost"), "localhost");
+    }
+
+    fn req(url: &str, method: &str, rt: Option<&str>) -> crate::browser::CapturedRequest {
+        crate::browser::CapturedRequest {
+            request_id: "r".into(),
+            url: url.into(),
+            method: method.into(),
+            status: Some(200),
+            resource_type: rt.map(str::to_string),
+            mime_type: None,
+        }
+    }
+
+    #[test]
+    fn network_claim_steps_dedupes_and_escapes_api_calls() {
+        let reqs = vec![
+            req("https://x/doc", "GET", Some("document")),
+            req("https://x/api/u?a=(1)", "GET", Some("xhr")),
+            req("https://x/api/u?a=(1)", "GET", Some("fetch")), // dup
+            req("https://x/api/save", "POST", Some("fetch")),
+        ];
+        let mut idx = 0;
+        let steps = network_claim_steps(&reqs, &mut idx);
+        assert_eq!(steps.len(), 2);
+        let m = &steps[0]["claim"]["subject"]["network"];
+        // regex-escaped: the literal '?' and parens can't regex-match wild
+        assert_eq!(
+            m["urlMatches"].as_str().unwrap(),
+            "https://x/api/u\\?a=\\(1\\)"
+        );
+        assert_eq!(m["method"].as_str().unwrap(), "GET");
+        assert_eq!(steps[0]["claim"]["predicate"].as_str().unwrap(), "exists");
+        assert!(steps[1]["intent"]
+            .as_str()
+            .unwrap()
+            .contains("POST https://x/api/save"));
     }
 }
