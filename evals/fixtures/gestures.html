@@ -6,6 +6,7 @@
 <style>
   #holdBtn { padding: 24px; background: #446; color: #fff; user-select: none; }
   #swipeZone { margin-top: 16px; height: 120px; background: #eee; }
+  #pinchZone { margin-top: 16px; height: 160px; background: #dfe; }
 </style>
 </head>
 <body>
@@ -13,6 +14,8 @@
 <div id="holdState">idle</div>
 <div id="swipeZone">swipe here</div>
 <div id="swipeState">none</div>
+<div id="pinchZone">pinch here</div>
+<div id="pinchState">none</div>
 <script>
   const holdBtn = document.getElementById('holdBtn');
   const holdState = document.getElementById('holdState');
@@ -42,6 +45,30 @@
   let ptrDown = false;
   zone.addEventListener('pointerdown', e => { if (state.textContent !== 'none') return; ptrDown = true; sx = e.clientX; sy = e.clientY; });
   zone.addEventListener('pointerup', e => { if (!ptrDown) return; ptrDown = false; end(e.clientX, e.clientY); });
+
+  const pinchZone = document.getElementById('pinchZone');
+  const pinchState = document.getElementById('pinchState');
+  function span(touches) {
+    const a = touches[0], b = touches[1];
+    return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+  }
+  let pStart = 0;
+  pinchZone.addEventListener('touchstart', e => {
+    if (e.touches.length === 2) pStart = span(e.touches);
+  });
+  pinchZone.addEventListener('touchend', e => {
+    if (!pStart || e.changedTouches.length < 2) return;
+    const end = span(e.touches.length >= 2 ? e.touches : e.changedTouches);
+    const delta = end - pStart;
+    pinchState.textContent = (delta < 0 ? 'in:' : 'out:') + Math.round(Math.abs(delta));
+    pStart = 0;
+  });
+  // desktop trackpad pinch convention: ctrl + wheel
+  pinchZone.addEventListener('wheel', e => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    pinchState.textContent = e.deltaY > 0 ? 'wheel-in' : 'wheel-out';
+  });
 </script>
 </body>
 </html>

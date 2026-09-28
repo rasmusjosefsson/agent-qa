@@ -60,8 +60,10 @@ the picture shifts materially.
 
 ### P2 — platform coverage
 
-9. **Mobile/touch**: `do/viewport` + `emulate` give layout, but no swipe/
-   tap-hold/pinch verbs; edge pages have no touch cases yet.
+9. **Mobile/touch**: `do/viewport` + `emulate` give layout; `hold`,
+   `swipe`, and `pinch` verbs synthesize touch gestures (gestures-tc01/02
+   goldens). Remaining: real mobile-emulation contexts (Emulation.setTouchEmulationEnabled)
+   and multi-touch beyond two-finger pinch.
 10. **Geolocation/timezone**: #242 ships `geo`/`device` (device presets
     bundle timezone+locale), but geolocation is *blocked on a permission
     grant* — see P1 #3's finding. Timezone has no `set` subcommand in

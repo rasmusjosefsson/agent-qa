@@ -197,6 +197,8 @@ describe("toRecordDraft — every shipped verb is reachable or triaged", () => {
     ["hold", ["action", { method: "holdBySelector", args: ["#h", 800] }]],
     ["swipe", ["action", { method: "swipeBySelector", args: [".card", "left", 160] }]],
     ["swipe", ["action", { method: "swipePage", args: ["up"] }]],
+  ["pinch", ["action", { method: "pinchBySelector", args: ["#map", "out", 200] }]],
+  ["pinch", ["action", { method: "pinchPage", args: ["in"] }]],
   ];
 
   const emitted = new Set<string>();

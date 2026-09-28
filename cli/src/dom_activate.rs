@@ -871,6 +871,69 @@ pub fn build_swipe_js(ep: Option<&DragEndpoint>, direction: &str, distance: f64)
     )
 }
 
+/// `build_pinch_js` — two-finger pinch/zoom via a synthesized
+/// TouchEvent chain (two Touches moving toward or away from each other)
+/// plus a ctrlKey WheelEvent (the desktop trackpad pinch convention).
+/// `direction`: "in" = fingers travel toward each other (zoom out),
+/// "out" = apart (zoom in). `distance` = per-finger travel in px.
+/// `__aqPinch` marker for test doubles.
+pub fn build_pinch_js(ep: Option<&DragEndpoint>, direction: &str, distance: f64) -> String {
+    let find_src = match ep {
+        Some(ep) => format!(
+            "  const el = __aqGestureFind({ep});
+  if (!el) return \"el-miss\";
+  try {{ el.scrollIntoView({{ block: 'center', inline: 'center' }}); }} catch (e) {{}}
+  const r = el.getBoundingClientRect();
+  const sx = r.left + r.width / 2, sy = r.top + r.height / 2;
+  const target = el;",
+            ep = drag_endpoint_json(ep)
+        ),
+        None => "  const sx = innerWidth / 2, sy = innerHeight / 2;
+  const target = document.elementFromPoint(sx, sy) || document.body;"
+            .to_string(),
+    };
+    format!(
+        r#"(() => {{ const __aqPinch = true;
+{prelude}
+{find}
+{finder}
+{find_src}
+  const D = {distance};
+  const IN = {dir} === 'in', OUT = {dir} === 'out';
+  if (!IN && !OUT) return "bad-dir";
+  const ev = (x, y) => ({{ bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y }});
+  const hasTouch = typeof TouchEvent === 'function' && typeof Touch === 'function';
+  const mkTouch = (id, x, y) => hasTouch ? new Touch({{ identifier: id, target, clientX: x, clientY: y }}) : null;
+  // Two fingers a fixed radius apart, on the vertical axis through the
+  // center. "in" starts spread and converges; "out" starts together and
+  // spreads. Touches report their position on the shared target.
+  const R0 = IN ? D : 1, R1 = IN ? 1 : D;
+  if (hasTouch) {{
+    const t1 = mkTouch(1, sx, sy - R0), t2 = mkTouch(2, sx, sy + R0);
+    target.dispatchEvent(new TouchEvent('touchstart', Object.assign({{}}, ev(sx, sy), {{ touches: [t1, t2], targetTouches: [t1, t2], changedTouches: [t1, t2] }})));
+    const STEPS = 8;
+    for (let i = 1; i <= STEPS; i++) {{
+      const r = R0 + (R1 - R0) * i / STEPS;
+      const a = mkTouch(1, sx, sy - r), b = mkTouch(2, sx, sy + r);
+      target.dispatchEvent(new TouchEvent('touchmove', Object.assign({{}}, ev(sx, sy), {{ touches: [a, b], targetTouches: [a, b], changedTouches: [a, b] }})));
+    }}
+    const e1 = mkTouch(1, sx, sy - R1), e2 = mkTouch(2, sx, sy + R1);
+    target.dispatchEvent(new TouchEvent('touchend', Object.assign({{}}, ev(sx, sy), {{ touches: [], targetTouches: [], changedTouches: [e1, e2] }})));
+  }}
+  // Also fire the ctrlKey wheel so pages that map trackpad pinch to
+  // wheel+zoom react even without touch support.
+  target.dispatchEvent(new WheelEvent('wheel', Object.assign({{}}, ev(sx, sy), {{ deltaY: IN ? 120 : -120, ctrlKey: true }})));
+  return "true";
+}})()"#,
+        prelude = activation_prelude(),
+        find = scoped_find_helper_js(),
+        finder = gesture_finder_js(),
+        find_src = find_src,
+        distance = distance,
+        dir = json_str(direction),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1106,5 +1169,24 @@ mod tests {
         assert!(page.contains("elementFromPoint"), "{page}");
         assert!(!page.contains("el-miss"), "{page}");
         assert!(build_swipe_js(None, "diagonal", 100.0).contains("bad-dir"));
+    }
+
+    #[test]
+    fn pinch_js_directions_and_viewport_default() {
+        let el = build_pinch_js(Some(&DragEndpoint::Css("#map".into())), "in", 200.0);
+        assert!(el.contains("__aqPinch"), "{el}");
+        assert!(el.contains("=== 'in'"), "{el}");
+        assert!(el.contains("const D = 200"), "{el}");
+        assert!(el.contains("touchstart"), "{el}");
+        assert!(el.contains("touchmove"), "{el}");
+        assert!(el.contains("touchend"), "{el}");
+        assert!(el.contains("[t1, t2]"), "{el}");
+        assert!(el.contains("ctrlKey: true"), "{el}");
+        assert!(el.contains("__aqGestureFind"), "{el}");
+
+        let page = build_pinch_js(None, "out", 150.0);
+        assert!(page.contains("elementFromPoint"), "{page}");
+        assert!(page.contains("=== 'out'"), "{page}");
+        assert!(build_pinch_js(None, "diagonal", 100.0).contains("bad-dir"));
     }
 }

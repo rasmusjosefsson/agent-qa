@@ -464,6 +464,55 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                 other => bail!("step '{id}' swipe: unexpected result {other:?}"),
             }
         }
+        Verb::Pinch => {
+            let p = params.ok_or_else(|| anyhow!("step '{id}' pinch: params required"))?;
+            let dir_raw = p
+                .get("direction")
+                .ok_or_else(|| anyhow!("step '{id}' pinch: params.direction is required"))?;
+            let dir = match dir_raw {
+                serde_json::Value::String(s) => crate::value::substitute_scenario_vars(s, scope),
+                _ => bail!("step '{id}' pinch: params.direction must be a string"),
+            };
+            let distance = p
+                .get("distance")
+                .map(|v| match v {
+                    serde_json::Value::Number(n) => n.as_f64().ok_or_else(|| {
+                        anyhow!("step '{id}' pinch: params.distance must be a number")
+                    }),
+                    serde_json::Value::String(s) => {
+                        let s = crate::value::substitute_scenario_vars(s, scope);
+                        s.parse::<f64>().map_err(|_| {
+                            anyhow!("step '{id}' pinch: params.distance must be a number")
+                        })
+                    }
+                    _ => bail!("step '{id}' pinch: params.distance must be a number"),
+                })
+                .transpose()?
+                .unwrap_or(150.0);
+            let ep = match on {
+                Some(loc) => Some(
+                    drag_endpoint(loc, scope, ctx.scenario_dir)
+                        .map_err(|e| anyhow!("step '{id}' pinch: {e}"))?,
+                ),
+                None => None,
+            };
+            let out = browser::eval_expression(
+                ctx.session,
+                &crate::dom_activate::build_pinch_js(ep.as_ref(), &dir, distance),
+            )
+            .map_err(|e| anyhow!("step '{id}' pinch: {e}"))?;
+            let trimmed = out.trim();
+            let code: String =
+                serde_json::from_str(trimmed).unwrap_or_else(|_| trimmed.to_string());
+            match code.as_str() {
+                "true" => Ok(None),
+                "el-miss" => bail!("step '{id}' pinch: origin element not found"),
+                "bad-dir" => {
+                    bail!("step '{id}' pinch: params.direction must be in|out, got {dir:?}")
+                }
+                other => bail!("step '{id}' pinch: unexpected result {other:?}"),
+            }
+        }
         Verb::Frame => {
             let p = params.ok_or_else(|| anyhow!("step '{id}' frame: params required"))?;
             let sel = if p.get("main").and_then(|v| v.as_bool()) == Some(true) {

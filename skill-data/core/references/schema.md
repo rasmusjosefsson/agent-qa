@@ -290,6 +290,14 @@ handlers (long-press menus) trigger while tap handlers do not.
 down) and `params.distance` (default 300 px). Optional `on` starts the gesture
 at the element's center; omit it for a viewport-centered swipe.
 
+`do/pinch` dispatches a two-finger pinch on the vertical axis through the
+center of `on` (or the viewport when `on` is omitted): `params.direction`
+(required, `in` = fingers converge → zoom out, `out` = fingers apart → zoom in)
+and `params.distance` (default 150 px, each finger's travel). A `touchstart`
+(2 touches) `→ touchmove×8 → touchend` chain fires for native pinch handlers,
+plus a `ctrlKey` `wheel` event so desktop trackpad-pinch conventions trigger
+too (the wheel alone fires when `Touch` is unsupported).
+
 ```json
 { "id": "s4", "intent": "long-press the row", "kind": "do", "verb": "hold",
   "on": { "raw": { "kind": "css", "value": ".row" }, "reason": "row" },
@@ -298,7 +306,12 @@ at the element's center; omit it for a viewport-centered swipe.
   "on": { "raw": { "kind": "css", "value": ".card" }, "reason": "card" },
   "params": { "direction": "left", "distance": 200 } },
 { "id": "s6", "intent": "scroll the feed", "kind": "do", "verb": "swipe",
-  "params": { "direction": "up" } }
+  "params": { "direction": "up" } },
+{ "id": "s7", "intent": "zoom the map in", "kind": "do", "verb": "pinch",
+  "on": { "raw": { "kind": "css", "value": "#map" }, "reason": "map" },
+  "params": { "direction": "out", "distance": 200 } },
+{ "id": "s8", "intent": "zoom out from the center", "kind": "do", "verb": "pinch",
+  "params": { "direction": "in" } }
 ```
 
 Both gestures are synthesized in-page (eval), so they work on desktop
