@@ -16,6 +16,7 @@
 <div id="swipeState">none</div>
 <div id="pinchZone">pinch here</div>
 <div id="pinchState">none</div>
+<div id="pinchWheel">none</div>
 <script>
   const holdBtn = document.getElementById('holdBtn');
   const holdState = document.getElementById('holdState');
@@ -48,6 +49,7 @@
 
   const pinchZone = document.getElementById('pinchZone');
   const pinchState = document.getElementById('pinchState');
+  const pinchWheel = document.getElementById('pinchWheel');
   function span(touches) {
     const a = touches[0], b = touches[1];
     return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
@@ -67,7 +69,7 @@
   pinchZone.addEventListener('wheel', e => {
     if (!e.ctrlKey) return;
     e.preventDefault();
-    pinchState.textContent = e.deltaY > 0 ? 'wheel-in' : 'wheel-out';
+    pinchWheel.textContent = e.deltaY > 0 ? 'wheel-in' : 'wheel-out';
   });
 </script>
 </body>
