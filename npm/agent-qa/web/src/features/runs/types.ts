@@ -27,6 +27,25 @@ export interface ScenarioHealth {
   chronic: string[]
 }
 
+export interface AuditTrendRun {
+  runId: string
+  exitCode: number | null
+  durationSecs: number | null
+  startedAt: string | null
+}
+
+// `audit trend` rollup: the scenario's last N runs as outcome glyphs +
+// a duration sparkline, for the "is this degrading" glance in the header.
+export interface AuditTrend {
+  scenarioId: string
+  runs: AuditTrendRun[]
+  passed: number
+  failed: number
+  medianSecs: number
+  outcomes: string
+  sparkline: string
+}
+
 export interface ScenarioSummary {
   sid: string
   dir: string
@@ -36,7 +55,14 @@ export interface ScenarioSummary {
   steps: number | null
   // do→check coverage (same heuristic as `scenario coverage`): null when no
   // scenario.json exists yet.
-  coverage: { doSteps: number; checked: number; bare: number; ratio: number } | null
+  coverage: {
+    doSteps: number
+    checked: number
+    bare: number
+    shotCovered: number
+    ratio: number
+    shotRatio: number
+  } | null
   latestRunId: string | null
   activeRunId: string | null
   latestRun: RunSummary | null
