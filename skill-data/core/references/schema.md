@@ -242,6 +242,5 @@ pass when ANY matching message's text satisfies them.
 Messages accumulate for the whole session — on a reused session, entries
 from earlier steps count too.
 
->>>>>>> origin/main
 Use `agent-qa scenario check <scenario.json>` before replay. It validates the
 schema and runs the scenario linter.
