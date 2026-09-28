@@ -23,6 +23,7 @@
 //! API surface lands ahead of demand.
 #![allow(dead_code)]
 
+use std::collections::HashMap;
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
@@ -817,7 +818,19 @@ pub fn network_har_stop(session: &str, dest: &Path) -> Result<(), AgentBrowserEr
     Ok(())
 }
 
+/// Top-level navigation invalidates any frame selection: drop our tracking
+/// and (when a frame was set) hand the daemon a `frame main` so its element
+/// context returns to the top document too. Best-effort — the daemon call
+/// only runs when a frame was actually selected.
+pub fn reset_frame_ctx(session: &str) {
+    let had = frame_ctx_map().lock().unwrap().remove(session).is_some();
+    if had {
+        let _ = run(session, ["frame", "main"], RunOpts::new().lenient());
+    }
+}
+
 pub fn open(session: &str, url: &str) -> Result<(), AgentBrowserError> {
+    reset_frame_ctx(session);
     let mut last_err = None;
     for attempt in 1..=OPEN_MAX_ATTEMPTS {
         match run(session, ["open", url], RunOpts::new().capture()) {
@@ -892,7 +905,8 @@ pub fn wait_for_load_capped(
 /// Run a JS expression in the page. Returns the binary's stdout
 /// (typically a JSON-encoded representation of the in-page value).
 pub fn eval_expression(session: &str, expression: &str) -> Result<String, AgentBrowserError> {
-    let r = run(session, ["eval", expression], RunOpts::new().capture())?;
+    let wrapped = frame_wrap_eval(session, expression);
+    let r = run(session, ["eval", &wrapped], RunOpts::new().capture())?;
     Ok(r.stdout)
 }
 
@@ -1313,6 +1327,76 @@ pub fn tab(session: &str, args: &[&str]) -> Result<(), AgentBrowserError> {
     cmd.extend_from_slice(args);
     run(session, cmd, RunOpts::new())?;
     Ok(())
+}
+
+/// Active frame context per session. `agent-browser frame` only scopes its
+/// own element commands — its `eval` always runs in the top document — so
+/// eval-based helpers (read, claims, scrollTo, auto-heal probes) pierce the
+/// frame themselves by shadowing `document`/`window` with the iframe's
+/// `contentDocument`/`defaultView`. Keyed by session; `None` entry = top doc.
+fn frame_ctx_map() -> &'static Mutex<HashMap<String, String>> {
+    static CELL: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    CELL.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Current frame selector for a session (None/absent = top document).
+pub fn frame_ctx(session: &str) -> Option<String> {
+    frame_ctx_map().lock().unwrap().get(session).cloned()
+}
+
+/// Switch the session's frame context: `Some(selector)` enters the iframe
+/// matching the CSS selector, `None` returns to the top document.
+/// Mirrors `agent-browser --session <s> frame <selector|main>`.
+pub fn switch_frame(session: &str, selector: Option<&str>) -> Result<(), AgentBrowserError> {
+    run(
+        session,
+        vec!["frame", selector.unwrap_or("main")],
+        RunOpts::new(),
+    )?;
+    let mut map = frame_ctx_map().lock().unwrap();
+    match selector {
+        Some(sel) => {
+            map.insert(session.to_string(), sel.to_string());
+        }
+        None => {
+            map.remove(session);
+        }
+    }
+    Ok(())
+}
+
+/// Wrap an eval expression so `document`/`window` inside it bind to the
+/// session's active iframe context. Same-origin only — cross-origin frames
+/// surface a clear error (element commands still work via CDP).
+pub fn frame_wrap_eval(session: &str, expression: &str) -> String {
+    let Some(sel) = frame_ctx(session) else {
+        return expression.to_string();
+    };
+    let sel = serde_json::to_string(&sel).unwrap_or_else(|_| "\"\x00\"".into());
+    // Params shadow globals inside the nested call — `const document` in the
+    // same scope would put every `document` read in a temporal dead zone, and
+    // un-shadowed DOM constructors (Event, HTMLInputElement, …) resolve to the
+    // TOP realm, throwing "Illegal invocation" when applied to frame elements.
+    const GLOBALS: &str = "document, window, Node, Element, HTMLElement, \
+         HTMLInputElement, HTMLTextAreaElement, HTMLSelectElement, HTMLFormElement, \
+         Event, MouseEvent, PointerEvent, KeyboardEvent, InputEvent, FocusEvent, \
+         CustomEvent, WheelEvent, DragEvent, DataTransfer, File, FileList, Blob, \
+         getComputedStyle, setTimeout, clearTimeout, setInterval, clearInterval, \
+         requestAnimationFrame, MutationObserver, IntersectionObserver, Promise, \
+         localStorage, sessionStorage";
+    format!(
+        "(() => {{ const __f = document.querySelector({sel}); \
+         if (!__f || !__f.contentDocument) throw new Error('frame ' + {sel} + ' not found (or cross-origin — eval-based steps cannot pierce it; element commands still work)'); \
+         const __w = __f.contentDocument.defaultView; \
+         return (({GLOBALS}) => ( {expression} ))(\
+             __f.contentDocument, __w, __w.Node, __w.Element, __w.HTMLElement, \
+             __w.HTMLInputElement, __w.HTMLTextAreaElement, __w.HTMLSelectElement, __w.HTMLFormElement, \
+             __w.Event, __w.MouseEvent, __w.PointerEvent, __w.KeyboardEvent, __w.InputEvent, __w.FocusEvent, \
+             __w.CustomEvent, __w.WheelEvent, __w.DragEvent, __w.DataTransfer, __w.File, __w.FileList, __w.Blob, \
+             __w.getComputedStyle, __w.setTimeout, __w.clearTimeout, __w.setInterval, __w.clearInterval, \
+             __w.requestAnimationFrame, __w.MutationObserver, __w.IntersectionObserver, __w.Promise, \
+             __w.localStorage, __w.sessionStorage); }})()"
+    )
 }
 
 /// Run `agent-browser doctor` and return its stdout.

@@ -53,6 +53,7 @@ const NOT_RECORDABLE: Record<string, string> = {
   drag: "recorded natively by the workbench live pane (endpoint pick + emit), not via agent-browser actions",
   mock: "authored — stubbing decisions belong in the scenario, not the recording",
   unmock: "authored — removes authored stubs; never emitted by capture",
+  frame: "authored — frame context is a scenario decision; capture records flat actions",
 };
 
 const action = (method: string, args: unknown[] = [], intent = "t") =>
