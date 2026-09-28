@@ -53,6 +53,18 @@ pub(crate) fn rules(session: &str) -> Vec<MockRule> {
     with_mocks(session, |v| v.clone())
 }
 
+/// Stale-recording guard: scenario.json edited after the HAR was captured
+/// means the stub set may predate the requests the scenario now makes.
+fn har_is_stale(har_path: &Path, scenario_json: &Path) -> bool {
+    let (Ok(h), Ok(s)) = (fs::metadata(har_path), fs::metadata(scenario_json)) else {
+        return false;
+    };
+    let (Ok(ht), Ok(st)) = (h.modified(), s.modified()) else {
+        return false;
+    };
+    st > ht
+}
+
 /// Parse a `do/mock` step's params into a rule.
 /// `params`: `{ "url": "*/api/x*", "status": 503, "json": {...}|"body": "…",
 /// "delayMs": 50 }`. `url` is required.
@@ -157,6 +169,11 @@ pub(crate) fn seed_from_har(session: &str, scenario_dir: &Path, run_id: &str) ->
             har_path.display()
         )
     })?;
+    if har_is_stale(&har_path, &scenario_dir.join("scenario.json")) {
+        eprintln!(
+            "[v2-replay] --mock-from {run_id:?}: scenario.json is newer than the recording — re-record with `replay --har` if steps changed"
+        );
+    }
     let har: Json = serde_json::from_str(&text)
         .with_context(|| format!("--mock-from: parse {}", har_path.display()))?;
     let entries = har["log"]["entries"]
@@ -318,6 +335,25 @@ mod tests {
         assert!(js.contains("window.fetch ="));
         assert!(js.contains("XMLHttpRequest.prototype.send"));
         assert!(js.contains("__qaMocksInstalled"));
+    }
+
+    #[test]
+    fn har_is_stale_flags_scenario_newer_than_recording() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let har = tmp.path().join("network.har");
+        let scn = tmp.path().join("scenario.json");
+        std::fs::write(&har, "{}").unwrap();
+        std::fs::write(&scn, "{}").unwrap();
+        // Same-mtime is racy — force order via filetime-free check: touch scn
+        // by rewriting after a tick.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&scn, "{\"a\":1}").unwrap();
+        assert!(har_is_stale(&har, &scn));
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&har, "{\"b\":1}").unwrap();
+        assert!(!har_is_stale(&har, &scn));
+        // Missing files never flag stale.
+        assert!(!har_is_stale(&har, &tmp.path().join("nope.json")));
     }
 
     #[test]
