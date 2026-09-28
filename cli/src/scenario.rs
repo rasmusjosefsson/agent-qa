@@ -347,8 +347,16 @@ pub enum ClaimSubject {
     /// differing pixels ≤ `tolerance.pixels` (default 0.01). On mismatch the
     /// delta map lands at `<run>/shots-diff/<stepId>.diff.png` and the claim
     /// fails with the diff ratio. Baselines are minted with `shot-accept`.
+    ///
+    /// `mask` lists CSS selectors hidden (visibility:hidden) while any step
+    /// screenshot is captured — the ignore-regions feature for volatile UI
+    /// (timestamps, live badges, user avatars). Masks from every shot claim
+    /// in the scenario apply to every screenshot, so baselines and replays
+    /// stay consistent.
     Shot {
         shot: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        mask: Vec<String>,
     },
     Var {
         kind: String, // always "var" — kept literal to disambiguate untagged
@@ -664,6 +672,63 @@ mod tests {
         // Round-trip preserves the meaningful subset (we strip None fields).
         assert_eq!(back["id"], j["id"]);
         assert_eq!(back["steps"][0]["verb"], "goto");
+    }
+
+    #[test]
+    fn shot_subject_mask_roundtrips() {
+        let parsed: Scenario = serde_json::from_value(json!({
+            "schema": "scenario/2",
+            "id": "j1",
+            "intent": "visual",
+            "steps": [
+                {
+                    "id": "s9",
+                    "intent": "visual baseline",
+                    "kind": "check",
+                    "claim": {
+                        "subject": { "shot": "s3", "mask": [".ts", "[data-qa-volatile]"] },
+                        "predicate": "matches"
+                    }
+                },
+                {
+                    "id": "s10",
+                    "intent": "plain shot",
+                    "kind": "check",
+                    "claim": {
+                        "subject": { "shot": "s4" },
+                        "predicate": "matches"
+                    }
+                }
+            ]
+        }))
+        .unwrap();
+        match &parsed.steps[0] {
+            Step::Check { claim, .. } => match &claim.subject {
+                ClaimSubject::Shot { shot, mask } => {
+                    assert_eq!(shot, "s3");
+                    assert_eq!(mask, &[".ts", "[data-qa-volatile]"]);
+                }
+                other => panic!("expected shot subject, got {other:?}"),
+            },
+            other => panic!("expected check step, got {other:?}"),
+        }
+        // No mask key → empty vec, and serialisation drops the empty key.
+        match &parsed.steps[1] {
+            Step::Check { claim, .. } => match &claim.subject {
+                ClaimSubject::Shot { shot, mask } => {
+                    assert_eq!(shot, "s4");
+                    assert!(mask.is_empty());
+                }
+                other => panic!("expected shot subject, got {other:?}"),
+            },
+            other => panic!("expected check step, got {other:?}"),
+        }
+        let back = serde_json::to_value(&parsed).unwrap();
+        assert!(back["steps"][1]["claim"]["subject"].get("mask").is_none());
+        assert_eq!(
+            back["steps"][0]["claim"]["subject"]["mask"],
+            json!([".ts", "[data-qa-volatile]"])
+        );
     }
 
     #[test]

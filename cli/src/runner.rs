@@ -354,6 +354,12 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         .with_context(|| format!("validate {}", scenario_file.display()))?;
     let scenario: Scenario = serde_json::from_value(parsed.clone()).context("parse scenario")?;
     let hash = hash_scenario_bytes(&bytes);
+    // Union of `mask` selectors across the scenario's shot claims — hidden
+    // (visibility:hidden) around every step screenshot so volatile UI
+    // (timestamps, live badges) can't flake the visual diff. Precomputed
+    // once: a claim's mask must already be in effect when the referenced
+    // step's screenshot is captured, before the claim step itself runs.
+    let shot_masks = scenario_shot_masks(&scenario);
 
     // Native-dialog steps need `alert`/`beforeunload` kept pending instead of
     // agent-browser's default auto-accept, or a recorded `dialog` step finds
@@ -728,7 +734,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             match result {
                 Ok(()) => {
                     if !opts.no_sidecars {
-                        capture_step_sidecars(&run, id, &opts.session_name);
+                        capture_step_sidecars(&run, id, &opts.session_name, &shot_masks);
                     }
                     summary.passed += 1;
                     emit_step_done(progress_mode, idx, total, true, &label, step_ms);
@@ -750,7 +756,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 }
                 Err(e) => {
                     if !opts.no_sidecars {
-                        capture_step_sidecars(&run, id, &opts.session_name);
+                        capture_step_sidecars(&run, id, &opts.session_name, &shot_masks);
                     }
                     summary.ok = false;
                     let reason = format!("{e:#}");
@@ -1320,7 +1326,12 @@ fn apply_heal_override(step: &Step, corrected: &str) -> Step {
 /// Capture the post-step ARIA snapshot + screenshot keyed by literal
 /// stepId. Best-effort: any failure logs to stderr but does not fail
 /// the step. Mirrors the TS runner's sidecar-after-each-step shape.
-fn capture_step_sidecars(run: &crate::sidecar::RunPaths, step_id: &str, session: &str) {
+fn capture_step_sidecars(
+    run: &crate::sidecar::RunPaths,
+    step_id: &str,
+    session: &str,
+    shot_masks: &[String],
+) {
     use crate::sidecar::{ensure_kind_dir, step_sidecar_path, write_step_sidecar, SidecarKind};
     if !is_safe_step_id(step_id) {
         eprintln!("[v2-replay] skip sidecars for unsafe stepId {step_id:?}");
@@ -1378,6 +1389,7 @@ fn capture_step_sidecars(run: &crate::sidecar::RunPaths, step_id: &str, session:
         let _ = dir; // keep the directory creation eager
     }
     if let Ok(path) = step_sidecar_path(run, SidecarKind::Screenshots, step_id) {
+        let masked = !shot_masks.is_empty() && apply_shot_mask(session, shot_masks);
         match browser::screenshot(session, &path, true, Some(cap_ms)) {
             Ok(true) => {}
             Ok(false) => eprintln!(
@@ -1385,6 +1397,73 @@ fn capture_step_sidecars(run: &crate::sidecar::RunPaths, step_id: &str, session:
             ),
             Err(e) => eprintln!("[v2-replay] screenshot {step_id} failed: {e}"),
         }
+        if masked {
+            clear_shot_mask(session);
+        }
+    }
+}
+
+/// Union of `mask` selectors declared on the scenario's `{"shot": ...}`
+/// claims. Walks the serialized steps so claims nested inside group/loop
+/// `params.steps` or `useTemplate` bodies count too — the same trick
+/// `scenario_uses_dialog` uses.
+fn scenario_shot_masks(scenario: &Scenario) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let v = serde_json::to_value(&scenario.steps).unwrap_or(serde_json::Value::Null);
+    fn walk(v: &serde_json::Value, out: &mut Vec<String>) {
+        match v {
+            serde_json::Value::Object(map) => {
+                if let Some(subject) = map.get("claim").and_then(|c| c.get("subject")) {
+                    let has_shot = subject.get("shot").and_then(|s| s.as_str()).is_some();
+                    if has_shot {
+                        if let Some(mask) = subject.get("mask").and_then(|m| m.as_array()) {
+                            for sel in mask.iter().filter_map(|m| m.as_str()) {
+                                if !out.iter().any(|o| o == sel) {
+                                    out.push(sel.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+                for v in map.values() {
+                    walk(v, out);
+                }
+            }
+            serde_json::Value::Array(arr) => {
+                for v in arr {
+                    walk(v, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    walk(&v, &mut out);
+    out
+}
+
+/// Hide the shot-mask selectors (visibility:hidden — layout stays put) and
+/// stash the originals on `window.__qa_shot_mask` for `clear_shot_mask`.
+/// Returns true when the mask was applied (restore is owed).
+fn apply_shot_mask(session: &str, masks: &[String]) -> bool {
+    let sels = serde_json::to_string(masks).unwrap_or_else(|_| "[]".to_string());
+    let js = format!(
+        "(() => {{ const sels = {sels}; const els = []; sels.forEach(s => document.querySelectorAll(s).forEach(e => els.push(e))); window.__qa_shot_mask = els.map(e => [e, e.style.visibility]); els.forEach(e => {{ e.style.visibility = 'hidden'; }}); return els.length; }})()"
+    );
+    match browser::eval_expression(session, &js) {
+        Ok(_) => true,
+        Err(e) => {
+            eprintln!("[v2-replay] shot mask hide failed (capturing unmasked): {e}");
+            false
+        }
+    }
+}
+
+fn clear_shot_mask(session: &str) {
+    let js = "(() => { const r = window.__qa_shot_mask || []; r.forEach(([e, v]) => { e.style.visibility = v; }); window.__qa_shot_mask = null; return r.length; })()";
+    if let Err(e) = browser::eval_expression(session, js) {
+        eprintln!(
+            "[v2-replay] shot mask restore failed (page keeps hidden elements until next nav): {e}"
+        );
     }
 }
 
@@ -2483,6 +2562,38 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         });
         let s: Scenario = serde_json::from_value(j).unwrap();
         assert!(!scenario_uses_dialog(&s));
+    }
+
+    #[test]
+    fn scenario_shot_masks_unions_and_dedups_nested_claims() {
+        let body = serde_json::json!([
+            {
+                "id": "s9", "intent": "visual a", "kind": "check",
+                "claim": { "subject": { "shot": "s1", "mask": [".ts", ".live"] }, "predicate": "matches" }
+            },
+            {
+                "id": "g1", "intent": "group", "kind": "do", "verb": "group",
+                "params": { "steps": [
+                    {
+                        "id": "sg1", "intent": "nested", "kind": "check",
+                        "claim": { "subject": { "shot": "sg0", "mask": [".ts", ".ad"] }, "predicate": "matches" }
+                    }
+                ]}
+            },
+            {
+                "id": "s10", "intent": "no mask", "kind": "check",
+                "claim": { "subject": { "shot": "s2" }, "predicate": "matches" }
+            },
+            {
+                "id": "s11", "intent": "not a shot", "kind": "check",
+                "claim": { "subject": { "url": true }, "predicate": "exists" }
+            }
+        ]);
+        let scenario: Scenario = serde_json::from_value(serde_json::json!({
+            "schema": "scenario/2", "id": "t", "intent": "t", "steps": body
+        }))
+        .unwrap();
+        assert_eq!(scenario_shot_masks(&scenario), vec![".ts", ".live", ".ad"]);
     }
 
     #[test]

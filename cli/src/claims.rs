@@ -104,7 +104,7 @@ pub fn dispatch_check(
         ClaimSubject::Flag { flag } => {
             check_flag(flag, &claim.predicate, claim.value.as_ref(), ctx)
         }
-        ClaimSubject::Shot { shot } => {
+        ClaimSubject::Shot { shot, .. } => {
             check_shot(shot, &claim.predicate, claim.tolerance.as_ref(), ctx)
         }
         ClaimSubject::Dialog { dialog } => {

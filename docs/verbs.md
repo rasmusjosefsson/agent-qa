@@ -65,6 +65,16 @@ It passes when the differing-pixel fraction ≤ `tolerance.pixels` (default `0.0
 on a miss the claim fails and a red delta map lands at `<run>/shots-diff/<stepId>.diff.png`.
 Size changes fail outright — re-mint with `shot-accept` when the change is legitimate.
 
+`mask` lists CSS selectors to hide (`visibility:hidden`) around every step
+screenshot — the ignore-regions escape hatch for volatile UI like timestamps,
+live badges, or user avatars. Masks union across all shot claims in the
+scenario and apply to baselines and replays alike, so masked regions can never
+flake the diff:
+
+```json
+{"check": {"shot": "s3", "mask": ["[data-qa-volatile]", "time"]}, "predicate": "matches"}
+```
+
 ## Profiles
 
 | Verb | What it does |
