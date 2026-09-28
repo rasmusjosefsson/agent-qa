@@ -96,6 +96,22 @@ export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
                     {verdict && <Badge tone={verdict}>{verdict}</Badge>}
                     <HealthBadges sid={sc.sid} runs={runs} />
                   </div>
+                  {sc.tags.length > 0 && (
+                    <div className="mt-0.5 flex flex-wrap items-center gap-1">
+                      {sc.tags.slice(0, 4).map((t) => (
+                        <span
+                          key={t}
+                          title={`replay --tags ${t} selects this scenario`}
+                          className="rounded border border-border px-1 py-px text-[10px] leading-tight text-muted-foreground"
+                        >
+                          {t}
+                        </span>
+                      ))}
+                      {sc.tags.length > 4 && (
+                        <span className="text-[10px] text-muted-foreground">+{sc.tags.length - 4}</span>
+                      )}
+                    </div>
+                  )}
                   <div className="tnum mt-0.5 truncate text-[11px] text-muted-foreground/80" title={fmtRunTime(sc.sid)}>
                     {relRunTime(sc.sid)}
                   </div>

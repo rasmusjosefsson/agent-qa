@@ -349,6 +349,10 @@ async function scenarioSummary(root, sid) {
     hasScenario: !!scenario,
     intent: scenario?.intent ?? null,
     steps: Array.isArray(scenario?.steps) ? scenario.steps.length : null,
+    // scenario.json's tags[] — the field `replay --tags` selects on.
+    tags: Array.isArray(scenario?.tags)
+      ? scenario.tags.filter((t) => typeof t === 'string')
+      : [],
     // Same do→check heuristic as `scenario coverage`/`coverage-all`: a do is
     // covered iff the next step is a check. Lets case/plan dashboards flag
     // thin scenarios without a CLI round-trip.

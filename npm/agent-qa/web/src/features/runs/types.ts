@@ -37,6 +37,8 @@ export interface ScenarioSummary {
   // do→check coverage (same heuristic as `scenario coverage`): null when no
   // scenario.json exists yet.
   coverage: { doSteps: number; checked: number; bare: number; ratio: number } | null
+  // scenario.json's tags[] — `replay --tags` selects on these.
+  tags: string[]
   latestRunId: string | null
   activeRunId: string | null
   latestRun: RunSummary | null
