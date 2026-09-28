@@ -278,8 +278,9 @@ pub fn run(args: &[String]) -> Result<u8> {
         "slow" => slow(&positionals, json_out, slow_pct, slow_min_ms, recent_n, min_runs),
         "health" => health(json_out),
         "cluster" => cluster(json_out, cluster_min),
+        "verdict" => verdict(&positionals, json_out),
         other => bail!(
-            "unknown audit subverb {other:?} (try: show | list | stats | stats-all | diff | summary | exit-code | field | count | duration | flaky | slow | health | cluster)"
+            "unknown audit subverb {other:?} (try: show | list | stats | stats-all | diff | summary | exit-code | field | count | duration | flaky | slow | health | cluster | verdict)"
         ),
     }
 }
@@ -788,6 +789,108 @@ fn exit_code(positionals: &[String]) -> Result<u8> {
     let exit = value.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(-1);
     println!("{exit}");
     Ok(0)
+}
+
+/// `audit verdict <sid> <runId|latest>` — the run-level triage signal a
+/// CI gate or a human can act on without reading the audit tree:
+///
+///   PASS  (exit 0): the run was green and needed no self-correction.
+///   FIX   (exit 2): the run was green BUT the runner had to self-correct
+///                   — auto-healed steps or value-rejection evidence mean
+///                   drift is accumulating; review heal.jsonl and promote.
+///   BLOCK (exit 1): the run failed — a human decides product-bug vs
+///                   scenario rot.
+///
+/// Reads `audit.json` (exitCode, autoHealed) + `heal.jsonl` rows (mode +
+/// stepId) for that run only.
+fn verdict(positionals: &[String], json_out: bool) -> Result<u8> {
+    let sid = positionals
+        .get(1)
+        .ok_or_else(|| anyhow!("usage: audit verdict <sid> <runId | latest>"))?;
+    let run_ref = positionals
+        .get(2)
+        .ok_or_else(|| anyhow!("usage: audit verdict <sid> <runId | latest>"))?;
+    let dir = paths::scenario_dir(sid)?;
+    let run_id = resolve_run_id(&dir, run_ref)?;
+    let run_dir = dir.join("replays").join(&run_id);
+    let audit_path = run_dir.join("audit.json");
+    if !audit_path.is_file() {
+        bail!("audit verdict: no audit.json at {}", audit_path.display());
+    }
+    let bytes = fs::read(&audit_path)?;
+    let audit: Value = serde_json::from_slice(&bytes)?;
+    let exit = audit.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(-1);
+    let summary_line = audit.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+
+    let mut healed_steps: Vec<String> = audit
+        .get("autoHealed")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // heal.jsonl rows carry the evidence classes that don't surface in
+    // audit.autoHealed (value rejections land there, not as locator heals).
+    let mut rejection_steps: Vec<String> = Vec::new();
+    let heal_path = run_dir.join("heal.jsonl");
+    if let Ok(body) = fs::read_to_string(&heal_path) {
+        for line in body.lines() {
+            let Ok(row) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            let step = row
+                .get("stepId")
+                .or_else(|| row.get("step_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let mode = row.get("mode").and_then(|v| v.as_str()).unwrap_or("");
+            if mode == "value-rejection" && !rejection_steps.iter().any(|s| s == step) {
+                rejection_steps.push(step.to_string());
+            }
+            if mode == "locator-correction" && !healed_steps.iter().any(|s| s == step) {
+                healed_steps.push(step.to_string());
+            }
+        }
+    }
+    healed_steps.sort();
+    rejection_steps.sort();
+
+    let (name, code) = if exit != 0 {
+        ("BLOCK", 1u8)
+    } else if !healed_steps.is_empty() || !rejection_steps.is_empty() {
+        ("FIX", 2u8)
+    } else {
+        ("PASS", 0u8)
+    };
+
+    if json_out {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "scenario": sid,
+                "runId": run_id,
+                "verdict": name,
+                "exitCode": exit,
+                "healedSteps": healed_steps,
+                "valueRejectionSteps": rejection_steps,
+                "summary": summary_line,
+            }))?
+        );
+    } else {
+        match name {
+            "PASS" => println!("PASS {sid} {run_id} — {summary_line}"),
+            "FIX" => println!(
+                "FIX {sid} {run_id} — green but self-corrected (healed: [{}], value-rejections: [{}]); review + promote",
+                healed_steps.join(", "),
+                rejection_steps.join(", "),
+            ),
+            _ => println!("BLOCK {sid} {run_id} — {summary_line}"),
+        }
+    }
+    Ok(code)
 }
 
 fn summary(positionals: &[String]) -> Result<u8> {
@@ -2125,6 +2228,76 @@ mod tests {
     }
 
     #[test]
+
+    fn verdict_maps_pass_fix_block() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        let jdir = tmp.path().join("sid");
+
+        // PASS: clean green run.
+        write_audit(&jdir, "r-pass", "SUMMARY: 3/3 (PASS)", 0);
+        assert_eq!(
+            verdict(&["verdict".into(), "sid".into(), "r-pass".into()], true).unwrap(),
+            0
+        );
+
+        // BLOCK: failed run.
+        write_audit(&jdir, "r-block", "SUMMARY: 2/3 (FAIL)", 1);
+        assert_eq!(
+            verdict(&["verdict".into(), "sid".into(), "r-block".into()], true).unwrap(),
+            1
+        );
+
+        // FIX via autoHealed: green run that self-corrected a locator.
+        let run_dir = jdir.join("replays").join("r-fix-healed");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(
+            run_dir.join("audit.json"),
+            r#"{"runId":"r-fix-healed","summary":"SUMMARY: 3/3 (PASS)","exitCode":0,"autoHealed":["s2"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            verdict(
+                &["verdict".into(), "sid".into(), "r-fix-healed".into()],
+                true
+            )
+            .unwrap(),
+            2
+        );
+
+        // FIX via value-rejection row in heal.jsonl (not reflected in
+        // audit.autoHealed).
+        let run_dir = jdir.join("replays").join("r-fix-reject");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(
+            run_dir.join("audit.json"),
+            r#"{"runId":"r-fix-reject","summary":"SUMMARY: 3/3 (PASS)","exitCode":0}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            run_dir.join("heal.jsonl"),
+            "{\"schema\":\"heal-row/v1\",\"mode\":\"value-rejection\",\"stepId\":\"s4\"}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            verdict(
+                &["verdict".into(), "sid".into(), "r-fix-reject".into()],
+                true
+            )
+            .unwrap(),
+            2
+        );
+
+        match prev {
+            Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    #[test]
+
     fn summary_prints_audit_summary_line() {
         let _g = crate::test_util::lock_env();
         let tmp = TempDir::new().unwrap();
