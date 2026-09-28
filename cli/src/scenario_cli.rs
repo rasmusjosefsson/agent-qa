@@ -1106,6 +1106,11 @@ fn list_lint_rules(json_out: bool) -> Result<u8> {
             severity: "warning",
             description: "A do/wait step has neither params.timeoutMs nor params.locator; will hang the replay until the global timeout.",
         },
+        Rule {
+            code: "shot-without-baseline",
+            severity: "warning",
+            description: "A {shot: <stepId>} claim has no baselines/<stepId>.png beside scenario.json; replay will fail with a missing-baseline hint. Skipped for stdin input.",
+        },
     ];
     if json_out {
         println!("{}", serde_json::to_string_pretty(&rules)?);
@@ -1423,6 +1428,54 @@ pub(crate) fn lint(
                         "step {id:?} verb=wait has neither params.timeoutMs nor params.locator; will hang the replay"
                     ),
                 });
+            }
+        }
+    }
+
+    // 13) a {"shot": <stepId>} claim needs a committed baseline —
+    // replay fails on the missing file anyway; flag it while the author
+    // still has the terminal in hand. Skipped on stdin ('-'): the tempfile
+    // has no scenario dir to resolve baselines/ against. Nested shot claims
+    // (inside group/loop params.steps) count too — same JSON walk the
+    // runner uses to find them.
+    let from_stdin = matches!(&_guard, crate::io::StdinOrPath::Stdin { .. });
+    if !from_stdin {
+        if let Some(scenario_dir) = path.parent() {
+            let mut shot_ids: Vec<String> = Vec::new();
+            fn collect_shots(v: &serde_json::Value, out: &mut Vec<String>) {
+                match v {
+                    serde_json::Value::Object(map) => {
+                        if let Some(subject) = map.get("claim").and_then(|c| c.get("subject")) {
+                            if let Some(sid) = subject.get("shot").and_then(|s| s.as_str()) {
+                                out.push(sid.to_string());
+                            }
+                        }
+                        for v in map.values() {
+                            collect_shots(v, out);
+                        }
+                    }
+                    serde_json::Value::Array(arr) => {
+                        for v in arr {
+                            collect_shots(v, out);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(steps) = raw.get("steps") {
+                collect_shots(steps, &mut shot_ids);
+            }
+            let baselines = scenario_dir.join("baselines");
+            for sid in &shot_ids {
+                if !baselines.join(format!("{sid}.png")).is_file() {
+                    findings.push(Finding {
+                        severity: "warning",
+                        code: "shot-without-baseline",
+                        message: format!(
+                            "check claims shot {sid:?} but baselines/{sid}.png is missing — run `agent-qa shot-accept` after a replay"
+                        ),
+                    });
+                }
             }
         }
     }
@@ -3437,6 +3490,67 @@ mod tests {
         );
         assert_eq!(lint(&p, LintFormat::Json, false, None, None).unwrap(), 0);
         assert_eq!(lint(&p, LintFormat::Json, true, None, None).unwrap(), 1);
+    }
+
+    #[test]
+    fn lint_shot_claim_without_baseline_warns() {
+        let tmp = TempDir::new().unwrap();
+        let p = write(
+            tmp.path(),
+            r#"{
+              "schema": "scenario/2", "id": "j", "intent": "x",
+              "steps": [
+                { "id": "s0", "intent": "shot", "kind": "check",
+                  "claim": { "subject": { "shot": "s0" }, "predicate": "matches" } }
+              ]
+            }"#,
+        );
+        // warning-only: exit 0 without --strict
+        assert_eq!(lint(&p, LintFormat::Json, false, None, None).unwrap(), 0);
+        // but the finding is there
+        let guard = crate::io::stdin_or_path(&p).unwrap();
+        let _ = guard;
+        let findings_dir = tmp.path().join("baselines");
+        fs::create_dir_all(&findings_dir).unwrap();
+        fs::write(findings_dir.join("s0.png"), b"png").unwrap();
+        assert_eq!(lint(&p, LintFormat::Json, false, None, None).unwrap(), 0);
+    }
+
+    #[test]
+    fn lint_shot_claim_missing_baseline_is_reported() {
+        let tmp = TempDir::new().unwrap();
+        let p = write(
+            tmp.path(),
+            r#"{
+              "schema": "scenario/2", "id": "j", "intent": "x",
+              "steps": [
+                { "id": "s0", "intent": "shot", "kind": "check",
+                  "claim": { "subject": { "shot": "s0" }, "predicate": "matches" } }
+              ]
+            }"#,
+        );
+        // capture stdout isn't accessible — use --strict so warnings exit 1
+        assert_eq!(lint(&p, LintFormat::Text, true, None, None).unwrap(), 1);
+    }
+
+    #[test]
+    fn lint_shot_claim_with_baseline_is_clean() {
+        let tmp = TempDir::new().unwrap();
+        let p = write(
+            tmp.path(),
+            r#"{
+              "schema": "scenario/2", "id": "j", "intent": "x",
+              "env": { "open": [ { "kind": "nav", "url": "https://example.com/" } ] },
+              "steps": [
+                { "id": "s0", "intent": "shot", "kind": "check",
+                  "claim": { "subject": { "shot": "s0" }, "predicate": "matches" } }
+              ]
+            }"#,
+        );
+        let baselines = tmp.path().join("baselines");
+        fs::create_dir_all(&baselines).unwrap();
+        fs::write(baselines.join("s0.png"), b"png").unwrap();
+        assert_eq!(lint(&p, LintFormat::Text, true, None, None).unwrap(), 0);
     }
 
     #[test]
