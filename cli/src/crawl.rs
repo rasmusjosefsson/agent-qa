@@ -341,21 +341,28 @@ fn page_links(page: &Value, seen: &mut std::collections::BTreeSet<String>) -> Ve
         .unwrap_or_default()
 }
 
-/// One `fired` claim per distinct XHR/fetch the entry page made (deduped
-/// by method+URL, capped so a chatty page doesn't drown the draft).
-/// `urlMatches` is a regex — the literal URL is escaped.
+/// One `fired` claim per distinct XHR/fetch/websocket/eventsource the
+/// entry page made (deduped by method+URL, capped so a chatty page
+/// doesn't drown the draft). `urlMatches` is a regex — the literal URL
+/// is escaped. `cdpws-*` socket/stream entries flow in through the same
+/// captured list, so crawls of real-time pages get socket coverage too.
 fn network_claim_steps(reqs: &[crate::browser::CapturedRequest], idx: &mut usize) -> Vec<Value> {
     use std::collections::BTreeSet;
     const CAP: usize = 10;
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
     for r in reqs {
-        let is_api = r
+        let is_live = r
             .resource_type
             .as_deref()
-            .map(|t| matches!(t.to_ascii_lowercase().as_str(), "xhr" | "fetch"))
+            .map(|t| {
+                matches!(
+                    t.to_ascii_lowercase().as_str(),
+                    "xhr" | "fetch" | "websocket" | "eventsource"
+                )
+            })
             .unwrap_or(false);
-        if !is_api || !seen.insert((r.method.clone(), r.url.clone())) {
+        if !is_live || !seen.insert((r.method.clone(), r.url.clone())) {
             continue;
         }
         if out.len() >= CAP {
@@ -470,10 +477,12 @@ mod tests {
             req("https://x/api/u?a=(1)", "GET", Some("xhr")),
             req("https://x/api/u?a=(1)", "GET", Some("fetch")), // dup
             req("https://x/api/save", "POST", Some("fetch")),
+            req("wss://x/live", "WS", Some("websocket")),
+            req("https://x/events", "GET", Some("eventsource")),
         ];
         let mut idx = 0;
         let steps = network_claim_steps(&reqs, &mut idx);
-        assert_eq!(steps.len(), 2);
+        assert_eq!(steps.len(), 4);
         let m = &steps[0]["claim"]["subject"]["network"];
         // regex-escaped: the literal '?' and parens can't regex-match wild
         assert_eq!(
@@ -486,5 +495,11 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("POST https://x/api/save"));
+        // sockets + streams claim their own fired presence
+        let ws = &steps[2]["claim"]["subject"]["network"];
+        assert_eq!(ws["urlMatches"].as_str().unwrap(), "wss://x/live");
+        assert_eq!(ws["method"].as_str().unwrap(), "WS");
+        let sse = &steps[3]["claim"]["subject"]["network"];
+        assert_eq!(sse["urlMatches"].as_str().unwrap(), "https://x/events");
     }
 }

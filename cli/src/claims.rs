@@ -3014,7 +3014,7 @@ mod tests {
         // wsPayloadContains narrows to sockets carrying a matching frame
         {
             use super::*;
-            let entries = vec![CapturedRequest {
+            let entries = [CapturedRequest {
                 request_id: "cdpws-0".into(),
                 url: "wss://echo.example/socket".into(),
                 method: "WS".into(),
