@@ -1061,6 +1061,16 @@ pub fn set_viewport(session: &str, width: u64, height: u64) -> Result<(), AgentB
     Ok(())
 }
 
+/// `agent-browser set <sub> <args…>` for the emulate-facing subcommands
+/// (device / geo / offline / media / headers / credentials).
+pub fn set_emulation(session: &str, args: &[String]) -> Result<(), AgentBrowserError> {
+    let mut argv: Vec<String> = vec!["set".into()];
+    argv.extend(args.iter().cloned());
+    let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    run(session, &refs, RunOpts::new())?;
+    Ok(())
+}
+
 /// Verb shape for [`find_role_act`]. Mirrors the agent-browser CLI:
 ///   `agent-browser --session <s> find role <role> <verb> [--name <n>] [<positional…>]`
 #[derive(Debug, Clone, Copy)]
