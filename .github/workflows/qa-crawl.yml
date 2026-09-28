@@ -1,0 +1,108 @@
+name: qa-crawl
+# "Grow coverage where the diff is": when a PR touches the workbench UI we
+# build the PR, boot the workbench, and run `agent-qa crawl` against it. The
+# crawler writes a draft scenario (goto + shot claim per discovered route) —
+# uploaded as an artifact and posted on the PR so adopting it is one copy +
+# `replay` + `shot-accept` away. This is the coverage-growth half of the
+# ui-goldens gate (#147) + `/qa accept` (#186) loop.
+on:
+  pull_request:
+    paths:
+      - "npm/agent-qa/web/**"
+      - "npm/agent-qa/lib/**"
+      - ".github/workflows/qa-crawl.yml"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  crawl:
+    name: draft coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+      - name: build cli
+        working-directory: cli
+        run: cargo build --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: launcher install (resolves agent-browser)
+        working-directory: npm/agent-qa
+        run: npm install --no-audit --no-fund
+      - name: build web bundle (lib/public is not committed)
+        working-directory: npm/agent-qa
+        run: npm run build:web
+      - name: browser install
+        working-directory: npm/agent-qa
+        env:
+          AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+        run: ./node_modules/.bin/agent-browser install
+      - name: boot the PR's workbench
+        env:
+          AGENT_QA_BINARY_PATH: ${{ github.workspace }}/cli/target/debug/agent-qa
+          AGENT_QA_SCENARIOS_DIR: ${{ runner.temp }}/qa-scenarios
+          AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
+          AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+        run: |
+          nohup node npm/agent-qa/bin/agent-qa.js web --port 4899 --no-open \
+            >"$RUNNER_TEMP/workbench.log" 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:4899/ >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:4899/ >/dev/null
+      - name: crawl the workbench into a draft scenario
+        env:
+          AGENT_QA_SCENARIOS_DIR: ${{ runner.temp }}/qa-scenarios
+          AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
+          AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+        run: >-
+          ./cli/target/debug/agent-qa crawl http://127.0.0.1:4899/
+          --sid crawl-pr-${{ github.event.pull_request.number }}
+      - name: upload the draft scenario
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-crawl
+          path: ${{ runner.temp }}/qa-scenarios/crawl-pr-${{ github.event.pull_request.number }}/
+          retention-days: 30
+      - name: comment the draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          SCENARIOS: ${{ runner.temp }}/qa-scenarios
+        run: |
+          set -euo pipefail
+          SID="crawl-pr-${PR}"
+          BODY=$(mktemp)
+          {
+            echo '<!-- qa-crawl -->'
+            echo '### Coverage draft for this PR'
+            echo
+            echo "Crawled the workbench built from this head — draft scenario \`$SID\` is attached as the \`qa-crawl\` artifact. To adopt it:"
+            echo
+            echo '```bash'
+            echo "unzip qa-crawl.zip -d <scenarios>/$SID"
+            echo "agent-qa replay $SID && agent-qa shot-accept $SID"
+            echo '```'
+            echo
+            echo '<details><summary>scenario.json</summary>'
+            echo
+            echo '```json'
+            cat "$SCENARIOS/$SID/scenario.json"
+            echo '```'
+            echo '</details>'
+          } > "$BODY"
+          EXISTING=$(gh api "repos/${{ github.repository }}/issues/${PR}/comments" \
+            --jq '.[] | select(.body | startswith("<!-- qa-crawl -->")) | .id' | head -1)
+          if [[ -n "$EXISTING" ]]; then
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$EXISTING" -F body=@"$BODY" >/dev/null
+          else
+            gh api -X POST "repos/${{ github.repository }}/issues/${PR}/comments" -F body=@"$BODY" >/dev/null
+          fi
