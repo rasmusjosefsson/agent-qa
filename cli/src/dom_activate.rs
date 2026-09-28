@@ -154,16 +154,25 @@ fn activation_prelude() -> &'static str {
     const isSubmit = (el.tagName === 'BUTTON' && type !== 'button' && type !== 'reset')
       || (el.tagName === 'INPUT' && type === 'submit');
     const form = el.form || (el.closest ? el.closest('form') : null);
-    if (isSubmit && form && typeof form.requestSubmit === 'function') {
-      form.requestSubmit(el);
-      return true;
-    }
-    const opts = { bubbles: true, cancelable: true, view: window };
-    try { el.dispatchEvent(new PointerEvent('pointerdown', opts)); } catch (e) {}
-    el.dispatchEvent(new MouseEvent('mousedown', opts));
-    try { el.dispatchEvent(new PointerEvent('pointerup', opts)); } catch (e) {}
-    el.dispatchEvent(new MouseEvent('mouseup', opts));
-    if (typeof el.click === 'function') { el.click(); } else { el.dispatchEvent(new MouseEvent('click', opts)); }
+    // Defer the activation chain past the eval's response window: a handler
+    // can open a native dialog (alert/confirm/prompt/beforeunload), which
+    // blocks the page's JS thread and stops the daemon delivering the eval
+    // result (~30s internal timeout). A ~150ms timer lets the response land
+    // first — the dialog then stays pending for the next `dialog` step.
+    setTimeout(() => {
+      try {
+        if (isSubmit && form && typeof form.requestSubmit === 'function') {
+          form.requestSubmit(el);
+          return;
+        }
+        const opts = { bubbles: true, cancelable: true, view: window };
+        try { el.dispatchEvent(new PointerEvent('pointerdown', opts)); } catch (e) {}
+        el.dispatchEvent(new MouseEvent('mousedown', opts));
+        try { el.dispatchEvent(new PointerEvent('pointerup', opts)); } catch (e) {}
+        el.dispatchEvent(new MouseEvent('mouseup', opts));
+        if (typeof el.click === 'function') { el.click(); } else { el.dispatchEvent(new MouseEvent('click', opts)); }
+      } catch (e) {}
+    }, 150);
     return true;
   };
 "#
