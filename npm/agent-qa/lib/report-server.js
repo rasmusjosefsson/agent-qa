@@ -288,27 +288,33 @@ function coverageOf(steps) {
   let doSteps = 0;
   let checked = 0;
   let bare = 0;
-  let prevWasDo = false;
+  let shotCovered = 0;
+  let prevDoId = null;
   for (const s of steps) {
     const isDo = s && s.kind === 'do';
     const isCheck = s && s.kind === 'check';
     if (isDo) {
-      if (prevWasDo) bare += 1;
+      if (prevDoId) bare += 1;
       doSteps += 1;
-      prevWasDo = true;
+      prevDoId = s.id;
     } else if (isCheck) {
-      if (prevWasDo) {
+      if (prevDoId) {
         checked += 1;
-        prevWasDo = false;
+        if (s.claim && s.claim.subject && s.claim.subject.shot === prevDoId) {
+          shotCovered += 1;
+        }
+        prevDoId = null;
       }
     }
   }
-  if (prevWasDo) bare += 1;
+  if (prevDoId) bare += 1;
   return {
     doSteps,
     checked,
     bare,
+    shotCovered,
     ratio: doSteps === 0 ? 1 : checked / doSteps,
+    shotRatio: doSteps === 0 ? 1 : shotCovered / doSteps,
   };
 }
 
