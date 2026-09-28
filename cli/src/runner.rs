@@ -1431,6 +1431,7 @@ pub fn cli(args: &[String]) -> Result<u8> {
             flags.runs,
             flags.shard,
             flags.filter.as_deref(),
+            &flags.tags,
         );
     }
     if flags.shard.is_some() {
@@ -1438,6 +1439,9 @@ pub fn cli(args: &[String]) -> Result<u8> {
     }
     if flags.filter.is_some() {
         bail!("--filter requires --all");
+    }
+    if !flags.tags.is_empty() {
+        bail!("--tags requires --all");
     }
     let parsed = parse_args(&flags.filtered)?;
     run_n(&parsed, flags.runs, None)
@@ -1479,9 +1483,16 @@ fn cli_all(
     runs: u32,
     shard: Option<(u32, u32)>,
     filter: Option<&str>,
+    tags: &[String],
 ) -> Result<u8> {
     let root = crate::paths::scenarios_root();
     let mut sids = crate::scenario_cli::all_sids(&root, filter);
+    if !tags.is_empty() {
+        sids = sids
+            .into_iter()
+            .filter(|sid| scenario_has_any_tag(&root, sid, tags))
+            .collect();
+    }
     if let Some((k, n)) = shard {
         sids = sids
             .into_iter()
@@ -1501,7 +1512,7 @@ fn cli_all(
         sids.len(),
         filter
             .map(|f| format!(" matching {f:?}"))
-            .unwrap_or_default()
+            .unwrap_or_default(),
     );
     let mut all_ok = true;
     let mut failed: Vec<String> = Vec::new();
@@ -1541,6 +1552,8 @@ struct CliFlags {
     shard: Option<(u32, u32)>,
     /// `--filter <substr>` — sid substring filter for --all.
     filter: Option<String>,
+    /// `--tags <a,b>` — keep scenarios carrying any of these tags (OR).
+    tags: Vec<String>,
 }
 
 /// Peel the CLI-level flags `--runs N`, `--all`, `--shard k/n`, and
@@ -1551,6 +1564,7 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
     let mut all = false;
     let mut shard: Option<(u32, u32)> = None;
     let mut filter: Option<String> = None;
+    let mut tags: Vec<String> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -1594,6 +1608,25 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
             s if s.starts_with("--filter=") => {
                 filter = Some(s["--filter=".len()..].to_string());
             }
+            "--tags" => {
+                let v = it
+                    .next()
+                    .cloned()
+                    .ok_or_else(|| anyhow!("--tags requires a comma-separated value"))?;
+                tags.extend(
+                    v.split(',')
+                        .map(|t| t.trim().to_string())
+                        .filter(|t| !t.is_empty()),
+                );
+            }
+            s if s.starts_with("--tags=") => {
+                tags.extend(
+                    s["--tags=".len()..]
+                        .split(',')
+                        .map(|t| t.trim().to_string())
+                        .filter(|t| !t.is_empty()),
+                );
+            }
             other => filtered.push(other.to_string()),
         }
     }
@@ -1603,7 +1636,29 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
         all,
         shard,
         filter,
+        tags,
     })
+}
+
+/// True when `<root>/<sid>/scenario.json` declares any of `tags`. A scenario
+/// with no `tags` field — or one that fails to parse — never matches.
+fn scenario_has_any_tag(root: &std::path::Path, sid: &str, tags: &[String]) -> bool {
+    let bytes = match std::fs::read(root.join(sid).join("scenario.json")) {
+        Ok(b) => b,
+        Err(_) => return false,
+    };
+    let doc: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+    doc.get("tags")
+        .and_then(|t| t.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| t.as_str())
+                .any(|t| tags.iter().any(|want| want == t))
+        })
+        .unwrap_or(false)
 }
 
 /// `k/n` — k is 1-based and must be <= n; both must be positive.
@@ -1835,6 +1890,8 @@ replays/latest.txt.
                          For CI matrix jobs, e.g. shard 1/4 + 2/4 + …
 --filter <substr>        With --all: keep sids containing <substr>
                          (case-insensitive).
+--tags <a,b>             With --all: keep scenarios whose `tags` list
+                         contains any of the comma-separated names (OR).
 --no-sidecars            Skip per-step ARIA snapshot + screenshot
                          capture. audit.json is still written. Useful
                          when running with --runs N.
@@ -2633,6 +2690,62 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         assert_eq!(f.shard, Some((2, 4)));
         assert_eq!(f.filter.as_deref(), Some("login"));
         assert_eq!(f.filtered, vec!["--quiet".to_string()]);
+    }
+
+    #[test]
+    fn parse_args_cli_tag_repeatable() {
+        let f = parse_args_cli(&[
+            "--all".into(),
+            "--tags".into(),
+            "smoke,checkout".into(),
+            "--tags=nightly".into(),
+        ])
+        .unwrap();
+        assert!(f.all);
+        assert_eq!(
+            f.tags,
+            vec![
+                "smoke".to_string(),
+                "checkout".to_string(),
+                "nightly".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn cli_tag_without_all_errors() {
+        let args: Vec<String> = ["sid-x", "--tags", "smoke"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(cli(&args).is_err());
+    }
+
+    #[test]
+    fn scenario_has_any_tag_matches_declared_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = dir.path().join("s1");
+        fs::create_dir_all(&sid).unwrap();
+        fs::write(
+            sid.join("scenario.json"),
+            r#"{"schema":"scenario/2","id":"s1","intent":"x","tags":["smoke","ci"],"steps":[]}"#,
+        )
+        .unwrap();
+        let root = dir.path();
+        let smoke = vec!["smoke".to_string()];
+        let nope = vec!["nightly".to_string()];
+        assert!(scenario_has_any_tag(root, "s1", &smoke));
+        assert!(!scenario_has_any_tag(root, "s1", &nope));
+        // no tags field → never matches
+        fs::write(
+            sid.join("scenario.json"),
+            r#"{"schema":"scenario/2","id":"s1","intent":"x","steps":[]}"#,
+        )
+        .unwrap();
+        assert!(!scenario_has_any_tag(root, "s1", &smoke));
+        // malformed json → never matches
+        fs::write(sid.join("scenario.json"), b"not json").unwrap();
+        assert!(!scenario_has_any_tag(root, "s1", &smoke));
     }
 
     #[test]
