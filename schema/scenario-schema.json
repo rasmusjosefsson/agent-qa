@@ -272,9 +272,13 @@
           "required": ["shot"],
           "additionalProperties": false,
           "properties": {
-            "shot": { "type": "string", "minLength": 1 }
+            "shot": { "type": "string", "minLength": 1 },
+            "mask": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            }
           },
-          "$comment": "shot subject — visual diff: compares <run>/screenshots/<stepId>.png against <scenario>/baselines/<stepId>.png. Only predicate is 'matches'; pass when the differing-pixel fraction <= tolerance.pixels (default 0.01). Diff maps write to <run>/shots-diff/. Mint baselines with shot-accept."
+          "$comment": "shot subject — visual diff: compares <run>/screenshots/<stepId>.png against <scenario>/baselines/<stepId>.png. Only predicate is 'matches'; pass when the differing-pixel fraction <= tolerance.pixels (default 0.01). Diff maps write to <run>/shots-diff/. Mint baselines with shot-accept. 'mask' lists CSS selectors hidden (visibility:hidden) around every step screenshot — ignore regions for volatile UI (timestamps, live badges). Masks union across all shot claims in the scenario."
         },
         {
           "type": "object",

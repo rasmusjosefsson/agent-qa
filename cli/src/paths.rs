@@ -286,7 +286,7 @@ fn safe_segment<'a>(value: &'a str, label: &str) -> Result<&'a str> {
     Ok(value)
 }
 
-fn is_safe(s: &str) -> bool {
+pub(crate) fn is_safe(s: &str) -> bool {
     s.chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
 }

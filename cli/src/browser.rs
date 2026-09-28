@@ -567,6 +567,49 @@ pub struct DialogStatus {
     pub default_prompt: String,
 }
 
+/// One console message as reported by `agent-browser console --json`.
+#[derive(Debug)]
+pub struct ConsoleMessage {
+    /// "log" | "info" | "warn" | "error" | "debug" | ... (verbatim).
+    pub level: String,
+    /// The message's rendered text.
+    pub text: String,
+}
+
+/// Messages the page logged to the console so far this session
+/// (`agent-browser console --json` → `data.messages[]`).
+pub fn console_messages(session: &str) -> Result<Vec<ConsoleMessage>, AgentBrowserError> {
+    let r = run(session, ["--json", "console"], RunOpts::new().capture())?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(r.stdout.trim()).map_err(|e| AgentBrowserError::NonZero {
+            verb: "console".to_string(),
+            exit_code: 0,
+            stderr: format!("unparseable console JSON: {e}: {:?}", r.stdout.trim()),
+            hint: String::new(),
+        })?;
+    Ok(parsed
+        .get("data")
+        .and_then(|d| d.get("messages"))
+        .and_then(|m| m.as_array())
+        .map(|msgs| {
+            msgs.iter()
+                .map(|m| ConsoleMessage {
+                    level: m
+                        .get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    text: m
+                        .get("text")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                })
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
 /// Poll `agent-browser --json dialog status`. Returns `DialogStatus` with
 /// `open=false` when no dialog is pending.
 pub fn dialog_status(session: &str) -> Result<DialogStatus, AgentBrowserError> {
@@ -787,6 +830,52 @@ pub fn wait_for_load_capped(
 pub fn eval_expression(session: &str, expression: &str) -> Result<String, AgentBrowserError> {
     let r = run(session, ["eval", expression], RunOpts::new().capture())?;
     Ok(r.stdout)
+}
+
+/// Poll the Resource Timing API until an entry URL matches `pattern`
+/// (substring, `*` = wildcard) — i.e. the request has completed — or
+/// `timeout_ms` elapses (error). For "request fired but still in flight"
+/// semantics, `performance` entries only appear on completion, which is the
+/// deterministic point a scenario wants to proceed from anyway.
+pub fn wait_for_resource(
+    session: &str,
+    pattern: &str,
+    timeout_ms: u64,
+) -> Result<(), AgentBrowserError> {
+    // Compile the glob to a JS regex: escape specials, '*' → '.*'.
+    let mut re = String::new();
+    for ch in pattern.chars() {
+        match ch {
+            '*' => re.push_str(".*"),
+            c if "\\.^$+?()[]{}|".contains(c) => {
+                re.push('\\');
+                re.push(c);
+            }
+            c => re.push(c),
+        }
+    }
+    let expr = format!(
+        "(function(){{var re=new RegExp({});var es=performance.getEntriesByType('resource');for(var i=0;i<es.length;i++){{if(re.test(es[i].name))return '1';}}return '0';}})()",
+        serde_json::to_string(&re).unwrap_or_else(|_| "\"\"".into())
+    );
+    let start = std::time::Instant::now();
+    loop {
+        let hit = eval_expression(session, &expr)
+            .map(|s| s.trim().contains("\"1\"") || s.trim() == "1")
+            .unwrap_or(false);
+        if hit {
+            return Ok(());
+        }
+        if start.elapsed().as_millis() as u64 >= timeout_ms {
+            return Err(AgentBrowserError::NonZero {
+                verb: "wait-resource".to_string(),
+                exit_code: 1,
+                stderr: format!("no resource matching '{pattern}' completed within {timeout_ms}ms"),
+                hint: String::new(),
+            });
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
 }
 
 /// The session tab's current top-level URL (`location.href`), or None on a
