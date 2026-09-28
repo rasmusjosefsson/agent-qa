@@ -146,3 +146,6 @@ running from a repo checkout.
 - `references/design-review.md` — the design-fidelity lane: reference images at
   `<sid>/designs/<stepId>.png`, verdicts, and when to stop and ask. Separate
   gate from behaviour; judges layout, never text content.
+- `references/visual.md` — `{"shot"}` pixel-diff claims: minting baselines
+  (`shot-accept`, `replay --update-baselines`, `flush --auto-shots`,
+  `crawl`), `clip` + `tolerance`, and why baselines are environment-bound.
