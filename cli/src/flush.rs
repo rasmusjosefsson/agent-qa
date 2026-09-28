@@ -12,6 +12,8 @@ use crate::sidecar::atomic_write_file;
 
 pub fn run(args: &[String]) -> Result<u8> {
     let mut auto_shots = false;
+    let mut auto_network = true;
+    let mut auto_errors = true;
     for arg in args {
         match arg.as_str() {
             "-h" | "--help" | "help" => {
@@ -19,10 +21,14 @@ pub fn run(args: &[String]) -> Result<u8> {
                 return Ok(0);
             }
             "--auto-shots" => auto_shots = true,
+            "--auto-network" => auto_network = true,
+            "--auto-errors" => auto_errors = true,
+            "--no-auto-network" => auto_network = false,
+            "--no-auto-errors" => auto_errors = false,
             other => bail!("flush: unknown argument {other:?}"),
         }
     }
-    let summary = flush(auto_shots)?;
+    let summary = flush(auto_shots, auto_network, auto_errors)?;
     println!("flushed sid={} steps={}", summary.sid, summary.steps);
     println!("wrote   {}", summary.scenario_file.display());
     Ok(0)
@@ -40,6 +46,14 @@ Options:
                 recorded flow gains golden-image coverage for free. Mint the
                 baselines with `agent-qa shot-accept <sid>` after the first
                 replay.
+  --auto-network Append a {{\"network\": {{urlMatches,method}},ofKind:fired}}
+                check per distinct XHR/fetch/non-GET request the session
+                made — replays then prove the same API calls still happen
+                (max 12). ON by default; --no-auto-network disables.
+  --auto-errors  Append a {{\"pageError\": true}} notExists check — a page
+                that starts throwing uncaught exceptions fails the replay.
+                ON by default; --no-auto-errors disables.
+  --auto-shots stays opt-in: shot claims need minted baselines.
 
 Writes:
   <scenarios_root>/<sid>/scenario.json
@@ -154,10 +168,96 @@ fn insert_auto_shot_claims(steps: &mut Vec<crate::scenario::Step>) {
     crate::buffer::normalize_ids(steps);
 }
 
-fn flush(auto_shots: bool) -> Result<Summary> {
+/// Append a `networkFired` check per distinct (method, path) the session
+/// captured — XHR/Fetch/EventSource/WebSocket plus any non-GET (POSTs are
+/// API calls whatever the resource type reports). Document/script/css
+/// traffic is covered implicitly by the goto steps already in the buffer.
+/// Capped at 12 so a chatty page doesn't flood the scenario.
+fn insert_auto_network_claims(
+    steps: &mut Vec<crate::scenario::Step>,
+    requests: &[crate::browser::CapturedRequest],
+) {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut added = 0usize;
+    for r in requests {
+        let rt = r.resource_type.as_deref().unwrap_or("");
+        let is_api =
+            matches!(rt, "XHR" | "Fetch" | "EventSource" | "WebSocket") || r.method != "GET";
+        if !is_api {
+            continue;
+        }
+        let path = r.url.split(['?', '#']).next().unwrap_or(&r.url);
+        if !seen.insert((r.method.clone(), path.to_string())) {
+            continue;
+        }
+        added += 1;
+        if added > 12 {
+            break;
+        }
+        let method = match r.method.as_str() {
+            "GET" => Some(crate::scenario::HttpMethod::Get),
+            "POST" => Some(crate::scenario::HttpMethod::Post),
+            "PUT" => Some(crate::scenario::HttpMethod::Put),
+            "PATCH" => Some(crate::scenario::HttpMethod::Patch),
+            "DELETE" => Some(crate::scenario::HttpMethod::Delete),
+            "HEAD" => Some(crate::scenario::HttpMethod::Head),
+            _ => None,
+        };
+        steps.push(crate::scenario::Step::Check {
+            id: String::new(),
+            intent: format!("{} {} fired", r.method, path),
+            claim: crate::scenario::Claim {
+                subject: crate::scenario::ClaimSubject::Network {
+                    network: crate::scenario::NetworkMatcher {
+                        url_matches: Some(path.to_string()),
+                        method,
+                        ..Default::default()
+                    },
+                    of_kind: Some(crate::scenario::NetworkClaimKind::Fired),
+                    path: None,
+                },
+                predicate: crate::scenario::Predicate::Exists,
+                value: None,
+                tolerance: None,
+            },
+            context: None,
+        });
+    }
+    crate::buffer::normalize_ids(steps);
+}
+
+/// Append a `{"pageError": true}` notExists check — an uncaught exception
+/// during replay then fails the scenario the same way a broken element does.
+fn append_auto_error_claims(steps: &mut Vec<crate::scenario::Step>) {
+    steps.push(crate::scenario::Step::Check {
+        id: String::new(),
+        intent: "page raised no uncaught exceptions".to_string(),
+        claim: crate::scenario::Claim {
+            subject: crate::scenario::ClaimSubject::PageError {
+                page_error: crate::scenario::PageErrorSubject::Flag(true),
+            },
+            predicate: crate::scenario::Predicate::NotExists,
+            value: None,
+            tolerance: None,
+        },
+        context: None,
+    });
+    crate::buffer::normalize_ids(steps);
+}
+
+fn flush(auto_shots: bool, auto_network: bool, auto_errors: bool) -> Result<Summary> {
     let mut state = RecorderState::load_active()?;
     if auto_shots {
         insert_auto_shot_claims(&mut state.steps);
+    }
+    if auto_network {
+        match crate::browser::network_requests(&state.session) {
+            Ok(requests) => insert_auto_network_claims(&mut state.steps, &requests),
+            Err(e) => eprintln!("[v2-record] auto-network skipped: {e}"),
+        }
+    }
+    if auto_errors {
+        append_auto_error_claims(&mut state.steps);
     }
     let scenario_json = assemble_scenario(&state)?;
 
@@ -232,7 +332,7 @@ mod tests {
         )
         .unwrap();
 
-        let summary = flush(false).unwrap();
+        let summary = flush(false, false, false).unwrap();
         let scenario: serde_json::Value =
             serde_json::from_slice(&fs::read(&summary.scenario_file).unwrap()).unwrap();
         assert_eq!(summary.steps, 2);
@@ -280,7 +380,7 @@ mod tests {
         }))
         .unwrap();
         state.save().unwrap();
-        flush(false).unwrap();
+        flush(false, false, false).unwrap();
 
         let scenario: serde_json::Value =
             serde_json::from_slice(&fs::read(dir.join("scenario.json")).unwrap()).unwrap();
@@ -326,7 +426,7 @@ mod tests {
         )
         .unwrap();
 
-        let summary = flush(true).unwrap();
+        let summary = flush(true, false, false).unwrap();
         let scenario: serde_json::Value =
             serde_json::from_slice(&fs::read(&summary.scenario_file).unwrap()).unwrap();
         let steps = scenario["steps"].as_array().unwrap();
@@ -342,5 +442,63 @@ mod tests {
         std::env::remove_var(paths::SCENARIOS_DIR_ENV);
         std::env::remove_var(paths::RECORD_DIR_ENV);
         std::env::remove_var("AGENT_QA_RECORD_SKIP_SIDECARS");
+    }
+
+    #[test]
+    fn flush_auto_network_claims_dedup_api_calls() {
+        use crate::browser::CapturedRequest;
+        let req = |method: &str, url: &str, rt: &str| CapturedRequest {
+            request_id: String::new(),
+            url: url.to_string(),
+            method: method.to_string(),
+            status: Some(200),
+            resource_type: Some(rt.to_string()),
+            mime_type: None,
+            post_data: None,
+        };
+        let mut steps = vec![crate::scenario::Step::Do {
+            id: "s0".into(),
+            intent: "open".into(),
+            verb: crate::scenario::Verb::Goto,
+            on: None,
+            value: None,
+            save_as: None,
+            params: None,
+            context: None,
+        }];
+        let requests = vec![
+            req("GET", "https://x/app.css", "Stylesheet"),
+            req("POST", "https://x/api/login?a=1", "XHR"),
+            req("POST", "https://x/api/login?a=2", "XHR"),
+            req("GET", "https://x/api/me", "Fetch"),
+        ];
+        insert_auto_network_claims(&mut steps, &requests);
+        // css is dropped, the dup POST collapses to one claim → 2 appended
+        assert_eq!(steps.len(), 3);
+        let subj = &steps[1];
+        let json = serde_json::to_value(subj).unwrap();
+        assert_eq!(json["claim"]["subject"]["network"]["method"], "POST");
+        assert_eq!(
+            json["claim"]["subject"]["network"]["urlMatches"],
+            "https://x/api/login"
+        );
+        assert_eq!(json["claim"]["subject"]["ofKind"], "fired");
+        assert_eq!(json["claim"]["predicate"], "exists");
+        let json2 = serde_json::to_value(&steps[2]).unwrap();
+        assert_eq!(
+            json2["claim"]["subject"]["network"]["urlMatches"],
+            "https://x/api/me"
+        );
+    }
+
+    #[test]
+    fn flush_auto_errors_appends_page_error_gate() {
+        let mut steps = vec![];
+        append_auto_error_claims(&mut steps);
+        assert_eq!(steps.len(), 1);
+        let json = serde_json::to_value(&steps[0]).unwrap();
+        assert_eq!(json["claim"]["subject"]["pageError"], true);
+        assert_eq!(json["claim"]["predicate"], "notExists");
+        assert_eq!(json["id"], "s0");
     }
 }

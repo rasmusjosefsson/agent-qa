@@ -296,7 +296,7 @@ pub enum Value {
 
 // ---------- Claim ----------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkMatcher {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -346,6 +346,27 @@ pub struct ConsoleMatcher {
 pub enum ConsoleSubject {
     Flag(bool),
     Matcher(ConsoleMatcher),
+}
+
+/// `{"pageError": true}` matches every uncaught exception; a matcher narrows
+/// on the rendered text (error message + stack).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageErrorMatcher {
+    /// Error text contains this substring.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// The exception was raised on a document URL containing this substring.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+/// `pageError` accepts either `true` (all page errors) or a matcher object.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PageErrorSubject {
+    Flag(bool),
+    Matcher(PageErrorMatcher),
 }
 
 /// `{"a11y": true}` audits the whole page; the matcher narrows which axe
@@ -486,6 +507,24 @@ pub enum ClaimSubject {
     /// predicates pass when ANY matching message's text satisfies them.
     Console {
         console: ConsoleSubject,
+    },
+    /// `{"pageError": true}` or `{"pageError": {"text": "<substring>"}}` —
+    /// assert on uncaught exceptions the page raised this session
+    /// (`agent-browser errors`; a different channel from `console`). Same
+    /// predicate set as `console`. `notExists` is the "page threw nothing"
+    /// gate.
+    #[serde(rename_all = "camelCase")]
+    PageError {
+        page_error: PageErrorSubject,
+    },
+    /// `{"timing": "<stepId>"}` — assert on a step's recorded duration in
+    /// this run (`<run>/events.jsonl`). Numeric predicates
+    /// (`gt`/`gte`/`lt`/`lte`/`equals`) compare milliseconds against
+    /// `value`; `exists`/`notExists` test whether the step has a timing
+    /// row at all. Only meaningful inside a replay (there is no run dir
+    /// under run-step).
+    Timing {
+        timing: String,
     },
     /// `{"a11y": true}` or `{"a11y": {"impact": "serious"}}` — run an
     /// axe-core accessibility audit (`agent-browser a11y`) and count the

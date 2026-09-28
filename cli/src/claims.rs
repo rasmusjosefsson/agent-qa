@@ -145,6 +145,14 @@ pub fn dispatch_check(
             scope,
             timeout,
         ),
+        ClaimSubject::PageError { page_error } => check_page_error(
+            page_error,
+            &claim.predicate,
+            claim.value.as_ref(),
+            ctx,
+            scope,
+            timeout,
+        ),
         ClaimSubject::Storage { storage, path } => check_storage(
             storage,
             path.as_deref(),
@@ -155,6 +163,9 @@ pub fn dispatch_check(
         ),
         ClaimSubject::Cookie { cookie } => {
             check_cookie(cookie, &claim.predicate, claim.value.as_ref(), ctx, scope)
+        }
+        ClaimSubject::Timing { timing } => {
+            check_timing(timing, &claim.predicate, claim.value.as_ref(), ctx, scope)
         }
         ClaimSubject::A11y { a11y } => check_a11y(
             a11y,
@@ -262,6 +273,117 @@ fn check_console(
             bail!(
                 "console claim timed out ({} messages; {} matched; latest: {})",
                 msgs.len(),
+                matched.len(),
+                if sample.is_empty() {
+                    "<none>".to_string()
+                } else {
+                    sample.join(" | ")
+                }
+            );
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+}
+
+// ---------- page errors (uncaught exceptions) ----------
+
+/// Check uncaught exceptions captured this session via
+/// `agent-browser errors --json` — a different channel from `console`:
+/// uncaught throws (window.onerror / Runtime.exceptionThrown) land here,
+/// `console.*` calls do not. Matcher `{"pageError": {"text": "s",
+/// "url": "u"}}` filters on the error text / raising document URL.
+///
+/// Predicates:
+///   `exists`/`isVisible`      ≥1 matching error
+///   `notExists`/`isHidden`    zero matching — the "page threw nothing" gate
+///   `countEquals`/`gt`/`gte`/`lt`/`lte`  compare the matching count to `value`
+///   text predicates           ANY matching error's text satisfies them
+fn check_page_error(
+    subject: &crate::scenario::PageErrorSubject,
+    predicate: &Predicate,
+    expected: Option<&Json>,
+    ctx: &CheckContext,
+    scope: &mut ValueScope,
+    timeout: Duration,
+) -> Result<()> {
+    use crate::scenario::PageErrorSubject;
+    let (want_text, want_url) = match subject {
+        PageErrorSubject::Flag(true) => (None, None),
+        PageErrorSubject::Flag(false) => {
+            bail!("pageError subject requires pageError=true or a matcher")
+        }
+        PageErrorSubject::Matcher(m) => (
+            m.text
+                .as_deref()
+                .map(|t| substitute_scenario_vars(t, scope)),
+            m.url.as_deref().map(|t| substitute_scenario_vars(t, scope)),
+        ),
+    };
+    let deadline = Instant::now() + timeout;
+    loop {
+        let errs = browser::page_errors(ctx.session).unwrap_or_default();
+        let matched: Vec<&crate::browser::PageError> = errs
+            .iter()
+            .filter(|e| {
+                want_text
+                    .as_deref()
+                    .map(|t| e.text.contains(t))
+                    .unwrap_or(true)
+                    && want_url
+                        .as_deref()
+                        .map(|u| e.url.as_deref().map(|eu| eu.contains(u)).unwrap_or(false))
+                        .unwrap_or(true)
+            })
+            .collect();
+        let done = match predicate {
+            Predicate::Exists | Predicate::IsVisible => !matched.is_empty(),
+            Predicate::NotExists | Predicate::IsHidden => matched.is_empty(),
+            Predicate::CountEquals
+            | Predicate::Gt
+            | Predicate::Gte
+            | Predicate::Lt
+            | Predicate::Lte => {
+                let need = expected.and_then(|v| v.as_u64()).ok_or_else(|| {
+                    anyhow!(
+                        "pageError claim with predicate '{predicate:?}' requires a numeric 'value'"
+                    )
+                })?;
+                let n = matched.len() as u64;
+                match predicate {
+                    Predicate::CountEquals => n == need,
+                    Predicate::Gt => n > need,
+                    Predicate::Gte => n >= need,
+                    Predicate::Lt => n < need,
+                    _ => n <= need,
+                }
+            }
+            other @ (Predicate::Equals
+            | Predicate::Contains
+            | Predicate::Matches
+            | Predicate::StartsWith
+            | Predicate::EndsWith) => {
+                let need = expected.ok_or_else(|| {
+                    anyhow!("pageError claim with predicate '{other:?}' requires 'value'")
+                })?;
+                let need = substitute_scenario_vars(&value_to_string(need), scope);
+                matched
+                    .iter()
+                    .any(|e| compare_string(other, &e.text, &need).is_ok())
+            }
+            other => bail!("pageError subject does not support predicate '{other:?}'"),
+        };
+        if done {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            let sample: Vec<String> = errs
+                .iter()
+                .take(3)
+                .map(|e| e.text.lines().next().unwrap_or_default().to_string())
+                .collect();
+            bail!(
+                "pageError claim timed out ({} errors; {} matched; latest: {})",
+                errs.len(),
                 matched.len(),
                 if sample.is_empty() {
                     "<none>".to_string()
@@ -614,6 +736,72 @@ fn check_cookie(
         Json::String(serde_json::from_str(raw).unwrap_or_else(|_| raw.to_string()))
     };
     check_value(&actual, predicate, expected, scope).map_err(|e| anyhow!("cookie {name:?}: {e:#}"))
+}
+
+// ---------- timing ----------
+
+/// `{"timing": "<stepId>"}` — read the run's `events.jsonl` and compare the
+/// latest timed row (status pass/fail, `ms` present) for that step against
+/// `value` via the numeric predicates. `exists`/`notExists` test whether a
+/// timing row exists at all. Requires a run dir — bails outside replay.
+fn check_timing(
+    step_id: &str,
+    predicate: &Predicate,
+    expected: Option<&Json>,
+    ctx: &CheckContext,
+    scope: &mut ValueScope,
+) -> Result<()> {
+    let step_id = substitute_scenario_vars(step_id, scope);
+    let run_dir = ctx
+        .run_dir
+        .ok_or_else(|| anyhow!("timing claims require a replay run directory"))?;
+    let body = std::fs::read_to_string(run_dir.join("events.jsonl")).unwrap_or_default();
+    // Latest terminal row for the step wins — an earlier `running` row for
+    // the same id carries no `ms`.
+    let mut actual: Option<u64> = None;
+    for line in body.lines() {
+        let row: Json = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if row.get("id").and_then(|v| v.as_str()) != Some(step_id.as_str()) {
+            continue;
+        }
+        let status = row.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        if status != "pass" && status != "fail" {
+            continue;
+        }
+        if let Some(ms) = row.get("ms").and_then(|v| v.as_u64()) {
+            actual = Some(ms);
+        }
+    }
+    let n = match (actual, predicate) {
+        (None, Predicate::NotExists | Predicate::IsHidden) => return Ok(()),
+        (None, _) => bail!("timing {step_id:?}: no timed step row in this run's events"),
+        (Some(n), Predicate::Exists | Predicate::IsVisible) => {
+            let _ = n;
+            return Ok(());
+        }
+        (Some(_), Predicate::NotExists | Predicate::IsHidden) => {
+            bail!("timing {step_id:?}: expected no timing row, found one")
+        }
+        (Some(n), _) => n,
+    };
+    let need = expected.and_then(|v| v.as_u64()).ok_or_else(|| {
+        anyhow!("timing claim with predicate '{predicate:?}' requires a numeric 'value'")
+    })?;
+    let ok = match predicate {
+        Predicate::Equals | Predicate::CountEquals => n == need,
+        Predicate::Gt => n > need,
+        Predicate::Gte => n >= need,
+        Predicate::Lt => n < need,
+        Predicate::Lte => n <= need,
+        other => bail!("timing claim does not support predicate '{other:?}'"),
+    };
+    if !ok {
+        bail!("timing {step_id:?}: {n}ms failed predicate {predicate:?} {need}ms")
+    }
+    Ok(())
 }
 
 // ---------- file ----------
@@ -1219,8 +1407,9 @@ fn read_element_attribute(
             // `text` reads textContent; value/checked/disabled/selected/readOnly
             // read the live IDL property (getAttribute would return the stale
             // default value, and boolean states often have no attribute at all);
-            // `focused` is `document.activeElement === el`; any other name is a
-            // getAttribute read (missing attributes read as the empty string).
+            // `focused` is `document.activeElement === el`; `style:<prop>`
+            // reads getComputedStyle; any other name is a getAttribute read
+            // (missing attributes read as the empty string).
             let prop_attrs = [
                 "value", "checked", "disabled", "selected", "readOnly", "required",
             ];
@@ -1233,6 +1422,15 @@ fn read_element_attribute(
                 format!(
                     "(() => {{ const el = document.querySelector({q}); if (!el) throw new Error('selector not found: ' + {q}); return String(document.activeElement === el); }})()",
                     q = serde_json::to_string(&selector).expect("string serializes")
+                )
+            } else if let Some(prop) = attribute.strip_prefix("style:") {
+                // style:<css-property> reads getComputedStyle — assertions
+                // on rendered styles (color, display, ...) that neither
+                // getAttribute nor IDL properties can express.
+                format!(
+                    "(() => {{ const el = document.querySelector({q}); if (!el) throw new Error('selector not found: ' + {q}); return getComputedStyle(el).getPropertyValue({a}) || ''; }})()",
+                    q = serde_json::to_string(&selector).expect("string serializes"),
+                    a = serde_json::to_string(prop).expect("string serializes")
                 )
             } else if prop_attrs.contains(&attribute) {
                 format!(
@@ -1748,6 +1946,117 @@ mod tests {
         ab::_reset_bin_cache_for_tests();
     }
 
+    fn install_fake_errors(dir: &Path, errors: &[serde_json::Value]) {
+        // Respond to `errors` with a canned --json payload; other verbs
+        // are no-ops.
+        let resp_path = dir.join("errors.json");
+        fs::write(
+            &resp_path,
+            json!({ "success": true, "data": { "errors": errors } }).to_string(),
+        )
+        .unwrap();
+        let body = format!(
+            "#!/bin/sh\ncase \" $* \" in *\\ errors\\ *) cat '{}' ;;\nesac\nexit 0\n",
+            resp_path.display()
+        );
+        let bin = dir.join("agent-browser");
+        fs::write(&bin, body).unwrap();
+        let mut perm = fs::metadata(&bin).unwrap().permissions();
+        perm.set_mode(0o755);
+        fs::set_permissions(&bin, perm).unwrap();
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+    }
+
+    #[test]
+    fn page_error_subject_no_errors_passes_not_exists() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake_errors(tmp.path(), &[]);
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "pageError": true },
+            "predicate": "notExists"
+        }))
+        .unwrap();
+        let mut scope = ValueScope::default();
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: Path::new("."),
+            run_dir: None,
+        };
+        dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+        clear_console();
+    }
+
+    #[test]
+    fn page_error_subject_text_match_and_url_filter() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake_errors(
+            tmp.path(),
+            &[
+                json!({ "text": "TypeError: Cannot read properties of undefined (reading 'xyz')", "url": "https://app.example/a" }),
+                json!({ "text": "RangeError: too far", "url": null }),
+            ],
+        );
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "pageError": { "text": "Cannot read", "url": "app.example" } },
+            "predicate": "exists"
+        }))
+        .unwrap();
+        let mut scope = ValueScope::default();
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: Path::new("."),
+            run_dir: None,
+        };
+        dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+
+        // text predicate against the error's rendered text
+        let claim2: Claim = serde_json::from_value(json!({
+            "subject": { "pageError": { "text": "too far" } },
+            "predicate": "contains",
+            "value": "RangeError"
+        }))
+        .unwrap();
+        dispatch_check(&claim2, &ctx, &mut scope, None).unwrap();
+
+        // count the total
+        let claim3: Claim = serde_json::from_value(json!({
+            "subject": { "pageError": true },
+            "predicate": "countEquals",
+            "value": 2
+        }))
+        .unwrap();
+        dispatch_check(&claim3, &ctx, &mut scope, None).unwrap();
+        clear_console();
+    }
+
+    #[test]
+    fn page_error_subject_error_present_fails_not_exists() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake_errors(
+            tmp.path(),
+            &[json!({ "text": "TypeError: x is undefined", "url": null })],
+        );
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "pageError": true },
+            "predicate": "notExists"
+        }))
+        .unwrap();
+        let mut scope = ValueScope::default();
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: Path::new("."),
+            run_dir: None,
+        };
+        let err =
+            dispatch_check(&claim, &ctx, &mut scope, Some(Duration::from_millis(1))).unwrap_err();
+        clear_console();
+        assert!(err.to_string().contains("pageError claim"), "got: {err}");
+    }
+
     fn clear_console() {
         std::env::remove_var(ab::BIN_ENV);
         ab::_reset_bin_cache_for_tests();
@@ -2180,6 +2489,81 @@ mod tests {
             };
             dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
             clear();
+        }
+    }
+
+    mod timing_claims {
+        use super::*;
+        use tempfile::TempDir;
+
+        fn ctx_with_events(rows: &[serde_json::Value]) -> (TempDir, CheckContext<'static>) {
+            let run = TempDir::new().unwrap();
+            let body: String = rows
+                .iter()
+                .map(|r| serde_json::to_string(r).unwrap() + "\n")
+                .collect();
+            std::fs::write(run.path().join("events.jsonl"), body).unwrap();
+            // Leak the path so the ctx can borrow it past `run`'s move —
+            // test-only, the tempdir itself still cleans up on drop.
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: Box::leak(Box::new(run.path().to_path_buf())),
+                run_dir: Some(Box::leak(Box::new(run.path().to_path_buf()))),
+            };
+            (run, ctx)
+        }
+
+        #[test]
+        fn lt_passes_and_gt_fails_on_step_ms() {
+            let (_t, ctx) = ctx_with_events(&[
+                json!({"idx":1,"id":"s3","status":"running"}),
+                json!({"idx":1,"id":"s3","status":"pass","ms":1420}),
+            ]);
+            let mut scope = ValueScope::default();
+            let fast: Claim = serde_json::from_value(json!({
+                "subject": {"timing": "s3"}, "predicate": "lt", "value": 2000
+            }))
+            .unwrap();
+            dispatch_check(&fast, &ctx, &mut scope, None).unwrap();
+            let slow: Claim = serde_json::from_value(json!({
+                "subject": {"timing": "s3"}, "predicate": "gt", "value": 2000
+            }))
+            .unwrap();
+            let e = dispatch_check(&slow, &ctx, &mut scope, None).unwrap_err();
+            assert!(e.to_string().contains("1420ms"), "got: {e}");
+        }
+
+        #[test]
+        fn missing_step_bails_and_not_exists_passes() {
+            let (_t, ctx) = ctx_with_events(&[json!({"idx":1,"id":"s0","status":"pass","ms":100})]);
+            let mut scope = ValueScope::default();
+            let missing: Claim = serde_json::from_value(json!({
+                "subject": {"timing": "s9"}, "predicate": "lt", "value": 1000
+            }))
+            .unwrap();
+            assert!(dispatch_check(&missing, &ctx, &mut scope, None)
+                .unwrap_err()
+                .to_string()
+                .contains("no timed step row"));
+            let absent: Claim = serde_json::from_value(json!({
+                "subject": {"timing": "s9"}, "predicate": "notExists"
+            }))
+            .unwrap();
+            dispatch_check(&absent, &ctx, &mut scope, None).unwrap();
+        }
+
+        #[test]
+        fn latest_terminal_row_wins_over_running() {
+            let (_t, ctx) = ctx_with_events(&[
+                json!({"id":"s1","status":"pass","ms":900}),
+                json!({"id":"s1","status":"running"}),
+            ]);
+            let mut scope = ValueScope::default();
+            let c: Claim = serde_json::from_value(json!({
+                "subject": {"timing": "s1"}, "predicate": "equals", "value": 900
+            }))
+            .unwrap();
+            dispatch_check(&c, &ctx, &mut scope, None).unwrap();
         }
     }
 

@@ -351,6 +351,36 @@
         },
         {
           "type": "object",
+          "required": ["pageError"],
+          "additionalProperties": false,
+          "properties": {
+            "pageError": {
+              "oneOf": [
+                { "type": "boolean" },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "text": { "type": "string" },
+                    "url": { "type": "string" }
+                  }
+                }
+              ]
+            }
+          },
+          "$comment": "pageError claim subject — assert on uncaught exceptions the page raised (agent-browser errors channel; NOT console.* calls). exists/notExists on presence; numeric predicates compare the count; text predicates match any error's text."
+        },
+        {
+          "type": "object",
+          "required": ["timing"],
+          "additionalProperties": false,
+          "properties": {
+            "timing": { "type": "string", "minLength": 1 }
+          },
+          "$comment": "timing claim subject — assert on a step's recorded duration in this run (events.jsonl). Numeric predicates (equals/countEquals/gt/gte/lt/lte) compare ms against value; exists/notExists test whether the step has a timing row."
+        },
+        {
+          "type": "object",
           "required": ["a11y"],
           "additionalProperties": false,
           "properties": {

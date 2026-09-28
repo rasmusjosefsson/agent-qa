@@ -364,6 +364,88 @@ test('auto-record maps checkbox toggles to check/uncheck, not click', async () =
   assert.deepEqual(recorded[0].payload.on, { role: 'checkbox', name: 'Agree' });
 });
 
+test('auto-record maps a file-input change to an upload step with basenames', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  sock.recv({
+    method: 'Runtime.bindingCalled',
+    params: {
+      name: '__aqRecord',
+      payload: JSON.stringify({
+        kind: 'upload',
+        name: 'Attachment',
+        selector: '#file',
+        files: ['a.txt', 'b.png'],
+      }),
+    },
+  });
+  await flush();
+  assert.equal(recorded.length, 1);
+  const p = recorded[0].payload;
+  assert.equal(p.verb, 'upload');
+  assert.deepEqual(p.on, { raw: { kind: 'css', value: '#file' }, reason: 'file input' });
+  assert.deepEqual(p.value, { from: 'literal', literal: ['a.txt', 'b.png'] });
+  assert.match(p.intent, /place the file/);
+});
+
+test('auto-record upload falls back to role+name when no selector', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  sock.recv({
+    method: 'Runtime.bindingCalled',
+    params: {
+      name: '__aqRecord',
+      payload: JSON.stringify({ kind: 'upload', name: 'Attachment', files: ['a.txt'] }),
+    },
+  });
+  await flush();
+  assert.equal(recorded.length, 1);
+  const p = recorded[0].payload;
+  assert.deepEqual(p.on, { role: 'button', name: 'Attachment' });
+  assert.equal(p.value.literal, 'a.txt');
+});
+
+test('auto-record maps a contextmenu event to a rightclick step', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  sock.recv({
+    method: 'Runtime.bindingCalled',
+    params: {
+      name: '__aqRecord',
+      payload: JSON.stringify({
+        kind: 'rightclick',
+        name: 'Canvas',
+        selector: '#canvas',
+      }),
+    },
+  });
+  await flush();
+  assert.equal(recorded.length, 1);
+  const p = recorded[0].payload;
+  assert.equal(p.verb, 'rightclick');
+  assert.deepEqual(p.on, { raw: { kind: 'css', value: '#canvas' }, reason: 'right-click target' });
+});
+
+test('auto-record rightclick still lands when the target has no name', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  sock.recv({
+    method: 'Runtime.bindingCalled',
+    params: {
+      name: '__aqRecord',
+      payload: JSON.stringify({ kind: 'rightclick', name: '', selector: 'div.icon-btn' }),
+    },
+  });
+  await flush();
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0].payload.verb, 'rightclick');
+  assert.equal(recorded[0].payload.intent, 'right-click div.icon-btn');
+});
+
 test('auto-record reports a record-skip for a nameless change target', async () => {
   const bridge = makeBridge();
   const events = [];
