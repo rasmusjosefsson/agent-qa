@@ -165,6 +165,14 @@ pub enum Verb {
     /// `DataTransfer` plus the pointer/mouse sequence pointer-based
     /// drag libraries listen for.
     Drag,
+    /// Stub network calls: `params` = `{ "url": "<glob>", "status": <n>,
+    /// "json": {...} | "body": "…", "delayMs": <n> }`. Wraps fetch + XHR in
+    /// the live page; registered rules re-apply automatically after
+    /// goto/reload/back/forward (navigation wipes the JS world).
+    Mock,
+    /// Remove mock rules: `params.url` (optional) drops that rule, absent
+    /// clears all.
+    Unmock,
     #[serde(rename = "loop")]
     Loop,
     Group,

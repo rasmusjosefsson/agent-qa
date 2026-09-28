@@ -352,6 +352,9 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     crate::browser::set_headed_mode(opts.headed);
     let connection = crate::browser::BrowserConnection::resolve()?;
     crate::browser::set_connection(&connection);
+    // A reused session name may carry mock rules from a prior scenario
+    // (`replay --all` suites, workbench runs) — start clean.
+    crate::mock::clear(&opts.session_name, None);
 
     // 1. Load + validate.
     let (scenario_file, scenario_dir) = resolve_source(&opts.source)?;
@@ -717,6 +720,13 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 }
                 Step::Check { claim, .. } => dispatch_check(claim, &check_ctx, &mut scope, None),
             };
+            // Navigation wipes the page's JS world — reinstall registered
+            // network mocks after navigation verbs so stubs survive loads.
+            if result.is_ok() && crate::verbs::is_navigation_step(&patched_step) {
+                if let Err(e) = crate::mock::reapply_if_any(&opts.session_name) {
+                    eprintln!("[v2-replay] mock re-apply failed (continuing): {e}");
+                }
+            }
             // Remember the last click as a potential popup opener for the
             // transient-popup recovery above.
             if crate::verbs::is_click_step(&patched_step) {

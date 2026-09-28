@@ -174,5 +174,30 @@ bytes, and string predicates match the file name — or the file's UTF-8
 text when `"attribute": "content"` is set (files over 1 MiB are rejected
 for content claims). Relative paths resolve against the scenario dir.
 
+### Network mocks
+
+`do/mock` stubs matching `fetch` and `XMLHttpRequest` calls in the live
+page — edge cases (5xx, error payloads, latency) that the real backend
+won't produce on demand. `params.url` is a glob matched on the request
+URL (`*` is the only wildcard):
+
+```json
+{
+  "id": "s4",
+  "intent": "the API is down",
+  "kind": "do",
+  "verb": "mock",
+  "params": { "url": "*/api/users*", "status": 503, "json": { "error": "unavailable" }, "delayMs": 50 }
+}
+```
+
+Registered rules re-apply automatically after `goto`/`reload`/`back`/
+`forward` (navigation wipes the page's JS world, so the runner reinstalls
+the wrapper). A click that navigates still drops them — put `mock` steps
+after unpredictable navigations. `do/unmock` removes a rule
+(`params.url` = the same glob) or clears all without it. Combine with
+`{"network": {"urlMatches": ...}}` claims to prove the stub fired, or a
+`{"shot": ...}` claim to golden the error UI.
+
 Use `agent-qa scenario check <scenario.json>` before replay. It validates the
 schema and runs the scenario linter.

@@ -306,6 +306,17 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                 .map_err(|e| anyhow!("step '{id}' viewport {w}x{h}: {e}"))?;
             Ok(None)
         }
+        Verb::Mock => {
+            let p = params.ok_or_else(|| anyhow!("step '{id}' mock: params required"))?;
+            crate::mock::apply_mock(ctx.session, p)
+                .map_err(|e| anyhow!("step '{id}' mock: {e}"))?;
+            Ok(None)
+        }
+        Verb::Unmock => {
+            crate::mock::apply_unmock(ctx.session, params)
+                .map_err(|e| anyhow!("step '{id}' unmock: {e}"))?;
+            Ok(None)
+        }
         Verb::Group => {
             bail!(
                 "step '{id}' verb=group should be flattened by the runner before dispatch_do is called"
@@ -411,6 +422,18 @@ pub fn is_click_step(step: &Step) -> bool {
         step,
         Step::Do {
             verb: Verb::Click,
+            ..
+        }
+    )
+}
+
+/// Whether a step navigates (or reloads) — such verbs wipe the page's JS
+/// world, so the runner re-installs registered network mocks after them.
+pub fn is_navigation_step(step: &Step) -> bool {
+    matches!(
+        step,
+        Step::Do {
+            verb: Verb::Goto | Verb::Reload | Verb::Back | Verb::Forward,
             ..
         }
     )
