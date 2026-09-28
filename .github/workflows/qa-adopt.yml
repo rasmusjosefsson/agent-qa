@@ -86,6 +86,7 @@ jobs:
           AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
         run: ./node_modules/.bin/agent-browser install
       - name: write the draft into the selftest scenarios
+        id: adopt
         env:
           PR: ${{ github.event.issue.number }}
           COMMENT_BODY: ${{ github.event.comment.body }}
@@ -107,21 +108,19 @@ jobs:
           AGENT_QA_EVAL_AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
           AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
           AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
-          SID: ${{ steps.draft.outputs.sid }}
-          DEST: ${{ steps.draft.outputs.dest }}
+          SID: ${{ steps.adopt.outputs.sid }}
+          DEST: ${{ steps.adopt.outputs.dest }}
         run: |
           set -euo pipefail
           CLI="${{ github.workspace }}/cli/target/debug/agent-qa"
-          export AGENT_QA_SCENARIOS_DIR="$(dirname "${{ github.workspace }}/x/$DEST")"
-          AGENT_QA_SCENARIOS_DIR="$(cd .. && pwd)/$(echo "$DEST" | sed 's|^evals/||; s|/[^/]*$||')"
-          # scenarios root = dir containing the scenario dir
+          # scenarios root = the directory that holds the adopted scenario dir
           export AGENT_QA_SCENARIOS_DIR="$(dirname "${{ github.workspace }}/${DEST}")"
           "$CLI" replay "$SID" || true
           "$CLI" shot-accept "$SID"
       - name: push the adopted scenario to the PR branch
         env:
           HEAD_REF: ${{ steps.pr.outputs.head_ref }}
-          DEST: ${{ steps.draft.outputs.dest }}
+          DEST: ${{ steps.adopt.outputs.dest }}
           PR: ${{ github.event.issue.number }}
         run: |
           set -euo pipefail
@@ -139,7 +138,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ github.event.issue.number }}
-          DEST: ${{ steps.draft.outputs.dest }}
+          DEST: ${{ steps.adopt.outputs.dest }}
           STATUS: ${{ job.status }}
         run: |
           if [ "$STATUS" = "success" ]; then
