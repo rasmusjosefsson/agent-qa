@@ -8,7 +8,7 @@ import { ReplayLive } from './components/ReplayLive'
 import { Lightbox } from './components/Lightbox'
 import { isRunLive } from './rows'
 import { effectiveSettings } from '@/lib/settings-api'
-import { Panel, PanelGroup } from 'react-resizable-panels'
+import { Group, Panel, useDefaultLayout } from 'react-resizable-panels'
 import { ResizeHandle } from '@/components/ResizeHandle'
 import { getPersonas, getEnvironments } from '@/lib/run-config-api'
 import type { PersonaRecord } from '@/features/personas/types'
@@ -16,6 +16,7 @@ import type { EnvironmentRecord } from '@/features/environments/types'
 
 export function RunsPage() {
   const runs = useRuns()
+  const cols = useDefaultLayout({ id: 'aqa-runs-cols' })
   const [lightbox, setLightbox] = useState<{ url: string; caption: string } | null>(null)
   const [replayErr, setReplayErr] = useState('')
 
@@ -131,18 +132,18 @@ export function RunsPage() {
       {/* Resizable full-bleed columns — drag the dividers to resize. The right
           column only exists once a run is open; otherwise the center empty
           state gets the room. */}
-      <PanelGroup direction="horizontal" autoSaveId="aqa-runs-cols" className="min-h-0 flex-1">
-        <Panel defaultSize={showRight ? 22 : 26} minSize={14} className="min-h-0">
+      <Group orientation="horizontal" defaultLayout={cols.defaultLayout} onLayoutChanged={cols.onLayoutChanged} className="min-h-0 flex-1">
+        <Panel defaultSize={showRight ? "22" : "26"} minSize="14%" className="min-h-0">
           <ScenarioSidebar runs={runs} />
         </Panel>
         <ResizeHandle />
-        <Panel defaultSize={showRight ? 56 : 74} minSize={30} className="min-h-0">
+        <Panel defaultSize={showRight ? "56" : "74"} minSize="30%" className="min-h-0">
           <CenterPane runs={runs} onReplay={(sid) => void onReplay(sid)} busy={busy} runConfig={runConfig} />
         </Panel>
         {showRight && (
           <>
             <ResizeHandle />
-            <Panel defaultSize={22} minSize={16} className="min-h-0" data-qa-volatile>
+            <Panel defaultSize="22" minSize="16%" className="min-h-0" data-qa-volatile>
               {showLive ? (
                 <ReplayLive sid={runs.sel.sid!} onLightbox={(url, caption) => setLightbox({ url, caption })} />
               ) : (
@@ -151,7 +152,7 @@ export function RunsPage() {
             </Panel>
           </>
         )}
-      </PanelGroup>
+      </Group>
 
       {/* Bottom status stripe — scenarios root + live toggle */}
       <div data-qa-volatile className="flex h-7 shrink-0 items-center justify-between gap-3 border-t border-border px-4 text-xs text-muted-foreground">
