@@ -168,16 +168,53 @@ fn parse_args(args: &[String]) -> Result<Opts> {
     })
 }
 
+/// Runner-facing entry: apply every locator-correction patch a run wrote,
+/// guarded by the same content-hash rebase check as the verb. Returns the
+/// number of patches applied (0 when the run produced none).
+pub(crate) fn promote_run(scenario_file: &std::path::Path, run_id: &str) -> Result<usize> {
+    let plan = build_plan_at(scenario_file, Some(run_id.to_string()), None)?;
+    if plan.patches.is_empty() {
+        return Ok(0);
+    }
+    if let Some(stale) = plan.patches.iter().find(|p| p.hash_mismatch) {
+        bail!(
+            "patch for {} carries scenarioContentHash {} but live scenario is {}",
+            stale.step_id,
+            stale.recorded_hash.as_deref().unwrap_or("(missing)"),
+            plan.live_hash
+        );
+    }
+    apply_plan(&plan)?;
+    Ok(plan.patches.len())
+}
+
 fn build_plan(opts: &Opts) -> Result<Plan> {
     let scenario_dir = paths::scenario_dir(&opts.sid)?;
     let scenario_file = scenario_dir.join("scenario.json");
+    build_plan_at(
+        &scenario_file,
+        opts.run_id.clone(),
+        opts.step_filter.clone(),
+    )
+}
+
+fn build_plan_at(
+    scenario_file: &std::path::Path,
+    run_id_arg: Option<String>,
+    step_filter: Option<Vec<String>>,
+) -> Result<Plan> {
+    let scenario_dir = scenario_file
+        .parent()
+        .ok_or_else(|| anyhow!("{} has no parent dir", scenario_file.display()))?
+        .to_path_buf();
+    let scenario_file = scenario_file.to_path_buf();
     let bytes =
         fs::read(&scenario_file).with_context(|| format!("read {}", scenario_file.display()))?;
     let scenario: Json = serde_json::from_slice(&bytes)
         .with_context(|| format!("parse {}", scenario_file.display()))?;
     let live_hash = hash_scenario_bytes(&bytes);
 
-    let run_id = match &opts.run_id {
+    let run_id = match &run_id_arg {
         Some(r) => r.clone(),
         None => {
             let latest = scenario_dir.join("replays").join("latest.txt");
@@ -205,7 +242,7 @@ fn build_plan(opts: &Opts) -> Result<Plan> {
             };
             let patch: PatchFile = serde_json::from_slice(&body)
                 .with_context(|| format!("parse {}", path.display()))?;
-            if let Some(filter) = &opts.step_filter {
+            if let Some(filter) = &step_filter {
                 if !filter.iter().any(|s| s == &patch.step_id) {
                     continue;
                 }
@@ -378,6 +415,39 @@ mod tests {
         // Scenario untouched.
         let post = fs::read(jdir.join("scenario.json")).unwrap();
         assert_eq!(post, pre);
+        teardown();
+    }
+
+    #[test]
+    fn promote_run_applies_this_runs_patch_and_refuses_stale() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        setup(tmp.path());
+        let jdir = tmp.path().join("j1");
+        let pre = write_minimal_scenario(&jdir, "j1");
+        write_patch(
+            &jdir,
+            "rA",
+            "s1",
+            Some(&hash_scenario_bytes(&pre)),
+            json!({"role":"button","name":"Save changes"}),
+        );
+
+        let file = jdir.join("scenario.json");
+        // A run that wrote no patches is a no-op.
+        assert_eq!(promote_run(&file, "rNone").unwrap(), 0);
+
+        let applied = promote_run(&file, "rA").unwrap();
+        assert_eq!(applied, 1);
+        let post: Json = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        assert_eq!(
+            post["steps"][1]["on"],
+            json!({"role":"button","name":"Save changes"})
+        );
+
+        // The applied patch now hashes against a DIFFERENT scenario bytes —
+        // a second promote refuses instead of silently rewriting again.
+        assert!(promote_run(&file, "rA").is_err());
         teardown();
     }
 
