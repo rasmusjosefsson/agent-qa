@@ -187,7 +187,14 @@
     "golden:edge:tc17": "bun golden/edge-tc17.ts",
     "golden:edge:tc18": "bun golden/edge-tc18.ts",
     "golden:edge:tc19": "bun golden/edge-tc19.ts",
-    "golden:edge:tc20": "bun golden/edge-tc20.ts"
+    "golden:edge:tc20": "bun golden/edge-tc20.ts",
+    "golden:edge:tc21": "bun golden/edge-tc21.ts",
+    "golden:edge:tc22": "bun golden/edge-tc22.ts",
+    "golden:edge:tc23": "bun golden/edge-tc23.ts",
+    "golden:edge:tc24": "bun golden/edge-tc24.ts",
+    "golden:edge:tc25": "bun golden/edge-tc25.ts",
+    "golden:edge:tc26": "bun golden/edge-tc26.ts",
+    "golden:edge:tc27": "bun golden/edge-tc27.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"

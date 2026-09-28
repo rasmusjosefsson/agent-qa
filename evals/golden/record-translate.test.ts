@@ -132,6 +132,12 @@ describe("toRecordDraft — emitted verbs are shipped", () => {
     ["assert", { kind: "networkFired", args: [{ urlMatches: "/api/" }, false] }],
     ["assert", { kind: "networkStatus", args: [{ method: "GET" }, "equals", "200"] }],
     ["assert", { kind: "networkJson", args: [{ operationName: "GetUser" }, "$.data.id", "exists"] }],
+    ["assert", { kind: "consoleMessage", args: [{ type: "error" }] }],
+    ["assert", { kind: "consoleMessage", args: [{ type: "error", text: "undefined" }, "exists"] }],
+    ["assert", { kind: "pageError", args: [] }],
+    ["assert", { kind: "pageError", args: [{ text: "Cannot read" }, "exists"] }],
+    ["assert", { kind: "a11yViolations", args: [] }],
+    ["assert", { kind: "a11yViolations", args: [{ impact: "serious" }, "countEquals", 0] }],
   ];
 
   const verbs = shippedVerbs();

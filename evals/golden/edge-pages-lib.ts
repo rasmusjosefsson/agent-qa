@@ -12,7 +12,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const evalsRoot = resolve(__dirname, "..");
 const repoRoot = resolve(evalsRoot, "..");
 const base = "https://the-internet.herokuapp.com";
-export const edgeUrl = (path: string) => `${base}${path}`;
+// pagePath may be a path (joined to the site base) or a full URL — e.g. a
+// credentialed URL for the basic_auth case.
+export const edgeUrl = (path: string) =>
+  path.startsWith("http://") || path.startsWith("https://") ? path : `${base}${path}`;
 
 interface StepResult {
   name: string;
@@ -67,6 +70,9 @@ export interface EdgeGolden extends GoldenContext {
   assertElementAbsent(selector: string, intent: string): Promise<void>;
   assertElementPresent(selector: string, intent: string): Promise<void>;
   assertUrlContains(fragment: string, intent: string): Promise<void>;
+  assertConsole(matcher: true | { type?: string; text?: string }, predicate: string, value: string | undefined, intent: string): Promise<void>;
+  assertPageError(matcher: true | { text?: string; url?: string }, predicate: string, value: string | undefined, intent: string): Promise<void>;
+  a11yAudit(matcher: true | Record<string, unknown>, predicate: string, value: number | undefined, intent: string): Promise<void>;
 }
 
 function createContext(tc: string, intent: string, keepDialogs: boolean): GoldenContext {
@@ -280,6 +286,27 @@ export async function runEdgeGolden(
     },
     async assertElementPresent(selector, stepIntent) {
       await record(ctx, "assert", { kind: "elementPresent", args: [selector], intent: stepIntent });
+    },
+    async assertConsole(matcher, predicate, value, stepIntent) {
+      await record(ctx, "assert", {
+        kind: "consoleMessage",
+        args: [matcher, predicate, value],
+        intent: stepIntent,
+      });
+    },
+    async assertPageError(matcher, predicate, value, stepIntent) {
+      await record(ctx, "assert", {
+        kind: "pageError",
+        args: [matcher, predicate, value],
+        intent: stepIntent,
+      });
+    },
+    async a11yAudit(matcher, predicate, value, stepIntent) {
+      await record(ctx, "assert", {
+        kind: "a11yViolations",
+        args: [matcher, predicate, value],
+        intent: stepIntent,
+      });
     },
     async assertUrlContains(fragment, stepIntent) {
       await record(ctx, "assert", { kind: "url", args: [fragment], intent: stepIntent });
