@@ -1,6 +1,6 @@
 [package]
 name = "agent-qa"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2021"
 description = "Record and replay user scenarios against any web app via CDP."
 license = "MIT"

@@ -143,3 +143,29 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         working-directory: npm/agent-qa
         run: npm publish --provenance --access public
+
+  github-release:
+    name: github release
+    needs: publish-umbrella
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: extract the tag's changelog section
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          python3 - "$VERSION" <<'PY'
+          import re, sys
+          version = sys.argv[1]
+          s = open('CHANGELOG.md').read()
+          m = re.search(rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\Z)", s, re.S | re.M)
+          notes = m.group(1).strip() if m else "See CHANGELOG.md for what's in this release."
+          open('release-notes.md', 'w').write(notes + "\n")
+          PY
+      - name: create github release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --notes-file release-notes.md
