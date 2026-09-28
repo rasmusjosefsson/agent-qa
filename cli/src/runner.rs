@@ -1992,6 +1992,33 @@ pub fn cli(args: &[String]) -> Result<u8> {
     if flags.watch {
         return cli_watch(&parsed, &flags);
     }
+    if flags.until_fail > 0 {
+        // --until-fail N: re-run until the first failure or N clean passes —
+        // flake reproduction. Exit 1 on the failing run (its dir stays for
+        // audit/compare); exit 0 when every pass was clean.
+        for attempt in 1..=flags.until_fail {
+            eprintln!("[v2-replay] until-fail run {attempt}/{}", flags.until_fail);
+            match run(&parsed) {
+                Ok(summary) if !summary.ok => {
+                    eprintln!(
+                        "[v2-replay] failed on run {attempt} — flake reproduced; \
+                         run dir kept for audit/compare"
+                    );
+                    return Ok(1);
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("[v2-replay] until-fail run {attempt} errored: {e}");
+                    return Err(e);
+                }
+            }
+        }
+        eprintln!(
+            "[v2-replay] {} consecutive pass(es) — no flake observed",
+            flags.until_fail
+        );
+        return Ok(0);
+    }
     if flags.retry > 1 {
         // --retry N: re-run until a pass or N attempts spent. Each attempt is
         // its own replay dir, so a pass-after-retries leaves flake evidence in
@@ -2343,6 +2370,10 @@ struct CliFlags {
     /// (the save-driven dev loop; pairs with --auto-promote /
     /// --update-baselines for hands-free goldens).
     watch: bool,
+    /// `--until-fail N` — re-run until the FIRST failure or N passes
+    /// (the inverse of --retry): flake reproduction. The failing run
+    /// dir stays on disk for `audit`/`compare` inspection.
+    until_fail: u32,
 }
 
 /// Peel the CLI-level flags `--runs N`, `--retry N`, `--all`,
@@ -2359,6 +2390,7 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
     let mut report: Option<PathBuf> = None;
     let mut jobs: u32 = 1;
     let mut watch = false;
+    let mut until_fail: u32 = 0;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -2470,12 +2502,35 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
                     bail!("--retry must be >= 1");
                 }
             }
+            "--until-fail" => {
+                let n = it
+                    .next()
+                    .ok_or_else(|| anyhow!("--until-fail requires a positive integer"))?;
+                until_fail = n
+                    .parse::<u32>()
+                    .map_err(|_| anyhow!("--until-fail must be a positive integer; got {n:?}"))?;
+                if until_fail == 0 {
+                    bail!("--until-fail must be >= 1");
+                }
+            }
+            s if s.starts_with("--until-fail=") => {
+                let n = &s["--until-fail=".len()..];
+                until_fail = n
+                    .parse::<u32>()
+                    .map_err(|_| anyhow!("--until-fail must be a positive integer; got {n:?}"))?;
+                if until_fail == 0 {
+                    bail!("--until-fail must be >= 1");
+                }
+            }
             "--watch" => watch = true,
             other => filtered.push(other.to_string()),
         }
     }
     if runs > 1 && retry > 1 {
         bail!("--runs and --retry are mutually exclusive (repeat-N vs until-pass)");
+    }
+    if until_fail > 0 && (runs > 1 || retry > 1) {
+        bail!("--until-fail is mutually exclusive with --runs/--retry (until-fail vs repeat/until-pass)");
     }
     // AGENT_QA_REPLAY_ARGS: whitespace-separated flags applied BEFORE the
     // command line, so an explicit argv flag still overrides it. Lets
@@ -2501,6 +2556,7 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
         report,
         jobs,
         watch,
+        until_fail,
     })
 }
 
@@ -2802,6 +2858,11 @@ replays/latest.txt.
                          changes — the save-driven dev loop. Combine
                          with --auto-promote/--update-baselines for
                          hands-free golden refreshes. Ctrl-C to stop.
+--until-fail <N>         Re-run until the FIRST failure or N clean
+                         passes — flake reproduction (the inverse of
+                         --retry). The failing run dir stays on disk
+                         for audit/compare. Exit 1 on a failure,
+                         0 when all N passes were clean.
 --all                    Replay every scenario under the scenarios root
                          (sorted sid order), printing a per-run banner
                          plus a final pass/fail rollup. Combines with
@@ -3776,6 +3837,32 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         assert_eq!(f.runs, 1);
         assert_eq!(f.retry, 1);
         assert!(!f.watch);
+    }
+
+    #[test]
+    fn parse_args_cli_until_fail() {
+        let f = parse_args_cli(&["./j.json".into(), "--until-fail".into(), "3".into()]).unwrap();
+        assert_eq!(f.until_fail, 3);
+        assert_eq!(f.retry, 1);
+        let f = parse_args_cli(&["./j.json".into(), "--until-fail=5".into()]).unwrap();
+        assert_eq!(f.until_fail, 5);
+        // zero / non-int rejected; mutually exclusive with --runs / --retry
+        parse_args_cli(&["./j.json".into(), "--until-fail".into(), "0".into()]).unwrap_err();
+        parse_args_cli(&["./j.json".into(), "--until-fail=x".into()]).unwrap_err();
+        parse_args_cli(&[
+            "./j.json".into(),
+            "--until-fail=2".into(),
+            "--retry=2".into(),
+        ])
+        .unwrap_err();
+        parse_args_cli(&[
+            "./j.json".into(),
+            "--until-fail=2".into(),
+            "--runs=2".into(),
+        ])
+        .unwrap_err();
+        let f = parse_args_cli(&["./j.json".into()]).unwrap();
+        assert_eq!(f.until_fail, 0);
     }
 
     #[test]
