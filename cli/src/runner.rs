@@ -1441,13 +1441,16 @@ fn scenario_shot_masks(scenario: &Scenario) -> Vec<String> {
     out
 }
 
-/// Hide the shot-mask selectors (visibility:hidden — layout stays put) and
-/// stash the originals on `window.__qa_shot_mask` for `clear_shot_mask`.
-/// Returns true when the mask was applied (restore is owed).
+/// Hide the shot-mask selectors by injecting a `<style>` tag —
+/// `visibility:hidden !important` keeps layout put and, unlike inline
+/// styles, keeps hiding nodes that remount between the eval and the
+/// capture (live-updating lists reconcile into fresh DOM).
+/// `clear_shot_mask` removes the tag. Returns true when the mask was
+/// applied (restore is owed).
 fn apply_shot_mask(session: &str, masks: &[String]) -> bool {
     let sels = serde_json::to_string(masks).unwrap_or_else(|_| "[]".to_string());
     let js = format!(
-        "(() => {{ const sels = {sels}; const els = []; sels.forEach(s => document.querySelectorAll(s).forEach(e => els.push(e))); window.__qa_shot_mask = els.map(e => [e, e.style.visibility]); els.forEach(e => {{ e.style.visibility = 'hidden'; }}); return els.length; }})()"
+        "(() => {{ const sels = {sels}; document.getElementById('__qa_shot_mask')?.remove(); const st = document.createElement('style'); st.id = '__qa_shot_mask'; st.textContent = sels.map(s => s + ' {{ visibility: hidden !important; }}').join('\\n'); document.head.appendChild(st); return sels.length; }})()"
     );
     match browser::eval_expression(session, &js) {
         Ok(_) => true,
@@ -1459,7 +1462,7 @@ fn apply_shot_mask(session: &str, masks: &[String]) -> bool {
 }
 
 fn clear_shot_mask(session: &str) {
-    let js = "(() => { const r = window.__qa_shot_mask || []; r.forEach(([e, v]) => { e.style.visibility = v; }); window.__qa_shot_mask = null; return r.length; })()";
+    let js = "(() => { const st = document.getElementById('__qa_shot_mask'); if (st) { st.remove(); return 1; } return 0; })()";
     if let Err(e) = browser::eval_expression(session, js) {
         eprintln!(
             "[v2-replay] shot mask restore failed (page keeps hidden elements until next nav): {e}"
