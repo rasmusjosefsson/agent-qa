@@ -120,6 +120,10 @@ pub struct RunOptions {
     /// path (.webm/.mp4). Start happens right before the step loop so
     /// env.open navigation is captured; stop after env.close.
     pub record_video: Option<PathBuf>,
+    /// `--freeze <iso>` — pin `Date.now()`/`new Date()` to the instant and
+    /// replace `Math.random` with a seeded LCG via a page init script, so
+    /// rendered timestamps and random ordering can't flake a golden diff.
+    pub freeze: Option<String>,
     /// `--har` — record a HAR file for the run via `agent-browser network
     /// har start|stop` and write `<run>/network.har`. Unlike network.json
     /// (urls + statuses) a HAR carries response bodies — the artifact you
@@ -467,6 +471,23 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     } else {
         Some(audit_params)
     };
+
+    // Determinism layer: `--freeze <iso>` pins the clock + RNG via a page
+    // init script (fresh sessions get it on every navigation; the live
+    // eval covers a warm session's current document).
+    if let Some(at) = &opts.freeze {
+        if opts.dry_run {
+            eprintln!("[v2-replay] --freeze ignored under --dry-run");
+        } else {
+            let js_path = run.run_root.join("freeze.js");
+            fs::write(&js_path, freeze_js(at))
+                .with_context(|| format!("write {}", js_path.display()))?;
+            std::env::set_var("AGENT_BROWSER_INIT_SCRIPTS", &js_path);
+            let src = fs::read_to_string(&js_path)?;
+            let _ = browser::eval_expression(&opts.session_name, &src);
+            eprintln!("[v2-replay] freeze {at} → {}", js_path.display());
+        }
+    }
 
     // 5. env.open setup. Skipped under --dry-run.
     //
@@ -1685,6 +1706,12 @@ fn stabilize_visual(session: &str, cap_ms: u64) {
             session,
             "(() => { const imgs = Array.from(document.images || []).filter(i => !i.complete).length; return JSON.stringify({fonts: document.fonts ? document.fonts.status : 'loaded', imgs, ready: document.readyState}); })()",
         );
+        // In-flight fetches don't show up in readyState/images — a lazy data
+        // load can still repaint after the screenshot. Require the session's
+        // request log to be quiet too.
+        let pending = browser::network_requests(session)
+            .map(|rs| rs.iter().filter(|r| r.status.is_none()).count())
+            .unwrap_or(0);
         match status {
             Ok(raw) => {
                 // eval stdout may wrap the JSON in a quoted string — peel once.
@@ -1697,7 +1724,7 @@ fn stabilize_visual(session: &str, cap_ms: u64) {
                             && v.get("ready").and_then(|r| r.as_str()) == Some("complete")
                     })
                     .unwrap_or(false);
-                if settled {
+                if settled && pending == 0 {
                     return;
                 }
             }
@@ -1708,6 +1735,34 @@ fn stabilize_visual(session: &str, cap_ms: u64) {
         }
         thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// The `--freeze` init script: pin `Date.now`/`new Date()` to `at` and
+/// replace `Math.random` with a seeded LCG (mulberry32-style) — same
+/// instant, same random stream, every run.
+fn freeze_js(at: &str) -> String {
+    format!(
+        r#"(() => {{
+  const T = Date.parse({});
+  const R = Date;
+  class F extends R {{
+    constructor(...a) {{ super(...(a.length ? a : [T])); }}
+    static now() {{ return T; }}
+    static parse(s) {{ return R.parse(s); }}
+    static UTC(...a) {{ return R.UTC(...a); }}
+  }}
+  window.Date = F;
+  let s = 0x9E3779B9;
+  Math.random = () => {{
+    s = (s + 0x6D2B79F5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }};
+}})()"#,
+        serde_json::to_string(at).unwrap_or_else(|_| "\"2026-01-01\"".into())
+    )
 }
 
 /// Whether the scenario contains a `check` claim on the `shot` subject
@@ -2197,6 +2252,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut until_step: Option<String> = None;
     let mut update_baselines = false;
     let mut record_video: Option<PathBuf> = None;
+    let mut freeze: Option<String> = None;
     let mut har = false;
     let mut mock_from: Option<String> = None;
     let mut input_overrides: BTreeMap<String, String> = BTreeMap::new();
@@ -2242,6 +2298,8 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             s if s.starts_with("--record-video=") => {
                 record_video = Some(PathBuf::from(&s["--record-video=".len()..]))
             }
+            "--freeze" => freeze = it.next().cloned().or_else(|| bail_missing("--freeze")),
+            s if s.starts_with("--freeze=") => freeze = Some(s["--freeze=".len()..].to_string()),
             "--har" => har = true,
             "--mock-from" => mock_from = it.next().cloned().or_else(|| bail_missing("--mock-from")),
             s if s.starts_with("--mock-from=") => {
@@ -2302,6 +2360,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         until_step,
         update_baselines,
         record_video,
+        freeze,
         har,
         mock_from,
     })
@@ -2369,7 +2428,8 @@ Usage:
                   [--no-sidecars] [--quiet | -q] [--plain]
                   [--tag <label>] [--output-audit <path>]
                   [--from <stepId>] [--until <stepId>]
-                  [--update-baselines] [--runs <N>] [--record-video [path]]
+                  [--update-baselines] [--freeze <iso>] [--runs <N>]
+                  [--record-video [path]]
 
 Loads + validates the scenario, mints a run id, prepares
 <sid>/replays/<runId>/, writes audit.json, runs env.open, iterates
@@ -2448,6 +2508,12 @@ replays/latest.txt.
                          replay. Rules install via a page init script
                          on fresh sessions (covers page-load fetches),
                          else re-apply after every navigation
+--freeze <iso>           Pin Date.now()/new Date() to <iso> and replace
+                         Math.random with a seeded LCG via a page init
+                         script — rendered timestamps and random ordering
+                         can't flake a golden diff. Fresh sessions apply
+                         it on every navigation; warm sessions get the
+                         current document only
 --record-video [path]    Record the browser to video for the whole run
                          (needs ffmpeg). Bare flag → <run>/run.webm;
                          =<path> picks the file (.webm/.mp4). Covers
@@ -2593,6 +2659,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             record_video: None,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -2672,6 +2739,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             record_video: None,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -2732,6 +2800,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             record_video: None,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -2773,6 +2842,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             record_video: None,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -2839,6 +2909,7 @@ esac\nexit 0\n",
             until_step: None,
             update_baselines: false,
             record_video: None,
+            freeze: None,
             har: false,
             mock_from: None,
         }
@@ -3093,6 +3164,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             record_video: None,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -3157,6 +3229,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             record_video: None,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -3818,6 +3891,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             record_video: None,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -3906,6 +3980,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             record_video: None,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -4028,6 +4103,27 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
     }
 
     #[test]
+    fn parse_args_freeze_flag() {
+        let opts = parse_args(&["x".into(), "--freeze".into(), "2026-01-01".into()]).unwrap();
+        assert_eq!(opts.freeze.as_deref(), Some("2026-01-01"));
+        let opts = parse_args(&["x".into(), "--freeze=2026-06-30T00:00Z".into()]).unwrap();
+        assert_eq!(opts.freeze.as_deref(), Some("2026-06-30T00:00Z"));
+        let opts = parse_args(&["x".into()]).unwrap();
+        assert_eq!(opts.freeze, None);
+    }
+
+    #[test]
+    fn freeze_js_pins_clock_and_seeds_rng() {
+        let js = freeze_js("2026-01-01T00:00:00Z");
+        assert!(
+            js.contains("Date.parse(\"2026-01-01T00:00:00Z\")"),
+            "got: {js}"
+        );
+        assert!(js.contains("static now()"), "got: {js}");
+        assert!(js.contains("Math.random ="), "got: {js}");
+    }
+
+    #[test]
     fn render_summary_formats_pass_and_fail() {
         let s = RunSummary {
             passed: 3,
@@ -4091,6 +4187,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             record_video: None,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -4181,6 +4278,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             record_video: None,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -4250,6 +4348,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             record_video: None,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -4297,6 +4396,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             record_video: None,
+            freeze: None,
             har: false,
             mock_from: None,
         };
@@ -4481,6 +4581,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             record_video: None,
+            freeze: None,
             har: false,
             mock_from: None,
         };
