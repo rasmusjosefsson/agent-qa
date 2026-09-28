@@ -1334,6 +1334,25 @@ pub fn screenshot(
     Ok(r.exit_code == 0)
 }
 
+/// Start recording the session's browser to `path` (.webm/.mp4;
+/// `agent-browser record start`). Errors surface via AgentBrowserError —
+/// callers decide whether a missing ffmpeg is fatal.
+pub fn record_video_start(session: &str, path: &std::path::Path) -> Result<(), AgentBrowserError> {
+    let p = path.display().to_string();
+    run(
+        session,
+        ["record", "start", p.as_str()],
+        RunOpts::new().capture(),
+    )?;
+    Ok(())
+}
+
+/// Stop and save a `record_video_start` recording (`record stop`).
+pub fn record_video_stop(session: &str) -> Result<(), AgentBrowserError> {
+    run(session, ["record", "stop"], RunOpts::new().capture())?;
+    Ok(())
+}
+
 /// Take an interactive a11y snapshot — returns the human-readable text
 /// agent-browser prints to stdout.
 /// Return the session's CDP WebSocket endpoint (`agent-browser get cdp-url`).

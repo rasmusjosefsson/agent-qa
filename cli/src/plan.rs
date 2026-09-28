@@ -291,6 +291,7 @@ fn run_plan(root: &Path, plan: &PlanFile, opts: &RunOpts) -> Result<(Vec<RunRow>
             from_step: None,
             until_step: None,
             update_baselines: false,
+            record_video: None,
             junit: None,
             base_url: None,
             auto_promote: false,
