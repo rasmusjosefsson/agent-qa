@@ -43,6 +43,9 @@ Options:
 
 Writes:
   <scenarios_root>/<sid>/scenario.json
+  <scenarios_root>/<sid>/replays/recorded/network.har  — the session's
+    traffic while recording; `replay <sid> --mock-from recorded` replays
+    the scenario offline from those recorded responses.
 
 On success it removes the active recorder state."
     );
@@ -165,6 +168,27 @@ fn flush(auto_shots: bool) -> Result<Summary> {
     let mut bytes = serde_json::to_string_pretty(&scenario_json)?.into_bytes();
     bytes.push(b'\n');
     atomic_write_file(&scenario_file, &bytes)?;
+
+    // Stop the HAR recording `start` opened and keep it next to the
+    // scenario: `replay <sid> --mock-from recorded` then replays
+    // hermetically from the recorded responses.
+    let har_dest = scenario_dir
+        .join("replays")
+        .join("recorded")
+        .join("network.har");
+    if let Some(parent) = har_dest.parent() {
+        if let Err(e) = fs::create_dir_all(parent) {
+            eprintln!("[v2-record] mkdir {}: {e}", parent.display());
+        }
+    }
+    match crate::browser::network_har_stop(&state.session, &har_dest) {
+        Ok(()) => eprintln!(
+            "[v2-record] network.har → replays/recorded/ — `replay {} --mock-from recorded` replays offline",
+            state.sid
+        ),
+        Err(e) => eprintln!("[v2-record] har stop skipped: {e}"),
+    }
+
     RecorderState::clear()?;
 
     Ok(Summary {

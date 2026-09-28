@@ -77,8 +77,25 @@ menu that only renders below a breakpoint).
   UI instead of guessing a fixed delay — e.g. click a filter, wait for the
   results call, then assert the table. `timeoutMs` defaults to 10s and the
   step fails when nothing matching lands in time.
-- No `params` — soft `networkidle` wait (use `url` when the app keeps
+- `{"idle": true}` or `{"idleMs": 500, "timeoutMs": 10000}` — wait for
+  network quiescence at the session level: zero in-flight requests for
+  `idleMs` (default 500) straight. This is the stability gate before a
+  screenshot or DOM read after async work — unlike `url` it waits for
+  silence rather than one named call. Fails at `timeoutMs` listing what's
+  still pending (long-polls/websockets will hit this — give them `url`
+  waits instead).
+- No `params` — soft `networkidle` wait (use `url`/`idle` when the app keeps
   long-lived connections open and never goes idle).
+
+### Per-step retry
+
+Any do-step may carry `params.retry` (attempt count) and
+`params.retryMs` (delay between attempts, default 300): the runner
+re-dispatches the step on failure before the run's failure handling kicks
+in. Use for one known-flaky interaction; whole-run flake belongs to
+`replay --retry`. Caveat: a partially-dispatched retry re-fires the side
+effect — prefer idempotent verbs (click, select) over append-style ones
+(type).
 
 ### Native dialogs (alert/confirm/prompt)
 

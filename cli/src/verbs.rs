@@ -193,20 +193,31 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
         Verb::Wait => {
             // `params.ms` → wait by ms; `params.until` → wait --load <state>;
             // `params.url` → poll resource timing until a matching request
-            // completed (`params.timeoutMs`, default 10s); neither → soft
-            // wait for networkidle.
+            // completed; `params.idle`/`idleMs` → session-level network
+            // quiescence (zero pending requests for idleMs, default 500ms);
+            // `params.timeoutMs` (default 10s) bounds the last two; neither
+            // → soft wait for networkidle.
             let ms = params.and_then(|p| p.get("ms")).and_then(|v| v.as_u64());
             let until = params.and_then(|p| p.get("until")).and_then(|v| v.as_str());
             let url = params.and_then(|p| p.get("url")).and_then(|v| v.as_str());
+            let idle = params.and_then(|p| p.get("idle")).and_then(|v| v.as_bool());
+            let idle_ms = params
+                .and_then(|p| p.get("idleMs"))
+                .and_then(|v| v.as_u64());
+            let wants_idle = idle == Some(true) || idle_ms.is_some();
             let timeout_ms = params
                 .and_then(|p| p.get("timeoutMs"))
                 .and_then(|v| v.as_u64())
                 .unwrap_or(10_000);
-            match (ms, until, url) {
-                (Some(ms), _, _) => browser::wait_ms(ctx.session, ms)?,
-                (_, Some(state), _) => browser::wait_for_load(ctx.session, state)?,
-                (_, _, Some(url)) => browser::wait_for_resource(ctx.session, url, timeout_ms)
+            match (ms, until, url, wants_idle) {
+                (Some(ms), _, _, _) => browser::wait_ms(ctx.session, ms)?,
+                (_, Some(state), _, _) => browser::wait_for_load(ctx.session, state)?,
+                (_, _, Some(url), _) => browser::wait_for_resource(ctx.session, url, timeout_ms)
                     .map_err(|e| anyhow!("step '{id}' wait url {url}: {e}"))?,
+                (_, _, _, true) => {
+                    browser::wait_for_idle(ctx.session, idle_ms.unwrap_or(500), timeout_ms)
+                        .map_err(|e| anyhow!("step '{id}' wait idle: {e}"))?
+                }
                 _ => browser::wait_for_load(ctx.session, "networkidle")?,
             }
             Ok(None)
@@ -1601,6 +1612,63 @@ mod tests {
             err.to_string().contains("no resource matching"),
             "got: {err}"
         );
+    }
+
+    #[test]
+    fn wait_with_idle_returns_once_no_request_is_pending() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        // All captured requests already carry a status → idle is immediate.
+        let body = format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\nif [ \"$3\" = requests ]; then printf '{{\"data\":{{\"requests\":[{{\"url\":\"https://x/api\",\"status\":200}}]}}}}'; fi\nexit 0\n",
+            log.display()
+        );
+        let bin = write_exec(tmp.path(), "agent-browser", &body);
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "wait",
+            "params": { "idle": true, "idleMs": 0 }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        assert!(out.contains("network requests"), "got: {out}");
+    }
+
+    #[test]
+    fn wait_with_idle_times_out_while_a_request_is_pending() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        // A status-less entry stays in-flight forever.
+        let body = format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\nif [ \"$3\" = requests ]; then printf '{{\"data\":{{\"requests\":[{{\"url\":\"https://x/slow\"}}]}}}}'; fi\nexit 0\n",
+            log.display()
+        );
+        let bin = write_exec(tmp.path(), "agent-browser", &body);
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "wait",
+            "params": { "idle": true, "timeoutMs": 1 }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+        };
+        let mut scope = ValueScope::default();
+        let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err();
+        clear_fake();
+        assert!(err.to_string().contains("still pending"), "got: {err}");
     }
 
     #[test]
