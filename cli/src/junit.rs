@@ -110,7 +110,7 @@ pub fn write(run_dir: &Path, sid: &str, dest: &Path) -> Result<(usize, usize)> {
         match &c.error {
             Some(e) => xml.push_str(&format!(
                 "<failure message=\"{}\">{}</failure></testcase>\n",
-                esc(&e.lines().next().unwrap_or("failed")),
+                esc(e.lines().next().unwrap_or("failed")),
                 esc(e)
             )),
             None => xml.push_str("</testcase>\n"),
