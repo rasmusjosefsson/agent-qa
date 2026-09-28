@@ -6,8 +6,9 @@
 //! inventory — next to it, as authoring input; nothing consumes it.
 //!
 //! Deliberately deterministic: no LLM call, no clicking (clicks mutate/navigate
-//! — a scaffold shouldn't do either). Route discovery is one level deep; run
-//! again from a discovered route for a deeper crawl.
+//! — a scaffold shouldn't do either). `--depth N` follows links BFS-style:
+//! depth 1 (default) covers the entry page's links; each extra level opens the
+//! discovered pages and merges their same-origin links, capped by `--max`.
 
 use std::fs;
 use std::path::PathBuf;
@@ -19,6 +20,7 @@ use crate::browser;
 use crate::paths;
 
 const MAX_DEFAULT: usize = 20;
+const DEPTH_MAX: usize = 4;
 
 /// `crawl <url> [--session <name>] [--out <dir>] [--max N] [--sid <name>]`
 pub fn run(args: &[String]) -> Result<u8> {
@@ -26,6 +28,7 @@ pub fn run(args: &[String]) -> Result<u8> {
     let mut session = "default".to_string();
     let mut out_dir: Option<PathBuf> = None;
     let mut max_links = MAX_DEFAULT;
+    let mut depth = 1usize;
     let mut sid_override: Option<String> = None;
     let mut console_checks = true;
     let mut mint_baselines = false;
@@ -36,7 +39,10 @@ pub fn run(args: &[String]) -> Result<u8> {
         match a.as_str() {
             "-h" | "--help" | "help" => {
                 println!(
-                    "agent-qa crawl — draft a coverage scenario from a live page\n\nUsage:\n  agent-qa crawl <url> [options]\n\nOptions:\n  --session <name>   Browser session to drive (default: default)\n  --out <dir>        Output dir for scenario.json + crawl-report.json\n                     (default: <scenarios_root>/crawl-<host>)\n  --max <N>          Max same-origin links to cover (default {MAX_DEFAULT})\n  --sid <name>       Scenario id (default: crawl-<host>)\n  --no-console-checks\n                     Skip the per-page 'no console errors' claims\n                     (on by default — a page that crashes JS isn't green).\n  --no-network-checks\n                     Skip 'fired' claims for the API calls the entry page\n                     made (on by default — a draft that never asserts its\n                     network contract can pass while the data layer broke).\n\nThe draft is a goto + shot claim + console check per discovered route —\nrun `replay`, then `shot-accept` to mint baselines.\n\n  --mint-baselines\n                     After writing the draft, visit every covered route\n                     and capture baselines/<gotoStepId>.png — the draft\n                     replays green immediately, no shot-accept pass."
+                    "agent-qa crawl — draft a coverage scenario from a live page\n\nUsage:\n  agent-qa crawl <url> [options]\n\nOptions:\n  --session <name>   Browser session to drive (default: default)\n  --out <dir>        Output dir for scenario.json + crawl-report.json\n                     (default: <scenarios_root>/crawl-<host>)\n  --max <N>          Max same-origin links to cover (default {MAX_DEFAULT})
+  --depth <N>        BFS depth — 1 (default) covers entry-page links only;
+                     each level deeper opens discovered pages and merges
+                     their links (cap {DEPTH_MAX})\n  --sid <name>       Scenario id (default: crawl-<host>)\n  --no-console-checks\n                     Skip the per-page 'no console errors' claims\n                     (on by default — a page that crashes JS isn't green).\n  --no-network-checks\n                     Skip 'fired' claims for the API calls the entry page\n                     made (on by default — a draft that never asserts its\n                     network contract can pass while the data layer broke).\n\nThe draft is a goto + shot claim + console check per discovered route —\nrun `replay`, then `shot-accept` to mint baselines.\n\n  --mint-baselines\n                     After writing the draft, visit every covered route\n                     and capture baselines/<gotoStepId>.png — the draft\n                     replays green immediately, no shot-accept pass."
                 );
                 return Ok(0);
             }
@@ -66,6 +72,15 @@ pub fn run(args: &[String]) -> Result<u8> {
                         .ok_or_else(|| anyhow::anyhow!("--sid requires a value"))?,
                 );
             }
+            "--depth" => {
+                depth = it
+                    .next()
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .filter(|n| (1..=DEPTH_MAX).contains(n))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("--depth expects an integer in 1..={DEPTH_MAX}")
+                    })?;
+            }
             "--no-console-checks" => console_checks = false,
             "--mint-baselines" => mint_baselines = true,
             "--no-network-checks" => network_checks = false,
@@ -88,30 +103,39 @@ pub fn run(args: &[String]) -> Result<u8> {
     let baseline = browser::network_requests(&session)
         .map(|v| v.len())
         .unwrap_or(0);
-    browser::open(&session, &url).with_context(|| format!("crawl: open {url}"))?;
-    browser::wait_for_load_capped(&session, "networkidle", 5000).ok();
+    let page = enumerate_page(&session, &url)?;
 
-    let raw = browser::eval_expression(
-        &session,
-        "(() => { const links=[...document.querySelectorAll('a[href]')].map(a=>a.href).filter(h=>h.startsWith(location.origin)); const els=[...document.querySelectorAll('button,[role=button],input,select,textarea,[onclick]')].map(e=>({tag:e.tagName.toLowerCase(),role:e.getAttribute('role'),text:(e.innerText||e.value||'').trim().slice(0,60),testid:e.getAttribute('data-testid')})).slice(0,50); return JSON.stringify({title:document.title,links:[...new Set(links)],interactive:els}); })()",
-    )
-    .context("crawl: enumerate page")?;
-    let peeled = raw.trim().trim_matches('"').replace("\\\"", "\"");
-    let page: Value = serde_json::from_str(raw.trim())
-        .or_else(|_| serde_json::from_str(&peeled))
-        .context("crawl: parse inventory")?;
-
-    let mut links: Vec<String> = page
-        .get("links")
-        .and_then(|v| v.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-    // Stable order, self-link first is noise — drop the bare root URL.
-    links.retain(|l| l != &url);
+    // BFS route discovery. `seen` holds every URL already queued or covered
+    // (seeded with the entry URL so self-links are noise); `frontier` is the
+    // current level's pages to open. Depth 1 = the historical behaviour.
+    let mut seen: std::collections::BTreeSet<String> = [url.clone()].into_iter().collect();
+    let mut links = page_links(&page, &mut seen);
+    let mut frontier = links.clone();
+    for level in 2..=depth {
+        if frontier.is_empty() || links.len() >= max_links {
+            break;
+        }
+        let mut next: Vec<String> = Vec::new();
+        for link in &frontier {
+            if links.len() >= max_links {
+                break;
+            }
+            // A discovered page that 404s or hangs the eval shouldn't sink
+            // the crawl — log and move on.
+            let sub = match enumerate_page(&session, link) {
+                Ok(v) => v,
+                Err(err) => {
+                    eprintln!("crawl: level {level}: skipping {link} ({err:#})");
+                    continue;
+                }
+            };
+            for fresh in page_links(&sub, &mut seen) {
+                links.push(fresh.clone());
+                next.push(fresh);
+            }
+        }
+        frontier = next;
+    }
     links.sort();
     links.dedup();
     links.truncate(max_links);
@@ -201,6 +225,7 @@ pub fn run(args: &[String]) -> Result<u8> {
         serde_json::to_string_pretty(&json!({
             "url": url,
             "title": title,
+            "depth": depth,
             "linksFound": links.len(),
             "routesCovered": covered,
             "interactive": page.get("interactive").cloned().unwrap_or(json!([])),
@@ -256,6 +281,64 @@ pub fn run(args: &[String]) -> Result<u8> {
         println!("  next:     agent-qa replay {sid} && agent-qa shot-accept {sid}");
     }
     Ok(0)
+}
+
+/// Open `url` in `session` and enumerate its same-origin links + interactive
+/// elements (title/links/interactive JSON inventory).
+fn enumerate_page(session: &str, url: &str) -> Result<Value> {
+    browser::open(session, url).with_context(|| format!("crawl: open {url}"))?;
+    browser::wait_for_load_capped(session, "networkidle", 5000).ok();
+    // SPAs mount their nav links after networkidle — an inventory with zero
+    // links on first paint is a render race, not a link-less page. Re-poll a
+    // few times before accepting an empty set.
+    let mut last: Option<Value> = None;
+    for attempt in 0..5 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+        let raw = browser::eval_expression(
+            session,
+            "(() => { const links=[...document.querySelectorAll('a[href]')].map(a=>a.href).filter(h=>h.startsWith(location.origin)); const els=[...document.querySelectorAll('button,[role=button],input,select,textarea,[onclick]')].map(e=>({tag:e.tagName.toLowerCase(),role:e.getAttribute('role'),text:(e.innerText||e.value||'').trim().slice(0,60),testid:e.getAttribute('data-testid')})).slice(0,50); return JSON.stringify({title:document.title,links:[...new Set(links)],interactive:els}); })()",
+        )
+        .context("crawl: enumerate page")?;
+        let page = parse_inventory(&raw)?;
+        let has_links = page
+            .get("links")
+            .and_then(|v| v.as_array())
+            .map(|a| !a.is_empty())
+            .unwrap_or(false);
+        if has_links || attempt == 4 {
+            return Ok(page);
+        }
+        last = Some(page);
+    }
+    last.context("crawl: enumerate page")
+}
+
+/// agent-browser returns the in-page value JSON-encoded, so a
+/// JSON.stringify'd result arrives as a *string literal* holding the object —
+/// parse once, then unwrap one string layer if the result is a Value::String.
+fn parse_inventory(raw: &str) -> Result<Value> {
+    let first: Value = serde_json::from_str(raw.trim()).context("crawl: parse inventory")?;
+    match first.as_str() {
+        Some(inner) => serde_json::from_str(inner).context("crawl: parse inventory"),
+        None => Ok(first),
+    }
+}
+
+/// Same-origin links from an inventory, minus anything in `seen` (which this
+/// mutates). Discovery order — callers re-sort the final list.
+fn page_links(page: &Value, seen: &mut std::collections::BTreeSet<String>) -> Vec<String> {
+    page.get("links")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .filter(|l| seen.insert(l.to_string()))
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// One `fired` claim per distinct XHR/fetch the entry page made (deduped
@@ -324,6 +407,36 @@ mod url {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn page_links_dedups_against_seen() {
+        let mut seen: std::collections::BTreeSet<String> =
+            ["https://a/".to_string()].into_iter().collect();
+        let page = json!({"links": ["https://a/", "https://a/x", "https://a/x", "https://a/y"]});
+        let got = page_links(&page, &mut seen);
+        assert_eq!(got, vec!["https://a/x", "https://a/y"]);
+        // A second page re-offering /x contributes only the fresh link.
+        let sub = json!({"links": ["https://a/x", "https://a/z"]});
+        assert_eq!(page_links(&sub, &mut seen), vec!["https://a/z"]);
+        // Cross-origin links never leave the host (enumerator filters, but
+        // the set guard is defence in depth).
+        assert!(seen.iter().all(|l| l.starts_with("https://a")));
+    }
+
+    #[test]
+    fn parse_inventory_unwraps_agent_browser_string_encoding() {
+        // `eval` JSON-encodes the return value: a JSON.stringify'd object
+        // arrives as `"{\"title\":...}"`. The first parse yields a
+        // Value::String — the inventory lives one layer down.
+        let inner = json!({"title":"app","links":["https://a/x"],"interactive":[]});
+        let raw = serde_json::to_string(&inner.to_string()).unwrap();
+        let page = parse_inventory(&raw).unwrap();
+        assert_eq!(page["links"][0], "https://a/x");
+        // A bare-object stdout (no encoding layer) parses directly.
+        let plain = parse_inventory(&inner.to_string()).unwrap();
+        assert_eq!(plain["title"], "app");
+        parse_inventory("not json").unwrap_err();
+    }
 
     #[test]
     fn host_parse_and_sanitize() {
