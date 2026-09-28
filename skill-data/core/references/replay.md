@@ -3,7 +3,10 @@
 `agent-qa replay <sid-or-scenario-path>` validates a `scenario/2` file, runs
 `env.open`, dispatches every `do` and `check` step, then runs `env.close`.
 Replay writes evidence under `<scenario-dir>/replays/<run-id>/`. It never
-changes `scenario.json`.
+changes `scenario.json`. Artifacts include `status.json`, `audit.json`,
+`events.jsonl`, per-step `snapshots/`/`screenshots/` sidecars, and
+`network.json` — the full captured request list (id, url, method, status,
+resourceType) for diffing traffic between runs.
 
 ```bash
 agent-qa scenario check <scenario.json>
