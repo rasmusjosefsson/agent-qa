@@ -114,6 +114,12 @@ pub struct RunOptions {
     /// performs). Runs even when shot claims FAILED: intentional UI
     /// changes are exactly the case where a failing diff needs re-minting.
     pub update_baselines: bool,
+    /// `--junit [path]` — write the run's terminal step outcomes as JUnit
+    /// XML after the run. Bare `--junit` writes `<run>/junit.xml` (the
+    /// empty-path sentinel); `--junit=<path>` writes that literal path.
+    /// One <testcase> per step so any CI's test-result ingestion renders
+    /// a replay like a unit-test run.
+    pub junit: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -943,6 +949,20 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         }
     }
 
+    // 11. `--junit` — XML report for CI test-result ingestion. Written
+    // before the failure bail so a FAIL run still produces its report
+    // (that's the case CI actually needs to render).
+    if let Some(dest) = &opts.junit {
+        let dest = crate::junit::resolve_dest(&run.run_root, dest);
+        match crate::junit::write(&run.run_root, &scenario.id, &dest) {
+            Ok((t, f)) => eprintln!(
+                "[v2-replay] junit → {} ({t} tests, {f} failures)",
+                dest.display()
+            ),
+            Err(err) => eprintln!("[v2-replay] junit skipped: {err}"),
+        }
+    }
+
     if let Some(msg) = first_failure {
         bail!(msg);
     }
@@ -1761,6 +1781,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut from_step: Option<String> = None;
     let mut until_step: Option<String> = None;
     let mut update_baselines = false;
+    let mut junit: Option<PathBuf> = None;
     let mut input_overrides: BTreeMap<String, String> = BTreeMap::new();
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
@@ -1800,6 +1821,8 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             "--until" => until_step = it.next().cloned().or_else(|| bail_missing("--until")),
             s if s.starts_with("--until=") => until_step = Some(s["--until=".len()..].to_string()),
             "--update-baselines" => update_baselines = true,
+            "--junit" => junit = Some(PathBuf::new()),
+            s if s.starts_with("--junit=") => junit = Some(PathBuf::from(&s["--junit=".len()..])),
             "--param" | "-p" => {
                 let pair = it
                     .next()
@@ -1854,6 +1877,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         from_step,
         until_step,
         update_baselines,
+        junit,
     })
 }
 
@@ -1919,7 +1943,7 @@ Usage:
                   [--no-sidecars] [--quiet | -q] [--plain]
                   [--tag <label>] [--output-audit <path>]
                   [--from <stepId>] [--until <stepId>]
-                  [--update-baselines] [--runs <N>]
+                  [--update-baselines] [--runs <N>] [--junit [path]]
 
 Loads + validates the scenario, mints a run id, prepares
 <sid>/replays/<runId>/, writes audit.json, runs env.open, iterates
@@ -1968,7 +1992,13 @@ replays/latest.txt.
                          performs). Runs even when shot claims fail —
                          intentional UI changes are the re-mint case.
                          Skips with a warning when the run captured no
-                         screenshots (e.g. --no-sidecars)."
+                         screenshots (e.g. --no-sidecars).
+--junit [path]           Write the run's terminal step outcomes as JUnit
+                         XML — one <testcase> per step. Bare flag writes
+                         <run>/junit.xml; --junit=<path> writes that
+                         path. Any CI's standard test-result ingestion
+                         (Jenkins/GitLab/Azure/GitHub reporters) renders
+                         the replay like a unit-test run."
 }
 
 #[cfg(all(test, unix))]
@@ -2048,6 +2078,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            junit: None,
         };
         let summary = run(&opts).unwrap();
         assert_eq!(summary.total, 1);
@@ -2124,6 +2155,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            junit: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2181,6 +2213,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            junit: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2219,6 +2252,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            junit: None,
         };
         let err = format!("{:#}", run(&opts).unwrap_err());
         assert!(err.contains("schema error"), "got: {err}");
@@ -2282,6 +2316,7 @@ esac\nexit 0\n",
             from_step: None,
             until_step: None,
             update_baselines: false,
+            junit: None,
         }
     }
 
@@ -2533,6 +2568,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            junit: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2594,6 +2630,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            junit: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3150,6 +3187,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            junit: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3235,6 +3273,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            junit: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3417,6 +3456,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            junit: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3504,6 +3544,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            junit: None,
         };
         // The run bails at the failing step; events/status are written
         // before the bail.
@@ -3570,6 +3611,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            junit: None,
         };
         run(&opts).unwrap();
 
@@ -3614,6 +3656,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            junit: None,
         };
         run(&opts).unwrap();
         let run_dir = run_dir_for(&jdir);
@@ -3795,6 +3838,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            junit: None,
         };
         assert_eq!(resolve_progress_mode(&mk(true, false)), ProgressMode::Quiet);
         // quiet wins over plain.
