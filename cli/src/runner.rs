@@ -114,6 +114,26 @@ pub struct RunOptions {
     /// performs). Runs even when shot claims FAILED: intentional UI
     /// changes are exactly the case where a failing diff needs re-minting.
     pub update_baselines: bool,
+    /// After a passing run, apply this run's locator-correction heal
+    /// patches back into scenario.json (heal-promote --apply for just this
+    /// run). The content-hash guard still applies: a patch recorded
+    /// against an older scenario is refused with a warning, never written.
+    pub auto_promote: bool,
+    /// `--freeze <iso>` — pin `Date.now()`/`new Date()` to the instant and
+    /// replace `Math.random` with a seeded LCG via a page init script, so
+    /// rendered timestamps and random ordering can't flake a golden diff.
+    pub freeze: Option<String>,
+    /// `--har` — record a HAR file for the run via `agent-browser network
+    /// har start|stop` and write `<run>/network.har`. Unlike network.json
+    /// (urls + statuses) a HAR carries response bodies — the artifact you
+    /// open in DevTools/Charles when a claim needs the payload.
+    pub har: bool,
+    /// `--mock-from <runId>` — seed mock rules from that run's
+    /// `network.har` (recorded via `--har`): the app's fetch/XHR calls get
+    /// the recorded status + body instead of the real backend. Fails the
+    /// run when the HAR is absent — a partial stub silently hitting the
+    /// real backend is worse than no run.
+    pub mock_from: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -352,6 +372,39 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     crate::browser::set_headed_mode(opts.headed);
     let connection = crate::browser::BrowserConnection::resolve()?;
     crate::browser::set_connection(&connection);
+    // A reused session name may carry mock rules from a prior scenario
+    // (`replay --all` suites, workbench runs) — start clean.
+    crate::mock::clear(&opts.session_name, None);
+
+    // The browser's request capture is per-session: a replayed session
+    // still holds the previous run's traffic. Clear it so this run's
+    // network.json (and {"network"} claims) sees only its own requests.
+    // Best-effort — a session that doesn't exist yet just warns.
+    if !opts.dry_run {
+        if let Err(e) = crate::browser::network_clear(&opts.session_name) {
+            eprintln!("[v2-replay] network log clear skipped: {e}");
+        }
+    }
+
+    // The browser's request capture is per-session: a replayed session
+    // still holds the previous run's traffic. Clear it so this run's
+    // network.json (and {"network"} claims) sees only its own requests.
+    // Best-effort — a session that doesn't exist yet just warns.
+    if !opts.dry_run {
+        if let Err(e) = crate::browser::network_clear(&opts.session_name) {
+            eprintln!("[v2-replay] network log clear skipped: {e}");
+        }
+    }
+
+    // The browser's request capture is per-session: a replayed session
+    // still holds the previous run's traffic. Clear it so this run's
+    // network.json (and {"network"} claims) sees only its own requests.
+    // Best-effort — a session that doesn't exist yet just warns.
+    if !opts.dry_run {
+        if let Err(e) = crate::browser::network_clear(&opts.session_name) {
+            eprintln!("[v2-replay] network log clear skipped: {e}");
+        }
+    }
 
     // 1. Load + validate.
     let (scenario_file, scenario_dir) = resolve_source(&opts.source)?;
@@ -418,6 +471,23 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         Some(audit_params)
     };
 
+    // Determinism layer: `--freeze <iso>` pins the clock + RNG via a page
+    // init script (fresh sessions get it on every navigation; the live
+    // eval covers a warm session's current document).
+    if let Some(at) = &opts.freeze {
+        if opts.dry_run {
+            eprintln!("[v2-replay] --freeze ignored under --dry-run");
+        } else {
+            let js_path = run.run_root.join("freeze.js");
+            fs::write(&js_path, freeze_js(at))
+                .with_context(|| format!("write {}", js_path.display()))?;
+            std::env::set_var("AGENT_BROWSER_INIT_SCRIPTS", &js_path);
+            let src = fs::read_to_string(&js_path)?;
+            let _ = browser::eval_expression(&opts.session_name, &src);
+            eprintln!("[v2-replay] freeze {at} → {}", js_path.display());
+        }
+    }
+
     // 5. env.open setup. Skipped under --dry-run.
     //
     // A setup failure (e.g. a `useProfile` op whose profile bootstrap can't
@@ -426,7 +496,37 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     // run had only audit.json and the viewer showed it "in flight" forever (a
     // ghost). Now we finalise a done/failed status + audit first, so the run
     // surfaces as FAIL with the setup error, then propagate.
+    // Seed mock stubs BEFORE env.open launches the session: rules written
+    // as a page init script install before the *first* navigation, so even
+    // page-load fetches are stubbed. A warm session that already exists
+    // ignores init scripts — the post-navigation re-apply still covers its
+    // in-page XHR/fetch traffic.
+    if let Some(from) = &opts.mock_from {
+        if opts.dry_run {
+            eprintln!("[v2-replay] --mock-from ignored under --dry-run");
+        } else {
+            let n = crate::mock::seed_from_har(&opts.session_name, &scenario_dir, from)
+                .with_context(|| format!("--mock-from {from:?}"))?;
+            let js_path = crate::mock::write_init_script(&opts.session_name, &run.run_root)
+                .with_context(|| "--mock-from: write init script")?;
+            // Children spawned from this process inherit the var; the
+            // daemon registers the script on session launch.
+            std::env::set_var("AGENT_BROWSER_INIT_SCRIPTS", &js_path);
+            eprintln!(
+                "[v2-replay] mock-from {from}: {n} stub(s) seeded (init script {})",
+                js_path.display()
+            );
+        }
+    }
+
     let mut scope = ValueScope::new(resolved_inputs);
+    // HAR recording starts before env.open so the open-phase navigation is
+    // part of the captured traffic.
+    if opts.har && !opts.dry_run {
+        if let Err(e) = crate::browser::network_har_start(&opts.session_name) {
+            eprintln!("[v2-replay] har start skipped: {e}");
+        }
+    }
     if !opts.dry_run {
         if let Some(env) = &scenario.env {
             if let Some(open_ops) = &env.open {
@@ -620,6 +720,27 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             let result = match &patched_step {
                 Step::Do { save_as, .. } => {
                     let mut outcome = dispatch_do(&patched_step, &do_ctx, &mut scope);
+                    // Per-step retry: params.retry re-dispatches the step
+                    // on failure — cheap flake absorption for one known-
+                    // flaky interaction without --retry's whole-run cost.
+                    // params.retryMs sets the inter-attempt delay
+                    // (default 300ms). Caveat: verbs whose side effect
+                    // isn't idempotent (e.g. `type` appends) can apply it
+                    // per attempt when the first attempt half-dispatched.
+                    if let Step::Do {
+                        params: Some(p), ..
+                    } = &patched_step
+                    {
+                        let retries = p.get("retry").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                        let delay = p.get("retryMs").and_then(|v| v.as_u64()).unwrap_or(300);
+                        let mut attempt = 0u32;
+                        while outcome.is_err() && attempt < retries {
+                            attempt += 1;
+                            eprintln!("[v2-replay] step {id}: retry {attempt}/{retries}");
+                            std::thread::sleep(std::time::Duration::from_millis(delay));
+                            outcome = dispatch_do(&patched_step, &do_ctx, &mut scope);
+                        }
+                    }
                     // Transient-popup recovery: an option/menuitem click that
                     // failed usually means the popup was dismissed between steps
                     // (inter-step keyframe capture, a re-render). Re-fire the
@@ -724,6 +845,13 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 }
                 Step::Check { claim, .. } => dispatch_check(claim, &check_ctx, &mut scope, None),
             };
+            // Navigation wipes the page's JS world — reinstall registered
+            // network mocks after navigation verbs so stubs survive loads.
+            if result.is_ok() && crate::verbs::is_navigation_step(&patched_step) {
+                if let Err(e) = crate::mock::reapply_if_any(&opts.session_name) {
+                    eprintln!("[v2-replay] mock re-apply failed (continuing): {e}");
+                }
+            }
             // Remember the last click as a potential popup opener for the
             // transient-popup recovery above.
             if crate::verbs::is_click_step(&patched_step) {
@@ -860,6 +988,32 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         ) {
             eprintln!("[v2-replay] status.json finalise failed: {e}");
         }
+
+        // Persist the session's captured network requests as
+        // <run>/network.json — the traffic list {"network"} claims queried
+        // mid-run, kept for post-hoc review/diff. Best-effort, and only
+        // when the run actually executed (a dry-run session has no traffic).
+        if !opts.dry_run {
+            crate::netlog::write_network_log_warn(&run, &opts.session_name);
+        }
+
+        // Flush the HAR recording before env.close (teardown traffic —
+        // profile saves, cleanup navigations — isn't part of the scenario's
+        // network evidence).
+        if opts.har {
+            let dest = run.run_root.join("network.har");
+            if let Err(e) = crate::browser::network_har_stop(&opts.session_name, &dest) {
+                eprintln!("[v2-replay] har stop skipped: {e}");
+            }
+        }
+
+        // Persist the session's captured network requests as
+        // <run>/network.json — the traffic list {"network"} claims queried
+        // mid-run, kept for post-hoc review/diff. Best-effort, and only
+        // when the run actually executed (a dry-run session has no traffic).
+        if !opts.dry_run {
+            crate::netlog::write_network_log_warn(&run, &opts.session_name);
+        }
     }
 
     // 7. env.close teardown — best effort. Skipped under --dry-run.
@@ -904,7 +1058,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         audit.heal_overrides_applied = Some(applied_overrides);
     }
     if !healed_steps.is_empty() {
-        audit.auto_healed = Some(healed_steps);
+        audit.auto_healed = Some(healed_steps.clone());
     }
     if let Some(f) = &opts.from_step {
         audit.window_from = Some(f.clone());
@@ -913,6 +1067,37 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         audit.window_until = Some(u.clone());
     }
     write_run_audit(&run, &audit)?;
+
+    // 9.4. Persist the session console log alongside audit.json — the
+    // `{"console"}` claims evaluated live during the run; landing the
+    // captured messages in the run dir keeps the evidence after the
+    // session closes (mirrors how the request log lands via --har).
+    if !opts.dry_run {
+        match browser::console_messages(&opts.session_name) {
+            Ok(msgs) => {
+                let body = serde_json::json!({
+                    "session": opts.session_name,
+                    "count": msgs.len(),
+                    "messages": msgs.iter().map(|m| serde_json::json!({
+                        "type": m.level,
+                        "text": m.text,
+                    })).collect::<Vec<_>>(),
+                });
+                match serde_json::to_vec_pretty(&body) {
+                    Ok(b) => {
+                        if let Err(e) = crate::sidecar::atomic_write_file(
+                            &run.run_root.join("console.json"),
+                            &b,
+                        ) {
+                            eprintln!("[v2-replay] console.json write failed: {e}");
+                        }
+                    }
+                    Err(e) => eprintln!("[v2-replay] console.json serialize failed: {e}"),
+                }
+            }
+            Err(e) => eprintln!("[v2-replay] console.json skipped: {e}"),
+        }
+    }
 
     // 9.5. Optional --output-audit duplicate (atomic write).
     if let Some(out) = &opts.output_audit {
@@ -926,6 +1111,23 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
 
     // 9. Latest pointer.
     update_latest_pointer(&scenario_dir, &run.run_id)?;
+
+    // 9.6. `--auto-promote` — self-healing write-back. Only on a passing
+    // run: locator-correction patches this run produced are applied to
+    // scenario.json via the same hash-guarded plan `heal-promote --apply`
+    // uses. A refusal (the file changed since the run started) is a
+    // warning, never a run failure. Skipped for --dry-run (no patches can
+    // exist) and runs that wrote no corrections.
+    if opts.auto_promote && !opts.dry_run && summary.ok && !healed_steps.is_empty() {
+        match crate::heal_promote::promote_run(&scenario_file, &run.run_id) {
+            Ok(0) => {}
+            Ok(n) => eprintln!(
+                "[v2-replay] auto-promoted {n} locator patch(es) into {}",
+                scenario_file.display()
+            ),
+            Err(err) => eprintln!("[v2-replay] --auto-promote skipped: {err}"),
+        }
+    }
 
     // 10. `--update-baselines` — mint from this run's capture set. Runs
     // before the failure bail on purpose: a shot claim that correctly
@@ -1549,6 +1751,12 @@ fn stabilize_visual(session: &str, cap_ms: u64) {
             session,
             "(() => { const imgs = Array.from(document.images || []).filter(i => !i.complete).length; return JSON.stringify({fonts: document.fonts ? document.fonts.status : 'loaded', imgs, ready: document.readyState}); })()",
         );
+        // In-flight fetches don't show up in readyState/images — a lazy data
+        // load can still repaint after the screenshot. Require the session's
+        // request log to be quiet too.
+        let pending = browser::network_requests(session)
+            .map(|rs| rs.iter().filter(|r| r.status.is_none()).count())
+            .unwrap_or(0);
         match status {
             Ok(raw) => {
                 // eval stdout may wrap the JSON in a quoted string — peel once.
@@ -1561,7 +1769,7 @@ fn stabilize_visual(session: &str, cap_ms: u64) {
                             && v.get("ready").and_then(|r| r.as_str()) == Some("complete")
                     })
                     .unwrap_or(false);
-                if settled {
+                if settled && pending == 0 {
                     return;
                 }
             }
@@ -1572,6 +1780,34 @@ fn stabilize_visual(session: &str, cap_ms: u64) {
         }
         thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// The `--freeze` init script: pin `Date.now`/`new Date()` to `at` and
+/// replace `Math.random` with a seeded LCG (mulberry32-style) — same
+/// instant, same random stream, every run.
+fn freeze_js(at: &str) -> String {
+    format!(
+        r#"(() => {{
+  const T = Date.parse({});
+  const R = Date;
+  class F extends R {{
+    constructor(...a) {{ super(...(a.length ? a : [T])); }}
+    static now() {{ return T; }}
+    static parse(s) {{ return R.parse(s); }}
+    static UTC(...a) {{ return R.UTC(...a); }}
+  }}
+  window.Date = F;
+  let s = 0x9E3779B9;
+  Math.random = () => {{
+    s = (s + 0x6D2B79F5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }};
+}})()"#,
+        serde_json::to_string(at).unwrap_or_else(|_| "\"2026-01-01\"".into())
+    )
 }
 
 /// Whether the scenario contains a `check` claim on the `shot` subject
@@ -1632,60 +1868,252 @@ fn is_safe_step_id(s: &str) -> bool {
 // ---------- CLI verb ----------
 
 pub fn cli(args: &[String]) -> Result<u8> {
-    let (parsed, runs, retry) = parse_args_with_runs(args)?;
-    if retry > 1 {
+    let flags = parse_args_cli(args)?;
+    if flags.all {
+        return cli_all(
+            &flags.filtered,
+            flags.runs,
+            flags.shard,
+            flags.filter.as_deref(),
+            &flags.tags,
+            flags.report.as_deref(),
+            flags.retry,
+        );
+    }
+    if flags.shard.is_some() {
+        bail!("--shard requires --all");
+    }
+    if flags.filter.is_some() {
+        bail!("--filter requires --all");
+    }
+    if !flags.tags.is_empty() {
+        bail!("--tags requires --all");
+    }
+    if flags.report.is_some() {
+        bail!("--report requires --all");
+    }
+
+    let parsed = parse_args(&flags.filtered)?;
+    if flags.retry > 1 {
         // --retry N: re-run until a pass or N attempts spent. Each attempt is
         // its own replay dir, so a pass-after-retries leaves flake evidence in
         // `audit list`/`audit flaky` instead of hiding it.
-        for attempt in 1..=retry {
-            eprintln!("[v2-replay] attempt {attempt}/{retry}");
+        for attempt in 1..=flags.retry {
+            eprintln!("[v2-replay] attempt {attempt}/{}", flags.retry);
             match run(&parsed) {
                 Ok(summary) if summary.ok => {
                     if attempt > 1 {
                         eprintln!(
-                            "[v2-replay] flaky — passed on attempt {attempt}/{retry} after {} failure(s)",
+                            "[v2-replay] flaky — passed on attempt {attempt}/{} after {} failure(s)",
+                            flags.retry,
                             attempt - 1
                         );
                     }
                     return Ok(0);
                 }
                 Ok(_) => {}
-                Err(e) => eprintln!("[v2-replay] attempt {attempt}/{retry} errored: {e}"),
+                Err(e) => eprintln!("[v2-replay] attempt {attempt}/{} errored: {e}", flags.retry),
             }
         }
-        eprintln!("[v2-replay] failed all {retry} attempt(s)");
+        eprintln!("[v2-replay] failed all {} attempt(s)", flags.retry);
         return Ok(1);
     }
+    let (code, _) = run_n(&parsed, flags.runs, None)?;
+    Ok(code)
+}
+
+/// Replay `parsed` `runs` times; `label` prefixes the per-run banner.
+/// Returns the exit code (0 iff every run is ok) and the last run's
+/// summary for reporting (None when every run errored before producing
+/// one).
+fn run_n(parsed: &RunOptions, runs: u32, label: Option<&str>) -> Result<(u8, Option<RunSummary>)> {
     if runs <= 1 {
-        let summary = run(&parsed)?;
-        return Ok(if summary.ok { 0 } else { 1 });
+        let summary = run(parsed)?;
+        let code = if summary.ok { 0 } else { 1 };
+        return Ok((code, Some(summary)));
     }
     let mut all_ok = true;
+    let mut last: Option<RunSummary> = None;
     for i in 1..=runs {
-        eprintln!("[v2-replay] run {i}/{runs}");
-        match run(&parsed) {
+        eprintln!("[v2-replay]{} run {i}/{runs}", label.unwrap_or(""));
+        match run(parsed) {
             Ok(summary) => {
                 if !summary.ok {
                     all_ok = false;
                 }
+                last = Some(summary);
             }
             Err(e) => {
-                eprintln!("[v2-replay] run {i}/{runs} errored: {e}");
+                eprintln!(
+                    "[v2-replay]{} run {i}/{runs} errored: {e}",
+                    label.unwrap_or("")
+                );
                 all_ok = false;
             }
         }
     }
+    Ok((if all_ok { 0 } else { 1 }, last))
+}
+
+/// `replay --all`: every scenario under the scenarios root, optionally
+/// sharded (`--shard k/n` keeps the sids whose sorted index % n == k-1)
+/// and/or name-filtered (`--filter <substr>`).
+fn cli_all(
+    filtered: &[String],
+    runs: u32,
+    shard: Option<(u32, u32)>,
+    filter: Option<&str>,
+    tags: &[String],
+    report: Option<&Path>,
+    retry: u32,
+) -> Result<u8> {
+    let root = crate::paths::scenarios_root();
+    let mut sids = crate::scenario_cli::all_sids(&root, filter);
+    if !tags.is_empty() {
+        sids.retain(|sid| scenario_has_any_tag(&root, sid, tags));
+    }
+    if let Some((k, n)) = shard {
+        sids = sids
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| (*i as u32) % n == k - 1)
+            .map(|(_, sid)| sid)
+            .collect();
+    }
+    if sids.is_empty() {
+        bail!("replay --all: no scenarios under {}", root.display());
+    }
+    eprintln!(
+        "[v2-replay] --all{}: {} scenario(s){}",
+        shard
+            .map(|(k, n)| format!(" --shard {k}/{n}"))
+            .unwrap_or_default(),
+        sids.len(),
+        filter
+            .map(|f| format!(" matching {f:?}"))
+            .unwrap_or_default(),
+    );
+    let mut all_ok = true;
+    let mut failed: Vec<String> = Vec::new();
+    let mut rows: Vec<(String, Option<RunSummary>)> = Vec::new();
+    for sid in &sids {
+        let mut per = filtered.to_vec();
+        per.push(sid.clone());
+        let parsed = parse_args(&per)?;
+        // --retry under --all: re-run THIS scenario until pass or N attempts;
+        // a pass on attempt 2 still leaves the earlier failing run dir as
+        // flake evidence. (runs>1 && retry>1 is rejected at parse.)
+        let mut attempt = 0u32;
+        let (code, summary) = loop {
+            attempt += 1;
+            let r = run_n(&parsed, runs, Some(&format!(" {sid}")))?;
+            if r.0 == 0 || attempt >= retry {
+                break r;
+            }
+            eprintln!("[v2-replay] {sid}: retry {attempt}/{retry}");
+        };
+        if code != 0 {
+            all_ok = false;
+            failed.push(sid.clone());
+        }
+        rows.push((sid.clone(), summary));
+    }
+    if let Some(path) = report {
+        write_report(path, &rows)?;
+        eprintln!("[v2-replay] report → {}", path.display());
+    }
+    eprintln!(
+        "[v2-replay] --all done: {} passed, {} failed{}",
+        sids.len() - failed.len(),
+        failed.len(),
+        if failed.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", failed.join(", "))
+        }
+    );
     Ok(if all_ok { 0 } else { 1 })
 }
 
-/// Wrapper around [`parse_args`] that also peels off `--runs N` (repeat N
-/// times regardless of outcome) and `--retry N` (re-run until pass, max N
-/// attempts) before resolution. They are mutually exclusive: --runs counts
-/// total executions for soak/perf collection; --retry bounds a flake hunt.
-fn parse_args_with_runs(args: &[String]) -> Result<(RunOptions, u32, u32)> {
+/// `--report` — a markdown verdict table for the suite run, the shape a
+/// CI step drops into a PR comment: header counts, one row per scenario,
+/// and a failing-scenario list at the bottom.
+fn write_report(path: &Path, rows: &[(String, Option<RunSummary>)]) -> Result<()> {
+    let passed = rows
+        .iter()
+        .filter(|(_, s)| s.as_ref().map(|s| s.ok).unwrap_or(false))
+        .count();
+    let failed = rows.len() - passed;
+    let mut out = String::new();
+    out.push_str("### agent-qa replay\n\n");
+    if failed == 0 {
+        out.push_str(&format!("✅ {passed}/{} scenarios pass.\n\n", rows.len()));
+    } else {
+        out.push_str(&format!(
+            "❌ {failed}/{} scenarios fail ({passed} pass).\n\n",
+            rows.len()
+        ));
+    }
+    out.push_str("| scenario | result | steps |\n| --- | --- | --- |\n");
+    for (sid, summary) in rows {
+        let (verdict, steps) = match summary {
+            Some(s) if s.ok => ("PASS".to_string(), format!("{}/{}", s.passed, s.total)),
+            Some(s) => ("FAIL".to_string(), format!("{}/{}", s.passed, s.total)),
+            None => ("ERROR".to_string(), "—".to_string()),
+        };
+        out.push_str(&format!("| `{sid}` | {verdict} | {steps} |\n"));
+    }
+    let failing: Vec<&str> = rows
+        .iter()
+        .filter(|(_, s)| !s.as_ref().map(|s| s.ok).unwrap_or(false))
+        .map(|(sid, _)| sid.as_str())
+        .collect();
+    if !failing.is_empty() {
+        out.push_str(&format!(
+            "\nFailing: {} — run artifacts live under `scenarios/<sid>/replays/`.\n",
+            failing.join(", ")
+        ));
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    fs::write(path, out).with_context(|| format!("write report {}", path.display()))
+}
+
+/// CLI-level flags peeled off before [`parse_args`] sees `args`.
+#[derive(Debug)]
+struct CliFlags {
+    /// Remaining args (positional sid + per-run flags) for parse_args.
+    filtered: Vec<String>,
+    /// `--runs N` repeat count.
+    runs: u32,
+    /// `--all` — replay every scenario under the root.
+    all: bool,
+    /// `--shard k/n` — 1-based shard of the sorted sid list.
+    shard: Option<(u32, u32)>,
+    /// `--filter <substr>` — sid substring filter for --all.
+    filter: Option<String>,
+    /// `--tags <a,b>` — keep scenarios carrying any of these tags (OR).
+    tags: Vec<String>,
+    /// `--report <path>` — write a markdown verdict table for --all.
+    report: Option<PathBuf>,
+    /// `--retry N` — re-run until a pass, at most N attempts (mutually
+    /// exclusive with --runs). Under --all it applies per scenario.
+    retry: u32,
+}
+
+/// Peel the CLI-level flags `--runs N`, `--retry N`, `--all`,
+/// `--shard k/n`, `--filter <substr>`, `--tags`, `--report` off `args`;
+/// the rest feed [`parse_args`].
+fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
     let mut filtered: Vec<String> = Vec::with_capacity(args.len());
     let mut runs: u32 = 1;
     let mut retry: u32 = 1;
+    let mut all = false;
+    let mut shard: Option<(u32, u32)> = None;
+    let mut filter: Option<String> = None;
+    let mut tags: Vec<String> = Vec::new();
+    let mut report: Option<PathBuf> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -1708,6 +2136,54 @@ fn parse_args_with_runs(args: &[String]) -> Result<(RunOptions, u32, u32)> {
                 if runs == 0 {
                     bail!("--runs must be >= 1");
                 }
+            }
+            "--all" => all = true,
+            "--shard" => {
+                let v = it
+                    .next()
+                    .ok_or_else(|| anyhow!("--shard requires k/n (e.g. --shard 2/4)"))?;
+                shard = Some(parse_shard(v)?);
+            }
+            s if s.starts_with("--shard=") => {
+                shard = Some(parse_shard(&s["--shard=".len()..])?);
+            }
+            "--filter" => {
+                filter = Some(
+                    it.next()
+                        .cloned()
+                        .ok_or_else(|| anyhow!("--filter requires a value"))?,
+                );
+            }
+            s if s.starts_with("--filter=") => {
+                filter = Some(s["--filter=".len()..].to_string());
+            }
+            "--tags" => {
+                let v = it
+                    .next()
+                    .cloned()
+                    .ok_or_else(|| anyhow!("--tags requires a comma-separated value"))?;
+                tags.extend(
+                    v.split(',')
+                        .map(|t| t.trim().to_string())
+                        .filter(|t| !t.is_empty()),
+                );
+            }
+            s if s.starts_with("--tags=") => {
+                tags.extend(
+                    s["--tags=".len()..]
+                        .split(',')
+                        .map(|t| t.trim().to_string())
+                        .filter(|t| !t.is_empty()),
+                );
+            }
+            "--report" => {
+                let v = it
+                    .next()
+                    .ok_or_else(|| anyhow!("--report requires a file path"))?;
+                report = Some(PathBuf::from(v));
+            }
+            s if s.starts_with("--report=") => {
+                report = Some(PathBuf::from(&s["--report=".len()..]));
             }
             "--retry" => {
                 let n = it
@@ -1735,8 +2211,67 @@ fn parse_args_with_runs(args: &[String]) -> Result<(RunOptions, u32, u32)> {
     if runs > 1 && retry > 1 {
         bail!("--runs and --retry are mutually exclusive (repeat-N vs until-pass)");
     }
-    let opts = parse_args(&filtered)?;
-    Ok((opts, runs, retry))
+    // AGENT_QA_REPLAY_ARGS: whitespace-separated flags applied BEFORE the
+    // command line, so an explicit argv flag still overrides it. Lets
+    // harnesses (golden libs, CI jobs) force flags like --har without
+    // editing every replay call site.
+    if let Ok(extra) = std::env::var("AGENT_QA_REPLAY_ARGS") {
+        let extra = extra.trim();
+        if !extra.is_empty() {
+            let mut merged: Vec<String> = extra.split_whitespace().map(str::to_string).collect();
+            merged.extend(filtered);
+            filtered = merged;
+            eprintln!("[v2-replay] AGENT_QA_REPLAY_ARGS applied: {extra}");
+        }
+    }
+    Ok(CliFlags {
+        filtered,
+        runs,
+        retry,
+        all,
+        shard,
+        filter,
+        tags,
+        report,
+    })
+}
+
+/// True when `<root>/<sid>/scenario.json` declares any of `tags`. A scenario
+/// with no `tags` field — or one that fails to parse — never matches.
+fn scenario_has_any_tag(root: &std::path::Path, sid: &str, tags: &[String]) -> bool {
+    let bytes = match std::fs::read(root.join(sid).join("scenario.json")) {
+        Ok(b) => b,
+        Err(_) => return false,
+    };
+    let doc: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+    doc.get("tags")
+        .and_then(|t| t.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| t.as_str())
+                .any(|t| tags.iter().any(|want| want == t))
+        })
+        .unwrap_or(false)
+}
+
+/// `k/n` — k is 1-based and must be <= n; both must be positive.
+fn parse_shard(v: &str) -> Result<(u32, u32)> {
+    let (k, n) = v
+        .split_once('/')
+        .ok_or_else(|| anyhow!("--shard expects k/n (e.g. 2/4); got {v:?}"))?;
+    let k: u32 = k
+        .parse()
+        .map_err(|_| anyhow!("--shard k must be a positive integer; got {v:?}"))?;
+    let n: u32 = n
+        .parse()
+        .map_err(|_| anyhow!("--shard n must be a positive integer; got {v:?}"))?;
+    if n == 0 || k == 0 || k > n {
+        bail!("--shard expects 1 <= k <= n; got {v:?}");
+    }
+    Ok((k, n))
 }
 
 fn parse_args(args: &[String]) -> Result<RunOptions> {
@@ -1761,6 +2296,10 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut from_step: Option<String> = None;
     let mut until_step: Option<String> = None;
     let mut update_baselines = false;
+    let mut auto_promote = false;
+    let mut freeze: Option<String> = None;
+    let mut har = false;
+    let mut mock_from: Option<String> = None;
     let mut input_overrides: BTreeMap<String, String> = BTreeMap::new();
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
@@ -1800,6 +2339,14 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             "--until" => until_step = it.next().cloned().or_else(|| bail_missing("--until")),
             s if s.starts_with("--until=") => until_step = Some(s["--until=".len()..].to_string()),
             "--update-baselines" => update_baselines = true,
+            "--auto-promote" => auto_promote = true,
+            "--freeze" => freeze = it.next().cloned().or_else(|| bail_missing("--freeze")),
+            s if s.starts_with("--freeze=") => freeze = Some(s["--freeze=".len()..].to_string()),
+            "--har" => har = true,
+            "--mock-from" => mock_from = it.next().cloned().or_else(|| bail_missing("--mock-from")),
+            s if s.starts_with("--mock-from=") => {
+                mock_from = Some(s["--mock-from=".len()..].to_string())
+            }
             "--param" | "-p" => {
                 let pair = it
                     .next()
@@ -1854,6 +2401,10 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         from_step,
         until_step,
         update_baselines,
+        auto_promote,
+        freeze,
+        har,
+        mock_from,
     })
 }
 
@@ -1919,7 +2470,7 @@ Usage:
                   [--no-sidecars] [--quiet | -q] [--plain]
                   [--tag <label>] [--output-audit <path>]
                   [--from <stepId>] [--until <stepId>]
-                  [--update-baselines] [--runs <N>]
+                  [--update-baselines] [--freeze <iso>] [--runs <N>]
 
 Loads + validates the scenario, mints a run id, prepares
 <sid>/replays/<runId>/, writes audit.json, runs env.open, iterates
@@ -1945,6 +2496,22 @@ replays/latest.txt.
 --runs <N>               Repeat the replay N times in one invocation
                          (each run mints its own runId). Useful for
                          flake detection. Exit 0 iff every run is OK.
+--all                    Replay every scenario under the scenarios root
+                         (sorted sid order), printing a per-run banner
+                         plus a final pass/fail rollup. Combines with
+                         every flag except a positional sid.
+--shard k/n              With --all: run only the sids whose index in
+                         the sorted list mod n == k-1 (k is 1-based).
+                         For CI matrix jobs, e.g. shard 1/4 + 2/4 + …
+--filter <substr>        With --all: keep sids containing <substr>
+                         (case-insensitive).
+--tags <a,b>             With --all: keep scenarios whose `tags` list
+                         contains any of the comma-separated names (OR).
+--report <path>          With --all: write a markdown verdict table
+                         (per-scenario PASS/FAIL + step counts) — the
+                         shape a CI step drops into a PR comment.
+                         (case-insensitive).
+
 --no-sidecars            Skip per-step ARIA snapshot + screenshot
                          capture. audit.json is still written. Useful
                          when running with --runs N.
@@ -1968,7 +2535,31 @@ replays/latest.txt.
                          performs). Runs even when shot claims fail —
                          intentional UI changes are the re-mint case.
                          Skips with a warning when the run captured no
-                         screenshots (e.g. --no-sidecars)."
+                         screenshots (e.g. --no-sidecars).
+--har                    Record a HAR file for the run and write
+                         <sid>/replays/<runId>/network.har — request +
+                         response bodies for DevTools/Charles-level
+                         inspection. network.json (when present) stays
+                         the lightweight status list; the HAR is the
+                         deep dive.
+--mock-from <runId>      Seed network stubs from <runId>'s
+                         network.har (record it with --har first): the
+                         page's fetch/XHR calls get the recorded
+                         status+body — a hermetic, offline-capable
+                         replay. Rules install via a page init script
+                         on fresh sessions (covers page-load fetches),
+                         else re-apply after every navigation
+--freeze <iso>           Pin Date.now()/new Date() to <iso> and replace
+                         Math.random with a seeded LCG via a page init
+                         script — rendered timestamps and random ordering
+                         can't flake a golden diff. Fresh sessions apply
+                         it on every navigation; warm sessions get the
+                         current document only
+--auto-promote           Self-healing write-back: when the run passed AND
+                         auto-heal corrected locators this run, apply those
+                         patches to scenario.json (the hash-guarded
+                         heal-promote --apply path). A stale-hash refusal
+                         is a warning, never a failure."
 }
 
 #[cfg(all(test, unix))]
@@ -1980,6 +2571,67 @@ mod tests {
 
     // env mutation isn't thread-safe; serialize via the shared lock.
     use crate::test_util::lock_env;
+
+    #[test]
+    fn parse_shard_validates_bounds() {
+        assert_eq!(parse_shard("1/4").unwrap(), (1, 4));
+        assert_eq!(parse_shard("4/4").unwrap(), (4, 4));
+        assert!(parse_shard("0/4").is_err());
+        assert!(parse_shard("5/4").is_err());
+        assert!(parse_shard("1/0").is_err());
+        assert!(parse_shard("x").is_err());
+        assert!(parse_shard("1/").is_err());
+    }
+
+    #[test]
+    fn cli_shard_without_all_errors() {
+        let args: Vec<String> = ["sid-x", "--shard", "1/2"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(cli(&args).is_err());
+    }
+
+    #[test]
+    fn write_report_renders_verdict_table() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("report.md");
+        let rows = vec![
+            (
+                "alpha".to_string(),
+                Some(RunSummary {
+                    passed: 3,
+                    total: 3,
+                    ok: true,
+                }),
+            ),
+            (
+                "beta".to_string(),
+                Some(RunSummary {
+                    passed: 1,
+                    total: 4,
+                    ok: false,
+                }),
+            ),
+            ("gamma".to_string(), None),
+        ];
+        write_report(&path, &rows).unwrap();
+        let md = fs::read_to_string(&path).unwrap();
+        assert!(md.contains("❌ 2/3 scenarios fail (1 pass)"));
+        assert!(md.contains("| `alpha` | PASS | 3/3 |"));
+        assert!(md.contains("| `beta` | FAIL | 1/4 |"));
+        assert!(md.contains("| `gamma` | ERROR | — |"));
+        assert!(md.contains("Failing: beta, gamma"));
+    }
+
+    #[test]
+    fn cli_report_without_all_errors() {
+        let args: Vec<String> = ["sid-x", "--report", "/tmp/r.md"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(cli(&args).is_err());
+    }
 
     fn write_exec(dir: &Path, name: &str, body: &str) -> PathBuf {
         let p = dir.join(name);
@@ -2048,6 +2700,10 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         let summary = run(&opts).unwrap();
         assert_eq!(summary.total, 1);
@@ -2124,6 +2780,10 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2181,6 +2841,10 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2219,6 +2883,10 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         let err = format!("{:#}", run(&opts).unwrap_err());
         assert!(err.contains("schema error"), "got: {err}");
@@ -2282,6 +2950,10 @@ esac\nexit 0\n",
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
+            freeze: None,
+            har: false,
+            mock_from: None,
         }
     }
 
@@ -2533,6 +3205,10 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2594,6 +3270,10 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2696,44 +3376,130 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
     }
 
     #[test]
-    fn parse_args_with_runs_strips_and_parses() {
-        let (opts, runs, _retry) =
-            parse_args_with_runs(&["./j.json".into(), "--runs".into(), "5".into()]).unwrap();
-        assert_eq!(runs, 5);
+    fn parse_args_cli_strips_runs_and_parses() {
+        let f = parse_args_cli(&["./j.json".into(), "--runs".into(), "5".into()]).unwrap();
+        assert_eq!(f.runs, 5);
+        assert_eq!(f.retry, 1);
+        assert!(!f.all && f.shard.is_none() && f.filter.is_none());
+        let opts = parse_args(&f.filtered).unwrap();
         assert!(matches!(opts.source, ScenarioSource::Path(_)));
     }
 
     #[test]
-    fn parse_args_with_runs_eq_form() {
-        let (_opts, runs, _retry) =
-            parse_args_with_runs(&["./j.json".into(), "--runs=3".into()]).unwrap();
-        assert_eq!(runs, 3);
+    fn parse_args_cli_eq_form() {
+        let f = parse_args_cli(&["./j.json".into(), "--runs=3".into()]).unwrap();
+        assert_eq!(f.runs, 3);
+        let f = parse_args_cli(&["./j.json".into(), "--retry=2".into()]).unwrap();
+        assert_eq!(f.retry, 2);
+        // --runs and --retry are mutually exclusive.
+        parse_args_cli(&["./j.json".into(), "--runs=2".into(), "--retry=2".into()]).unwrap_err();
     }
 
     #[test]
-    fn parse_args_with_runs_default_is_one() {
-        let (_opts, runs, _retry) = parse_args_with_runs(&["./j.json".into()]).unwrap();
-        assert_eq!(runs, 1);
+    fn parse_args_cli_default_is_one() {
+        let f = parse_args_cli(&["./j.json".into()]).unwrap();
+        assert_eq!(f.runs, 1);
+        assert_eq!(f.retry, 1);
     }
 
     #[test]
-    fn parse_args_with_runs_rejects_zero_and_non_int() {
-        parse_args_with_runs(&["./j.json".into(), "--runs".into(), "0".into()]).unwrap_err();
-        parse_args_with_runs(&["./j.json".into(), "--runs".into(), "x".into()]).unwrap_err();
+    fn parse_args_cli_rejects_zero_and_non_int() {
+        parse_args_cli(&["./j.json".into(), "--runs".into(), "0".into()]).unwrap_err();
+        parse_args_cli(&["./j.json".into(), "--runs".into(), "x".into()]).unwrap_err();
+    }
+
+    #[test]
+    fn parse_args_cli_all_shard_filter() {
+        let f = parse_args_cli(&[
+            "--all".into(),
+            "--shard".into(),
+            "2/4".into(),
+            "--filter=login".into(),
+            "--quiet".into(),
+        ])
+        .unwrap();
+        assert!(f.all);
+        assert_eq!(f.shard, Some((2, 4)));
+        assert_eq!(f.filter.as_deref(), Some("login"));
+        assert_eq!(f.filtered, vec!["--quiet".to_string()]);
+    }
+
+    #[test]
+    fn parse_args_cli_tag_repeatable() {
+        let f = parse_args_cli(&[
+            "--all".into(),
+            "--tags".into(),
+            "smoke,checkout".into(),
+            "--tags=nightly".into(),
+        ])
+        .unwrap();
+        assert!(f.all);
+        assert_eq!(
+            f.tags,
+            vec![
+                "smoke".to_string(),
+                "checkout".to_string(),
+                "nightly".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn cli_tag_without_all_errors() {
+        let args: Vec<String> = ["sid-x", "--tags", "smoke"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(cli(&args).is_err());
+    }
+
+    #[test]
+    fn scenario_has_any_tag_matches_declared_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = dir.path().join("s1");
+        fs::create_dir_all(&sid).unwrap();
+        fs::write(
+            sid.join("scenario.json"),
+            r#"{"schema":"scenario/2","id":"s1","intent":"x","tags":["smoke","ci"],"steps":[]}"#,
+        )
+        .unwrap();
+        let root = dir.path();
+        let smoke = vec!["smoke".to_string()];
+        let nope = vec!["nightly".to_string()];
+        assert!(scenario_has_any_tag(root, "s1", &smoke));
+        assert!(!scenario_has_any_tag(root, "s1", &nope));
+        // no tags field → never matches
+        fs::write(
+            sid.join("scenario.json"),
+            r#"{"schema":"scenario/2","id":"s1","intent":"x","steps":[]}"#,
+        )
+        .unwrap();
+        assert!(!scenario_has_any_tag(root, "s1", &smoke));
+        // malformed json → never matches
+        fs::write(sid.join("scenario.json"), b"not json").unwrap();
+        assert!(!scenario_has_any_tag(root, "s1", &smoke));
+    }
+
+    #[test]
+    fn replay_args_env_applies_and_argv_overrides() {
+        std::env::set_var("AGENT_QA_REPLAY_ARGS", "--har --dry-run");
+        let flags = parse_args_cli(&["./j.json".into()]).unwrap();
+        std::env::remove_var("AGENT_QA_REPLAY_ARGS");
+        let opts = parse_args(&flags.filtered).unwrap();
+        assert!(opts.har, "--har from AGENT_QA_REPLAY_ARGS applied");
+        assert!(opts.dry_run, "--dry-run from the env applied");
     }
 
     #[test]
     fn parse_retry_parses_both_forms() {
-        let (_o, runs, retry) =
-            parse_args_with_runs(&["./j.json".into(), "--retry".into(), "3".into()]).unwrap();
-        assert_eq!((runs, retry), (1, 3));
-        let (_o, _r, retry) =
-            parse_args_with_runs(&["./j.json".into(), "--retry=2".into()]).unwrap();
-        assert_eq!(retry, 2);
-        let (_o, runs, retry) = parse_args_with_runs(&["./j.json".into()]).unwrap();
-        assert_eq!((runs, retry), (1, 1));
-        parse_args_with_runs(&["./j.json".into(), "--retry".into(), "0".into()]).unwrap_err();
-        parse_args_with_runs(&["./j.json".into(), "--retry".into(), "x".into()]).unwrap_err();
+        let f = parse_args_cli(&["./j.json".into(), "--retry".into(), "3".into()]).unwrap();
+        assert_eq!((f.runs, f.retry), (1, 3));
+        let f = parse_args_cli(&["./j.json".into(), "--retry=2".into()]).unwrap();
+        assert_eq!(f.retry, 2);
+        let f = parse_args_cli(&["./j.json".into()]).unwrap();
+        assert_eq!((f.runs, f.retry), (1, 1));
+        parse_args_cli(&["./j.json".into(), "--retry".into(), "0".into()]).unwrap_err();
+        parse_args_cli(&["./j.json".into(), "--retry".into(), "x".into()]).unwrap_err();
     }
 
     #[test]
@@ -2779,7 +3545,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
 
     #[test]
     fn runs_and_retry_are_mutually_exclusive() {
-        parse_args_with_runs(&[
+        parse_args_cli(&[
             "./j.json".into(),
             "--runs".into(),
             "2".into(),
@@ -2788,7 +3554,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         ])
         .unwrap_err();
         // retry alone with runs at its default is fine
-        parse_args_with_runs(&["./j.json".into(), "--retry".into(), "3".into()]).unwrap();
+        parse_args_cli(&["./j.json".into(), "--retry".into(), "3".into()]).unwrap();
     }
 
     #[test]
@@ -3150,6 +3916,10 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3235,6 +4005,10 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3355,6 +4129,27 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
     }
 
     #[test]
+    fn parse_args_freeze_flag() {
+        let opts = parse_args(&["x".into(), "--freeze".into(), "2026-01-01".into()]).unwrap();
+        assert_eq!(opts.freeze.as_deref(), Some("2026-01-01"));
+        let opts = parse_args(&["x".into(), "--freeze=2026-06-30T00:00Z".into()]).unwrap();
+        assert_eq!(opts.freeze.as_deref(), Some("2026-06-30T00:00Z"));
+        let opts = parse_args(&["x".into()]).unwrap();
+        assert_eq!(opts.freeze, None);
+    }
+
+    #[test]
+    fn freeze_js_pins_clock_and_seeds_rng() {
+        let js = freeze_js("2026-01-01T00:00:00Z");
+        assert!(
+            js.contains("Date.parse(\"2026-01-01T00:00:00Z\")"),
+            "got: {js}"
+        );
+        assert!(js.contains("static now()"), "got: {js}");
+        assert!(js.contains("Math.random ="), "got: {js}");
+    }
+
+    #[test]
     fn render_summary_formats_pass_and_fail() {
         let s = RunSummary {
             passed: 3,
@@ -3417,6 +4212,10 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3504,6 +4303,10 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         // The run bails at the failing step; events/status are written
         // before the bail.
@@ -3570,6 +4373,10 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         run(&opts).unwrap();
 
@@ -3614,6 +4421,10 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         run(&opts).unwrap();
         let run_dir = run_dir_for(&jdir);
@@ -3795,6 +4606,10 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            auto_promote: false,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         assert_eq!(resolve_progress_mode(&mk(true, false)), ProgressMode::Quiet);
         // quiet wins over plain.
@@ -3809,5 +4624,13 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         assert!(opts.plain);
         let opts = parse_args(&["./j.json".into()]).unwrap();
         assert!(!opts.plain);
+    }
+
+    #[test]
+    fn parse_args_auto_promote_flag() {
+        let opts = parse_args(&["sid".into(), "--auto-promote".into()]).unwrap();
+        assert!(opts.auto_promote);
+        let opts = parse_args(&["sid".into()]).unwrap();
+        assert!(!opts.auto_promote);
     }
 }

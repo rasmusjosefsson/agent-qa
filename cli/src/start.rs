@@ -153,6 +153,12 @@ fn start(opts: &Opts) -> Result<StartSummary> {
             .with_context(|| format!("agent-browser open {url}"))?;
         summary.opened_url = Some(url.clone());
     }
+    // Record the session's traffic alongside the steps: flush stops it into
+    // `replays/recorded/network.har`, and `replay --mock-from recorded`
+    // replays the scenario hermetically from that recording.
+    if let Err(e) = browser::network_har_start(&opts.session_name) {
+        eprintln!("[v2-record] har start skipped: {e}");
+    }
     Ok(summary)
 }
 

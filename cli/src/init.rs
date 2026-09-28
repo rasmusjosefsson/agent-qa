@@ -45,16 +45,74 @@ const HELLO: &str = r#"{
 
 const GITIGNORE_BLOCK: &str = "# agent-qa run artifacts (scenario.json + baselines/ stay tracked)\ntmp/agent-qa-scenarios/\ntmp/agent-qa-record/\nscenarios/*/replays/\nscenarios/*/shots-diff/\n";
 
+/// A PR gate that replays the whole suite and comments the verdict. Uses the
+/// published package, so this repo only needs scenarios + baselines committed.
+const CI_WORKFLOW: &str = r#"name: agent-qa
+# Replays every scenario under scenarios/ on each pull request and posts a
+# sticky verdict comment. Sharding: uncomment the matrix to split the suite.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  replay:
+    name: replay goldens
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # strategy:
+    #   matrix:
+    #     shard: [1, 2]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: install agent-qa + browser
+        run: |
+          npm install --no-audit --no-fund agent-qa agent-browser
+          ./node_modules/.bin/agent-browser install
+      - name: replay suite
+        id: gate
+        working-directory: .
+        env:
+          AGENT_BROWSER_BIN: ${{ github.workspace }}/node_modules/.bin/agent-browser
+        run: ./node_modules/.bin/agent-qa replay --all --quiet --report /tmp/qa-report.md
+        # sharded: replay --all --shard ${{ matrix.shard }}/2 --quiet --report /tmp/qa-report.md
+      - name: upload run evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-qa-runs
+          path: scenarios/*/replays/
+          retention-days: 14
+      - name: comment verdict on the PR
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          printf '\n\n[run artifacts](%s/artifacts)\n' "$RUN_URL" >> /tmp/qa-report.md
+          gh pr comment ${{ github.event.pull_request.number }} --body-file /tmp/qa-report.md
+"#;
+
 pub fn cli(args: &[String]) -> Result<u8> {
     let mut root: Option<PathBuf> = None;
     let mut force = false;
+    let mut ci = false;
     for a in args {
         match a.as_str() {
             "--force" => force = true,
+            "--ci" => ci = true,
             v if v.starts_with("--") => bail!("init: unknown flag {v:?}"),
             v => {
                 if root.is_some() {
-                    bail!("unexpected positional {v:?}; usage: agent-qa init [dir] [--force]");
+                    bail!(
+                        "unexpected positional {v:?}; usage: agent-qa init [dir] [--force] [--ci]"
+                    );
                 }
                 root = Some(PathBuf::from(v));
             }
@@ -66,11 +124,11 @@ pub fn cli(args: &[String]) -> Result<u8> {
         None => std::env::current_dir().context("cwd")?,
     };
     fs::create_dir_all(&root).with_context(|| format!("create {}", root.display()))?;
-    init_at(&root, force, &mut |line| println!("{line}"))?;
+    init_at(&root, force, ci, &mut |line| println!("{line}"))?;
     Ok(0)
 }
 
-fn init_at(root: &Path, force: bool, note: &mut dyn FnMut(&str)) -> Result<()> {
+fn init_at(root: &Path, force: bool, ci: bool, note: &mut dyn FnMut(&str)) -> Result<()> {
     // 1. agent-qa.toml — pin scenarios under ./scenarios so goldens commit.
     let toml_path = root.join("agent-qa.toml");
     let toml_exists = toml_path.exists();
@@ -120,9 +178,24 @@ fn init_at(root: &Path, force: bool, note: &mut dyn FnMut(&str)) -> Result<()> {
         note("kept    .gitignore        (agent-qa block already present)");
     }
 
+    // 4. --ci — a PR gate that replays the suite.
+    if ci {
+        let wf = root.join(".github/workflows/agent-qa.yml");
+        if !wf.exists() || force {
+            fs::create_dir_all(wf.parent().unwrap())?;
+            fs::write(&wf, CI_WORKFLOW).with_context(|| format!("write {}", wf.display()))?;
+            note("created .github/workflows/agent-qa.yml  (PR gate: replay --all)");
+        } else {
+            note("kept    .github/workflows/agent-qa.yml  (already present)");
+        }
+    }
+
     note("");
     note("next: agent-qa replay hello          # smoke-check the setup");
     note("      agent-qa start \"my flow\"      # record your first scenario");
+    if ci {
+        note("      # .github/workflows/agent-qa.yml replays the suite on every PR");
+    }
     Ok(())
 }
 
@@ -135,14 +208,17 @@ mod tests {
     fn init_writes_toml_hello_and_gitignore_idempotently() {
         let tmp = TempDir::new().unwrap();
         let mut lines = Vec::new();
-        init_at(tmp.path(), false, &mut |l| lines.push(l.to_string())).unwrap();
+        init_at(tmp.path(), false, false, &mut |l| lines.push(l.to_string())).unwrap();
         assert!(tmp.path().join("agent-qa.toml").exists());
         assert!(tmp.path().join("scenarios/hello/scenario.json").exists());
         let gi = fs::read_to_string(tmp.path().join(".gitignore")).unwrap();
         assert!(gi.contains("scenarios/*/replays/"));
         // second run keeps everything
         let mut lines2 = Vec::new();
-        init_at(tmp.path(), false, &mut |l| lines2.push(l.to_string())).unwrap();
+        init_at(tmp.path(), false, false, &mut |l| {
+            lines2.push(l.to_string())
+        })
+        .unwrap();
         assert!(lines2
             .iter()
             .all(|l| !l.starts_with("created") && !l.starts_with("updated") || l.is_empty()));
@@ -153,8 +229,22 @@ mod tests {
         assert_eq!(sc.steps.len(), 2);
         // --force appends [paths] to an existing toml lacking it
         fs::write(tmp.path().join("agent-qa.toml"), "[plugins]\n").unwrap();
-        init_at(tmp.path(), true, &mut |l| lines2.push(l.to_string())).unwrap();
+        init_at(tmp.path(), true, false, &mut |l| lines2.push(l.to_string())).unwrap();
         let toml = fs::read_to_string(tmp.path().join("agent-qa.toml")).unwrap();
         assert!(toml.contains("[paths]") && toml.contains("scenarios_root"));
+    }
+
+    #[test]
+    fn init_ci_writes_pr_gate_workflow() {
+        let tmp = TempDir::new().unwrap();
+        let mut lines = Vec::new();
+        init_at(tmp.path(), false, true, &mut |l| lines.push(l.to_string())).unwrap();
+        let wf = tmp.path().join(".github/workflows/agent-qa.yml");
+        let body = fs::read_to_string(&wf).unwrap();
+        assert!(body.contains("pull_request:") && body.contains("replay --all"));
+        // second run leaves it alone
+        fs::write(&wf, "custom").unwrap();
+        init_at(tmp.path(), false, true, &mut |_| {}).unwrap();
+        assert_eq!(fs::read_to_string(&wf).unwrap(), "custom");
     }
 }
