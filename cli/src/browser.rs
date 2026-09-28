@@ -774,6 +774,10 @@ pub struct CapturedRequest {
     /// POST body when the capture pipeline surfaces it on the list entry.
     #[serde(default)]
     pub post_data: Option<String>,
+    /// WebSocket frames (`{dir,opcode,payload}`) on `cdpws-*` entries —
+    /// absent on plain HTTP entries. Lets claims match frame payloads.
+    #[serde(default)]
+    pub ws_frames: Vec<serde_json::Value>,
 }
 
 fn json_data(verb: &str, stdout: &str) -> Result<serde_json::Value, AgentBrowserError> {
@@ -803,12 +807,23 @@ pub fn network_requests(session: &str) -> Result<Vec<CapturedRequest>, AgentBrow
         .get("requests")
         .cloned()
         .unwrap_or(serde_json::Value::Array(vec![]));
-    serde_json::from_value(list).map_err(|e| AgentBrowserError::NonZero {
-        verb: "network requests".to_string(),
-        exit_code: 0,
-        stderr: format!("unparseable requests array: {e}"),
-        hint: String::new(),
-    })
+    let mut reqs: Vec<CapturedRequest> =
+        serde_json::from_value(list).map_err(|e| AgentBrowserError::NonZero {
+            verb: "network requests".to_string(),
+            exit_code: 0,
+            stderr: format!("unparseable requests array: {e}"),
+            hint: String::new(),
+        })?;
+    // WebSockets are invisible to the daemon's fetch/XHR capture — merge
+    // the entries our own CDP listener saw (`cdpws-*`).
+    if let Ok(ws_entries) = crate::cdp::ws_entries(session) {
+        for e in ws_entries {
+            if let Ok(req) = serde_json::from_value::<CapturedRequest>(e) {
+                reqs.push(req);
+            }
+        }
+    }
+    Ok(reqs)
 }
 
 /// `agent-browser network requests --clear` — drop the session's captured
@@ -821,15 +836,41 @@ pub fn network_clear(session: &str) -> Result<(), AgentBrowserError> {
         ["network", "requests", "--clear"],
         RunOpts::new().capture(),
     )?;
+    // Same for the ws capture — fresh per run. Then (re)arm Network.enable
+    // on the page session so sockets opened during this run are seen.
+    crate::cdp::clear_capture(session);
+    let _ = crate::cdp::enable_network_capture(session);
     Ok(())
 }
 
 /// `agent-browser --json network request <id>` — full record for one
-/// exchange, including `responseBody`.
+/// exchange, including `responseBody`. `cdpws-*` ids are answered from
+/// our own capture (the daemon never saw the socket).
 pub fn network_request(
     session: &str,
     request_id: &str,
 ) -> Result<serde_json::Value, AgentBrowserError> {
+    if request_id.starts_with("cdpws-") {
+        match crate::cdp::ws_detail(session, request_id) {
+            Ok(Some(detail)) => return Ok(detail),
+            Ok(None) => {
+                return Err(AgentBrowserError::NonZero {
+                    verb: "network request".to_string(),
+                    exit_code: 1,
+                    stderr: format!("no websocket entry {request_id}"),
+                    hint: String::new(),
+                })
+            }
+            Err(e) => {
+                return Err(AgentBrowserError::NonZero {
+                    verb: "network request".to_string(),
+                    exit_code: 1,
+                    stderr: format!("cdp ws detail: {e}"),
+                    hint: String::new(),
+                })
+            }
+        }
+    }
     let r = run(
         session,
         ["--json", "network", "request", request_id],

@@ -459,6 +459,7 @@ mod tests {
             resource_type: rt.map(str::to_string),
             mime_type: None,
             post_data: None,
+            ws_frames: vec![],
         }
     }
 

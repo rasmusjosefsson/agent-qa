@@ -411,10 +411,16 @@ subject — matcher fields AND together:
 
 - `urlMatches` — regex on the request URL
 - `operationName` — substring on the URL (GraphQL-style operation names)
-- `method` — `"GET"`/`"POST"`/`"PUT"`/`"PATCH"`/`"DELETE"`/`"HEAD"`
+- `method` — `"GET"`/`"POST"`/`"PUT"`/`"PATCH"`/`"DELETE"`/`"HEAD"`/`"WS"`
+  (`"WS"` selects captured sockets)
 - `postDataContains` — substring on the request's POST body (fetches the
   request detail per candidate — keep a url/method matcher alongside so the
   narrowing runs on a small set)
+- `wsPayloadContains` — substring on any WebSocket frame payload; narrows
+  to `cdpws-*` socket entries. Sockets appear as `method: "WS"`,
+  `status: 101`, `resourceType: "WebSocket"` with `wsFrames[]`
+  (`{dir, opcode, payload}`); `EventSource` streams appear as GETs with
+  `resourceType: "EventSource"`.
 
 `ofKind` picks what the predicate applies to:
 

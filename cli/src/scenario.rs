@@ -317,6 +317,10 @@ pub struct NetworkMatcher {
     /// `network request <id>` per candidate — url/method narrow first).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub post_data_contains: Option<String>,
+    /// Substring match on any WebSocket frame payload — narrows to
+    /// `cdpws-*` socket entries (only they carry frames).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ws_payload_contains: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
