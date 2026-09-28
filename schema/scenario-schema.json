@@ -389,6 +389,8 @@
             "viewport",
             "fileChooser",
             "drag",
+            "mock",
+            "unmock",
             "loop",
             "group",
             "useTemplate"

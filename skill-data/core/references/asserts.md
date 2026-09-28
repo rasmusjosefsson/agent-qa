@@ -31,3 +31,19 @@ Use a raw text locator only when the page has no stable accessible role.
 ```
 
 `record-step` accepts direct `check` drafts only.
+
+## Claim subjects
+
+Every claim is `{"subject": <one of>, "predicate": <pred>}`.
+
+| Subject shape | Asserts on |
+| --- | --- |
+| `{"element": {"role": ..., "name"?}}` or `{"element": {"raw": ...}}` | An accessible element (visibility, text, count, attributes). |
+| `{"url": true}` | The current page URL (`equals`/`contains`/`matches`/`startsWith`/`endsWith`). |
+| `{"file": "downloads/x.pdf"}` | A file saved into the scenario dir by a `download` step (`exists`, `equals` on name, `gt` on byte size, `contains` on content). |
+| `{"dialog": true}` | A pending native dialog (`exists`/`notExists`; string predicates match its message). |
+| `{"shot": "<stepId>"}` | `screenshots/<stepId>.png` pixel-diffed vs `baselines/<stepId>.png` (`matches` + optional `tolerance.pixels`) — see `visual.md`. |
+
+Predicates (camelCase): `isVisible`, `isHidden`, `isEnabled`, `isDisabled`,
+`isChecked`, `isUnchecked`, `exists`, `notExists`, `equals`, `contains`,
+`matches`, `startsWith`, `endsWith`, `gt`, `gte`, `lt`, `lte`, `countEquals`.
