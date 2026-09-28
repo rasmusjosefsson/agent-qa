@@ -3389,6 +3389,8 @@ mod tests {
             har: false,
             mock_from: None,
             offline: false,
+            persona: None,
+            environment: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3453,6 +3455,8 @@ mod tests {
             har: false,
             mock_from: None,
             offline: false,
+            persona: None,
+            environment: None,
         };
         let err = run(&opts).unwrap_err();
         assert!(
