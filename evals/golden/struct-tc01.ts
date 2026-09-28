@@ -74,6 +74,18 @@ await runAuthoredGolden(
         },
       }),
       {
+        id: "s5",
+        intent: "the template-expanded login click stayed under 15s",
+        kind: "check",
+        claim: { subject: { timing: "l3" }, predicate: "lt", value: 15000 },
+      },
+      {
+        id: "s6",
+        intent: "every sort select stayed under 5s",
+        kind: "check",
+        claim: { subject: { timing: "d0" }, predicate: "lt", value: 5000 },
+      },
+      {
         id: "s4",
         intent: "loop ended on za → first item is the Z-side product",
         kind: "check",

@@ -164,6 +164,9 @@ pub fn dispatch_check(
         ClaimSubject::Cookie { cookie } => {
             check_cookie(cookie, &claim.predicate, claim.value.as_ref(), ctx, scope)
         }
+        ClaimSubject::Timing { timing } => {
+            check_timing(timing, &claim.predicate, claim.value.as_ref(), ctx, scope)
+        }
         ClaimSubject::A11y { a11y } => check_a11y(
             a11y,
             &claim.predicate,
@@ -733,6 +736,72 @@ fn check_cookie(
         Json::String(serde_json::from_str(raw).unwrap_or_else(|_| raw.to_string()))
     };
     check_value(&actual, predicate, expected, scope).map_err(|e| anyhow!("cookie {name:?}: {e:#}"))
+}
+
+// ---------- timing ----------
+
+/// `{"timing": "<stepId>"}` — read the run's `events.jsonl` and compare the
+/// latest timed row (status pass/fail, `ms` present) for that step against
+/// `value` via the numeric predicates. `exists`/`notExists` test whether a
+/// timing row exists at all. Requires a run dir — bails outside replay.
+fn check_timing(
+    step_id: &str,
+    predicate: &Predicate,
+    expected: Option<&Json>,
+    ctx: &CheckContext,
+    scope: &mut ValueScope,
+) -> Result<()> {
+    let step_id = substitute_scenario_vars(step_id, scope);
+    let run_dir = ctx
+        .run_dir
+        .ok_or_else(|| anyhow!("timing claims require a replay run directory"))?;
+    let body = std::fs::read_to_string(run_dir.join("events.jsonl")).unwrap_or_default();
+    // Latest terminal row for the step wins — an earlier `running` row for
+    // the same id carries no `ms`.
+    let mut actual: Option<u64> = None;
+    for line in body.lines() {
+        let row: Json = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if row.get("id").and_then(|v| v.as_str()) != Some(step_id.as_str()) {
+            continue;
+        }
+        let status = row.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        if status != "pass" && status != "fail" {
+            continue;
+        }
+        if let Some(ms) = row.get("ms").and_then(|v| v.as_u64()) {
+            actual = Some(ms);
+        }
+    }
+    let n = match (actual, predicate) {
+        (None, Predicate::NotExists | Predicate::IsHidden) => return Ok(()),
+        (None, _) => bail!("timing {step_id:?}: no timed step row in this run's events"),
+        (Some(n), Predicate::Exists | Predicate::IsVisible) => {
+            let _ = n;
+            return Ok(());
+        }
+        (Some(_), Predicate::NotExists | Predicate::IsHidden) => {
+            bail!("timing {step_id:?}: expected no timing row, found one")
+        }
+        (Some(n), _) => n,
+    };
+    let need = expected
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| anyhow!("timing claim with predicate '{predicate:?}' requires a numeric 'value'"))?;
+    let ok = match predicate {
+        Predicate::Equals | Predicate::CountEquals => n == need,
+        Predicate::Gt => n > need,
+        Predicate::Gte => n >= need,
+        Predicate::Lt => n < need,
+        Predicate::Lte => n <= need,
+        other => bail!("timing claim does not support predicate '{other:?}'"),
+    };
+    if !ok {
+        bail!("timing {step_id:?}: {n}ms failed predicate {predicate:?} {need}ms")
+    }
+    Ok(())
 }
 
 // ---------- file ----------
@@ -2420,6 +2489,83 @@ mod tests {
             };
             dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
             clear();
+        }
+    }
+
+    mod timing_claims {
+        use super::*;
+        use tempfile::TempDir;
+
+        fn ctx_with_events(rows: &[serde_json::Value]) -> (TempDir, CheckContext<'static>) {
+            let run = TempDir::new().unwrap();
+            let body: String = rows
+                .iter()
+                .map(|r| serde_json::to_string(r).unwrap() + "\n")
+                .collect();
+            std::fs::write(run.path().join("events.jsonl"), body).unwrap();
+            // Leak the path so the ctx can borrow it past `run`'s move —
+            // test-only, the tempdir itself still cleans up on drop.
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: Box::leak(Box::new(run.path().to_path_buf())),
+                run_dir: Some(Box::leak(Box::new(run.path().to_path_buf()))),
+            };
+            (run, ctx)
+        }
+
+        #[test]
+        fn lt_passes_and_gt_fails_on_step_ms() {
+            let (_t, ctx) = ctx_with_events(&[
+                json!({"idx":1,"id":"s3","status":"running"}),
+                json!({"idx":1,"id":"s3","status":"pass","ms":1420}),
+            ]);
+            let mut scope = ValueScope::default();
+            let fast: Claim = serde_json::from_value(json!({
+                "subject": {"timing": "s3"}, "predicate": "lt", "value": 2000
+            }))
+            .unwrap();
+            dispatch_check(&fast, &ctx, &mut scope, None).unwrap();
+            let slow: Claim = serde_json::from_value(json!({
+                "subject": {"timing": "s3"}, "predicate": "gt", "value": 2000
+            }))
+            .unwrap();
+            let e = dispatch_check(&slow, &ctx, &mut scope, None).unwrap_err();
+            assert!(e.to_string().contains("1420ms"), "got: {e}");
+        }
+
+        #[test]
+        fn missing_step_bails_and_not_exists_passes() {
+            let (_t, ctx) = ctx_with_events(&[
+                json!({"idx":1,"id":"s0","status":"pass","ms":100}),
+            ]);
+            let mut scope = ValueScope::default();
+            let missing: Claim = serde_json::from_value(json!({
+                "subject": {"timing": "s9"}, "predicate": "lt", "value": 1000
+            }))
+            .unwrap();
+            assert!(dispatch_check(&missing, &ctx, &mut scope, None)
+                .unwrap_err()
+                .to_string()
+                .contains("no timed step row"));
+            let absent: Claim = serde_json::from_value(json!({
+                "subject": {"timing": "s9"}, "predicate": "notExists"
+            }))
+            .unwrap();
+            dispatch_check(&absent, &ctx, &mut scope, None).unwrap();
+        }
+
+        #[test]
+        fn latest_terminal_row_wins_over_running() {
+            let (_t, ctx) = ctx_with_events(&[
+                json!({"id":"s1","status":"pass","ms":900}),
+                json!({"id":"s1","status":"running"}),
+            ]);
+            let mut scope = ValueScope::default();
+            let c: Claim = serde_json::from_value(json!({
+                "subject": {"timing": "s1"}, "predicate": "equals", "value": 900
+            }))
+            .unwrap();
+            dispatch_check(&c, &ctx, &mut scope, None).unwrap();
         }
     }
 
