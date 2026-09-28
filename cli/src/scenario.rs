@@ -165,6 +165,14 @@ pub enum Verb {
     /// `DataTransfer` plus the pointer/mouse sequence pointer-based
     /// drag libraries listen for.
     Drag,
+    /// Stub network calls: `params` = `{ "url": "<glob>", "status": <n>,
+    /// "json": {...} | "body": "…", "delayMs": <n> }`. Wraps fetch + XHR in
+    /// the live page; registered rules re-apply automatically after
+    /// goto/reload/back/forward (navigation wipes the JS world).
+    Mock,
+    /// Remove mock rules: `params.url` (optional) drops that rule, absent
+    /// clears all.
+    Unmock,
     #[serde(rename = "loop")]
     Loop,
     Group,
@@ -276,6 +284,10 @@ pub struct NetworkMatcher {
     pub operation_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub method: Option<HttpMethod>,
+    /// Substring match on the request's POST body (fetched via
+    /// `network request <id>` per candidate — url/method narrow first).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_data_contains: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

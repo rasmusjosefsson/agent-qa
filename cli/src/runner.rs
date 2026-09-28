@@ -119,6 +119,21 @@ pub struct RunOptions {
     /// at the recorded origin is rewritten to this origin. See
     /// [`crate::scenario::retarget_origin`].
     pub base_url: Option<String>,
+    /// `--freeze <iso>` — pin `Date.now()`/`new Date()` to the instant and
+    /// replace `Math.random` with a seeded LCG via a page init script, so
+    /// rendered timestamps and random ordering can't flake a golden diff.
+    pub freeze: Option<String>,
+    /// `--har` — record a HAR file for the run via `agent-browser network
+    /// har start|stop` and write `<run>/network.har`. Unlike network.json
+    /// (urls + statuses) a HAR carries response bodies — the artifact you
+    /// open in DevTools/Charles when a claim needs the payload.
+    pub har: bool,
+    /// `--mock-from <runId>` — seed mock rules from that run's
+    /// `network.har` (recorded via `--har`): the app's fetch/XHR calls get
+    /// the recorded status + body instead of the real backend. Fails the
+    /// run when the HAR is absent — a partial stub silently hitting the
+    /// real backend is worse than no run.
+    pub mock_from: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -357,6 +372,39 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     crate::browser::set_headed_mode(opts.headed);
     let connection = crate::browser::BrowserConnection::resolve()?;
     crate::browser::set_connection(&connection);
+    // A reused session name may carry mock rules from a prior scenario
+    // (`replay --all` suites, workbench runs) — start clean.
+    crate::mock::clear(&opts.session_name, None);
+
+    // The browser's request capture is per-session: a replayed session
+    // still holds the previous run's traffic. Clear it so this run's
+    // network.json (and {"network"} claims) sees only its own requests.
+    // Best-effort — a session that doesn't exist yet just warns.
+    if !opts.dry_run {
+        if let Err(e) = crate::browser::network_clear(&opts.session_name) {
+            eprintln!("[v2-replay] network log clear skipped: {e}");
+        }
+    }
+
+    // The browser's request capture is per-session: a replayed session
+    // still holds the previous run's traffic. Clear it so this run's
+    // network.json (and {"network"} claims) sees only its own requests.
+    // Best-effort — a session that doesn't exist yet just warns.
+    if !opts.dry_run {
+        if let Err(e) = crate::browser::network_clear(&opts.session_name) {
+            eprintln!("[v2-replay] network log clear skipped: {e}");
+        }
+    }
+
+    // The browser's request capture is per-session: a replayed session
+    // still holds the previous run's traffic. Clear it so this run's
+    // network.json (and {"network"} claims) sees only its own requests.
+    // Best-effort — a session that doesn't exist yet just warns.
+    if !opts.dry_run {
+        if let Err(e) = crate::browser::network_clear(&opts.session_name) {
+            eprintln!("[v2-replay] network log clear skipped: {e}");
+        }
+    }
 
     // 1. Load + validate.
     let (scenario_file, scenario_dir) = resolve_source(&opts.source)?;
@@ -434,6 +482,23 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         Some(audit_params)
     };
 
+    // Determinism layer: `--freeze <iso>` pins the clock + RNG via a page
+    // init script (fresh sessions get it on every navigation; the live
+    // eval covers a warm session's current document).
+    if let Some(at) = &opts.freeze {
+        if opts.dry_run {
+            eprintln!("[v2-replay] --freeze ignored under --dry-run");
+        } else {
+            let js_path = run.run_root.join("freeze.js");
+            fs::write(&js_path, freeze_js(at))
+                .with_context(|| format!("write {}", js_path.display()))?;
+            std::env::set_var("AGENT_BROWSER_INIT_SCRIPTS", &js_path);
+            let src = fs::read_to_string(&js_path)?;
+            let _ = browser::eval_expression(&opts.session_name, &src);
+            eprintln!("[v2-replay] freeze {at} → {}", js_path.display());
+        }
+    }
+
     // 5. env.open setup. Skipped under --dry-run.
     //
     // A setup failure (e.g. a `useProfile` op whose profile bootstrap can't
@@ -442,7 +507,37 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     // run had only audit.json and the viewer showed it "in flight" forever (a
     // ghost). Now we finalise a done/failed status + audit first, so the run
     // surfaces as FAIL with the setup error, then propagate.
+    // Seed mock stubs BEFORE env.open launches the session: rules written
+    // as a page init script install before the *first* navigation, so even
+    // page-load fetches are stubbed. A warm session that already exists
+    // ignores init scripts — the post-navigation re-apply still covers its
+    // in-page XHR/fetch traffic.
+    if let Some(from) = &opts.mock_from {
+        if opts.dry_run {
+            eprintln!("[v2-replay] --mock-from ignored under --dry-run");
+        } else {
+            let n = crate::mock::seed_from_har(&opts.session_name, &scenario_dir, from)
+                .with_context(|| format!("--mock-from {from:?}"))?;
+            let js_path = crate::mock::write_init_script(&opts.session_name, &run.run_root)
+                .with_context(|| "--mock-from: write init script")?;
+            // Children spawned from this process inherit the var; the
+            // daemon registers the script on session launch.
+            std::env::set_var("AGENT_BROWSER_INIT_SCRIPTS", &js_path);
+            eprintln!(
+                "[v2-replay] mock-from {from}: {n} stub(s) seeded (init script {})",
+                js_path.display()
+            );
+        }
+    }
+
     let mut scope = ValueScope::new(resolved_inputs);
+    // HAR recording starts before env.open so the open-phase navigation is
+    // part of the captured traffic.
+    if opts.har && !opts.dry_run {
+        if let Err(e) = crate::browser::network_har_start(&opts.session_name) {
+            eprintln!("[v2-replay] har start skipped: {e}");
+        }
+    }
     if !opts.dry_run {
         if let Some(env) = &scenario.env {
             if let Some(open_ops) = &env.open {
@@ -740,6 +835,13 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 }
                 Step::Check { claim, .. } => dispatch_check(claim, &check_ctx, &mut scope, None),
             };
+            // Navigation wipes the page's JS world — reinstall registered
+            // network mocks after navigation verbs so stubs survive loads.
+            if result.is_ok() && crate::verbs::is_navigation_step(&patched_step) {
+                if let Err(e) = crate::mock::reapply_if_any(&opts.session_name) {
+                    eprintln!("[v2-replay] mock re-apply failed (continuing): {e}");
+                }
+            }
             // Remember the last click as a potential popup opener for the
             // transient-popup recovery above.
             if crate::verbs::is_click_step(&patched_step) {
@@ -875,6 +977,32 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             },
         ) {
             eprintln!("[v2-replay] status.json finalise failed: {e}");
+        }
+
+        // Persist the session's captured network requests as
+        // <run>/network.json — the traffic list {"network"} claims queried
+        // mid-run, kept for post-hoc review/diff. Best-effort, and only
+        // when the run actually executed (a dry-run session has no traffic).
+        if !opts.dry_run {
+            crate::netlog::write_network_log_warn(&run, &opts.session_name);
+        }
+
+        // Flush the HAR recording before env.close (teardown traffic —
+        // profile saves, cleanup navigations — isn't part of the scenario's
+        // network evidence).
+        if opts.har {
+            let dest = run.run_root.join("network.har");
+            if let Err(e) = crate::browser::network_har_stop(&opts.session_name, &dest) {
+                eprintln!("[v2-replay] har stop skipped: {e}");
+            }
+        }
+
+        // Persist the session's captured network requests as
+        // <run>/network.json — the traffic list {"network"} claims queried
+        // mid-run, kept for post-hoc review/diff. Best-effort, and only
+        // when the run actually executed (a dry-run session has no traffic).
+        if !opts.dry_run {
+            crate::netlog::write_network_log_warn(&run, &opts.session_name);
         }
     }
 
@@ -1565,6 +1693,12 @@ fn stabilize_visual(session: &str, cap_ms: u64) {
             session,
             "(() => { const imgs = Array.from(document.images || []).filter(i => !i.complete).length; return JSON.stringify({fonts: document.fonts ? document.fonts.status : 'loaded', imgs, ready: document.readyState}); })()",
         );
+        // In-flight fetches don't show up in readyState/images — a lazy data
+        // load can still repaint after the screenshot. Require the session's
+        // request log to be quiet too.
+        let pending = browser::network_requests(session)
+            .map(|rs| rs.iter().filter(|r| r.status.is_none()).count())
+            .unwrap_or(0);
         match status {
             Ok(raw) => {
                 // eval stdout may wrap the JSON in a quoted string — peel once.
@@ -1577,7 +1711,7 @@ fn stabilize_visual(session: &str, cap_ms: u64) {
                             && v.get("ready").and_then(|r| r.as_str()) == Some("complete")
                     })
                     .unwrap_or(false);
-                if settled {
+                if settled && pending == 0 {
                     return;
                 }
             }
@@ -1588,6 +1722,34 @@ fn stabilize_visual(session: &str, cap_ms: u64) {
         }
         thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// The `--freeze` init script: pin `Date.now`/`new Date()` to `at` and
+/// replace `Math.random` with a seeded LCG (mulberry32-style) — same
+/// instant, same random stream, every run.
+fn freeze_js(at: &str) -> String {
+    format!(
+        r#"(() => {{
+  const T = Date.parse({});
+  const R = Date;
+  class F extends R {{
+    constructor(...a) {{ super(...(a.length ? a : [T])); }}
+    static now() {{ return T; }}
+    static parse(s) {{ return R.parse(s); }}
+    static UTC(...a) {{ return R.UTC(...a); }}
+  }}
+  window.Date = F;
+  let s = 0x9E3779B9;
+  Math.random = () => {{
+    s = (s + 0x6D2B79F5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }};
+}})()"#,
+        serde_json::to_string(at).unwrap_or_else(|_| "\"2026-01-01\"".into())
+    )
 }
 
 /// Whether the scenario contains a `check` claim on the `shot` subject
@@ -1991,6 +2153,19 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
     if runs > 1 && retry > 1 {
         bail!("--runs and --retry are mutually exclusive (repeat-N vs until-pass)");
     }
+    // AGENT_QA_REPLAY_ARGS: whitespace-separated flags applied BEFORE the
+    // command line, so an explicit argv flag still overrides it. Lets
+    // harnesses (golden libs, CI jobs) force flags like --har without
+    // editing every replay call site.
+    if let Ok(extra) = std::env::var("AGENT_QA_REPLAY_ARGS") {
+        let extra = extra.trim();
+        if !extra.is_empty() {
+            let mut merged: Vec<String> = extra.split_whitespace().map(str::to_string).collect();
+            merged.extend(filtered);
+            filtered = merged;
+            eprintln!("[v2-replay] AGENT_QA_REPLAY_ARGS applied: {extra}");
+        }
+    }
     Ok(CliFlags {
         filtered,
         runs,
@@ -2064,6 +2239,9 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut until_step: Option<String> = None;
     let mut update_baselines = false;
     let mut base_url: Option<String> = None;
+    let mut freeze: Option<String> = None;
+    let mut har = false;
+    let mut mock_from: Option<String> = None;
     let mut input_overrides: BTreeMap<String, String> = BTreeMap::new();
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
@@ -2106,6 +2284,13 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             "--base-url" => base_url = it.next().cloned().or_else(|| bail_missing("--base-url")),
             s if s.starts_with("--base-url=") => {
                 base_url = Some(s["--base-url=".len()..].to_string())
+            }
+            "--freeze" => freeze = it.next().cloned().or_else(|| bail_missing("--freeze")),
+            s if s.starts_with("--freeze=") => freeze = Some(s["--freeze=".len()..].to_string()),
+            "--har" => har = true,
+            "--mock-from" => mock_from = it.next().cloned().or_else(|| bail_missing("--mock-from")),
+            s if s.starts_with("--mock-from=") => {
+                mock_from = Some(s["--mock-from=".len()..].to_string())
             }
             "--param" | "-p" => {
                 let pair = it
@@ -2162,6 +2347,9 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         until_step,
         update_baselines,
         base_url: normalize_base_url(base_url)?,
+        freeze,
+        har,
+        mock_from,
     })
 }
 
@@ -2241,7 +2429,7 @@ Usage:
                   [--no-sidecars] [--quiet | -q] [--plain]
                   [--tag <label>] [--output-audit <path>]
                   [--from <stepId>] [--until <stepId>]
-                  [--update-baselines] [--base-url <origin>]
+                  [--update-baselines] [--freeze <iso>] [--base-url <origin>]
                   [--runs <N>]
 
 Loads + validates the scenario, mints a run id, prepares
@@ -2308,6 +2496,25 @@ replays/latest.txt.
                          intentional UI changes are the re-mint case.
                          Skips with a warning when the run captured no
                          screenshots (e.g. --no-sidecars).
+--har                    Record a HAR file for the run and write
+                         <sid>/replays/<runId>/network.har — request +
+                         response bodies for DevTools/Charles-level
+                         inspection. network.json (when present) stays
+                         the lightweight status list; the HAR is the
+                         deep dive.
+--mock-from <runId>      Seed network stubs from <runId>'s
+                         network.har (record it with --har first): the
+                         page's fetch/XHR calls get the recorded
+                         status+body — a hermetic, offline-capable
+                         replay. Rules install via a page init script
+                         on fresh sessions (covers page-load fetches),
+                         else re-apply after every navigation
+--freeze <iso>           Pin Date.now()/new Date() to <iso> and replace
+                         Math.random with a seeded LCG via a page init
+                         script — rendered timestamps and random ordering
+                         can't flake a golden diff. Fresh sessions apply
+                         it on every navigation; warm sessions get the
+                         current document only
 --base-url <origin>      Retarget the run onto another deploy (e.g. a
                          PR preview): every env nav url + goto literal
                          rooted at the recorded origin is rewritten to
@@ -2455,6 +2662,9 @@ mod tests {
             until_step: None,
             update_baselines: false,
             base_url: None,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         let summary = run(&opts).unwrap();
         assert_eq!(summary.total, 1);
@@ -2532,6 +2742,9 @@ mod tests {
             until_step: None,
             update_baselines: false,
             base_url: None,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2590,6 +2803,9 @@ mod tests {
             until_step: None,
             update_baselines: false,
             base_url: None,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2629,6 +2845,9 @@ mod tests {
             until_step: None,
             update_baselines: false,
             base_url: None,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         let err = format!("{:#}", run(&opts).unwrap_err());
         assert!(err.contains("schema error"), "got: {err}");
@@ -2693,6 +2912,9 @@ esac\nexit 0\n",
             until_step: None,
             update_baselines: false,
             base_url: None,
+            freeze: None,
+            har: false,
+            mock_from: None,
         }
     }
 
@@ -2945,6 +3167,9 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             base_url: None,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3007,6 +3232,9 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             base_url: None,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3211,6 +3439,16 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         // malformed json → never matches
         fs::write(sid.join("scenario.json"), b"not json").unwrap();
         assert!(!scenario_has_any_tag(root, "s1", &smoke));
+    }
+
+    #[test]
+    fn replay_args_env_applies_and_argv_overrides() {
+        std::env::set_var("AGENT_QA_REPLAY_ARGS", "--har --dry-run");
+        let flags = parse_args_cli(&["./j.json".into()]).unwrap();
+        std::env::remove_var("AGENT_QA_REPLAY_ARGS");
+        let opts = parse_args(&flags.filtered).unwrap();
+        assert!(opts.har, "--har from AGENT_QA_REPLAY_ARGS applied");
+        assert!(opts.dry_run, "--dry-run from the env applied");
     }
 
     #[test]
@@ -3640,6 +3878,9 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             base_url: None,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3726,6 +3967,9 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             base_url: None,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3860,6 +4104,27 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
     }
 
     #[test]
+    fn parse_args_freeze_flag() {
+        let opts = parse_args(&["x".into(), "--freeze".into(), "2026-01-01".into()]).unwrap();
+        assert_eq!(opts.freeze.as_deref(), Some("2026-01-01"));
+        let opts = parse_args(&["x".into(), "--freeze=2026-06-30T00:00Z".into()]).unwrap();
+        assert_eq!(opts.freeze.as_deref(), Some("2026-06-30T00:00Z"));
+        let opts = parse_args(&["x".into()]).unwrap();
+        assert_eq!(opts.freeze, None);
+    }
+
+    #[test]
+    fn freeze_js_pins_clock_and_seeds_rng() {
+        let js = freeze_js("2026-01-01T00:00:00Z");
+        assert!(
+            js.contains("Date.parse(\"2026-01-01T00:00:00Z\")"),
+            "got: {js}"
+        );
+        assert!(js.contains("static now()"), "got: {js}");
+        assert!(js.contains("Math.random ="), "got: {js}");
+    }
+
+    #[test]
     fn render_summary_formats_pass_and_fail() {
         let s = RunSummary {
             passed: 3,
@@ -3923,6 +4188,9 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             base_url: None,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -4011,6 +4279,9 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             base_url: None,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         // The run bails at the failing step; events/status are written
         // before the bail.
@@ -4078,6 +4349,9 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             base_url: None,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         run(&opts).unwrap();
 
@@ -4123,6 +4397,9 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             base_url: None,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         run(&opts).unwrap();
         let run_dir = run_dir_for(&jdir);
@@ -4305,6 +4582,9 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             base_url: None,
+            freeze: None,
+            har: false,
+            mock_from: None,
         };
         assert_eq!(resolve_progress_mode(&mk(true, false)), ProgressMode::Quiet);
         // quiet wins over plain.

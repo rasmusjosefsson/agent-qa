@@ -702,6 +702,9 @@ pub struct CapturedRequest {
     pub resource_type: Option<String>,
     #[serde(default)]
     pub mime_type: Option<String>,
+    /// POST body when the capture pipeline surfaces it on the list entry.
+    #[serde(default)]
+    pub post_data: Option<String>,
 }
 
 fn json_data(verb: &str, stdout: &str) -> Result<serde_json::Value, AgentBrowserError> {
@@ -739,6 +742,19 @@ pub fn network_requests(session: &str) -> Result<Vec<CapturedRequest>, AgentBrow
     })
 }
 
+/// `agent-browser network requests --clear` — drop the session's captured
+/// request log. Called at run start so a replayed session's network.json
+/// covers this run only (the capture is per-session and otherwise
+/// accumulates across replays sharing a session).
+pub fn network_clear(session: &str) -> Result<(), AgentBrowserError> {
+    run(
+        session,
+        ["network", "requests", "--clear"],
+        RunOpts::new().capture(),
+    )?;
+    Ok(())
+}
+
 /// `agent-browser --json network request <id>` — full record for one
 /// exchange, including `responseBody`.
 pub fn network_request(
@@ -751,6 +767,28 @@ pub fn network_request(
         RunOpts::new().capture(),
     )?;
     json_data("network request", &r.stdout)
+}
+
+/// `agent-browser network har start` — begin a HAR recording on the
+/// session. The daemon keeps accumulating entries until `har stop`.
+pub fn network_har_start(session: &str) -> Result<(), AgentBrowserError> {
+    run(
+        session,
+        ["network", "har", "start"],
+        RunOpts::new().capture(),
+    )?;
+    Ok(())
+}
+
+/// `agent-browser network har stop <path>` — flush the recording to
+/// `path` (a HAR 1.2 file) and end it.
+pub fn network_har_stop(session: &str, dest: &Path) -> Result<(), AgentBrowserError> {
+    run(
+        session,
+        ["network", "har", "stop", &dest.to_string_lossy()],
+        RunOpts::new().capture(),
+    )?;
+    Ok(())
 }
 
 pub fn open(session: &str, url: &str) -> Result<(), AgentBrowserError> {
@@ -875,6 +913,53 @@ pub fn wait_for_resource(
             });
         }
         std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+}
+
+/// `wait idle` — block until the session's captured request log shows zero
+/// in-flight exchanges (status-less entries) for `idle_ms` straight, or
+/// fail at `timeout_ms` listing what's still pending. Complements
+/// `wait url` (one named request) — this waits for quiet, the stability
+/// gate before a screenshot or a DOM read after async work.
+pub fn wait_for_idle(
+    session: &str,
+    idle_ms: u64,
+    timeout_ms: u64,
+) -> Result<(), AgentBrowserError> {
+    let start = std::time::Instant::now();
+    let mut last_busy = std::time::Instant::now();
+    loop {
+        let pending: Vec<String> = network_requests(session)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|r| r.status.is_none())
+            .map(|r| r.url)
+            .collect();
+        if pending.is_empty() {
+            if last_busy.elapsed().as_millis() as u64 >= idle_ms {
+                return Ok(());
+            }
+        } else {
+            last_busy = std::time::Instant::now();
+        }
+        if start.elapsed().as_millis() as u64 >= timeout_ms {
+            return Err(AgentBrowserError::NonZero {
+                verb: "wait-idle".to_string(),
+                exit_code: 1,
+                stderr: format!(
+                    "network never went idle within {timeout_ms}ms — {} request(s) still pending: {}",
+                    pending.len(),
+                    pending
+                        .iter()
+                        .take(5)
+                        .map(|u| u.chars().take(120).collect::<String>())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                hint: String::new(),
+            });
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
 
