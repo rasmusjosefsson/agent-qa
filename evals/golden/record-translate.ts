@@ -188,6 +188,9 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           // args[0] is the full `tab` subcommand tail: "new <url>", "list",
           // "close <ref>", or "<ref>" to switch.
           return doStep(intent, { verb: "tab", value: literal(args[0]) });
+        case "seedState":
+          // do/state seeding: args[0] = params ({cookies:[...], localStorage:{...}, ...})
+          return doStep(intent, { verb: "state", params: args[0] });
         case "clickNthOption":
           // args[0] = scoped listbox css, args[1] = 1-based option index
           return doStep(intent, {
@@ -373,6 +376,22 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
             { a11y: args[0] ?? true },
             args[1] ?? "notExists",
             args[2],
+          );
+        case "cookiePresent":
+          // args[0] = cookie name; args[1] === false flips to expecting it
+          // absent (e.g. after logout).
+          return checkStep(
+            intent,
+            { cookie: args[0] },
+            args[1] === false ? "notExists" : "exists",
+          );
+        case "storagePresent":
+          // args[0] = key or {key, scope:"local"|"session"}; args[1] ===
+          // false flips to expecting the key absent.
+          return checkStep(
+            intent,
+            { storage: args[0] },
+            args[1] === false ? "notExists" : "exists",
           );
         default:
           throw new Error(`record-step translate: unknown assert kind ${String(p.kind)}`);

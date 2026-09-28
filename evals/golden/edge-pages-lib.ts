@@ -62,6 +62,10 @@ export interface EdgeGolden extends GoldenContext {
   dialogDismiss(intent: string): Promise<void>;
   assertDialogText(text: string, intent: string): Promise<void>;
   assertDialogClosed(intent: string): Promise<void>;
+  waitMs(ms: number, intent: string): Promise<void>;
+  clickSelectorForce(selector: string, intent: string): Promise<void>;
+  seedCookie(name: string, value: string, intent: string): Promise<void>;
+  gotoUrl(url: string, intent: string): Promise<void>;
   waitSelector(selector: string, intent: string): Promise<void>;
   waitSelectorAbsent(selector: string, intent: string): Promise<void>;
   waitSelectorText(selector: string, text: string, intent: string): Promise<void>;
@@ -75,6 +79,9 @@ export interface EdgeGolden extends GoldenContext {
   assertPageError(matcher: true | { text?: string; url?: string }, predicate: string, value: string | undefined, intent: string): Promise<void>;
   assertNetworkStatus(matcher: Record<string, unknown>, predicate: string, value: string | undefined, intent: string): Promise<void>;
   assertNetworkFired(matcher: Record<string, unknown>, mustFire: boolean, intent: string): Promise<void>;
+  assertCookie(name: string, expectPresent: boolean, intent: string): Promise<void>;
+  assertStorage(keyOrMatcher: string | { key: string; scope?: string }, expectPresent: boolean, intent: string): Promise<void>;
+  assertStyle(selector: string, cssProperty: string, expected: string, intent: string): Promise<void>;
   a11yAudit(matcher: true | Record<string, unknown>, predicate: string, value: number | undefined, intent: string): Promise<void>;
 }
 
@@ -249,6 +256,28 @@ export async function runEdgeGolden(
     async assertDialogClosed(stepIntent) {
       await record(ctx, "assert", { kind: "dialogClosed", args: [], intent: stepIntent });
     },
+    async gotoUrl(url, stepIntent) {
+      await run(ctx, `open ${url}`, [ctx.agentBrowser, "--session", ctx.session, "open", url]);
+      await record(ctx, "action", { method: "navigate", args: [url], intent: stepIntent });
+    },
+    async seedCookie(name, value, stepIntent) {
+      // do/state seeds via document.cookie — drive the live browser the
+      // same way so the recorded step replays what the run observed.
+      await run(ctx, `seedCookie ${name}`, [ctx.agentBrowser, "--session", ctx.session, "eval", `document.cookie=${JSON.stringify(`${name}=${value}; path=/`)}`]);
+      await record(ctx, "action", { method: "seedState", args: [{ cookies: [{ name, value, path: "/" }] }], intent: stepIntent });
+    },
+    async clickSelectorForce(selector, stepIntent) {
+      // Live-drive via el.click() — replay already activates selectors with
+      // a native DOM click, so this keeps record/replay identical while
+      // dodging agent-browser's live covered-element refusal (e.g. a link
+      // whose click point sits under a still-animating drawer header).
+      await run(ctx, `jsclick ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "eval", `document.querySelector(${JSON.stringify(selector)}).click()`]);
+      await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
+    },
+    async waitMs(ms, stepIntent) {
+      await Bun.sleep(ms);
+      await record(ctx, "wait", { condition: { kind: "duration", ms }, intent: stepIntent });
+    },
     async waitSelector(selector, stepIntent) {
       await run(ctx, `wait ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "wait", selector]);
       await record(ctx, "wait", { condition: { kind: "selector", selector }, intent: stepIntent });
@@ -308,6 +337,20 @@ export async function runEdgeGolden(
       await run(ctx, "reload", [ctx.agentBrowser, "--session", ctx.session, "reload"]);
       await record(ctx, "action", { method: "reloadPage", args: [], intent: stepIntent });
     },
+    async assertCookie(name, expectPresent, stepIntent) {
+      await record(ctx, "assert", {
+        kind: "cookiePresent",
+        args: [name, expectPresent],
+        intent: stepIntent,
+      });
+    },
+    async assertStorage(keyOrMatcher, expectPresent, stepIntent) {
+      await record(ctx, "assert", {
+        kind: "storagePresent",
+        args: [keyOrMatcher, expectPresent],
+        intent: stepIntent,
+      });
+    },
     async assertNetworkStatus(matcher, predicate, value, stepIntent) {
       await record(ctx, "assert", {
         kind: "networkStatus",
@@ -321,6 +364,9 @@ export async function runEdgeGolden(
         args: [matcher, mustFire],
         intent: stepIntent,
       });
+    },
+    async assertStyle(selector, cssProperty, expected, stepIntent) {
+      await record(ctx, "assert", { kind: "elementAttribute", args: [selector, `style:${cssProperty}`, "equals", expected], intent: stepIntent });
     },
     async a11yAudit(matcher, predicate, value, stepIntent) {
       await record(ctx, "assert", {

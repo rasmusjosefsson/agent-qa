@@ -206,6 +206,10 @@
     "golden:sauce:s02": "bun golden/sauce-tc02.ts",
     "golden:sauce:s03": "bun golden/sauce-tc03.ts",
     "golden:sauce:s04": "bun golden/sauce-tc04.ts",
+    "golden:sauce:s05": "bun golden/sauce-tc05.ts",
+    "golden:sauce:s06": "bun golden/sauce-tc06.ts",
+    "golden:edge:tc35": "bun golden/edge-tc35.ts",
+    "selftest:accept": "bun selftest/accept.ts",
     "golden:frame:tc01": "bun golden/frame-tc01.ts"
   },
   "devDependencies": {
