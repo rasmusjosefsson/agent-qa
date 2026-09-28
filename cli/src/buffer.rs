@@ -481,6 +481,28 @@ mod tests {
     }
 
     #[test]
+    fn delete_rewires_shot_claim_refs() {
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var(crate::paths::RECORD_DIR_ENV, tmp.path());
+        let mut state = state();
+        state.steps = serde_json::from_value(serde_json::json!([
+            {"id":"s0","intent":"drop","kind":"do","verb":"reload"},
+            {"id":"s1","intent":"capture","kind":"do","verb":"reload"},
+            {"id":"s2","intent":"assert visual","kind":"check",
+             "claim":{"subject":{"shot":"s1"},"predicate":"matches"}}
+        ]))
+        .unwrap();
+        state.save().unwrap();
+        // Removing s0 renumbers s1→s0; the shot claim must follow it.
+        cmd_delete(&["0".into()]).unwrap();
+        let steps = RecorderState::load_active().unwrap().steps;
+        let check = serde_json::to_value(&steps[1]).unwrap();
+        assert_eq!(check["claim"]["subject"]["shot"], "s0");
+        std::env::remove_var(crate::paths::RECORD_DIR_ENV);
+    }
+
+    #[test]
     fn delete_rewires_refs_to_survivors() {
         let _guard = lock_env();
         let tmp = TempDir::new().unwrap();

@@ -64,6 +64,22 @@ values like `"{{mobileWidth}}"` are resolved through scenario vars. Combine with
 an element claim afterwards to assert responsive behaviour (e.g. a hamburger
 menu that only renders below a breakpoint).
 
+### Waits
+
+`do/wait` picks its semantics from `params`:
+
+- `{"ms": 250}` — fixed delay.
+- `{"until": "load" | "networkidle" | "domcontentloaded"}` — wait for a load
+  state.
+- `{"url": "*/api/users*", "timeoutMs": 8000}` — poll the Resource Timing API
+  until a request whose URL matches the glob completes (`*` = wildcard; plain
+  substring also works). Use this to gate a check on the XHR that feeds the
+  UI instead of guessing a fixed delay — e.g. click a filter, wait for the
+  results call, then assert the table. `timeoutMs` defaults to 10s and the
+  step fails when nothing matching lands in time.
+- No `params` — soft `networkidle` wait (use `url` when the app keeps
+  long-lived connections open and never goes idle).
+
 ### Native dialogs (alert/confirm/prompt)
 
 Resolve a pending native dialog with a `dialog` do-step:
@@ -199,5 +215,33 @@ after unpredictable navigations. `do/unmock` removes a rule
 `{"network": {"urlMatches": ...}}` claims to prove the stub fired, or a
 `{"shot": ...}` claim to golden the error UI.
 
+### Console claims
+
+Assert on messages the page logged this session with the `{"console"}`
+subject — the canonical use is gating a golden path on "no JS errors":
+
+```json
+{
+  "id": "s9",
+  "intent": "the page logged no console errors",
+  "kind": "check",
+  "claim": {
+    "subject": { "console": { "type": "error" } },
+    "predicate": "notExists"
+  }
+}
+```
+
+The matcher filters which messages count: `{"console": true}` → all,
+`{"type": "error"|"warn"|"log"|...}` → that level, `{"text": "<substring>"}`
+→ text contains it. `exists`/`notExists` check presence of a matching
+message, `countEquals`/`gt`/`gte`/`lt`/`lte` compare the count to `value`,
+and text predicates (`equals`/`contains`/`matches`/`startsWith`/`endsWith`)
+pass when ANY matching message's text satisfies them.
+
+Messages accumulate for the whole session — on a reused session, entries
+from earlier steps count too.
+
+>>>>>>> origin/main
 Use `agent-qa scenario check <scenario.json>` before replay. It validates the
 schema and runs the scenario linter.

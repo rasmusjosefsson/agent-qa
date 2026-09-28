@@ -7,6 +7,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 
 | Verb | What it does |
 | --- | --- |
+| `init [dir] [--force]` | Bootstrap a directory: `agent-qa.toml` (`scenarios_root = ./scenarios`), a `scenarios/hello` smoke scenario, `.gitignore` for run artifacts. Idempotent. |
 | `start` | Mint a new scenario directory + skeleton `scenario.json` |
 | `record-step` | Append one step to the in-flight scenario via the recorder |
 | `record pause \| resume \| status` | Freeze capture while you set up page state — record append paths (`record-step`, `smart-click`, `fill-unique`, the editor's auto-record) drop steps while paused instead of writing them. `status --json` emits `{sid, intent, session, paused, steps, startedAt}`. |
@@ -47,7 +48,22 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `audit flaky <sid>` | Flag steps whose outcome interleaves pass/fail across runs — the flake signature (vs `heal-chronic`, which flags locator churn). Flags: `--min-flips N` (default 2), `--min-runs N` (default 3), `--json` |
 | `audit slow <sid>` | Flag steps whose duration regressed — every one of the last `--recent` pass runs (default 2) exceeds the earlier-run median by `+--pct%` (default 50) and `--min-ms` (default 250). Pass rows only; a fail's `ms` is the timeout budget, not step cost. |
 | `audit health` | Cross-scenario rollup of `flaky` + `slow` + `heal-chronic` at their defaults — one row per scenario with silent degradation, none when the suite is quiet. `--json` emits one compact line (the workbench consumes it to badge scenario rows). |
+| `audit trend <sid>` | Outcome + duration trend over the scenario's runs — pass%, median secs, a `✓/✗` outcome line, and a duration sparkline. `--limit N` (default: all runs) windows to the latest N; `--json` emits the same data structured. |
+| `audit cluster` | Group step failures across every scenario's runs by normalized error signature (quoted literals + digit runs stripped) — one root cause across N runs reads as one cluster with its member list. `--min-size N` (default 2) hides lone failures; `--json` for the structured list. |
 | `audit verdict <sid> <runId \| latest>` | One-word triage for the run: `PASS` (exit 0) green and clean, `FIX` (exit 2) green but self-corrected (auto-heals or value-rejections — review heal.jsonl + promote), `BLOCK` (exit 1) failed. `--json` for the structured verdict incl. the offending stepIds. |
+
+
+## Plans
+
+Plans/cases/sets are the workbench's run-scope records under `<root>/_plans`, `_sets`, `_cases` (created/edited in the UI); `plan` is their terminal + CI twin.
+
+| Verb | What it does |
+| --- | --- |
+| `plan list` | Every plan with its resolved member count. `--json` emits one compact line. |
+| `plan cases <planId>` | Resolved member cases (caseId → scenario sid → title), in run order. `--json`. |
+| `plan run <planId>` | Replay every member case's linked scenario and roll up pass/fail/skip — the PR/CI gate entrypoint (`plan run regression --json`). Cases with no recorded scenario or a missing scenario dir are `SKIP`ped. Flags: `--profile <p>`, `--param k=v` (repeatable), `--headed`/`--headless`, `--dry-run`, `--no-sidecars`, `--json` (single-line rollup as the last line). Exit 0 iff every started run passed. |
+
+
 
 ## Heal
 
@@ -67,6 +83,21 @@ the current run's `screenshots/<stepId>.png` against `<sid>/baselines/<stepId>.p
 It passes when the differing-pixel fraction ≤ `tolerance.pixels` (default `0.01` = 1%);
 on a miss the claim fails and a red delta map lands at `<run>/shots-diff/<stepId>.diff.png`.
 Size changes fail outright — re-mint with `shot-accept` when the change is legitimate.
+
+`mask` lists CSS selectors to hide (`visibility:hidden`) around every step
+screenshot — the ignore-regions escape hatch for volatile UI like timestamps,
+live badges, or user avatars. Masks union across all shot claims in the
+scenario and apply to baselines and replays alike, so masked regions can never
+flake the diff:
+
+```json
+{"check": {"shot": "s3", "mask": ["[data-qa-volatile]", "time"]}, "predicate": "matches"}
+```
+
+A scenario with shot claims opts out of the warm-page `goto` skip: the step
+always navigates, so the diff compares a fresh document — a reused session can
+otherwise hold a stale DOM (an older bundle or settled live data) that no
+amount of masking fixes.
 
 ## Profiles
 
@@ -107,6 +138,7 @@ Size changes fail outright — re-mint with `shot-accept` when the change is leg
 | `scenario field <file> <name>` | Print any top-level scenario field (scalars verbatim; object/array as compact JSON) |
 | `scenario rename <sid> <new>` | Rename a scenario directory + id field |
 | `scenario copy <sid> <new>` | Copy a scenario (replays not copied) |
+| `scenario tag <sid>` | List or mutate a scenario's `tags[]` — the field `replay --tags` selects on. Flags: `--add <a,b>`, `--remove <c,d>`, `--json` |
 | `scenario delete <sid>` | Remove a scenario directory. `--yes` / `-y` confirms; otherwise dry-run. |
 | `scenario prune-replays <sid> --keep N` | Keep most recent N replays. `--yes` / `-y` confirms. |
 | `scenario prune-all --keep N` | Same across every scenario. `--yes` / `-y` confirms. |
