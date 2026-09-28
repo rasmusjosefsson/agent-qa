@@ -14,6 +14,7 @@ mod auto_heal;
 mod browser;
 mod buffer;
 mod byo_doctor;
+mod cdp;
 mod cdp_url;
 mod claims;
 mod compare;
