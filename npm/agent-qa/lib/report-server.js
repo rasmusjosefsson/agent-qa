@@ -1824,6 +1824,12 @@ async function handleCompare(req, res, deps, root, sid) {
     differingPixels: row[2] && row[2] !== '-' ? Number(row[2]) : null,
     hasDiffPng: row[1] === 'CHANGED',
   }));
+  const network = parseCompareTable(md, 'network').map((row) => ({
+    request: row[0],
+    outcome: row[1],
+    statusA: row[2],
+    statusB: row[3],
+  }));
   return sendJson(res, 200, {
     sid,
     folder,
@@ -1831,6 +1837,7 @@ async function handleCompare(req, res, deps, root, sid) {
     runB: head ? head[2] : null,
     snapshots,
     screenshots,
+    network,
   });
 }
 

@@ -154,6 +154,13 @@ export interface CompareShot {
   hasDiffPng: boolean
 }
 
+export interface CompareNetEntry {
+  request: string
+  outcome: 'SAME' | 'CHANGED' | 'ONLY-A' | 'ONLY-B' | string
+  statusA: string
+  statusB: string
+}
+
 export interface CompareReport {
   sid: string
   folder: string
@@ -161,6 +168,7 @@ export interface CompareReport {
   runB: string | null
   snapshots: CompareEntry[]
   screenshots: CompareShot[]
+  network: CompareNetEntry[]
 }
 
 export interface Selection {

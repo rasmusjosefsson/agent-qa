@@ -377,6 +377,16 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         }
     }
 
+    // The browser's request capture is per-session: a replayed session
+    // still holds the previous run's traffic. Clear it so this run's
+    // network.json (and {"network"} claims) sees only its own requests.
+    // Best-effort — a session that doesn't exist yet just warns.
+    if !opts.dry_run {
+        if let Err(e) = crate::browser::network_clear(&opts.session_name) {
+            eprintln!("[v2-replay] network log clear skipped: {e}");
+        }
+    }
+
     // 1. Load + validate.
     let (scenario_file, scenario_dir) = resolve_source(&opts.source)?;
     let bytes =

@@ -34,6 +34,7 @@ export function CompareView({ runs }: { runs: RunsApi }) {
   const [openShot, setOpenShot] = useState<string | null>(null)
   const changed = r.snapshots.filter((s) => s.outcome !== 'SAME').length
   const shotsChanged = r.screenshots.filter((s) => s.outcome !== 'SAME').length
+  const netChanged = (r.network || []).filter((n) => n.outcome !== 'SAME').length
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -46,6 +47,7 @@ export function CompareView({ runs }: { runs: RunsApi }) {
           <span className="ml-2 opacity-70">
             {changed} changed snapshot{changed === 1 ? '' : 's'} · {shotsChanged} changed screenshot
             {shotsChanged === 1 ? '' : 's'}
+            {(r.network || []).length > 0 && ` · ${netChanged} changed request${netChanged === 1 ? '' : 's'}`}
           </span>
         </div>
         <button
@@ -157,6 +159,30 @@ export function CompareView({ runs }: { runs: RunsApi }) {
                   </li>
                 )
               })}
+            </ul>
+          </section>
+        )}
+        {(r.network || []).length > 0 && (
+          <section>
+            <div className="px-1 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+              Network
+            </div>
+            <ul className="space-y-px">
+              {r.network.map((n) => (
+                <li
+                  key={n.request}
+                  className="flex items-center gap-2 rounded-md px-2 py-1.5 opacity-90"
+                  title={n.request}
+                >
+                  <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
+                    {n.request}
+                  </span>
+                  <span className="tnum shrink-0 text-[11px] text-muted-foreground">
+                    {n.statusA} → {n.statusB}
+                  </span>
+                  <OutcomeBadge outcome={n.outcome} />
+                </li>
+              ))}
             </ul>
           </section>
         )}
