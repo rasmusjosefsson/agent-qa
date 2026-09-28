@@ -114,6 +114,12 @@ pub struct RunOptions {
     /// performs). Runs even when shot claims FAILED: intentional UI
     /// changes are exactly the case where a failing diff needs re-minting.
     pub update_baselines: bool,
+    /// `--keep-going` — dispatch every step even after a failure instead
+    /// of stopping at the first one (the default). Later steps often
+    /// cascade-fail from the broken page state, but a repair sweep wants
+    /// the complete failure list in one run's events/audit rather than
+    /// re-running once per step.
+    pub keep_going: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -831,7 +837,10 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                         },
                     );
                     first_failure.get_or_insert_with(|| format!("step {id}: {e}"));
-                    break;
+                    if !opts.keep_going {
+                        break;
+                    }
+                    eprintln!("[v2-replay] --keep-going: continuing after step {id}'s failure");
                 }
             }
         }
@@ -1761,6 +1770,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut from_step: Option<String> = None;
     let mut until_step: Option<String> = None;
     let mut update_baselines = false;
+    let mut keep_going = false;
     let mut input_overrides: BTreeMap<String, String> = BTreeMap::new();
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
@@ -1800,6 +1810,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             "--until" => until_step = it.next().cloned().or_else(|| bail_missing("--until")),
             s if s.starts_with("--until=") => until_step = Some(s["--until=".len()..].to_string()),
             "--update-baselines" => update_baselines = true,
+            "--keep-going" => keep_going = true,
             "--param" | "-p" => {
                 let pair = it
                     .next()
@@ -1854,6 +1865,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         from_step,
         until_step,
         update_baselines,
+        keep_going,
     })
 }
 
@@ -1919,7 +1931,7 @@ Usage:
                   [--no-sidecars] [--quiet | -q] [--plain]
                   [--tag <label>] [--output-audit <path>]
                   [--from <stepId>] [--until <stepId>]
-                  [--update-baselines] [--runs <N>]
+                  [--update-baselines] [--runs <N>] [--keep-going]
 
 Loads + validates the scenario, mints a run id, prepares
 <sid>/replays/<runId>/, writes audit.json, runs env.open, iterates
@@ -1968,7 +1980,12 @@ replays/latest.txt.
                          performs). Runs even when shot claims fail —
                          intentional UI changes are the re-mint case.
                          Skips with a warning when the run captured no
-                         screenshots (e.g. --no-sidecars)."
+                         screenshots (e.g. --no-sidecars).
+--keep-going             Dispatch every step even after a failure
+                         (default: stop at the first). Later steps often
+                         cascade-fail from the broken page state, but a
+                         repair sweep wants the complete failure list in
+                         one run's audit rather than one re-run per step."
 }
 
 #[cfg(all(test, unix))]
@@ -2048,6 +2065,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
         };
         let summary = run(&opts).unwrap();
         assert_eq!(summary.total, 1);
@@ -2124,6 +2142,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2181,6 +2200,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2219,6 +2239,7 @@ mod tests {
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
         };
         let err = format!("{:#}", run(&opts).unwrap_err());
         assert!(err.contains("schema error"), "got: {err}");
@@ -2282,6 +2303,7 @@ esac\nexit 0\n",
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
         }
     }
 
@@ -2533,6 +2555,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2594,6 +2617,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2619,6 +2643,16 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         assert_eq!(opts.input_overrides.get("name").unwrap(), "alice");
         assert_eq!(opts.input_overrides.get("count").unwrap(), "3");
         assert_eq!(opts.input_overrides.get("flag").unwrap(), "true");
+    }
+
+    #[test]
+    fn parse_args_keep_going_flag() {
+        assert!(!parse_args(&["./j.json".into()]).unwrap().keep_going);
+        assert!(
+            parse_args(&["./j.json".into(), "--keep-going".into()])
+                .unwrap()
+                .keep_going
+        );
     }
 
     #[test]
@@ -3150,6 +3184,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3235,6 +3270,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3417,6 +3453,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3504,6 +3541,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
         };
         // The run bails at the failing step; events/status are written
         // before the bail.
@@ -3570,6 +3608,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
         };
         run(&opts).unwrap();
 
@@ -3614,6 +3653,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
         };
         run(&opts).unwrap();
         let run_dir = run_dir_for(&jdir);
@@ -3795,6 +3835,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             from_step: None,
             until_step: None,
             update_baselines: false,
+            keep_going: false,
         };
         assert_eq!(resolve_progress_mode(&mk(true, false)), ProgressMode::Quiet);
         // quiet wins over plain.
