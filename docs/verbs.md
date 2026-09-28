@@ -30,7 +30,9 @@ The full set of CLI verbs at a glance. Every verb also responds to
 
 | Verb | What it does |
 | --- | --- |
+| `replay <sid \| path>` | Run a scenario. Flags: `--profile`, `--session`, `--param name=value`, `--heal-from-run <runId>`, `--dry-run`, `--no-sidecars`, `--runs <N>`, `--quiet`/`-q`, `--tag <label>`, `--output-audit <path>`, `--from <stepId>` (skip earlier steps — needs a warm session at that state), `--until <stepId>` (stop after it, inclusive). With `--all`: replay every scenario under the root — `--shard k/n` splits the sorted sid list for CI matrices, `--filter <substr>` narrows it, `--tags <a,b>` keeps scenarios declaring any of the named `tags` |
 | `replay <sid \| path>` | Run a scenario. Flags: `--profile`, `--session`, `--param name=value`, `--heal-from-run <runId>`, `--dry-run`, `--no-sidecars`, `--runs <N>`, `--quiet`/`-q`, `--tag <label>`, `--output-audit <path>`, `--from <stepId>` (skip earlier steps — needs a warm session at that state), `--until <stepId>` (stop after it, inclusive). With `--all`: replay every scenario under the root — `--shard k/n` splits the sorted sid list for CI matrices, `--filter <substr>` narrows it, `--report <path>` writes a markdown verdict table for a PR comment |
+
 | `list` | Enumerate scenarios (root mode) or one scenario's replays. Flags: `--json`, `--filter <substr>`, `--limit <N>` |
 | `compare <a> <b>` | Diff two replay run directories. Alias `diff`. |
 | `crawl <url>` | Coverage scaffolding — enumerate same-origin links + interactive elements and write a draft scenario (goto + shot claim per route) to `<scenarios_root>/crawl-<host>/` plus a `crawl-report.json` authoring inventory. Flags: `--session`, `--out`, `--max`, `--sid`. |
