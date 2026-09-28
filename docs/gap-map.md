@@ -1,0 +1,80 @@
+# Gap map — what agent-qa covers today, and what's still open
+
+A snapshot audit of the whole surface (verbs, claims, evals, CI, workbench)
+with the gaps ranked by how much they'd hurt a real user. Updated each time
+the picture shifts materially.
+
+## Surface inventory
+
+| Layer | What exists |
+| --- | --- |
+| Do verbs (31) | navigation (`goto`/`reload`/`back`/`forward`), input (`click`/`dblclick`/`type`/`clear`/`press`/`hover`/`select`/`check`/`uncheck`/`upload`/`focus`/`blur`/`drag`/`scrollTo`), dialogs (`dialog`), files (`download`/`fileChooser`), system (`wait`/`read`/`state`/`mock`/`unmock`/`callGql`/`tab`/`viewport`), structure (`loop`/`group`/`useTemplate`) |
+| Claim subjects (15) | `element` (text/value/count/attribute), `url`, `network` (fired/status/responseJsonPath), `data`, `flag`, `dialog`, `file`, `shot` (visual diff, clip, mask), `storage`, `cookie`, `console`, `pageError`, `a11y` (axe-core) |
+| Record vocabulary | ~50 methods covering every verb + claim kind; parity-gate tested |
+| Suite flags | `--all`/`--shard`/`--filter`/`--tags`/`--jobs`, `--retry`/`--until-fail`/`--watch`/`--keep-going`, `--har`/`--offline`/`--mock-from`/`--freeze`/`--base-url`, `--auto-promote`/`--update-baselines`, `--junit`/`--report`/`--record-video`, `--from`/`--until` |
+| Audit | `flaky`, `slow`, `heal-chronic` (+`--all`), `verdict` (+`--all`), `cluster`, `trend` (+`--all`), `health`, run-vs-run compare (CLI + workbench) |
+| CI | `qa-gate` (fixture goldens + sticky verdict), `ui-goldens` (visual gate w/ embedded diffs), `qa-crawl` (draft coverage on UI PRs), `qa-adopt` + `/qa accept` commands, composite `action.yml`, `evals-nightly`, changelog-driven releases |
+| Golden suites | ~30 QA Playground pages, ~34 the-internet edge cases (six sweeps), saucedemo suite (login/sort, full 21-step purchase, negative auth, logout), workbench selftest goldens |
+
+## Ranked gaps
+
+### P0 — the loop isn't closed for recorded users
+
+1. **Record → network claims.** Recording captures the session HAR (#206)
+   but nothing translates it into `network` claims at flush — a recorded
+   scenario gets element/console asserts, never "POST /login fired". Record
+   should emit at least a `networkFired` claim for each XHR/fetch the
+   session made, mirroring what `crawl` already emits.
+2. **`pageError`/`console` claims in record.** Same story — record knows the
+   session's errors; a `pageError notExists` claim should be auto-appended
+   to recorded goldens the way `crawl` appends console-error checks (#168).
+
+### P1 — shipped verbs with no golden coverage
+
+3. **`emulate` (#242) and `frame` (#245)** are open but have zero eval
+   coverage — `/geolocation` + `/tinymce`/`/nested_frames` goldens are the
+   obvious first runs once they merge.
+4. **`storage`/`cookie` claims (#239)** landed with unit tests only — a
+   golden that logs in via `do/state` (cookie seed) and asserts
+   `storage`/`cookie` would close the loop.
+5. **`loop`/`group`/`useTemplate`** — no golden exercises them; a
+   `forgot_password`-style loop case would.
+
+### P1 — claim subjects still missing
+
+6. **`computedStyle` claim** — "element has color X / display:grid" is a
+   common UI assertion `element.attribute` can't express (styles aren't
+   attributes). Small surface: one subject reading `getComputedStyle`.
+7. **`focus` claim** — "the input has focus" — a11y/keyboard-nav testing
+   needs it; cheap (`document.activeElement`).
+8. **`timing` claim** — "step finished < 2s" exists in audit-slow but not as
+   a per-step assertion.
+
+### P2 — platform coverage
+
+9. **Mobile/touch**: `do/viewport` + `emulate` give layout, but no swipe/
+   tap-hold/pinch verbs; edge pages have no touch cases yet.
+10. **Geolocation/timezone**: verbs queued in #242; needs the `/geolocation`
+    + a timezone-shifted golden.
+11. **WebSocket/SSE**: the network layer is request/response only —
+    `ws://` frames aren't captured; a `network` ofKind would need daemon
+    support first.
+
+### P3 — ecosystem polish
+
+12. **`run-report` in CI** — the HTML report exists (#224) but no workflow
+    uploads it as an artifact yet.
+13. **Skill docs for edge sweeps** — the qaplayground skill covers the
+    Playground flow but not the edge-pages-lib pattern a new-site sweep
+    follows.
+
+## Recently closed (for orientation)
+
+- Dialog tolerance on dialog-opening clicks (#246)
+- `pageError` + `console` + `a11y` claim subjects (#248/#167/#240)
+- Network claims fired/status/json (#143), postDataContains (#205),
+  `wait url` (#166)
+- Visual loop: shot claims + clip + mask + diff maps + re-mint + `/qa
+  accept` (#129–#186)
+- Suite tooling: parallel `--jobs`, `--retry`, `--until-fail`, `--watch`,
+  JUnit, HTML report
