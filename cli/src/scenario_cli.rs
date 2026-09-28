@@ -1231,7 +1231,7 @@ fn list_lint_rules(json_out: bool) -> Result<u8> {
         Rule {
             code: "wait-without-condition",
             severity: "warning",
-            description: "A do/wait step has none of params.ms/until/url/timeoutMs/locator; falls back to a networkidle wait that may miss the intended condition.",
+            description: "A do/wait step has none of params.ms/until/url/idle/idleMs/timeoutMs/locator; falls back to a networkidle wait that may miss the intended condition.",
         },
         Rule {
             code: "shot-without-baseline",
@@ -1599,6 +1599,8 @@ pub(crate) fn lint(
                         || p.get("url").is_some()
                         || p.get("timeoutMs").is_some()
                         || p.get("locator").is_some()
+                        || p.get("idle").is_some()
+                        || p.get("idleMs").is_some()
                 })
                 .unwrap_or(false);
             if !has_condition {
@@ -1606,7 +1608,7 @@ pub(crate) fn lint(
                     severity: "warning",
                     code: "wait-without-condition",
                     message: format!(
-                        "step {id:?} verb=wait has no wait condition (params.ms/until/url/timeoutMs/locator); falls back to networkidle"
+                        "step {id:?} verb=wait has no wait condition (params.ms/until/url/idle/idleMs/timeoutMs/locator); falls back to networkidle"
                     ),
                 });
             }
@@ -2419,6 +2421,8 @@ fn lint_collect(
                         || p.get("url").is_some()
                         || p.get("timeoutMs").is_some()
                         || p.get("locator").is_some()
+                        || p.get("idle").is_some()
+                        || p.get("idleMs").is_some()
                 })
                 .unwrap_or(false);
             if !has_condition && active("wait-without-condition") {
