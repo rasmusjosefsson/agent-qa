@@ -348,6 +348,32 @@
             }
           },
           "$comment": "console claim subject — the runner has evaluated it since #167; the schema branch was missed, so crawl-emitted console checks failed validation."
+        },
+        {
+          "type": "object",
+          "required": ["a11y"],
+          "additionalProperties": false,
+          "properties": {
+            "a11y": {
+              "oneOf": [
+                { "type": "boolean" },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "impact": {
+                      "type": "string",
+                      "enum": ["minor", "moderate", "serious", "critical"]
+                    },
+                    "within": { "type": "string" },
+                    "rule": { "type": "string" },
+                    "incomplete": { "type": "boolean" }
+                  }
+                }
+              ]
+            }
+          },
+          "$comment": "a11y claim subject — run an axe-core audit (agent-browser a11y) and count matching violations. exists/notExists on presence; numeric predicates compare the count. impact is a floor (minor<moderate<serious<critical); within scopes to a subtree; rule filters by axe rule id; incomplete also counts axe's incomplete results."
         }
       ]
     },

@@ -1,0 +1,45 @@
+{
+  "schema": "scenario/2",
+  "id": "a11y",
+  "intent": "Accessibility gating — axe-core violations gate the scenario",
+  "env": {
+    "open": [{ "kind": "fresh" }]
+  },
+  "steps": [
+    {
+      "id": "s1",
+      "kind": "do",
+      "verb": "goto",
+      "value": { "from": "literal", "literal": "https://example.com" },
+      "intent": "open the page under test"
+    },
+    {
+      "id": "s2",
+      "kind": "check",
+      "intent": "no serious-or-worse axe violations",
+      "claim": {
+        "subject": { "a11y": { "impact": "serious" } },
+        "predicate": "notExists"
+      }
+    },
+    {
+      "id": "s3",
+      "kind": "check",
+      "intent": "total violations stay within budget",
+      "claim": {
+        "subject": { "a11y": true },
+        "predicate": "lte",
+        "value": 3
+      }
+    },
+    {
+      "id": "s4",
+      "kind": "check",
+      "intent": "contrast rule clean inside the app shell",
+      "claim": {
+        "subject": { "a11y": { "rule": "color-contrast", "within": "#app" } },
+        "predicate": "notExists"
+      }
+    }
+  ]
+}

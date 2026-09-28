@@ -156,6 +156,14 @@ pub fn dispatch_check(
         ClaimSubject::Cookie { cookie } => {
             check_cookie(cookie, &claim.predicate, claim.value.as_ref(), ctx, scope)
         }
+        ClaimSubject::A11y { a11y } => check_a11y(
+            a11y,
+            &claim.predicate,
+            claim.value.as_ref(),
+            ctx,
+            scope,
+            timeout,
+        ),
     }
 }
 
@@ -259,6 +267,134 @@ fn check_console(
                     "<none>".to_string()
                 } else {
                     sample.join(" | ")
+                }
+            );
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+}
+
+// ---------- accessibility (axe-core via `agent-browser a11y`) ----------
+
+/// Check the page's axe audit (`agent-browser a11y --json`). The matcher
+/// filters which findings count:
+///   `{"a11y": true}`                     every violation
+///   `{"a11y": {"impact": "serious"}}`    violations at that impact or worse
+///   `{"a11y": {"rule": "color-contrast"}}`  only that axe rule id
+///   `{"a11y": {"within": "#app"}}`       audit scoped to a subtree
+///   `{"a11y": {"incomplete": true}}`     also count axe's incomplete results
+///
+/// Predicates:
+///   `exists`/`isVisible`     ≥1 matching finding
+///   `notExists`/`isHidden`   zero matching — the "page is clean" gate
+///   numeric predicates       compare the matching count to `value`
+fn check_a11y(
+    subject: &crate::scenario::A11ySubject,
+    predicate: &Predicate,
+    expected: Option<&Json>,
+    ctx: &CheckContext,
+    scope: &mut ValueScope,
+    timeout: Duration,
+) -> Result<()> {
+    use crate::scenario::A11ySubject;
+    let (floor, within, rule, incomplete) = match subject {
+        A11ySubject::Flag(true) => (None, None, None, false),
+        A11ySubject::Flag(false) => bail!("a11y subject requires a11y=true or a matcher object"),
+        A11ySubject::Matcher(m) => (
+            m.impact
+                .as_deref()
+                .map(|s| substitute_scenario_vars(s, scope)),
+            m.within
+                .as_deref()
+                .map(|s| substitute_scenario_vars(s, scope)),
+            m.rule
+                .as_deref()
+                .map(|s| substitute_scenario_vars(s, scope)),
+            m.incomplete,
+        ),
+    };
+    // axe impact ordering — a floor keeps that level and everything worse.
+    let rank = |impact: &str| match impact {
+        "minor" => 0,
+        "moderate" => 1,
+        "serious" => 2,
+        "critical" => 3,
+        _ => -1,
+    };
+    let floor_n = match floor.as_deref() {
+        Some(f) => {
+            let n = rank(f);
+            if n < 0 {
+                bail!("a11y matcher 'impact' must be minor|moderate|serious|critical; got {f:?}");
+            }
+            Some(n)
+        }
+        None => None,
+    };
+    let deadline = Instant::now() + timeout;
+    loop {
+        let data = browser::a11y_audit(ctx.session, within.as_deref()).unwrap_or_default();
+        let mut matched: Vec<Json> = Vec::new();
+        if let Some(vs) = data.get("violations").and_then(|v| v.as_array()) {
+            matched.extend(vs.iter().cloned());
+        }
+        if incomplete {
+            if let Some(is) = data.get("incomplete").and_then(|v| v.as_array()) {
+                matched.extend(is.iter().cloned());
+            }
+        }
+        matched.retain(|v| {
+            let impact_ok = floor_n
+                .map(|f| {
+                    v.get("impact")
+                        .and_then(|i| i.as_str())
+                        .map(|i| rank(i) >= f)
+                        .unwrap_or(false)
+                })
+                .unwrap_or(true);
+            let rule_ok = rule
+                .as_deref()
+                .map(|r| v.get("id").and_then(|i| i.as_str()) == Some(r))
+                .unwrap_or(true);
+            impact_ok && rule_ok
+        });
+        let n = matched.len() as u64;
+        let done = match predicate {
+            Predicate::Exists | Predicate::IsVisible => n > 0,
+            Predicate::NotExists | Predicate::IsHidden => n == 0,
+            Predicate::CountEquals
+            | Predicate::Gt
+            | Predicate::Gte
+            | Predicate::Lt
+            | Predicate::Lte => {
+                let need = expected.and_then(|v| v.as_u64()).ok_or_else(|| {
+                    anyhow!("a11y claim with predicate '{predicate:?}' requires a numeric 'value'")
+                })?;
+                match predicate {
+                    Predicate::CountEquals => n == need,
+                    Predicate::Gt => n > need,
+                    Predicate::Gte => n >= need,
+                    Predicate::Lt => n < need,
+                    _ => n <= need,
+                }
+            }
+            other => bail!("a11y subject does not support predicate '{other:?}'"),
+        };
+        if done {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            let ids: Vec<String> = matched
+                .iter()
+                .filter_map(|v| v.get("id").and_then(|i| i.as_str()).map(str::to_string))
+                .collect();
+            bail!(
+                "a11y check failed: {} matching violation(s){}",
+                n,
+                if ids.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — rules: {}", ids.join(", "))
                 }
             );
         }
@@ -1615,6 +1751,130 @@ mod tests {
     fn clear_console() {
         std::env::remove_var(ab::BIN_ENV);
         ab::_reset_bin_cache_for_tests();
+    }
+
+    fn install_fake_a11y(dir: &Path, data: serde_json::Value) {
+        // Respond to `a11y` with a canned --json payload; other verbs no-op.
+        let resp_path = dir.join("a11y.json");
+        fs::write(
+            &resp_path,
+            json!({ "success": true, "data": data }).to_string(),
+        )
+        .unwrap();
+        let body = format!(
+            "#!/bin/sh\ncase \" $* \" in *\\ a11y\\ *) cat '{}' ;;\nesac\nexit 0\n",
+            resp_path.display()
+        );
+        let bin = dir.join("agent-browser");
+        fs::write(&bin, body).unwrap();
+        let mut perm = fs::metadata(&bin).unwrap().permissions();
+        perm.set_mode(0o755);
+        fs::set_permissions(&bin, perm).unwrap();
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+    }
+
+    fn a11y_ctx() -> CheckContext<'static> {
+        CheckContext {
+            session: "s",
+            scenario_dir: Path::new("."),
+            run_dir: None,
+        }
+    }
+
+    #[test]
+    fn a11y_clean_page_passes_notexists() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake_a11y(
+            tmp.path(),
+            json!({ "violations": [], "incomplete": [], "counts": { "violations": 0 } }),
+        );
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "a11y": true },
+            "predicate": "notExists"
+        }))
+        .unwrap();
+        dispatch_check(&claim, &a11y_ctx(), &mut ValueScope::default(), None).unwrap();
+        clear_console();
+    }
+
+    #[test]
+    fn a11y_impact_floor_counts_at_or_above() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake_a11y(
+            tmp.path(),
+            json!({ "violations": [
+                { "id": "minor-one", "impact": "minor" },
+                { "id": "serious-one", "impact": "serious" },
+                { "id": "critical-one", "impact": "critical" }
+            ], "incomplete": [] }),
+        );
+        let mut scope = ValueScope::default();
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "a11y": { "impact": "serious" } },
+            "predicate": "countEquals",
+            "value": 2
+        }))
+        .unwrap();
+        dispatch_check(&claim, &a11y_ctx(), &mut scope, None).unwrap();
+        clear_console();
+    }
+
+    #[test]
+    fn a11y_rule_filter_and_incomplete_flag() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake_a11y(
+            tmp.path(),
+            json!({ "violations": [ { "id": "color-contrast", "impact": "serious" } ],
+                    "incomplete": [ { "id": "scrollable-region-focusable", "impact": "serious" } ] }),
+        );
+        let mut scope = ValueScope::default();
+        // rule filter keeps only the named rule
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "a11y": { "rule": "color-contrast" } },
+            "predicate": "exists"
+        }))
+        .unwrap();
+        dispatch_check(&claim, &a11y_ctx(), &mut scope, None).unwrap();
+        // incomplete excluded by default → total is 1
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "a11y": true },
+            "predicate": "countEquals",
+            "value": 1
+        }))
+        .unwrap();
+        dispatch_check(&claim, &a11y_ctx(), &mut scope, None).unwrap();
+        // incomplete:true counts both buckets → 2
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "a11y": { "incomplete": true } },
+            "predicate": "countEquals",
+            "value": 2
+        }))
+        .unwrap();
+        dispatch_check(&claim, &a11y_ctx(), &mut scope, None).unwrap();
+        clear_console();
+    }
+
+    #[test]
+    fn a11y_failure_lists_rule_ids() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake_a11y(
+            tmp.path(),
+            json!({ "violations": [ { "id": "document-title", "impact": "serious" } ] }),
+        );
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "a11y": true },
+            "predicate": "notExists"
+        }))
+        .unwrap();
+        let err =
+            dispatch_check(&claim, &a11y_ctx(), &mut ValueScope::default(), None).unwrap_err();
+        assert!(err.to_string().contains("document-title"), "{err}");
+        clear_console();
     }
 
     #[test]

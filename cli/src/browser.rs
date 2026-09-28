@@ -610,6 +610,32 @@ pub fn console_messages(session: &str) -> Result<Vec<ConsoleMessage>, AgentBrows
         .unwrap_or_default())
 }
 
+/// Run `agent-browser a11y --json` (axe-core) and return the `data` object —
+/// `{counts, violations[], incomplete[], passes?, url, axeVersion}`.
+/// `within` maps to `--selector` to scope the audit to a subtree.
+/// Returns `Json::Null` when the payload lacks a `data` key.
+pub fn a11y_audit(
+    session: &str,
+    within: Option<&str>,
+) -> Result<serde_json::Value, AgentBrowserError> {
+    let mut args: Vec<&str> = vec!["--json", "a11y"];
+    if let Some(sel) = within {
+        args.extend(["--selector", sel]);
+    }
+    let r = run(session, args, RunOpts::new().capture())?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(r.stdout.trim()).map_err(|e| AgentBrowserError::NonZero {
+            verb: "a11y".to_string(),
+            exit_code: 0,
+            stderr: format!("unparseable a11y JSON: {e}: {:?}", r.stdout.trim()),
+            hint: String::new(),
+        })?;
+    Ok(parsed
+        .get("data")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null))
+}
+
 /// Poll `agent-browser --json dialog status`. Returns `DialogStatus` with
 /// `open=false` when no dialog is pending.
 pub fn dialog_status(session: &str) -> Result<DialogStatus, AgentBrowserError> {
