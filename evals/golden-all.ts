@@ -6,7 +6,9 @@
  *
  * Env:
  *   GOLDEN_TIMEOUT_MS — per-case cap in milliseconds (default 300000)
- *   GOLDEN_ONLY       — substring filter on script name (local debugging)
+ *   GOLDEN_ONLY       — comma-separated substring filters on script name;
+ *                       a case runs when it matches ANY entry (local
+ *                       debugging + CI subsets, e.g. fixture-only gates)
  *
  * Exit: 0 when every case passed, 1 otherwise. A JSON rollup lands in
  * results/golden-all-<ts>.json next to each case's own golden-report.json.
@@ -22,15 +24,18 @@ const pkg = JSON.parse(readFileSync(resolve(__dirname, "package.json"), "utf8"))
 };
 
 const timeoutMs = Number(process.env.GOLDEN_TIMEOUT_MS || 300_000);
-const only = process.env.GOLDEN_ONLY;
+const only = (process.env.GOLDEN_ONLY || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 const names = Object.keys(pkg.scripts)
   .filter((n) => n.startsWith("golden:") && n !== "golden:all")
-  .filter((n) => !only || n.includes(only))
+  .filter((n) => only.length === 0 || only.some((o) => n.includes(o)))
   .sort();
 
 if (names.length === 0) {
-  console.error(`golden-all: no golden:* scripts matched${only ? ` (GOLDEN_ONLY=${only})` : ""}`);
+  console.error(`golden-all: no golden:* scripts matched${only.length ? ` (GOLDEN_ONLY=${only.join(",")})` : ""}`);
   process.exit(2);
 }
 
@@ -78,6 +83,7 @@ writeFileSync(
       passed: passed.length,
       failed: failed.length,
       results,
+      filter: only.length ? only : undefined,
     },
     null,
     2,
