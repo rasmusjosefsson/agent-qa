@@ -107,6 +107,11 @@ pub struct RunOptions {
     /// `--until <stepId>` — stop dispatch after this step (inclusive).
     /// Steps after it never run; env.close still executes.
     pub until_step: Option<String>,
+    /// `--update-baselines` — after the run finishes, mint every captured
+    /// screenshot as a `baselines/<stepId>.png` (same copy `shot-accept`
+    /// performs). Runs even when shot claims FAILED: intentional UI
+    /// changes are exactly the case where a failing diff needs re-minting.
+    pub update_baselines: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -897,6 +902,22 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     // 9. Latest pointer.
     update_latest_pointer(&scenario_dir, &run.run_id)?;
 
+    // 10. `--update-baselines` — mint from this run's capture set. Runs
+    // before the failure bail on purpose: a shot claim that correctly
+    // flagged a real UI change is the re-mint case, and requiring a
+    // passing run first would force a shot-accept round trip.
+    if opts.update_baselines {
+        match crate::shot_accept::mint_baselines(&scenario_dir, &run.run_id, None, false, false) {
+            Ok(minted) => eprintln!(
+                "baselines: minted {} shot(s) from run {}: {}",
+                minted.len(),
+                run.run_id,
+                minted.join(", ")
+            ),
+            Err(err) => eprintln!("baselines: skipped ({err})"),
+        }
+    }
+
     if let Some(msg) = first_failure {
         bail!(msg);
     }
@@ -1503,6 +1524,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut output_audit: Option<PathBuf> = None;
     let mut from_step: Option<String> = None;
     let mut until_step: Option<String> = None;
+    let mut update_baselines = false;
     let mut input_overrides: BTreeMap<String, String> = BTreeMap::new();
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
@@ -1541,6 +1563,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             s if s.starts_with("--from=") => from_step = Some(s["--from=".len()..].to_string()),
             "--until" => until_step = it.next().cloned().or_else(|| bail_missing("--until")),
             s if s.starts_with("--until=") => until_step = Some(s["--until=".len()..].to_string()),
+            "--update-baselines" => update_baselines = true,
             "--param" | "-p" => {
                 let pair = it
                     .next()
@@ -1594,6 +1617,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         output_audit,
         from_step,
         until_step,
+        update_baselines,
     })
 }
 
@@ -1659,7 +1683,7 @@ Usage:
                   [--no-sidecars] [--quiet | -q] [--plain]
                   [--tag <label>] [--output-audit <path>]
                   [--from <stepId>] [--until <stepId>]
-                  [--runs <N>]
+                  [--update-baselines] [--runs <N>]
 
 Loads + validates the scenario, mints a run id, prepares
 <sid>/replays/<runId>/, writes audit.json, runs env.open, iterates
@@ -1702,7 +1726,13 @@ replays/latest.txt.
                          additional path. The canonical copy still
                          lives under <sid>/replays/<runId>/audit.json;
                          this is for CI artifact upload or pipeline
-                         convenience."
+                         convenience.
+--update-baselines       After the run, mint every captured screenshot
+                         into <sid>/baselines/ (same copy shot-accept
+                         performs). Runs even when shot claims fail —
+                         intentional UI changes are the re-mint case.
+                         Skips with a warning when the run captured no
+                         screenshots (e.g. --no-sidecars)."
 }
 
 #[cfg(all(test, unix))]
@@ -1781,6 +1811,7 @@ mod tests {
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         let summary = run(&opts).unwrap();
         assert_eq!(summary.total, 1);
@@ -1856,6 +1887,7 @@ mod tests {
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -1912,6 +1944,7 @@ mod tests {
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -1949,6 +1982,7 @@ mod tests {
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         let err = format!("{:#}", run(&opts).unwrap_err());
         assert!(err.contains("schema error"), "got: {err}");
@@ -2011,6 +2045,7 @@ esac\nexit 0\n",
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         }
     }
 
@@ -2261,6 +2296,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2321,6 +2357,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2730,6 +2767,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2814,6 +2852,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -2995,6 +3034,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3081,6 +3121,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         // The run bails at the failing step; events/status are written
         // before the bail.
@@ -3146,6 +3187,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         run(&opts).unwrap();
 
@@ -3189,6 +3231,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         run(&opts).unwrap();
         let run_dir = run_dir_for(&jdir);
@@ -3369,6 +3412,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             output_audit: None,
             from_step: None,
             until_step: None,
+            update_baselines: false,
         };
         assert_eq!(resolve_progress_mode(&mk(true, false)), ProgressMode::Quiet);
         // quiet wins over plain.

@@ -91,6 +91,22 @@ agent-qa heal-respond <sid> --run <failed-run-id> --step s1 --value qa-other@exa
 agent-qa replay <sid> --heal-from-run <failed-run-id>
 ```
 
+## Golden screenshots
+
+`{"shot":"<stepId>"}` claims pixel-diff a run's screenshot against a checked-in
+`baselines/<stepId>.png`; misses write a red delta map under `shots-diff/`.
+
+```bash
+agent-qa flush --auto-shots        # one shot claim per do-step
+agent-qa replay <sid>              # captures screenshots
+agent-qa shot-accept <sid>         # mint baselines
+agent-qa replay <sid>              # now guarded
+agent-qa replay <sid> --update-baselines   # re-mint on intentional change
+```
+
+Element-clipped diffs (`clip` locator), one-click re-mint in the workbench, and
+the `ui-goldens` PR workflow: see [`docs/visual-testing.md`](docs/visual-testing.md).
+
 ## Verbs
 
 The full verb set ships, plus a few inspection verbs.

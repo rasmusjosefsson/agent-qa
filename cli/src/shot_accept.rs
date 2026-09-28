@@ -13,6 +13,7 @@
 //! baseline. `--json` emits the minted step list for automation.
 
 use std::fs;
+use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 
@@ -63,7 +64,35 @@ pub fn run(args: &[String]) -> Result<u8> {
             .trim()
             .to_string(),
     };
-    let shots_dir = sdir.join("replays").join(&rid).join("screenshots");
+    let minted = mint_baselines(&sdir, &rid, steps, dry_run, json)?;
+    if dry_run {
+        return Ok(0);
+    }
+
+    if json {
+        println!("{}", serde_json::to_string(&minted)?);
+    } else {
+        println!(
+            "minted {} baseline(s) under {} from run {rid}: {}",
+            minted.len(),
+            sdir.join("baselines").display(),
+            minted.join(", ")
+        );
+    }
+    Ok(0)
+}
+
+/// Copy `<scenario_dir>/replays/<rid>/screenshots/<step>.png` to
+/// `<scenario_dir>/baselines/<step>.png`. Shared with `replay
+/// --update-baselines` — both mint from a finished run's capture set.
+pub(crate) fn mint_baselines(
+    scenario_dir: &Path,
+    rid: &str,
+    steps: Option<Vec<String>>,
+    dry_run: bool,
+    json: bool,
+) -> Result<Vec<String>> {
+    let shots_dir = scenario_dir.join("replays").join(rid).join("screenshots");
     if !shots_dir.is_dir() {
         bail!("no screenshots dir at {}", shots_dir.display());
     }
@@ -87,7 +116,7 @@ pub fn run(args: &[String]) -> Result<u8> {
         bail!("no screenshots to mint in {rid}");
     }
 
-    let base_dir = sdir.join("baselines");
+    let base_dir = scenario_dir.join("baselines");
 
     if dry_run {
         #[derive(serde::Serialize)]
@@ -156,7 +185,7 @@ pub fn run(args: &[String]) -> Result<u8> {
                 base_dir.display()
             );
         }
-        return Ok(0);
+        return Ok(Vec::new());
     }
 
     fs::create_dir_all(&base_dir)?;
@@ -169,18 +198,7 @@ pub fn run(args: &[String]) -> Result<u8> {
         fs::copy(&src, base_dir.join(format!("{id}.png")))?;
         minted.push(id.clone());
     }
-
-    if json {
-        println!("{}", serde_json::to_string(&minted)?);
-    } else {
-        println!(
-            "minted {} baseline(s) under {} from run {rid}: {}",
-            minted.len(),
-            base_dir.display(),
-            minted.join(", ")
-        );
-    }
-    Ok(0)
+    Ok(minted)
 }
 
 #[cfg(test)]
