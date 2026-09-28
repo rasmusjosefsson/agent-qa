@@ -860,6 +860,14 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         ) {
             eprintln!("[v2-replay] status.json finalise failed: {e}");
         }
+
+        // Persist the session's captured network requests as
+        // <run>/network.json — the traffic list {"network"} claims queried
+        // mid-run, kept for post-hoc review/diff. Best-effort, and only
+        // when the run actually executed (a dry-run session has no traffic).
+        if !opts.dry_run {
+            crate::netlog::write_network_log_warn(&run, &opts.session_name);
+        }
     }
 
     // 7. env.close teardown — best effort. Skipped under --dry-run.
