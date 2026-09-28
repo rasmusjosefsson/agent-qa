@@ -1488,10 +1488,7 @@ fn cli_all(
     let root = crate::paths::scenarios_root();
     let mut sids = crate::scenario_cli::all_sids(&root, filter);
     if !tags.is_empty() {
-        sids = sids
-            .into_iter()
-            .filter(|sid| scenario_has_any_tag(&root, sid, tags))
-            .collect();
+        sids.retain(|sid| scenario_has_any_tag(&root, sid, tags));
     }
     if let Some((k, n)) = shard {
         sids = sids
