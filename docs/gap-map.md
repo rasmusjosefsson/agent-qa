@@ -112,13 +112,19 @@ the picture shifts materially.
     and focus emulation over the pooled CDP connection — both required
     headless; `file://` pages have no grantable origin. Empty clipboard
     maps to `null` so `exists` means "holds text".
-16. **Service-worker-served responses** — cache-first PWAs answer from
-    the SW without a `Network.*` hit on the page target; `network`
-    claims on those endpoints would time out. Untested whether the
-    own-CDP client sees SW-target traffic — needs a probe.
+16. ~~Service-worker-served responses~~ — probed: a page-origin
+    `fetch()` answered by a service worker's `respondWith` (no real
+    network hit) still emits `Network.*` on the page target, and a
+    `network` claim sees the synthetic 200 (fixture: page registers a
+    SW, reloads once for `clients.claim`, fetches a SW-only URL). What
+    stays blind: fetches the SW itself originates (cache-fill,
+    background sync) — those live on the worker target and would need
+    `Target.setAutoAttach` to worker-type targets.
 17. **Closed shadow roots are unreachable** — role locators pierce *open*
     roots via the a11y tree; closed roots hide everything by design.
-    Worth documenting as a hard limit rather than a gap to fix.
+    **Hard limit, not a gap**: no CDP/JS surface can see inside a closed
+    root (its `shadowRoot` is null for everyone). Documented as
+    permanent — closed.
 18. **`set` toggles without a clear state** — #349 resets `offline` +
     `headers` at run start. `viewport`/`device`/`geo`/`credentials`/
     `media` have no `set`-level off and — verified live — can't be
