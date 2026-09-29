@@ -455,6 +455,7 @@ mod tests {
             resource_type: Some(rt.to_string()),
             mime_type: None,
             post_data: None,
+            ws_frames: vec![],
         };
         let mut steps = vec![crate::scenario::Step::Do {
             id: "s0".into(),

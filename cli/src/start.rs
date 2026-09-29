@@ -159,6 +159,9 @@ fn start(opts: &Opts) -> Result<StartSummary> {
     if let Err(e) = browser::network_har_start(&opts.session_name) {
         eprintln!("[v2-record] har start skipped: {e}");
     }
+    // Arm the click-effect probe for the landing page; `record-step`
+    // re-arms after each step so post-navigation pages are covered too.
+    crate::record_step::arm_click_probe(&opts.session_name);
     Ok(summary)
 }
 
