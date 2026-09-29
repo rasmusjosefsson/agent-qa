@@ -863,7 +863,6 @@ fn mocked_requests(session: &str) -> Vec<CapturedRequest> {
         })
         .collect()
 }
-}
 
 /// `agent-browser network requests --clear` — drop the session's captured
 /// request log. Called at run start so a replayed session's network.json
