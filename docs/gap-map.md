@@ -15,7 +15,7 @@ the picture shifts materially.
 | Audit | `flaky`, `slow`, `heal-chronic` (+`--all`), `verdict` (+`--all`), `cluster`, `trend` (+`--all`), `health`, run-vs-run compare (CLI + workbench) |
 | Lint | `no-visual-check`, `shot-without-baseline`, `domshot-without-baseline`, `orphan-baseline`, `brittle-locator`, `fixed-sleep`, `check-all` in smoke |
 | CI | `qa-gate` (fixture goldens + sticky verdict + run-report artifacts), `ui-goldens` (visual gate w/ embedded before/after/diff images), `qa-crawl` (draft coverage on UI PRs), `qa-adopt` + `/qa accept` commands, composite `action.yml` (+npm install mode, +app-under-test boot), `evals-nightly`, changelog-driven releases |
-| Golden suites | ~30 QA Playground pages, ~34 the-internet edge cases (six sweeps), saucedemo suite (login/sort, full 21-step purchase, negative auth, logout, cookie+storage lifecycle), expandtesting (login round-trip, dynamic table, infinite scroll), todomvc (stateful SPA), demoqa widgets, httpbin hermetic-mock loop, workbench selftest goldens |
+| Golden suites | ~30 QA Playground pages, ~34 the-internet edge cases (six sweeps), saucedemo suite (login/sort, full 21-step purchase, negative auth, logout, cookie+storage lifecycle), expandtesting (login round-trip, dynamic table, infinite scroll), todomvc (stateful SPA), demoqa widgets, httpbin hermetic-mock loop, workbench selftest goldens, quotes.toscrape.com (pagination, HttpOnly cookie claims, scroll offsets), parabank (registration with `{{vars._unique}}`, login/logout, profile update — volatile-URL claims normalized), demoblaze (category filters, add-to-cart alert claims, cart session persistence across reload, full purchase flow) |
 
 ## Ranked gaps
 
@@ -67,6 +67,35 @@ the picture shifts materially.
 9. ~~**heal-chronic → issue handoff**~~ — #290 adds `--issue`: a
    paste-ready markdown handoff (table + promote block). Auto-filing
    stays out on purpose — the debt list is small enough to paste.
+
+### P4 — upstream capture limits
+
+10. **Navigation-redirect statuses are uncapturable** — a POST → 302 →
+    GET chain records the POST's status as null because agent-browser's
+    netlog never sees the redirect hop's response. The `#277` pooled
+    CDP client is the substrate for owning `Network.*` capture directly.
+11. **`wait url` can't match in-flight requests** — it polls resource
+    timing, which only lists *completed* entries; a request still
+    pending at claim time waits out the full timeout (fine) but a slow
+    endpoint (>15s cold, e.g. demoblaze `/signup`) needs an explicit
+    `params.timeoutMs`.
+
+## Lessons from the fresh-site sweeps (quotes/parabank/demoblaze, #309/#310)
+
+Real sites taught three durable patterns:
+
+- **Volatile URL pieces hide in three places** — query strings (already
+  stripped), `;k=v` matrix params, and id-bearing path segments. Flush's
+  auto-network claims now normalize all three (digits → `\d+`, hex/uuid
+  → class regex). If a site invents a fourth carrier, extend
+  `normalize_volatile_path_segments`.
+- **Dialogs that follow an XHR are async** — `assertDialogText` reads
+  the pending dialog *at record time*, so a click whose handler alerts
+  after an ajax call needs a settle wait (`waitMs` ~2s, or
+  `waitRequest` on the endpoint) between click and assert.
+- **Timed waits must not touch the page** — `do:wait {ms}` slept via
+  `agent-browser wait` until #310; a pending dialog wedged it. Now a
+  pure `thread::sleep`.
 
 ## Recently closed (for orientation)
 
