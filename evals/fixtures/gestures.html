@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>gestures fixture</title>
+<style>
+  #holdBtn { padding: 24px; background: #446; color: #fff; user-select: none; }
+  #swipeZone { margin-top: 16px; height: 120px; background: #eee; }
+</style>
+</head>
+<body>
+<div id="holdBtn">hold me</div>
+<div id="holdState">idle</div>
+<div id="swipeZone">swipe here</div>
+<div id="swipeState">none</div>
+<script>
+  const holdBtn = document.getElementById('holdBtn');
+  const holdState = document.getElementById('holdState');
+  let downAt = 0;
+  let clicked = false;
+  holdBtn.addEventListener('pointerdown', () => { downAt = performance.now(); clicked = false; });
+  holdBtn.addEventListener('click', () => { clicked = true; });
+  holdBtn.addEventListener('pointerup', () => {
+    const held = performance.now() - downAt >= 450;
+    holdState.textContent = (held ? 'HELD' : 'TAP') + (clicked ? '+CLICK' : '');
+  });
+
+  const zone = document.getElementById('swipeZone');
+  const state = document.getElementById('swipeState');
+  let sx = 0, sy = 0;
+  function end(ex, ey) {
+    const dx = ex - sx, dy = ey - sy;
+    if (Math.abs(dx) < 20 && Math.abs(dy) < 20) { state.textContent = 'none'; return; }
+    const dir = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
+    state.textContent = dir + ':' + Math.round(Math.max(Math.abs(dx), Math.abs(dy)));
+  }
+  // touch path
+  function txy(t) { return [t.clientX, t.clientY]; }
+  document.addEventListener('touchstart', e => { if (!e.touches[0]) return; const p = e.touches[0].target === zone || zone.contains(e.touches[0].target); if (!p) return; [sx, sy] = txy(e.touches[0]); });
+  document.addEventListener('touchend', e => { if (!e.changedTouches[0]) return; const p = e.changedTouches[0].target === zone || zone.contains(e.changedTouches[0].target); if (!p) return; const [ex, ey] = txy(e.changedTouches[0]); end(ex, ey); });
+  // pointer fallback (desktop without Touch support)
+  let ptrDown = false;
+  zone.addEventListener('pointerdown', e => { if (state.textContent !== 'none') return; ptrDown = true; sx = e.clientX; sy = e.clientY; });
+  zone.addEventListener('pointerup', e => { if (!ptrDown) return; ptrDown = false; end(e.clientX, e.clientY); });
+</script>
+</body>
+</html>

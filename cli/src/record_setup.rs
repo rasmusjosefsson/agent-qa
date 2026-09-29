@@ -16,17 +16,24 @@ pub fn run(args: &[String]) -> Result<u8> {
         return Ok(0);
     }
     if args.len() != 1 {
-        bail!("usage: record-setup <env-op-json>");
+        bail!("usage: record-setup <env-op-json>|-");
     }
-    let raw: Json = serde_json::from_str(&args[0]).context("parse setup JSON")?;
-    let op = parse_env_op(&raw)?;
+    let raws: Vec<Json> = if args[0] == "-" {
+        let stdin = std::io::read_to_string(std::io::stdin()).context("read stdin")?;
+        crate::record_step::parse_stdin_drafts(&stdin).context("record-setup stdin")?
+    } else {
+        vec![serde_json::from_str(&args[0]).context("parse setup JSON")?]
+    };
     let mut state = RecorderState::load_active()?;
-    if let Some(warn) = opaque_origin_warning(&state.env_open, &op) {
-        eprintln!("{warn}");
+    for (i, raw) in raws.iter().enumerate() {
+        let op = parse_env_op(raw).with_context(|| format!("setup op {}", i + 1))?;
+        if let Some(warn) = opaque_origin_warning(&state.env_open, &op) {
+            eprintln!("{warn}");
+        }
+        state.env_open.push(op);
     }
-    state.env_open.push(op);
     state.save()?;
-    println!("recorded setup operation");
+    println!("recorded {} setup operation(s)", raws.len());
     Ok(0)
 }
 
@@ -67,7 +74,10 @@ fn print_help() {
         "agent-qa record-setup — append one replay setup operation
 
 Usage:
-  agent-qa record-setup '<env-op-json>'
+  agent-qa record-setup '<env-op-json>'    append one env op
+  agent-qa record-setup -                  read env ops as JSONL from stdin
+                                           (one op per line, blanks skipped,
+                                           errors name their line number)
 
 The JSON must be one schema-valid scenario/2 env.open operation. Supported
 kinds are fresh, useProfile, nav, cookie, localStorage, gql, and flag.
@@ -86,8 +96,38 @@ fn parse_env_op(raw: &Json) -> Result<EnvOp> {
         "env": { "open": [raw] },
         "steps": [],
     }))
-    .context("setup operation failed scenario schema validation")?;
+    .with_context(|| {
+        format!(
+            "setup operation failed scenario schema validation — {}",
+            kind_hint(raw)
+        )
+    })?;
     serde_json::from_value(raw.clone()).context("parse setup operation")
+}
+
+/// The oneOf schema error can't name the failing arm; restate the op's own
+/// kind plus its required fields so a malformed op is self-explanatory.
+fn kind_hint(raw: &Json) -> String {
+    let kind = raw
+        .get("kind")
+        .and_then(Json::as_str)
+        .unwrap_or("<missing>");
+    match kind {
+        "fresh" => "fresh takes no other fields".to_string(),
+        "useProfile" => "useProfile requires \"name\"".to_string(),
+        "nav" => "nav requires \"url\" (a URI)".to_string(),
+        "cookie" => "cookie requires \"name\" + \"value\"".to_string(),
+        "localStorage" => "localStorage requires \"key\" + \"value\"".to_string(),
+        "gql" => "gql requires \"url\" + \"query\"; \"forEach\" is a Value \
+             ({\"from\":\"literal\",\"literal\":...} or from-step), \
+             \"saveAs\" a bare name"
+            .to_string(),
+        "flag" => "flag requires \"name\" + \"enabled\"".to_string(),
+        other => format!(
+            "kind {other:?} is unknown — valid kinds: fresh, useProfile, nav, cookie, \
+             localStorage, gql, flag"
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -116,11 +156,15 @@ mod tests {
         .unwrap();
 
         run(&[r#"{"kind":"flag","name":"example-flag","enabled":true}"#.into()]).unwrap();
+        // a second valid op lands in order behind the first
+        run(&[r#"{"kind":"flag","name":"other-flag","enabled":false}"#.into()]).unwrap();
 
         let state = RecorderState::load_active().unwrap();
-        assert!(
-            matches!(state.env_open.as_slice(), [EnvOp::Flag { name, enabled: true, .. }] if name == "example-flag")
-        );
+        assert!(matches!(
+            state.env_open.as_slice(),
+            [EnvOp::Flag { name: a, enabled: true, .. }, EnvOp::Flag { name: b, enabled: false, .. }]
+                if a == "example-flag" && b == "other-flag"
+        ));
         std::env::remove_var(paths::RECORD_DIR_ENV);
     }
 
@@ -129,6 +173,13 @@ mod tests {
         let raw: Json = serde_json::json!({ "kind": "flag", "name": "x" });
         let err = parse_env_op(&raw).unwrap_err().to_string();
         assert!(err.contains("schema"));
+        assert!(err.contains("flag requires \"name\" + \"enabled\""));
+    }
+
+    #[test]
+    fn kind_hint_names_unknown_kinds() {
+        let raw: Json = serde_json::json!({ "kind": "bogus" });
+        assert!(kind_hint(&raw).contains("valid kinds"));
     }
 
     fn nav() -> EnvOp {
