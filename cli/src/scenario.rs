@@ -223,7 +223,7 @@ pub enum NameMatch {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LocatorTolerance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digits: Option<bool>,
@@ -235,7 +235,7 @@ pub struct LocatorTolerance {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LocatorRole {
     pub role: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -247,12 +247,14 @@ pub struct LocatorRole {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LocatorRawSpec {
     pub kind: RawLocatorKind,
     pub value: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LocatorRaw {
     pub raw: LocatorRawSpec,
     pub reason: String,
