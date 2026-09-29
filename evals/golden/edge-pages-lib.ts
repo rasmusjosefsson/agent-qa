@@ -73,6 +73,7 @@ export interface EdgeGolden extends GoldenContext {
   waitLoad(state: string, intent: string): Promise<void>;
   assertElementText(selector: string, expected: string, intent: string): Promise<void>;
   assertElementAttribute(selector: string, attribute: string, predicate: string, expected: string, intent: string): Promise<void>;
+  assertElementCount(selector: string, predicate: string, count: number, intent: string): Promise<void>;
   assertElementAbsent(selector: string, intent: string): Promise<void>;
   assertElementPresent(selector: string, intent: string): Promise<void>;
   assertUrlContains(fragment: string, intent: string): Promise<void>;
@@ -348,6 +349,9 @@ export async function runEdgeGolden(
     },
     async assertElementAttribute(selector, attribute, predicate, expected, stepIntent) {
       await record(ctx, "assert", { kind: "elementAttribute", args: [selector, attribute, predicate, expected], intent: stepIntent });
+    },
+    async assertElementCount(selector, predicate, count, stepIntent) {
+      await record(ctx, "assert", { kind: "elementCount", args: [selector, predicate, count], intent: stepIntent });
     },
     async assertElementAbsent(selector, stepIntent) {
       await record(ctx, "assert", { kind: "elementAbsent", args: [selector], intent: stepIntent });
