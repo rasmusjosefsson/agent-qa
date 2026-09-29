@@ -1729,13 +1729,100 @@ fn click_locator(
     scope: &mut ValueScope,
     scenario_dir: &std::path::Path,
 ) -> Result<()> {
-    match act_on_locator(session, loc, scope, RoleAct::Click, None, scenario_dir) {
+    let probe = ClickProbe::arm(session);
+    let res = match act_on_locator(session, loc, scope, RoleAct::Click, None, scenario_dir) {
         Err(e) if dialog_blocking_error(&e) && dialog_pending_within(session, 3000) => {
             eprintln!("[v2-replay] click tolerated — dialog pending");
             Ok(())
         }
         other => other,
+    };
+    if res.is_ok() {
+        probe.warn_if_inert(session, loc);
     }
+    res
+}
+
+/// Arms a page-side observer before a click so a click whose handler never
+/// ran (unbound listener, detached element, covered target) surfaces as a
+/// warning instead of a confusingly-unrelated wait failure one step later.
+/// Advisory only: legitimate clicks can change nothing (focus, backdrop
+/// dismissal, canvas paints).
+struct ClickProbe {
+    armed: bool,
+}
+
+impl ClickProbe {
+    fn arm(session: &str) -> Self {
+        let armed = browser::eval_expression(
+            session,
+            "(function(){try{window.__aqClick={u:location.href,m:0,r:performance.getEntriesByType('resource').length};new MutationObserver(function(x){window.__aqClick.m+=x.length}).observe(document.documentElement,{subtree:true,childList:true,attributes:true,characterData:true});}catch(e){}return '1'})()",
+        )
+        .is_ok();
+        Self { armed }
+    }
+
+    /// Poll briefly for an observable effect — navigation (a full nav also
+    /// wipes `__aqClick`), DOM mutation, a completed fetch, or a pending
+    /// native dialog. Early-exits on the first effect, so a working click
+    /// costs ~one extra eval; a truly inert one costs the full window.
+    fn warn_if_inert(&self, session: &str, loc: &Locator) {
+        if !self.armed {
+            return;
+        }
+        for _ in 0..4 {
+            std::thread::sleep(std::time::Duration::from_millis(180));
+            if click_effect_seen(session) || browser::dialog_pending(session) {
+                return;
+            }
+        }
+        eprintln!(
+            "[v2-replay] click on {} produced no observable effect (no navigation, DOM change, request, or dialog) — the handler may not have been bound",
+            click_locator_label(loc)
+        );
+    }
+}
+
+/// False means "definitely inert"; any doubt (eval failure, parse failure,
+/// missing probe — a navigation removes it) reads as an effect.
+fn click_effect_seen(session: &str) -> bool {
+    let Ok(out) = browser::eval_expression(
+        session,
+        "(function(){var p=window.__aqClick;if(!p)return '{\"nav\":true}';return JSON.stringify({nav:location.href!==p.u,m:p.m,r:performance.getEntriesByType('resource').length-p.r})})()",
+    ) else {
+        return true;
+    };
+    // eval result arrives as a JSON string literal; unwrap then parse.
+    let Ok(inner) = serde_json::from_str::<String>(out.trim()) else {
+        return true;
+    };
+    let Ok(v) = serde_json::from_str::<Json>(&inner) else {
+        return true;
+    };
+    v["nav"].as_bool().unwrap_or(false)
+        || v["m"].as_u64().unwrap_or(0) > 0
+        || v["r"].as_i64().unwrap_or(0) != 0
+}
+
+fn click_locator_label(loc: &Locator) -> String {
+    let (kind, value) = match loc {
+        Locator::Role(r) => ("role", r.role.clone()),
+        Locator::Raw(raw) => {
+            let kind = match raw.raw.kind {
+                RawLocatorKind::Css => "css",
+                RawLocatorKind::TestId => "testId",
+                RawLocatorKind::Xpath => "xpath",
+                RawLocatorKind::Text => "text",
+            };
+            (kind, raw.raw.value.clone())
+        }
+    };
+    let v = if value.chars().count() > 80 {
+        format!("{}…", value.chars().take(80).collect::<String>())
+    } else {
+        value
+    };
+    format!("{kind} '{v}'")
 }
 
 /// Poll `dialog status` briefly — the daemon can take a beat to surface the
@@ -3445,6 +3532,33 @@ mod tests {
         let out = fs::read_to_string(&log).unwrap();
         clear_fake();
         assert!(out.contains("Select All"), "got: {out}");
+    }
+
+    #[test]
+    fn click_locator_label_maps_kinds_and_truncates() {
+        let css = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "click",
+            "on": { "raw": { "kind": "css", "value": "#save" }, "reason": "t" }
+        }));
+        let Step::Do { on, .. } = &css else { panic!() };
+        assert_eq!(click_locator_label(on.as_ref().unwrap()), "css '#save'");
+
+        let role = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "click",
+            "on": { "role": "button" }
+        }));
+        let Step::Do { on, .. } = &role else { panic!() };
+        assert_eq!(click_locator_label(on.as_ref().unwrap()), "role 'button'");
+
+        let long = "x".repeat(200);
+        let txt = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "click",
+            "on": { "raw": { "kind": "text", "value": long }, "reason": "t" }
+        }));
+        let Step::Do { on, .. } = &txt else { panic!() };
+        let label = click_locator_label(on.as_ref().unwrap());
+        assert!(label.starts_with("text '") && label.ends_with("…'"));
+        assert!(label.len() < 100);
     }
 
     #[test]
