@@ -266,6 +266,7 @@
     "golden:struct:tc01": "bun golden/struct-tc01.ts",
     "selftest:accept": "bun selftest/accept.ts",
     "golden:emulate:tc01": "bun golden/emulate-tc01.ts",
+    "golden:emulate:tc02": "bun golden/emulate-tc02.ts",
     "golden:edge:tc01": "bun golden/edge-tc01.ts",
     "golden:edge:tc02": "bun golden/edge-tc02.ts",
     "golden:edge:tc03": "bun golden/edge-tc03.ts",

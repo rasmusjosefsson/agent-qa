@@ -982,6 +982,7 @@ fn emulate_apply(
         "reducedMotion",
         "headers",
         "credentials",
+        "permissions",
     ];
     for k in params.keys() {
         if !KEYS.contains(&k.as_str()) {
@@ -1030,18 +1031,61 @@ fn emulate_apply(
         .map_err(|e| anyhow!("set credentials: {e}"))?;
     }
     if let Some(v) = params.get("geo") {
-        let mut f = |k: &str| -> Result<String> {
+        let mut f = |k: &str| -> Result<f64> {
             let n = v
                 .get(k)
                 .ok_or_else(|| anyhow!("params.geo.{k} is required"))?;
             match n {
-                Json::Number(n) => Ok(n.to_string()),
-                Json::String(_) => Ok(subst(n, scope)?),
+                Json::Number(n) => n
+                    .as_f64()
+                    .ok_or_else(|| anyhow!("params.geo.{k} must be a finite number")),
+                Json::String(_) => subst(n, scope)?
+                    .parse::<f64>()
+                    .map_err(|_| anyhow!("params.geo.{k} must be a number")),
                 _ => bail!("params.geo.{k} must be a number"),
             }
         };
-        browser::set_emulation(session, &["geo".into(), f("lat")?, f("lng")?])
-            .map_err(|e| anyhow!("set geo: {e}"))?;
+        let (lat, lng) = (f("lat")?, f("lng")?);
+        let accuracy = v.get("accuracy").and_then(|a| a.as_f64()).unwrap_or(50.0);
+        // `set geo` scopes the override to the daemon's current target —
+        // when a leftover page (e.g. chrome://newtab) holds it, the real
+        // page never sees the override. Prefer our own flat-session
+        // override aimed at the active page; fall back to `set geo` when
+        // no page exists yet (emulate before the first goto).
+        if !crate::cdp::set_geo_override(session, lat, lng, accuracy)
+            .map_err(|e| anyhow!("set geo override: {e}"))?
+        {
+            browser::set_emulation(session, &["geo".into(), lat.to_string(), lng.to_string()])
+                .map_err(|e| anyhow!("set geo: {e}"))?;
+        }
+        // A geolocation override without the permission leaves
+        // navigator.geolocation hanging. Grants must be origin-scoped —
+        // unscoped grants no-op on the synthetic browser context headless
+        // pages run in (see cdp::grant_permissions). No page → nothing to
+        // grant yet; the override above still applies post-goto.
+        let origin = crate::cdp::active_page_origin(session)
+            .map_err(|e| anyhow!("resolve page origin: {e}"))?;
+        crate::cdp::grant_permissions(session, &["geolocation"], origin.as_deref())
+            .map_err(|e| anyhow!("grant geolocation permission: {e}"))?;
+    }
+    if let Some(v) = params.get("permissions") {
+        let list = v
+            .as_array()
+            .ok_or_else(|| anyhow!("params.permissions must be an array of strings"))?;
+        let mut names: Vec<String> = Vec::new();
+        for p in list {
+            match p {
+                Json::String(_) => names.push(subst(p, scope)?),
+                _ => bail!("params.permissions entries must be strings"),
+            }
+        }
+        if !names.is_empty() {
+            let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+            let origin = crate::cdp::active_page_origin(session)
+                .map_err(|e| anyhow!("resolve page origin: {e}"))?;
+            crate::cdp::grant_permissions(session, &refs, origin.as_deref())
+                .map_err(|e| anyhow!("grant permissions {names:?}: {e}"))?;
+        }
     }
     if let Some(v) = params.get("offline") {
         let on = v
