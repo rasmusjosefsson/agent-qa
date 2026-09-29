@@ -205,6 +205,7 @@
     "golden:edge:tc32": "bun golden/edge-tc32.ts",
     "golden:edge:tc33": "bun golden/edge-tc33.ts",
     "golden:edge:tc34": "bun golden/edge-tc34.ts",
+    "golden:shub:tc01": "bun golden/shadow-dom-tc01.ts",
     "golden:sauce:s01": "bun golden/sauce-tc01.ts",
     "golden:sauce:s02": "bun golden/sauce-tc02.ts",
     "golden:sauce:s03": "bun golden/sauce-tc03.ts",
@@ -214,10 +215,10 @@
     "golden:edge:tc35": "bun golden/edge-tc35.ts",
     "golden:struct:tc01": "bun golden/struct-tc01.ts",
     "golden:emulate:tc01": "bun golden/emulate-tc01.ts",
-    "golden:formy:tc01": "bun golden/formy-tc01.ts",
-    "golden:formy:tc02": "bun golden/formy-tc02.ts",
-    "golden:formy:tc03": "bun golden/formy-tc03.ts",
-    "golden:formy:tc04": "bun golden/formy-tc04.ts",
+    "golden:cc:tc01": "bun golden/cc-tc01.ts",
+    "golden:cc:tc02": "bun golden/cc-tc02.ts",
+    "golden:cc:tc03": "bun golden/cc-tc03.ts",
+    "golden:cc:tc04": "bun golden/cc-tc04.ts",
     "golden:gestures:tc01": "bun run golden/gestures-tc01.ts",
     "golden:crawl:tc01": "bun golden/crawl-tc01.ts",
     "golden:todomvc:tc01": "bun golden/todomvc-tc01.ts",
@@ -230,7 +231,6 @@
     "golden:state:tc01": "bun golden/state-tc01.ts",
     "golden:ws:tc01": "bun golden/ws-tc01.ts",
     "golden:idb:tc01": "bun golden/idb-tc01.ts",
-    "golden:shub:tc01": "bun golden/shadow-dom-tc01.ts",
     "golden:wiki:tc01": "bun golden/wiki-tc01.ts",
     "golden:wiki:tc02": "bun golden/wiki-tc02.ts",
     "golden:wiki:tc03": "bun golden/wiki-tc03.ts",
@@ -267,7 +267,11 @@
     "golden:tp:tc01": "bun golden/tp-tc01.ts",
     "golden:tp:tc02": "bun golden/tp-tc02.ts",
     "golden:tp:tc03": "bun golden/tp-tc03.ts",
-    "golden:tp:tc04": "bun golden/tp-tc04.ts"
+    "golden:tp:tc04": "bun golden/tp-tc04.ts",
+    "golden:formy:tc01": "bun golden/formy-tc01.ts",
+    "golden:formy:tc02": "bun golden/formy-tc02.ts",
+    "golden:formy:tc03": "bun golden/formy-tc03.ts",
+    "golden:formy:tc04": "bun golden/formy-tc04.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"
