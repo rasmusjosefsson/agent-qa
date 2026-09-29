@@ -14,6 +14,7 @@ mod auto_heal;
 mod browser;
 mod buffer;
 mod byo_doctor;
+mod cdp;
 mod cdp_url;
 mod claims;
 mod compare;
@@ -64,6 +65,7 @@ mod shot_accept;
 mod sidecar;
 mod skills;
 mod smart_click;
+mod smart_fill;
 mod start;
 mod test_util;
 mod time;
@@ -133,6 +135,7 @@ fn main() -> ExitCode {
         "perf-snapshot" => perf_snapshot::run(rest),
         "fill-unique" => fill_unique::run(rest),
         "smart-click" => smart_click::run(rest),
+        "smart-fill" => smart_fill::run(rest),
         "heal-respond" => heal_respond::run(rest),
         "heal-promote" => heal_promote::run(rest),
         "heal-apply" => heal_apply::run(rest),
@@ -142,7 +145,7 @@ fn main() -> ExitCode {
         "init" => init::cli(rest),
         _ => {
             eprintln!(
-"agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, run-report, init."
+"agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, smart-fill, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, run-report, init."
 
             );
             eprintln!("Run `agent-qa --help` for usage.");
@@ -264,6 +267,7 @@ Verbs:
   perf-snapshot [--sid <sid>]   Capture navigation + paint timings
   fill-unique <Label> --template <…>   Fill a unique-token field + record
   smart-click \"<name>\" [--role <r>]   Click by accessible name + auto-record
+  smart-fill \"<name>\" <value> [--role <r>]  Fill a field by accessible name + auto-record
   heal-respond <sid> --step <id> (--value <…> | --reject)   Record a caller-driven heal
   heal-promote <sid> [--run <id>] [--steps <…>] [--apply]   Promote replay-side patches
   heal-apply <sid> --step <id> [--target-step <…>] [--dry-run]   Patch buffer in place
