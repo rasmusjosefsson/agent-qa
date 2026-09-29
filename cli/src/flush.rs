@@ -273,6 +273,37 @@ fn insert_auto_shot_claims(steps: &mut Vec<crate::scenario::Step>) {
     crate::buffer::normalize_ids(steps);
 }
 
+/// Strip `;k=v` matrix params (e.g. `;jsessionid=…`) from each path segment —
+/// they are almost always session-scoped, so a claim matcher carrying one can
+/// never match a fresh session at replay.
+fn strip_matrix_params(url_path: &str) -> String {
+    url_path
+        .split('/')
+        .map(|seg| seg.split(';').next().unwrap_or(seg))
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Rewrite entity ids in URL path segments into regexes — an auto claim
+/// recorded as `…/customers/63827` can never match the fresh id a replay
+/// mints, so all-numeric segments become `\d+` and long hex/uuid segments
+/// become `[0-9a-fA-F-]{8,}`.
+fn normalize_volatile_path_segments(url_path: &str) -> String {
+    url_path
+        .split('/')
+        .map(|seg| {
+            if !seg.is_empty() && seg.chars().all(|c| c.is_ascii_digit()) {
+                "\\d+".to_string()
+            } else if seg.len() >= 8 && seg.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+                "[0-9a-fA-F-]{8,}".to_string()
+            } else {
+                seg.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// Append a `networkFired` check per distinct (method, path) the session
 /// captured — XHR/Fetch/EventSource/WebSocket plus any non-GET (POSTs are
 /// API calls whatever the resource type reports). Document/script/css
@@ -291,8 +322,10 @@ fn insert_auto_network_claims(
         if !is_api {
             continue;
         }
-        let path = r.url.split(['?', '#']).next().unwrap_or(&r.url);
-        if !seen.insert((r.method.clone(), path.to_string())) {
+        let path = normalize_volatile_path_segments(&strip_matrix_params(
+            r.url.split(['?', '#']).next().unwrap_or(&r.url),
+        ));
+        if !seen.insert((r.method.clone(), path.clone())) {
             continue;
         }
         added += 1;
@@ -659,6 +692,7 @@ mod tests {
             resource_type: Some(rt.to_string()),
             mime_type: None,
             post_data: None,
+            ws_frames: vec![],
         };
         let mut steps = vec![crate::scenario::Step::Do {
             id: "s0".into(),
@@ -692,6 +726,60 @@ mod tests {
         assert_eq!(
             json2["claim"]["subject"]["network"]["urlMatches"],
             "https://x/api/me"
+        );
+    }
+
+    #[test]
+    fn flush_auto_network_claims_normalize_volatile_urls() {
+        use crate::browser::CapturedRequest;
+        let mut steps = vec![];
+        let requests = vec![
+            CapturedRequest {
+                request_id: String::new(),
+                url: "https://x/app/login.htm;jsessionid=ABC123".into(),
+                method: "POST".into(),
+                status: Some(200),
+                resource_type: Some("XHR".into()),
+                mime_type: None,
+                post_data: None,
+                ws_frames: vec![],
+            },
+            CapturedRequest {
+                request_id: String::new(),
+                url: "https://x/services_proxy/bank/customers/63827".into(),
+                method: "GET".into(),
+                status: Some(200),
+                resource_type: Some("XHR".into()),
+                mime_type: None,
+                post_data: None,
+                ws_frames: vec![],
+            },
+            CapturedRequest {
+                request_id: String::new(),
+                url: "https://x/api/items/550e8400-e29b-41d4-a716".into(),
+                method: "GET".into(),
+                status: Some(200),
+                resource_type: Some("Fetch".into()),
+                mime_type: None,
+                post_data: None,
+                ws_frames: vec![],
+            },
+        ];
+        insert_auto_network_claims(&mut steps, &requests);
+        let json = serde_json::to_value(&steps[0]).unwrap();
+        assert_eq!(
+            json["claim"]["subject"]["network"]["urlMatches"],
+            "https://x/app/login.htm"
+        );
+        let json = serde_json::to_value(&steps[1]).unwrap();
+        assert_eq!(
+            json["claim"]["subject"]["network"]["urlMatches"],
+            "https://x/services_proxy/bank/customers/\\d+"
+        );
+        let json = serde_json::to_value(&steps[2]).unwrap();
+        assert_eq!(
+            json["claim"]["subject"]["network"]["urlMatches"],
+            "https://x/api/items/[0-9a-fA-F-]{8,}"
         );
     }
 

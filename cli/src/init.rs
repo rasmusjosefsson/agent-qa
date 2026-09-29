@@ -36,7 +36,7 @@ const HELLO: &str = r#"{
       "claim": {
         "subject": { "url": true },
         "predicate": "contains",
-        "value": { "from": "literal", "literal": "example.com" }
+        "value": "example.com"
       }
     }
   ]
@@ -75,6 +75,8 @@ jobs:
         run: |
           npm install --no-audit --no-fund agent-qa agent-browser
           ./node_modules/.bin/agent-browser install
+      - name: lint scenarios
+        run: ./node_modules/.bin/agent-qa scenario check-all
       - name: replay suite
         id: gate
         working-directory: .
@@ -100,6 +102,15 @@ jobs:
 "#;
 
 pub fn cli(args: &[String]) -> Result<u8> {
+    if args
+        .iter()
+        .any(|a| matches!(a.as_str(), "-h" | "--help" | "help"))
+    {
+        println!(
+            "agent-qa init — bootstrap an agent-qa scenario directory\n\nUsage:\n  agent-qa init [dir] [--force] [--ci]\n\n  dir      Target directory (default: cwd)\n  --force  Overwrite existing files (scenario.json, agent-qa.toml)\n  --ci     Also write .github/workflows/agent-qa.yml — a replay-on-PR gate"
+        );
+        return Ok(0);
+    }
     let mut root: Option<PathBuf> = None;
     let mut force = false;
     let mut ci = false;
@@ -246,5 +257,13 @@ mod tests {
         fs::write(&wf, "custom").unwrap();
         init_at(tmp.path(), false, true, &mut |_| {}).unwrap();
         assert_eq!(fs::read_to_string(&wf).unwrap(), "custom");
+    }
+
+    /// `init --help` prints usage (it used to fail "unknown flag").
+    #[test]
+    fn help_flag_prints_usage() {
+        for args in [vec!["--help".to_string()], vec!["-h".to_string()]] {
+            assert_eq!(cli(&args).unwrap(), 0, "args {args:?}");
+        }
     }
 }

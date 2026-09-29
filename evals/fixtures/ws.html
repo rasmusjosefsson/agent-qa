@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>WebSocket + EventSource fixture</title>
+  </head>
+  <body>
+    <!-- Served over http by the golden runner's in-process server, which
+         also hosts the /socket upgrade and the /events SSE stream on the
+         same origin — the page derives both endpoints from location.host. -->
+    <h1>Sockets fixture</h1>
+    <button id="connect" data-testid="connect">Connect socket</button>
+    <button id="events" data-testid="events">Open events</button>
+    <div id="out" data-testid="out">idle</div>
+    <script>
+      const out = document.getElementById("out");
+      document.getElementById("connect").addEventListener("click", () => {
+        out.textContent = "connecting";
+        const ws = new WebSocket(`ws://${location.host}/socket`);
+        ws.onopen = () => ws.send("hello");
+        ws.onmessage = (e) => {
+          out.textContent = `ws:${e.data}`;
+        };
+        ws.onerror = () => {
+          out.textContent = "ws:error";
+        };
+      });
+      document.getElementById("events").addEventListener("click", () => {
+        const es = new EventSource("/events");
+        es.onmessage = (e) => {
+          out.textContent = `sse:${e.data}`;
+        };
+      });
+    </script>
+  </body>
+</html>

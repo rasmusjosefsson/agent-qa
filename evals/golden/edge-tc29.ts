@@ -1,35 +1,36 @@
 import { runEdgeGolden } from "./edge-pages-lib";
 
-// Edge case: the site's own auth flow — login with flash message, secure
-// area, logout with a second flash.
+// Edge case: redirect hops keep their real status — /redirector's link
+// does GET /redirect → 302 → GET /status_codes. The daemon's request log
+// lists the hop with no status; the own-CDP Network capture fills it in
+// (requestWillBeSent.redirectResponse).
 await runEdgeGolden(
   "tc29",
-  "form authentication: login flash, secure area, logout flash",
-  "/login",
-  "input#username",
+  "redirect chain records the hop's 302, not a missing status",
+  "/redirector",
+  ".example a[href='redirect']",
   async (b) => {
     await b.openPage();
-    await b.fillSelector("#username", "tomsmith", "username");
-    await b.fillSelector("#password", "SuperSecretPassword!", "password");
-    await b.clickSelector("button.radius", "log in");
-    await b.waitSelector("#flash", "post-login flash");
-    await b.assertElementAttribute(
-      "#flash",
-      "text",
-      "contains",
-      "You logged into a secure area",
-      "success flash text",
+    await b.clickSelector(
+      ".example a[href='redirect']",
+      "follow the redirect link",
     );
-    await b.assertUrlContains("/secure", "on the secure area");
-    await b.clickSelector("a.button.secondary", "log out");
-    await b.waitSelector("#flash", "post-logout flash");
-    await b.assertElementAttribute(
-      "#flash",
-      "text",
-      "contains",
-      "You logged out",
-      "logout flash text",
+    await b.assertElementText(
+      "h3",
+      "Status Codes",
+      "landed on the status-code index",
     );
-    await b.assertUrlContains("/login", "back on the login page");
+    await b.assertNetworkStatus(
+      { urlMatches: "the-internet.herokuapp.com/redirect$", method: "GET" },
+      "equals",
+      "302",
+      "the redirect hop itself answered 302",
+    );
+    await b.assertNetworkStatus(
+      { urlMatches: "the-internet.herokuapp.com/status_codes$" },
+      "equals",
+      "200",
+      "the final destination answered 200",
+    );
   },
 );
