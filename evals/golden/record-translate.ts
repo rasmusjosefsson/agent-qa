@@ -290,6 +290,13 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
             args[2] ?? "equals",
             args[3],
           );
+        case "elementCount":
+          return checkStep(
+            intent,
+            { element: css(args[0]), ofKind: "count" },
+            "equals",
+            args[1],
+          );
         case "fileExists":
           return checkStep(intent, { file: args[0] }, "exists");
         case "fileAbsent":
