@@ -88,16 +88,18 @@ the picture shifts materially.
     through `find_role_act` unguarded (resolving role+name in-page needs
     the role engine), and a daemon-side fix upstream would be the real
     close.
-13. **Record-side resolution is still first-match** — replay prefers the
-    first *visible* css match (#348), but the live `agent-browser`
-    `click`/`wait`/`fill` that golden runners drive keep first-match
-    semantics: a hidden twin refuses the trusted click (`covered by
-    #main-header`) or hangs `wait` forever. Lambdatest exposed this on
-    the record path — worked around with `clickSelectorForce` (eval
-    `.click()` on the first match, safe because the twins share the
-    delegated handler). Real closes: an upstream prefer-visible in
-    agent-browser, or a record-side helper that resolves visibility
-    first and drives the chosen node by ref.
+13. ~~**Record-side resolution is still first-match**~~ — closed for the
+    golden runners by `evals/golden/visible.ts` (#356): `pickVisible`
+    makes the same visibility pick replay does, `clickVisibleEval`
+    dispatches mousedown/mouseup/click on it, and `clickTrustedOrVisible`
+    keeps the trusted `agent-browser click` with an unhittable-triggered
+    eval fallback — wired through every lib's `clickSelector`/
+    `domClickSelector`/`clickSelectorForce`. Lambdatest exposed this on
+    the record path — previously worked around with a first-match eval
+    click. Still open upstream: `agent-browser`'s own `click`/`wait`/
+    `fill` keep first-match semantics for hand-driven flows, and live-
+    pane recording resolves whatever DOM node the user physically
+    clicked (correct by definition).
 
 ### P5 — uncovered surfaces (smaller, real)
 
@@ -275,8 +277,8 @@ class the sweep list hadn't hit yet:
   `button.btn-cart` exists twice per product page; the first DOM match
   is a 0×0 sticky-bar twin covered by `#main-header`. Replay-side fix
   (#348): every css resolution for an action target picks
-  `els.find(visible) || els[0]`. Record-side is still first-match (gap
-  13). The same page puts a visible *category dropdown-toggle* before
+  `els.find(visible) || els[0]`. Record-side matched in #356 (gap 13
+  closed). The same page puts a visible *category dropdown-toggle* before
   the submit button inside the search form — a comma selector's "first
   visible" pick hits the wrong control; tighten to the actual submit
   (`form button.type-text`).
