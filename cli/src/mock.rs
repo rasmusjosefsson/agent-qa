@@ -232,17 +232,27 @@ pub(crate) fn seed_from_har(session: &str, scenario_dir: &Path, run_id: &str) ->
         .join("replays")
         .join(run_id)
         .join("network.har");
-    let text = fs::read_to_string(&har_path).with_context(|| {
-        format!(
-            "--mock-from {run_id:?}: no network.har at {} (record one with `replay --har`)",
-            har_path.display()
-        )
-    })?;
     if har_is_stale(&har_path, &scenario_dir.join("scenario.json")) {
         eprintln!(
             "[v2-replay] --mock-from {run_id:?}: scenario.json is newer than the recording — re-record with `replay --har` if steps changed"
         );
     }
+    seed_from_har_file(session, &har_path)
+}
+
+/// Like `seed_from_har` but takes the HAR file's path directly — `start
+/// --mock-from <path>` records against stubs without a scenario dir.
+pub(crate) fn seed_from_har_path(session: &str, har_path: &Path) -> Result<usize> {
+    seed_from_har_file(session, har_path)
+}
+
+fn seed_from_har_file(session: &str, har_path: &Path) -> Result<usize> {
+    let text = fs::read_to_string(har_path).with_context(|| {
+        format!(
+            "--mock-from: no network.har at {} (record one with `replay --har`)",
+            har_path.display()
+        )
+    })?;
     let har: Json = serde_json::from_str(&text)
         .with_context(|| format!("--mock-from: parse {}", har_path.display()))?;
     let entries = har["log"]["entries"]
@@ -427,6 +437,27 @@ mod tests {
         let js = install_js(&[r], false);
         assert!(js.contains("Failed to fetch"));
         assert!(js.contains("new Event('error')"));
+    }
+
+    #[test]
+    fn seed_from_har_path_accepts_a_direct_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let har = tmp.path().join("network.har");
+        std::fs::write(
+            &har,
+            r#"{"log":{"entries":[
+              {"request":{"url":"https://x/api/u","method":"GET"},
+               "response":{"status":201,"content":{"text":"{\"ok\":true}"}}}
+            ]}}"#,
+        )
+        .unwrap();
+        let n = seed_from_har_path("s-direct", &har).unwrap();
+        assert_eq!(n, 1);
+        let rs = rules("s-direct");
+        assert_eq!(rs[0].url, "https://x/api/u");
+        assert_eq!(rs[0].status, 201);
+        assert_eq!(rs[0].body, "{\"ok\":true}");
+        assert!(seed_from_har_path("s-miss", &tmp.path().join("none.har")).is_err());
     }
 
     #[test]
