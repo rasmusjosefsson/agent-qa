@@ -84,6 +84,11 @@
             "reason": { "type": "string", "minLength": 1 }
           },
           "$comment": "Named-and-shamed escape hatch. `reason` is required so PR review sees why we fell off the accessible-name + role rails."
+        },
+        {
+          "type": "string",
+          "pattern": "^(css|xpath|testId|text):\\S+$",
+          "$comment": "Shorthand for the named raw locator — \"css:sel\", \"xpath:expr\", \"testId:key\", \"text:txt\". Lowers to {\"raw\":{kind,value},\"reason\":\"locator shorthand\"}."
         }
       ]
     },
