@@ -151,3 +151,39 @@ persisted, logout cleared the session cookie:
 `storage` takes `"key"` (localStorage) or `{ "key": "…", "scope":
 "local"|"session" }`; `path` walks a JSON-encoded value. `cookie` reads
 `document.cookie` — `httpOnly` cookies are invisible there.
+
+## `do/state` — `indexeddb` seeding
+
+`params.indexeddb` seeds IndexedDB stores — each entry is
+`{"db","store","keyPath"?,"clear"?,"put":[…]}`. With `keyPath` the `put`
+entries are full records; without it they are `{"key","value"}` pairs
+stored under out-of-line keys. `clear: true` empties the store first.
+Missing stores are created (a version bump on the open db):
+
+```json
+{ "id": "s2", "kind": "do", "verb": "state",
+  "params": { "indexeddb": [
+    { "db": "cart", "store": "items", "keyPath": "sku",
+      "put": [ { "sku": "sku-1", "qty": 2 } ] },
+    { "db": "flags", "store": "out",
+      "put": [ { "key": "onboarded", "value": { "done": true } } ] }
+  ] } }
+```
+
+## `{"indexeddb"}` claim subject
+
+Assert an IndexedDB record — `{"db","store","key"?}`. Without `key` the
+subject is the object store itself (exists/notExists); with it, record
+predicates apply and `path` walks a JSON-structured value:
+
+```json
+{ "claim": {
+    "subject": { "indexeddb": { "db": "cart", "store": "items", "key": "sku-1" },
+                 "path": "$.qty" },
+    "predicate": "gte", "value": 1 } }
+{ "claim": { "subject": { "indexeddb": { "db": "flags", "store": "out" } },
+             "predicate": "exists" } }
+```
+
+The probe lists `indexedDB.databases()` before opening so `notExists`
+checks never create the db they're probing.

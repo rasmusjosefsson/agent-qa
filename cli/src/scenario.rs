@@ -420,6 +420,17 @@ pub struct StorageMatcher {
     pub scope: Option<String>,
 }
 
+/// `{"db": "d", "store": "s", "key": "k"}` — `key` is optional; without
+/// it the subject is the object store itself.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexedDbMatcher {
+    pub db: String,
+    pub store: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ClaimSubject {
@@ -504,6 +515,17 @@ pub enum ClaimSubject {
     /// `notExists` for presence; string predicates compare the value.
     Cookie {
         cookie: String,
+    },
+    /// `{"indexeddb": {"db": "d", "store": "s", "key": "k"}}` — assert on
+    /// an IndexedDB record. `exists`/`notExists` check record presence (the
+    /// store's presence when `key` is omitted); string predicates compare
+    /// the stored value; `path` walks a JSON-structured value. The db is
+    /// probed via `indexedDB.databases()` first so a missing db is reported
+    /// as absent rather than created by the check.
+    IndexedDb {
+        indexeddb: IndexedDbMatcher,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
     },
     /// `{"console": true}` or `{"console": {"type": "error"}}` — assert on
     /// messages the page logged this session. `exists`/`notExists` on
