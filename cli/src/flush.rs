@@ -325,8 +325,6 @@ fn insert_auto_network_claims(
         // `;` cuts matrix params — Java containers append a volatile
         // `;jsessionid=<id>` path segment whose record-time value can never
         // match a fresh replay session.
-        let path = r.url.split(['?', '#', ';']).next().unwrap_or(&r.url);
-        if !seen.insert((r.method.clone(), path.to_string())) {
         let path = normalize_volatile_path_segments(&strip_matrix_params(
             r.url.split(['?', '#']).next().unwrap_or(&r.url),
         ));
@@ -805,6 +803,7 @@ mod tests {
             resource_type: Some(rt.to_string()),
             mime_type: None,
             post_data: None,
+            ws_frames: vec![],
         };
         let mut steps = vec![];
         let requests = vec![
