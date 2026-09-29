@@ -129,9 +129,14 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           return doStep(intent, { verb: "rightclick", on: css(args[0]) });
         case "scrollToBySelector":
           return doStep(intent, { verb: "scrollTo", on: css(args[0]) });
-        case "scrollTop":
-          // scrollTo with no locator scrolls the page to the top.
-          return doStep(intent, { verb: "scrollTo" });
+        case "scrollTop": {
+          // args[0] is the pixel offset — a huge sentinel means "bottom".
+          const y = typeof args[0] === "number" ? args[0] : 0;
+          return doStep(intent, {
+            verb: "scrollTo",
+            params: y >= 99999 ? { to: "bottom" } : { y },
+          });
+        }
         case "dragBySelector":
           // args[0] = source css, args[1] = target css — drives do/drag.
           return doStep(intent, {
@@ -245,6 +250,13 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
         case "loadState":
           // c.state = "load" | "domcontentloaded" | "networkidle"
           return doStep(intent, { verb: "wait", params: { until: c.state } });
+        case "networkRequest":
+          // wait url — poll resource timing until a matching request
+          // completed. c.pattern is a glob; c.timeoutMs optional.
+          return doStep(intent, {
+            verb: "wait",
+            params: { url: c.pattern, ...(c.timeoutMs ? { timeoutMs: c.timeoutMs } : {}) },
+          });
         default:
           throw new Error(`record-step translate: unknown wait condition ${String(c.kind)}`);
       }

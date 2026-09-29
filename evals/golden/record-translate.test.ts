@@ -276,6 +276,25 @@ describe("toRecordDraft — new mappings land the right fields", () => {
     const [, d] = wait({ kind: "loadState", state: "networkidle" });
     expect(d).toMatchObject({ verb: "wait", params: { until: "networkidle" } });
   });
+  test("networkRequest wait maps to wait params.url", () => {
+    const [, d] = wait({ kind: "networkRequest", pattern: "*/api/quotes*" });
+    expect(d).toMatchObject({ verb: "wait", params: { url: "*/api/quotes*" } });
+  });
+  test("networkRequest wait threads timeoutMs", () => {
+    const [, d] = wait({ kind: "networkRequest", pattern: "*/x*", timeoutMs: 3000 });
+    expect(d).toMatchObject({
+      verb: "wait",
+      params: { url: "*/x*", timeoutMs: 3000 },
+    });
+  });
+  test("scrollTop sentinel maps to params.to bottom", () => {
+    const [, d] = action("scrollTop", [999999]);
+    expect(d).toMatchObject({ verb: "scrollTo", params: { to: "bottom" } });
+  });
+  test("scrollTop finite offset maps to params.y", () => {
+    const [, d] = action("scrollTop", [300]);
+    expect(d).toMatchObject({ verb: "scrollTo", params: { y: 300 } });
+  });
   test("unknown methods still throw", () => {
     expect(() => action("nopeNever")).toThrow(/unknown action method/);
     expect(() => wait({ kind: "mystery" })).toThrow(/unknown wait condition/);

@@ -70,6 +70,10 @@ export interface EdgeGolden extends GoldenContext {
   waitSelectorAbsent(selector: string, intent: string): Promise<void>;
   waitSelectorText(selector: string, text: string, intent: string): Promise<void>;
   waitLoad(state: string, intent: string): Promise<void>;
+  // `wait url` — poll resource timing until a matching request completed.
+  // Record-side nothing is pending (the request already fired); the wait
+  // exists for replay.
+  waitRequest(pattern: string, intent: string): Promise<void>;
   assertElementText(selector: string, expected: string, intent: string): Promise<void>;
   assertElementAttribute(selector: string, attribute: string, predicate: string, expected: string, intent: string): Promise<void>;
   assertElementAbsent(selector: string, intent: string): Promise<void>;
@@ -79,6 +83,8 @@ export interface EdgeGolden extends GoldenContext {
   assertPageError(matcher: true | { text?: string; url?: string }, predicate: string, value: string | undefined, intent: string): Promise<void>;
   assertNetworkStatus(matcher: Record<string, unknown>, predicate: string, value: string | undefined, intent: string): Promise<void>;
   assertNetworkFired(matcher: Record<string, unknown>, mustFire: boolean, intent: string): Promise<void>;
+  assertNetworkJson(matcher: Record<string, unknown>, path: string, predicate: string, value: unknown, intent: string): Promise<void>;
+  assertNetworkSilent(matcher: Record<string, unknown>, intent: string): Promise<void>;
   assertCookie(name: string, expectPresent: boolean, intent: string): Promise<void>;
   assertStorage(keyOrMatcher: string | { key: string; scope?: string }, expectPresent: boolean, intent: string): Promise<void>;
   assertStyle(selector: string, cssProperty: string, expected: string, intent: string): Promise<void>;
@@ -291,6 +297,9 @@ export async function runEdgeGolden(
     async waitLoad(state, stepIntent) {
       await record(ctx, "wait", { condition: { kind: "loadState", state }, intent: stepIntent });
     },
+    async waitRequest(pattern, stepIntent) {
+      await record(ctx, "wait", { condition: { kind: "networkRequest", pattern }, intent: stepIntent });
+    },
     async assertElementText(selector, expected, stepIntent) {
       await record(ctx, "assert", { kind: "elementText", args: [selector, expected], intent: stepIntent });
     },
@@ -362,6 +371,20 @@ export async function runEdgeGolden(
       await record(ctx, "assert", {
         kind: "networkFired",
         args: [matcher, mustFire],
+        intent: stepIntent,
+      });
+    },
+    async assertNetworkJson(matcher, path, predicate, value, stepIntent) {
+      await record(ctx, "assert", {
+        kind: "networkJson",
+        args: [matcher, path, predicate, value],
+        intent: stepIntent,
+      });
+    },
+    async assertNetworkSilent(matcher, stepIntent) {
+      await record(ctx, "assert", {
+        kind: "networkFired",
+        args: [matcher, false],
         intent: stepIntent,
       });
     },

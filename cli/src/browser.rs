@@ -952,6 +952,14 @@ pub fn eval_expression(session: &str, expression: &str) -> Result<String, AgentB
     Ok(r.stdout)
 }
 
+/// Dump the context's cookie jar via `agent-browser cookies` — CDP-level, so
+/// HttpOnly cookies (session/auth) are included where `document.cookie` is
+/// blind. Returns stdout in `name=value` line form; values may contain `=`.
+pub fn cookies(session: &str) -> Result<String, AgentBrowserError> {
+    let r = run(session, ["cookies"], RunOpts::new().capture())?;
+    Ok(r.stdout)
+}
+
 /// Poll the Resource Timing API until an entry URL matches `pattern`
 /// (substring, `*` = wildcard) — i.e. the request has completed — or
 /// `timeout_ms` elapses (error). For "request fired but still in flight"

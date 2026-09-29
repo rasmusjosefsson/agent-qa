@@ -242,7 +242,13 @@
     "golden:edge:tc25": "bun golden/edge-tc25.ts",
     "golden:edge:tc26": "bun golden/edge-tc26.ts",
     "golden:edge:tc27": "bun golden/edge-tc27.ts",
-    "golden:frame:tc01": "bun golden/frame-tc01.ts"
+    "golden:frame:tc01": "bun golden/frame-tc01.ts",
+    "golden:quotes:tc01": "bun golden/quotes-tc01.ts",
+    "golden:quotes:tc02": "bun golden/quotes-tc02.ts",
+    "golden:quotes:tc03": "bun golden/quotes-tc03.ts",
+    "golden:quotes:tc04": "bun golden/quotes-tc04.ts",
+    "golden:quotes:tc05": "bun golden/quotes-tc05.ts",
+    "golden:quotes:tc06": "bun golden/quotes-tc06.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"

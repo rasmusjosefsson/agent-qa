@@ -272,7 +272,7 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
             Ok(Some(response))
         }
         Verb::ScrollTo => {
-            scroll_to(ctx.session, on, scope)?;
+            scroll_to(ctx.session, on, params, scope)?;
             Ok(None)
         }
         Verb::Read => {
@@ -712,15 +712,32 @@ fn read_text(session: &str, loc: &Locator, scope: &mut ValueScope) -> anyhow::Re
 
 /// Scroll to a given target.
 ///
-/// - No `on` → `window.scrollTo(0, 0)` (top of page).
+/// - No `on` → `params.to:"bottom"` scrolls to the document end,
+///   `params.y:<px>` scrolls to that offset, otherwise `window.scrollTo(0, 0)`
+///   (top of page).
 /// - `on` Raw css → `document.querySelector(…).scrollIntoView({block: "center"})`.
 /// - `on` Raw xpath → same, via the centred variant.
 /// - `on` Raw testId → synthesised `[data-testid=…]` CSS.
 /// - `on` Role → not yet supported (needs ARIA-aware DOM traversal).
-fn scroll_to(session: &str, on: Option<&Locator>, scope: &mut ValueScope) -> anyhow::Result<()> {
+fn scroll_to(
+    session: &str,
+    on: Option<&Locator>,
+    params: Option<&std::collections::BTreeMap<String, Json>>,
+    scope: &mut ValueScope,
+) -> anyhow::Result<()> {
     use anyhow::bail;
     let expr = match on {
-        None => "(() => { window.scrollTo(0, 0); })()".to_string(),
+        None => {
+            let to = params.and_then(|p| p.get("to")).and_then(|v| v.as_str());
+            let y = params.and_then(|p| p.get("y")).and_then(|v| v.as_f64());
+            match (to, y) {
+                (Some("bottom"), _) => {
+                    "(() => { window.scrollTo(0, document.body.scrollHeight); })()".to_string()
+                }
+                (_, Some(y)) => format!("(() => {{ window.scrollTo(0, {y}); }})()"),
+                _ => "(() => { window.scrollTo(0, 0); })()".to_string(),
+            }
+        }
         Some(Locator::Raw(raw)) => {
             let v = crate::value::substitute_scenario_vars(&raw.raw.value, scope);
             match raw.raw.kind {
@@ -2162,6 +2179,26 @@ mod tests {
         let out = run_one(&s);
         assert!(out.contains("--session sess eval"), "got: {out}");
         assert!(out.contains("window.scrollTo(0, 0)"), "got: {out}");
+    }
+
+    #[test]
+    fn scrollto_to_bottom_scrolls_document_height() {
+        let s = parse(json!({
+            "id": "s1", "intent": "bottom", "kind": "do", "verb": "scrollTo",
+            "params": { "to": "bottom" }
+        }));
+        let out = run_one(&s);
+        assert!(out.contains("document.body.scrollHeight"), "got: {out}");
+    }
+
+    #[test]
+    fn scrollto_y_scrolls_to_pixel_offset() {
+        let s = parse(json!({
+            "id": "s1", "intent": "down 200", "kind": "do", "verb": "scrollTo",
+            "params": { "y": 200 }
+        }));
+        let out = run_one(&s);
+        assert!(out.contains("window.scrollTo(0, 200)"), "got: {out}");
     }
 
     #[test]
