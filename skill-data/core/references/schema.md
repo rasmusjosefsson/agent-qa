@@ -64,10 +64,15 @@ before a `goto`/`reload`:
 
 Recognized `params` keys: `localStorage`, `sessionStorage`, `cookies`
 (each entry `{"name","value","path"?,"domain"?,"maxAge"?,"secure"?,"sameSite"?}`),
-`clearCookies`, `clearLocalStorage`, `clearSessionStorage`. Cookies go through
-`document.cookie`, so `httpOnly` values cannot be seeded — auth plugins cover
-that. Assert the result with `{"storage": "key"}` / `{"storage": {"key": "k",
-"scope": "session"}, "path": "$.json.path"}` or `{"cookie": "name"}` claims.
+`clearCookies`, `clearLocalStorage`, `clearSessionStorage`, and `indexeddb`
+(an array of `{"db","store","keyPath"?,"clear"?,"put":[…]}` — with `keyPath`
+the `put` entries are full records, without it `{"key","value"}` pairs stored
+under out-of-line keys; missing stores are created via a db version bump).
+Cookies go through `document.cookie`, so `httpOnly` values cannot be seeded —
+auth plugins cover that. Assert the result with `{"storage": "key"}` /
+`{"storage": {"key": "k", "scope": "session"}, "path": "$.json.path"}`,
+`{"cookie": "name"}`, or `{"indexeddb": {"db","store","key"?}, "path"?}`
+claims (without `key` the subject is the object store itself).
 
 ### Iframes
 
@@ -440,10 +445,16 @@ subject — matcher fields AND together:
 
 - `urlMatches` — regex on the request URL
 - `operationName` — substring on the URL (GraphQL-style operation names)
-- `method` — `"GET"`/`"POST"`/`"PUT"`/`"PATCH"`/`"DELETE"`/`"HEAD"`
+- `method` — `"GET"`/`"POST"`/`"PUT"`/`"PATCH"`/`"DELETE"`/`"HEAD"`/`"WS"`
+  (`"WS"` selects captured sockets)
 - `postDataContains` — substring on the request's POST body (fetches the
   request detail per candidate — keep a url/method matcher alongside so the
   narrowing runs on a small set)
+- `wsPayloadContains` — substring on any WebSocket frame payload; narrows
+  to `cdpws-*` socket entries. Sockets appear as `method: "WS"`,
+  `status: 101`, `resourceType: "WebSocket"` with `wsFrames[]`
+  (`{dir, opcode, payload}`); `EventSource` streams appear as GETs with
+  `resourceType: "EventSource"`.
 
 `ofKind` picks what the predicate applies to:
 
