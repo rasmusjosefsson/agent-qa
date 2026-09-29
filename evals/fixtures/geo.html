@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+  <body>
+    <button id="locate">locate</button>
+    <div id="out">idle</div>
+    <script>
+      document.getElementById("locate").addEventListener("click", () => {
+        document.getElementById("out").textContent = "asking";
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            document.getElementById("out").textContent =
+              "geo:" + pos.coords.latitude.toFixed(4) + "," + pos.coords.longitude.toFixed(4);
+          },
+          (err) => {
+            document.getElementById("out").textContent = "err:" + err.code;
+          },
+        );
+        // getCurrentPosition hangs silently (no success, no error) when the
+        // browser has no geolocation permission grant — the emulate step's
+        // grant is what makes this resolve at all.
+        setTimeout(() => {
+          if (document.getElementById("out").textContent === "asking") {
+            document.getElementById("out").textContent = "err:timeout";
+          }
+        }, 4000);
+      });
+    </script>
+  </body>
+</html>
