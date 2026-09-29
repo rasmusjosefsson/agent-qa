@@ -129,6 +129,27 @@ Site quirks live in the case file, not the lib: credentialed URLs via
 `keepDialogs`, download asserts via `assertFile*`. New script entries go
 into `evals/package.json` as `"golden:<site>:<tc>"`.
 
+### Sweep skip list (probed, not goldenable)
+
+Don't re-probe these — verified unreachable, bot-gated, or broken:
+
+- `nopcommerce` demos, `demo.opencart.com`, `webdriveruniversity.com` —
+  Cloudflare/robot challenge.
+- `uitestingplayground.com` — `ERR_CERT_COMMON_NAME_INVALID`.
+- `computer-database.gatling.io`, `computer-database.herokuapp.com`,
+  `olympus.realpython.org` — DNS/TLS dead.
+- `seleniumbase.io/demo_page`, `magento.softwaretestingboard.com` — cert
+  / origin errors.
+- `buggy.justtestit.org` — reachable, but its register POST to the AWS
+  API Gateway backend hangs indefinitely (XHR `loadend` never fires); all
+  dynamic content (register/login/overall) is empty. The register submit
+  sits below the fold — the probe was a real-site repro of the
+  hit-test gap fixed by `ensureHittable` in the golden lib.
+- `demo.realworld.io`, `automationintesting.com`, `openlibrary.org`,
+  `demoblaze /signup`, formy `/autocomplete` (Google Places needs a key),
+  formy `/switch` (404), testpages `attributes-test`, `refresh-page-test`,
+  `key-click-events` (404).
+
 ## Done Criteria
 
 - Target suite reports 100% pass.
