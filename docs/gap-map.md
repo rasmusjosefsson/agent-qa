@@ -463,3 +463,32 @@ signin POST 302-redirects into the account page. Two real findings:
   same "close-by-style" trap as jQuery UI; the nav link stays covered
   until the fade finishes, so the sweep waits ~800ms (bootstrap's
   transition) before the next click.
+
+## Dogfood pass IX — thinking-tester-contact-list: React SPA + mongo CRUD
+
+Three cases shipped (`cl-tc01..03`, 103 checks total) covering signup →
+add/edit/delete contact → logout→re-login. First suite exercising a real
+CRUD REST API with per-entity ids and a native `confirm()` delete.
+
+Surfaced **a real flush bug, fixed in the sweep PR**: auto-network
+claims recorded REST entity ids literally (`GET /contacts/<mongoId>`) —
+a replay mints a different contact via signup, so the claim could never
+match. `insert_auto_network_claims` now rewrites volatile segments
+(≥16 hex/dash, ≥6 digits) into regex classes and dedupes on the pattern.
+Verified live: `GET/PUT/DELETE /contacts/<freshId>` all PASS on replay.
+
+New race class, **post-commit-effect nav binding**: the app's router
+binds nav-link/button handlers in a `useEffect` that runs after the view
+commits — a synthetic click ~0ms after a render check (`#error` text,
+details `#edit-contact`, navbar `#logout`) is a *silent no-op* (element
+exists, click dispatches, nothing happens). Rows rendering is NOT proof
+handlers are bound. Mitigation in the sweep: short recorded `wait`
+settles (~700ms) before each nav click. Candidate product feature: a
+recorded click that produces no DOM/network/location change within ~1s
+should self-warn or retry — "click had no effect" is currently invisible
+at record time.
+
+Site vetoes catalogued while scouting: `uitestingplayground.com` has a
+broken cert (ERR_CERT_COMMON_NAME_INVALID, apex + www; http blocked),
+`computer-database.gatling.io` is DNS-dead, `demo.nopcommerce.com` is
+Cloudflare-gated, `automationintesting.com` is now a landing page.
