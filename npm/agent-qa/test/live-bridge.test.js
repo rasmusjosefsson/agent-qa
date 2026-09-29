@@ -936,7 +936,6 @@ test('a resize inside an iframe does not record viewport', async () => {
   await flush();
   assert.equal(recorded.length, 0);
 });
-=======
 
 // -- download capture -------------------------------------------------------
 
