@@ -157,11 +157,30 @@ session mid-flow, pre-seed a cart before checkout:
 
 Keys: `localStorage`/`sessionStorage` (objects of key→value), `cookies`
 (array of `{"name","value","path"?,"domain"?,"maxAge"?,"secure"?,"sameSite"?}`),
-and the `clearCookies`/`clearLocalStorage`/`clearSessionStorage` clears.
+`clipboard` (a string written via `navigator.clipboard.writeText`), and
+the `clearCookies`/`clearLocalStorage`/`clearSessionStorage` clears.
 Values run through scenario-var substitution. Cookies are set via
 `document.cookie` — `httpOnly` entries can't be seeded (that's what the
-auth plugins are for). Order a `goto`/`reload` after it so the app reads
-the fresh state.
+auth plugins are for). Clipboard seeding grants
+`clipboard-write` for the page's origin over
+the pooled CDP connection first (writeText rejects without it headless).
+Order a `goto`/`reload` after it so the app reads the fresh state.
+
+## `{"clipboard"}` claim subject
+
+Assert what a copy button (or any page code) left on the clipboard, or
+that the clipboard is empty:
+
+```json
+{ "claim": { "subject": { "clipboard": true }, "predicate": "contains", "value": "Order #4482" } }
+{ "claim": { "subject": { "clipboard": true }, "predicate": "notExists" } }
+```
+
+Reads `navigator.clipboard.readText()`; an empty clipboard maps to null,
+so `exists` means "holds text". Requires the page's origin — the runner
+grants `clipboard-read` and enables focus emulation via CDP before
+reading (both are mandatory headless). Seed the clipboard ahead of the
+check with `do/state`'s `clipboard` key.
 
 ## `{"storage"}` / `{"cookie"}` claim subjects
 

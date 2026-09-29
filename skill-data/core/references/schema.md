@@ -64,10 +64,13 @@ before a `goto`/`reload`:
 
 Recognized `params` keys: `localStorage`, `sessionStorage`, `cookies`
 (each entry `{"name","value","path"?,"domain"?,"maxAge"?,"secure"?,"sameSite"?}`),
+`clipboard` (string written via `navigator.clipboard.writeText`),
 `clearCookies`, `clearLocalStorage`, `clearSessionStorage`. Cookies go through
 `document.cookie`, so `httpOnly` values cannot be seeded — auth plugins cover
-that. Assert the result with `{"storage": "key"}` / `{"storage": {"key": "k",
-"scope": "session"}, "path": "$.json.path"}` or `{"cookie": "name"}` claims.
+that. Clipboard writes grant the write permissions over CDP first.
+Assert the result with `{"storage": "key"}` / `{"storage": {"key": "k",
+"scope": "session"}, "path": "$.json.path"}` or `{"cookie": "name"}` claims;
+assert clipboard text with `{"clipboard": true}`.
 
 ### Iframes
 

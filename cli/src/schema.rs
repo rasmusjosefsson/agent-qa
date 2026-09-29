@@ -136,6 +136,18 @@ mod tests {
         }
     }
 
+    #[test]
+    fn clipboard_claim_subject_validates() {
+        let j = json!({
+            "schema": "scenario/2", "id": "j1", "intent": "smoke",
+            "steps": [{
+                "id": "s1", "intent": "copied", "kind": "check",
+                "claim": {"subject": {"clipboard": true}, "predicate": "contains", "value": "x"}
+            }]
+        });
+        validate_value(&j).expect("clipboard subject should validate");
+    }
+
     /// The smoke scenario under examples/scenarios/smoke/scenario.json is a
     /// hand-authored document — schema-validate it from inside cargo
     /// test so a future schema tightening catches the doc drift before
