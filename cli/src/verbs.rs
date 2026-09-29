@@ -255,14 +255,21 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
             Ok(None)
         }
         Verb::Clear => {
+            // Clear via keystrokes, not a value-set: framework-controlled
+            // inputs (React) keep their own state copy, so an empty fill
+            // leaves the bound state stale — the UI looks cleared but the
+            // app still behaves as if the old value were there. Focus +
+            // select-all + Backspace is the deletion a real user performs.
             act_on_locator(
                 ctx.session,
                 on.unwrap(),
                 scope,
-                RoleAct::Fill,
-                Some(""),
+                RoleAct::Focus,
+                None,
                 ctx.scenario_dir,
             )?;
+            browser::press_key(ctx.session, "Control+a")?;
+            browser::press_key(ctx.session, "Backspace")?;
             Ok(None)
         }
         Verb::Press => {
@@ -2479,6 +2486,19 @@ mod tests {
             out.contains("--session sess find role textbox fill --name Email a@b"),
             "got: {out}"
         );
+    }
+
+    #[test]
+    fn clear_uses_keystrokes_not_an_empty_fill() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "clear",
+            "on": { "raw": { "kind": "css", "value": "#q" }, "reason": "test" }
+        }));
+        let out = run_one(&s);
+        assert!(out.contains("focus #q"), "got: {out}");
+        assert!(out.contains("press Control+a"), "got: {out}");
+        assert!(out.contains("press Backspace"), "got: {out}");
+        assert!(!out.contains("fill"), "got: {out}");
     }
 
     #[test]

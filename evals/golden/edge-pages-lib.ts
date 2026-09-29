@@ -47,11 +47,13 @@ interface GoldenContext {
 export interface EdgeGolden extends GoldenContext {
   openPage(): Promise<void>;
   clickSelector(selector: string, intent: string): Promise<void>;
+  clickRole(role: string, name: string, intent: string): Promise<void>;
   fillSelector(selector: string, value: string, intent: string): Promise<void>;
   // Fill a selector with a template containing `{{vars._unique}}`: mints a
   // fresh value at record time for the live fill, and records the template
   // verbatim so replay mints a different one (uniqueness-constrained fields).
   fillUnique(selector: string, template: string, intent: string): Promise<void>;
+  clearSelector(selector: string, intent: string): Promise<void>;
   selectOption(selector: string, value: string, intent: string): Promise<void>;
   checkSelector(selector: string, intent: string): Promise<void>;
   dblclickSelector(selector: string, intent: string): Promise<void>;
@@ -251,6 +253,10 @@ export async function runEdgeGolden(
       await run(ctx, `click ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "click", selector]);
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
+    async clickRole(role, name, stepIntent) {
+      await run(ctx, `click ${role} '${name}'`, [ctx.agentBrowser, "--session", ctx.session, "find", "role", role, "click", "--name", name]);
+      await record(ctx, "action", { method: "clickRole", args: [role, name], intent: stepIntent });
+    },
     async fillSelector(selector, value, stepIntent) {
       await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `fill ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, value], fillVisibleEval(selector, value));
       await record(ctx, "action", { method: "fillBySelector", args: [selector, value], intent: stepIntent });
@@ -262,6 +268,15 @@ export async function runEdgeGolden(
       const resolved = template.replaceAll("{{vars._unique}}", ctx.uniqueMint);
       await run(ctx, `fill ${selector} (unique)`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, resolved]);
       await record(ctx, "action", { method: "fillBySelector", args: [selector, template], intent: stepIntent });
+    },
+    async clearSelector(selector, stepIntent) {
+      // Keystroke clearing: focus + select-all + Backspace. `fill <sel> ""`
+      // leaves framework-controlled inputs (React) stale — the DOM value is
+      // empty but no onChange fires, so the app keeps behaving as filtered.
+      await run(ctx, `focus ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "focus", selector]);
+      await run(ctx, `press ctrl+a`, [ctx.agentBrowser, "--session", ctx.session, "press", "Control+a"]);
+      await run(ctx, `press backspace`, [ctx.agentBrowser, "--session", ctx.session, "press", "Backspace"]);
+      await record(ctx, "action", { method: "clearBySelector", args: [selector], intent: stepIntent });
     },
     async selectOption(selector, value, stepIntent) {
       await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `select ${value}`, [ctx.agentBrowser, "--session", ctx.session, "select", selector, value], selectVisibleEval(selector, Array.isArray(value) ? value : [value]));
