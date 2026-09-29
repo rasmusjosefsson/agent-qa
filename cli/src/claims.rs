@@ -34,8 +34,8 @@ use serde_json::Value as Json;
 
 use crate::browser::{self, CapturedRequest, RoleAct};
 use crate::scenario::{
-    Claim, ClaimSubject, HttpMethod, Locator, NetworkClaimKind, NetworkMatcher, Predicate,
-    RawLocatorKind,
+    Claim, ClaimSubject, ElementClaimKind, HttpMethod, Locator, NetworkClaimKind, NetworkMatcher,
+    Predicate, RawLocatorKind,
 };
 use crate::value::{select_json_path, substitute_scenario_vars, value_to_string, ValueScope};
 
@@ -68,11 +68,8 @@ pub fn dispatch_check(
             element,
             attribute,
             of_kind,
-        } => {
-            if of_kind.is_some() {
-                bail!("element claim with ofKind is not yet supported");
-            }
-            check_element(
+        } => match of_kind {
+            None => check_element(
                 element,
                 attribute.as_deref(),
                 &claim.predicate,
@@ -80,8 +77,17 @@ pub fn dispatch_check(
                 ctx,
                 scope,
                 timeout,
-            )
-        }
+            ),
+            Some(ElementClaimKind::Count) => check_element_count(
+                element,
+                &claim.predicate,
+                claim.value.as_ref(),
+                ctx,
+                scope,
+                timeout,
+            ),
+            Some(kind) => bail!("element claim ofKind {kind:?} is not yet supported"),
+        },
         ClaimSubject::Url { url: _ } => {
             check_url(&claim.predicate, claim.value.as_ref(), ctx, scope, timeout)
         }
@@ -1385,6 +1391,88 @@ fn check_element(
             bail!("expected {predicate:?}, but element still present");
         }
         other => bail!("element subject does not yet support predicate '{other:?}'"),
+    }
+}
+
+/// `{"element": <locator>, "ofKind": "count"}` — how many nodes the locator
+/// resolves to right now. Numeric predicates compare the match count to
+/// `value`; the count is polled (lists may render incrementally). Raw
+/// css/testId locators only — the count is a `querySelectorAll`.
+fn check_element_count(
+    loc: &Locator,
+    predicate: &Predicate,
+    expected: Option<&Json>,
+    ctx: &CheckContext,
+    scope: &mut ValueScope,
+    timeout: Duration,
+) -> Result<()> {
+    let need = expected.and_then(|v| v.as_u64()).ok_or_else(|| {
+        anyhow!("element count claim with predicate '{predicate:?}' requires a numeric 'value'")
+    })?;
+    match predicate {
+        Predicate::Equals
+        | Predicate::CountEquals
+        | Predicate::Gt
+        | Predicate::Gte
+        | Predicate::Lt
+        | Predicate::Lte => {}
+        other => bail!("element count claim does not support predicate '{other:?}'"),
+    }
+    let deadline = Instant::now() + timeout;
+    let mut last: Option<u64> = None;
+    let mut last_err: Option<anyhow::Error> = None;
+    while Instant::now() < deadline {
+        match count_elements(ctx.session, loc, scope) {
+            Ok(n) => {
+                last = Some(n);
+                let ok = match predicate {
+                    Predicate::Equals | Predicate::CountEquals => n == need,
+                    Predicate::Gt => n > need,
+                    Predicate::Gte => n >= need,
+                    Predicate::Lt => n < need,
+                    Predicate::Lte => n <= need,
+                    _ => unreachable!(),
+                };
+                if ok {
+                    return Ok(());
+                }
+            }
+            Err(e) => last_err = Some(e),
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+    match (last, last_err) {
+        (Some(n), _) => {
+            bail!("element count {n} failed predicate {predicate:?} {need}")
+        }
+        (None, Some(e)) => bail!("element count claim timed out; count never readable: {e}"),
+        (None, None) => bail!("element count claim timed out"),
+    }
+}
+
+fn count_elements(session: &str, loc: &Locator, scope: &mut ValueScope) -> Result<u64> {
+    match loc {
+        Locator::Raw(raw) => {
+            let v = substitute_scenario_vars(&raw.raw.value, scope);
+            let selector = match &raw.raw.kind {
+                RawLocatorKind::Css => v,
+                RawLocatorKind::TestId => {
+                    format!("[data-testid=\"{}\"]", v.replace('"', "\\\""))
+                }
+                other => {
+                    bail!("element count claims do not support raw locator kind {other:?}")
+                }
+            };
+            let expr = format!(
+                "(() => document.querySelectorAll({q}).length)()",
+                q = serde_json::to_string(&selector).expect("string serializes")
+            );
+            let raw = browser::eval_expression(session, &expr)?;
+            raw.trim()
+                .parse::<u64>()
+                .map_err(|e| anyhow!("element count eval returned unexpected value {raw:?}: {e}"))
+        }
+        _ => bail!("element count claims currently require a raw css or testId locator"),
     }
 }
 
@@ -2987,5 +3075,44 @@ mod tests {
         }));
         let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
         assert!(err.to_string().contains("not a valid regex"), "got: {err}");
+    }
+
+    #[test]
+    fn element_count_claim_hard_validation() {
+        let sid_dir = Path::new("/tmp");
+        let mut scope = ValueScope::default();
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: sid_dir,
+            run_dir: None,
+        };
+        let el_claim = |subject: serde_json::Value, rest: serde_json::Value| -> Claim {
+            let mut m = serde_json::Map::new();
+            m.insert("subject".into(), subject);
+            if let serde_json::Value::Object(rest) = rest {
+                m.extend(rest);
+            }
+            serde_json::from_value(serde_json::Value::Object(m)).unwrap()
+        };
+        let subject = || json!({"element": {"raw": {"kind": "css", "value": ".item"}, "reason": "test"}, "ofKind": "count"});
+        // missing/blank value → bail before any browser call
+        let claim = el_claim(subject(), json!({"predicate": "equals"}));
+        let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
+        assert!(err.to_string().contains("numeric 'value'"), "got: {err}");
+        // string predicate → unsupported
+        let claim = el_claim(subject(), json!({"predicate": "contains", "value": 3}));
+        let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
+        assert!(
+            err.to_string().contains("does not support predicate"),
+            "got: {err}"
+        );
+        // a non-count ofKind still fails loudly, not silently
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": {"element": {"raw": {"kind": "css", "value": ".item"}, "reason": "test"}, "ofKind": "text"},
+            "predicate": "isVisible"
+        }))
+        .unwrap();
+        let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
+        assert!(err.to_string().contains("not yet supported"), "got: {err}");
     }
 }
