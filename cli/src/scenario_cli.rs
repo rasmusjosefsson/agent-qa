@@ -7,7 +7,7 @@
 //!   scenario insert <file> ...    Splice a validated step into a saved scenario.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 
@@ -37,7 +37,7 @@ pub fn run(args: &[String]) -> Result<u8> {
                     format = parse_lint_format(v)?;
                 }
             }
-            validate(Path::new(file), format)
+            validate(&scenario_file_arg(file), format)
         }
         Some("validate-all") => {
             let mut format = if args.iter().any(|a| a == "--json") {
@@ -136,25 +136,25 @@ pub fn run(args: &[String]) -> Result<u8> {
             let file = args
                 .get(1)
                 .ok_or_else(|| anyhow!("usage: scenario hash <file>"))?;
-            hash(Path::new(file))
+            hash(&scenario_file_arg(file))
         }
         Some("id") => {
             let file = args
                 .get(1)
                 .ok_or_else(|| anyhow!("usage: scenario id <file>"))?;
-            id(Path::new(file))
+            id(&scenario_file_arg(file))
         }
         Some("intent") => {
             let file = args
                 .get(1)
                 .ok_or_else(|| anyhow!("usage: scenario intent <file>"))?;
-            intent(Path::new(file))
+            intent(&scenario_file_arg(file))
         }
         Some("step-ids") => {
             let file = args
                 .get(1)
                 .ok_or_else(|| anyhow!("usage: scenario step-ids <file>"))?;
-            step_ids(Path::new(file))
+            step_ids(&scenario_file_arg(file))
         }
         Some("field") => {
             let file = args
@@ -163,14 +163,14 @@ pub fn run(args: &[String]) -> Result<u8> {
             let name = args
                 .get(2)
                 .ok_or_else(|| anyhow!("usage: scenario field <file> <name>"))?;
-            field(Path::new(file), name)
+            field(&scenario_file_arg(file), name)
         }
         Some("coverage") => {
             let file = args
                 .get(1)
-                .ok_or_else(|| anyhow!("usage: scenario coverage <file> [--json]"))?;
+                .ok_or_else(|| anyhow!("usage: scenario coverage <file|sid> [--json]"))?;
             let json_out = args.iter().any(|a| a == "--json");
-            coverage(Path::new(file), json_out)
+            coverage(&scenario_file_arg(file), json_out)
         }
         Some("coverage-all") => {
             let mut filter: Option<String> = None;
@@ -212,7 +212,7 @@ pub fn run(args: &[String]) -> Result<u8> {
                     format = parse_lint_format(v)?;
                 }
             }
-            check(Path::new(file), strict, format)
+            check(&scenario_file_arg(file), strict, format)
         }
         Some("check-all") => {
             let strict = args.iter().any(|a| a == "--strict");
@@ -292,7 +292,7 @@ pub fn run(args: &[String]) -> Result<u8> {
                 Some(exclude_rules)
             };
             lint(
-                Path::new(file),
+                &scenario_file_arg(file),
                 format,
                 strict,
                 rules.as_deref(),
@@ -539,14 +539,14 @@ pub fn run(args: &[String]) -> Result<u8> {
                     other => bail!("unknown flag {other:?}"),
                 }
             }
-            summary(Path::new(file), filter.as_deref(), json_out)
+            summary(&scenario_file_arg(file), filter.as_deref(), json_out)
         }
         Some("inputs") => {
             let file = args
                 .get(1)
                 .ok_or_else(|| anyhow!("usage: scenario inputs <file> [--json]"))?;
             let json_out = args.iter().any(|a| a == "--json");
-            inputs(Path::new(file), json_out)
+            inputs(&scenario_file_arg(file), json_out)
         }
         Some("insert") => {
             let mut file: Option<&str> = None;
@@ -604,7 +604,7 @@ pub fn run(args: &[String]) -> Result<u8> {
                     "usage: scenario insert <file> <do|check> <draft-json> [--after <stepId> | --at <index>]"
                 ),
             };
-            insert(Path::new(file), kind, draft, after.as_deref(), at)
+            insert(&scenario_file_arg(file), kind, draft, after.as_deref(), at)
         }
         Some("new") => {
             let mut file: Option<&str> = None;
@@ -2274,6 +2274,23 @@ fn coverage_counts(steps: &[crate::scenario::Step]) -> CoverageCounts {
     c
 }
 
+/// A `<file>` arg that also accepts a scenario sid: when the arg is not
+/// an existing file (and isn't '-' for stdin), resolve it as
+/// <scenarios_root>/<arg>/scenario.json. Existing paths always win.
+fn scenario_file_arg(arg: &str) -> PathBuf {
+    let p = Path::new(arg);
+    if arg == "-" || p.is_file() {
+        return p.to_path_buf();
+    }
+    if let Ok(dir) = crate::paths::scenario_dir(arg) {
+        let f = dir.join("scenario.json");
+        if f.is_file() {
+            return f;
+        }
+    }
+    p.to_path_buf()
+}
+
 fn coverage(path: &Path, json_out: bool) -> Result<u8> {
     let _guard = crate::io::stdin_or_path(path)?;
     let path = _guard.path();
@@ -3767,6 +3784,33 @@ mod tests {
         assert_eq!(coverage_all(None, true).unwrap(), 0);
         // --filter narrows the rollup
         assert_eq!(coverage_all(Some("full"), true).unwrap(), 0);
+        match prev {
+            Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    #[test]
+    fn scenario_file_arg_accepts_sid_and_keeps_paths() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        let dir = tmp.path().join("hello");
+        std::fs::create_dir_all(&dir).unwrap();
+        let sc = dir.join("scenario.json");
+        fs::write(&sc, "{}").unwrap();
+        // sid resolves to its scenario.json
+        assert_eq!(scenario_file_arg("hello"), sc);
+        // existing file paths pass through untouched
+        let loose = tmp.path().join("loose.json");
+        fs::write(&loose, "{}").unwrap();
+        assert_eq!(scenario_file_arg(loose.to_str().unwrap()), loose);
+        // unknown args fall back to the literal path (read error surfaces later)
+        assert_eq!(
+            scenario_file_arg("no-such-sid"),
+            Path::new("no-such-sid").to_path_buf()
+        );
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
