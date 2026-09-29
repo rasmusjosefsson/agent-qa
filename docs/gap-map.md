@@ -329,6 +329,32 @@ first run once the right helpers existed:
   alert/confirm/prompt claims to page state on real pages for the
   first time.
 
+## Dogfood pass VII — testautomationpractice.blogspot (TAP): blogspot widget soup
+
+One page packs form fields, radios, checkboxes, two jQuery UI widgets
+(datepicker, price slider), native alert/confirm/prompt, a dblclick
+copy button, file upload, a live Wikipedia-search widget, and a
+two-window `window.open` popup. Four goldens (#358) + one drag case
+(#359, stacked on #281) all pass record→replay:
+
+- **Popup `window.open` maps to `tab t2` deterministically** — a fresh
+  session numbers tabs in open order, so recorded `tab t2` + `tab close`
+  + `tab t1` round-trips cleanly through replay. First real coverage of
+  the `tab` verb on a popup (not `tab new`).
+- **jQuery UI datepicker closes by `display:none`, not removal** — the
+  calendar node stays in the DOM; absence claims misfire on this widget
+  class. The value-regex claim (`mm/dd/yyyy`) is the honest check.
+- **`agent-browser drag` unifies live drive with replay** — #281's
+  trusted-mouse `do/drag` made the synth-`DragEvent` live drive a
+  parity lie (record showed nothing move, replay moved it). TAP's
+  jQuery droppable works end-to-end only when the live drive uses the
+  daemon's trusted `drag` command too (#359 flips `dragSelector`).
+  `dragSelectorMouse` (bonigarcia) becomes redundant — a future cleanup.
+- **nopCommerce is Cloudflare-gated** — `demo.nopcommerce.com` serves
+  "Just a moment" to headless Chrome forever; swapped sites. Rule of
+  thumb for sweep picks: probe with a real `agent-browser open`, not
+  curl.
+
 ## Dogfood pass VI — JPetStore (petstore.octoperf.com)
 
 Struts app; every URL carries a `;jsessionid=<id>` matrix param and the
