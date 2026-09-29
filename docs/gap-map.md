@@ -15,7 +15,7 @@ the picture shifts materially.
 | Audit | `flaky`, `slow`, `heal-chronic` (+`--all`), `verdict` (+`--all`), `cluster`, `trend` (+`--all`), `health`, run-vs-run compare (CLI + workbench) |
 | Lint | `no-visual-check`, `shot-without-baseline`, `domshot-without-baseline`, `orphan-baseline`, `brittle-locator`, `fixed-sleep`, `check-all` in smoke |
 | CI | `qa-gate` (fixture goldens + sticky verdict + run-report artifacts), `ui-goldens` (visual gate w/ embedded before/after/diff images), `qa-crawl` (draft coverage on UI PRs), `qa-adopt` + `/qa accept` commands, composite `action.yml` (+npm install mode, +app-under-test boot), `evals-nightly`, changelog-driven releases |
-| Golden suites | ~30 QA Playground pages, ~34 the-internet edge cases (six sweeps), saucedemo suite (login/sort, full 21-step purchase, negative auth, logout, cookie+storage lifecycle), expandtesting (login round-trip, dynamic table, infinite scroll), todomvc (stateful SPA), demoqa widgets, httpbin hermetic-mock loop, workbench selftest goldens, quotes.toscrape.com (pagination, HttpOnly cookie claims, scroll offsets), parabank (registration with `{{vars._unique}}`, login/logout, profile update — volatile-URL claims normalized), demoblaze (category filters, add-to-cart alert claims, cart session persistence across reload, full purchase flow) |
+| Golden suites | ~30 QA Playground pages, ~34 the-internet edge cases (six sweeps), saucedemo suite (login/sort, full 21-step purchase, negative auth, logout, cookie+storage lifecycle), expandtesting (login round-trip, dynamic table, infinite scroll), todomvc (stateful SPA), demoqa widgets, httpbin hermetic-mock loop, workbench selftest goldens, quotes.toscrape.com (pagination, HttpOnly cookie claims, scroll offsets), parabank (registration with `{{vars._unique}}`, login/logout, profile update — volatile-URL claims normalized), demoblaze (category filters, add-to-cart alert claims, cart session persistence across reload, full purchase flow), automation-exercise (signup+cart lifecycle), wikipedia (search nav, TOC, history, REST API claims), formy (full form, bootstrap modal, jQuery datepicker, JS dropdown), testpages (ajax cascade, form POST echo, native dialogs, onblur validation), coffee-cart (cart badge, promo modal, checkout form, quantity steppers), globalsqa XYZ Bank (AngularJS login, deposit/withdraw, transactions ledger, manager console) |
 
 ## Ranked gaps
 
@@ -69,19 +69,26 @@ the picture shifts materially.
 
 ### P4 — upstream capture limits
 
-10. **Navigation-redirect statuses are uncapturable** — a POST → 302 →
-    GET chain records the POST's status as null because agent-browser's
-    netlog never sees the redirect hop's response. The `#277` pooled
-    CDP client is the substrate for owning `Network.*` capture directly.
-11. **`wait url` can't match in-flight requests** — it polls resource
-    timing, which only lists *completed* entries; a request still
-    pending at claim time waits out the full timeout (fine) but a slow
-    endpoint (>15s cold, e.g. demoblaze `/signup`) needs an explicit
-    `params.timeoutMs`.
+10. ~~**Navigation-redirect statuses are uncapturable**~~ — #317 adds an
+    own-CDP `Network.*` capture client (`cdp_net.rs`): per-request
+    `NetEvent` records keep redirect hops, `redirect_entries()` mints
+    `cdp-<id>` synthetic CapturedRequests for each 3xx hop, and
+    `find_completed` is OR'd into `wait_for_resource` polls.
+11. ~~**`wait url` can't match in-flight requests**~~ — same PR: the
+    own-CDP poll sees requests while still pending, so a slow endpoint
+    (>15s cold, e.g. demoblaze `/signup`) matches as soon as it lands.
+12. **Silent clicks on unhittable elements** — `agent-browser click`
+    reports success when the element's centre fails `elementFromPoint`
+    (below fold / zero-size / covered): the click dispatches to nothing
+    and the recorded scenario replays the miss. Seen on three sites
+    (formy submit anchor, testpages dialog buttons, buggy register).
+    Fixed at the golden layer by `ensureHittable` (#321) — hit-test +
+    scroll + recorded scrollTo step; a daemon-side fix upstream would be
+    the real close.
 
-## Lessons from the fresh-site sweeps (quotes/parabank/demoblaze, #309/#310)
+## Lessons from the fresh-site sweeps
 
-Real sites taught three durable patterns:
+Real sites taught durable patterns:
 
 - **Volatile URL pieces hide in three places** — query strings (already
   stripped), `;k=v` matrix params, and id-bearing path segments. Flush's
@@ -95,6 +102,20 @@ Real sites taught three durable patterns:
 - **Timed waits must not touch the page** — `do:wait {ms}` slept via
   `agent-browser wait` until #310; a pending dialog wedged it. Now a
   pure `thread::sleep`.
+- **Frameworks bind late and submit eagerly** (testpages/xyz, #320/#323)
+  — ajax handlers may bind after `load` (bounded `waitMs` is the honest
+  gate), AngularJS un-hides the submit only once the model is set (wait
+  on `:not(.ng-hide)`), and a synthetic click can land before `ng-submit`
+  attaches — `clickSelectorForce` (eval `el.click()`) is the reliable
+  submit for that generation.
+- **Page state is in-memory on some SPAs** (coffee-cart, #322) — a
+  second `open` reloads the app and empties the cart; in-app link clicks
+  preserve it. And SPAs often render hidden duplicates (a
+  `ul.cart-preview` shadowing the real list's `+/-` buttons) — scope
+  row-action selectors to the visible list or the click misses.
+- **`{{vars._unique}}` templates survive into the scenario** —
+  fillSelector's recorded `fillBySelector` keeps the template so replay
+  mints fresh uniqueness per run (parabank registration, xyz last name).
 
 ## Recently closed (for orientation)
 
@@ -128,6 +149,12 @@ Real sites taught three durable patterns:
   record-driven `frame` verb, delayed dialogs, visibility triggers
   (#316)
 - Cookie/storage goldens + `do/state` seeding (#253)
+- Own-CDP `Network.*` capture — redirect-hop statuses + in-flight
+  `wait url` (#317)
+- Sweeps VIII–XI: wikipedia (#318), formy (#319), testpages (#320),
+  coffee-cart (#322), XYZ Bank AngularJS (#323); `ensureHittable`
+  click-guard in the golden lib (#321); site skip list in the
+  eval-loop skill (#323)
 - `pageError` + `console` + `a11y` claim subjects (#248/#167/#240)
 - Network claims fired/status/json (#143), postDataContains (#205),
   `wait url` (#166)
