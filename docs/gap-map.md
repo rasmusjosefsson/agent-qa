@@ -134,6 +134,34 @@ so the file-based verbs and their defaults were never exercised:
   would shorten the LLM authoring loop further — both are deliberately
   unbuilt until a second dogfood wave proves which one earns it.
 
+## Dogfood pass II — flag consistency + claim authoring
+
+- **`-h`/`--help` is now positional-safe** (#332): `init` had no help arm;
+  `record`/`buffer` only checked `args[0]`; scenario's file-taking
+  subverbs swallowed `--help` as a path (`read --help: No such file`).
+  All verbs now treat help-anywhere as usage+exit 0.
+- **`record-setup` storage ops on a never-navigated session produce an
+  unreplayable scenario** — `[fresh, localStorage]` with no `nav` op runs
+  `localStorage` on about:blank and dies `SecurityError` at env.open.
+  #329's nav-seal fixes the common case (a `--open` session); still open:
+  a `record-setup` cookie/localStorage on a no-nav recording. Options:
+  warn at setup time ("no nav op precedes this storage op"), or have the
+  replay env-runner skip storage ops on opaque origins with a visible
+  warning. Not fixed — needs a decision on which layer owns it.
+- **Claim predicate sugar** (#333): `{"predicate":{"contains":"x"}}`
+  lowers to predicate+value; unary-in-object and doubled-value are
+  explicit errors. Second most-common hand-author miss after locators.
+- **`record-step` takes no `--session`** (appends to the one active
+  buffer, never drives a browser) and **`flush` takes no intent arg**
+  (intent is `start`'s job) — both error with usage, consistent.
+- **`run-step`/`smart-click` verified live** — role click dispatches
+  (`named control click`), check drafts evaluate (`url contains`),
+  smart-click's miss lists the real accessible names
+  (`none match name "More information...". Names seen: "Learn more"`).
+- **`aria-snapshot`, `perf-snapshot`, `record continue --skip-replay`,
+  `truncate`, `buffer discard`, `verify`, `list`, `info`, `config`,
+  `plugins`, `skills` — all clean.
+
 ## Lessons from the fresh-site sweeps
 
 Real sites taught durable patterns:
