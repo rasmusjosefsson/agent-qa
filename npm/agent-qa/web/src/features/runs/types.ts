@@ -60,8 +60,10 @@ export interface ScenarioSummary {
     checked: number
     bare: number
     shotCovered: number
+    goldenCovered: number
     ratio: number
     shotRatio: number
+    goldenRatio: number
   } | null
   // scenario.json's tags[] — `replay --tags` selects on these.
   tags: string[]

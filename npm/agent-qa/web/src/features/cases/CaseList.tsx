@@ -164,18 +164,18 @@ export function CaseList() {
                               ? 'text-amber-600 dark:text-amber-400'
                               : 'text-red-600 dark:text-red-400'
                         }
-                        title={`${c.scenario.coverage.checked}/${c.scenario.coverage.doSteps} do steps checked · ${c.scenario.coverage.bare} bare · ${c.scenario.coverage.shotCovered} with a visual baseline`}
+                        title={`${c.scenario.coverage.checked}/${c.scenario.coverage.doSteps} do steps checked · ${c.scenario.coverage.bare} bare · ${c.scenario.coverage.goldenCovered ?? c.scenario.coverage.shotCovered} with a golden baseline`}
                       >
                         {Math.round(c.scenario.coverage.ratio * 100)}%
                         <span
                           className={
-                            c.scenario.coverage.shotRatio >= 1
+                            (c.scenario.coverage.goldenRatio ?? c.scenario.coverage.shotRatio) >= 1
                               ? 'text-emerald-600/80 dark:text-emerald-400/80'
                               : 'text-muted-foreground'
                           }
                         >
                           {' '}
-                          · shot {Math.round(c.scenario.coverage.shotRatio * 100)}%
+                          · golden {Math.round((c.scenario.coverage.goldenRatio ?? c.scenario.coverage.shotRatio) * 100)}%
                         </span>
                       </span>
                     ) : (
