@@ -63,6 +63,22 @@
         }
       },
       "intent": "visual baseline"
+    },
+    {
+      "id": "s10",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "domshot": "s3",
+          "skip": [
+            "v\\d+\\.\\d+\\.\\d+",
+            "StaticText \"[/~]",
+            "StaticText \"[A-Za-z]:"
+          ]
+        },
+        "predicate": "matches"
+      },
+      "intent": "structural baseline (ARIA tree)"
     }
   ]
 }
