@@ -1,4 +1,4 @@
-//! `audit show <sid> <runId | latest>` — pretty-print one replay's audit.json.
+//! `audit show <sid> [<runId | latest>]` — pretty-print one replay's audit.json.
 //!
 //! Useful when investigating a single failure without reaching for a JSON
 //! viewer; complements `list <sid>` which only shows summary rows.
@@ -314,10 +314,8 @@ struct ListFilters {
 fn show(positionals: &[String], json_out: bool, github_format: bool) -> Result<u8> {
     let sid = positionals
         .get(1)
-        .ok_or_else(|| anyhow!("usage: audit show <sid> <runId | latest>"))?;
-    let run_ref = positionals
-        .get(2)
-        .ok_or_else(|| anyhow!("usage: audit show <sid> <runId | latest>"))?;
+        .ok_or_else(|| anyhow!("usage: audit show <sid> [<runId | latest>]"))?;
+    let run_ref = positionals.get(2).map(|s| s.as_str()).unwrap_or("latest");
     let dir = paths::scenario_dir(sid)?;
     let run_id = resolve_run_id(&dir, run_ref)?;
     let audit_path = dir.join("replays").join(&run_id).join("audit.json");
@@ -695,10 +693,8 @@ fn stats(
 fn duration(positionals: &[String]) -> Result<u8> {
     let sid = positionals
         .get(1)
-        .ok_or_else(|| anyhow!("usage: audit duration <sid> <runId | latest>"))?;
-    let run_ref = positionals
-        .get(2)
-        .ok_or_else(|| anyhow!("usage: audit duration <sid> <runId | latest>"))?;
+        .ok_or_else(|| anyhow!("usage: audit duration <sid> [<runId | latest>]"))?;
+    let run_ref = positionals.get(2).map(|s| s.as_str()).unwrap_or("latest");
     let dir = paths::scenario_dir(sid)?;
     let run_id = resolve_run_id(&dir, run_ref)?;
     let audit_path = dir.join("replays").join(&run_id).join("audit.json");
@@ -786,10 +782,8 @@ fn field(positionals: &[String]) -> Result<u8> {
 fn exit_code(positionals: &[String]) -> Result<u8> {
     let sid = positionals
         .get(1)
-        .ok_or_else(|| anyhow!("usage: audit exit-code <sid> <runId | latest>"))?;
-    let run_ref = positionals
-        .get(2)
-        .ok_or_else(|| anyhow!("usage: audit exit-code <sid> <runId | latest>"))?;
+        .ok_or_else(|| anyhow!("usage: audit exit-code <sid> [<runId | latest>]"))?;
+    let run_ref = positionals.get(2).map(|s| s.as_str()).unwrap_or("latest");
     let dir = paths::scenario_dir(sid)?;
     let run_id = resolve_run_id(&dir, run_ref)?;
     let audit_path = dir.join("replays").join(&run_id).join("audit.json");
@@ -818,10 +812,8 @@ fn exit_code(positionals: &[String]) -> Result<u8> {
 fn verdict(positionals: &[String], json_out: bool) -> Result<u8> {
     let sid = positionals
         .get(1)
-        .ok_or_else(|| anyhow!("usage: audit verdict <sid> <runId | latest>"))?;
-    let run_ref = positionals
-        .get(2)
-        .ok_or_else(|| anyhow!("usage: audit verdict <sid> <runId | latest>"))?;
+        .ok_or_else(|| anyhow!("usage: audit verdict <sid> [<runId | latest>]"))?;
+    let run_ref = positionals.get(2).map(|s| s.as_str()).unwrap_or("latest");
     let dir = paths::scenario_dir(sid)?;
     let run_id = resolve_run_id(&dir, run_ref)?;
     let run_dir = dir.join("replays").join(&run_id);
@@ -1016,10 +1008,8 @@ fn verdict_all(json_out: bool) -> Result<u8> {
 fn summary(positionals: &[String]) -> Result<u8> {
     let sid = positionals
         .get(1)
-        .ok_or_else(|| anyhow!("usage: audit summary <sid> <runId | latest>"))?;
-    let run_ref = positionals
-        .get(2)
-        .ok_or_else(|| anyhow!("usage: audit summary <sid> <runId | latest>"))?;
+        .ok_or_else(|| anyhow!("usage: audit summary <sid> [<runId | latest>]"))?;
+    let run_ref = positionals.get(2).map(|s| s.as_str()).unwrap_or("latest");
     let dir = paths::scenario_dir(sid)?;
     let run_id = resolve_run_id(&dir, run_ref)?;
     let audit_path = dir.join("replays").join(&run_id).join("audit.json");
@@ -2144,9 +2134,9 @@ fn render_text(path: &std::path::Path, audit: &Value) {
 
 fn print_help() {
     println!(
-                "agent-qa audit \u{2014} inspect a replay's audit.json\n\nUsage:\n  agent-qa audit show <sid> <runId | latest> [--json | --format text|json|github]\n  agent-qa audit list <sid>                    Table view: every run's\n                                               summary / exit / profile / tag\n  agent-qa audit list <sid> --json             Structured rows on stdout\n  agent-qa audit list <sid> [--passed | --failed] [--tag <pat>] [--profile <pat>] [--limit N] [--slow <secs>] [--sort duration|runId-desc] [--since <iso-ts>] [--until <iso-ts>] [--format text|json|github]\n                                               Filters: case-insensitive substring\n                                               --passed/--failed are exit-code partitions\n  agent-qa audit stats <sid> [--since <iso-ts>] [--until <iso-ts>]\n                                               Pass/fail/tag rollup for one scenario\n  agent-qa audit stats <sid> --json            Structured rollup on stdout\n  agent-qa audit stats-all                     Per-scenario + overall pass/fail rollup\n  agent-qa audit stats-all --json              Structured rollup on stdout\n  agent-qa audit stats-all [--since <iso-ts>] [--until <iso-ts>]\n                                               Constrain to a date window\n  agent-qa audit diff <sid> <runIdA> <runIdB>  Unified diff between two replays'\n                                               audit.json (canonicalised JSON;\n                                               'latest' accepted for either side;\n                                               exit 1 on difference)\n  agent-qa audit summary <sid> <runId | latest>\n                                               Print just the summary line (one line out)\n  agent-qa audit exit-code <sid> <runId | latest>\n                                               Print just the run's exitCode (-1 if missing)\n  agent-qa audit field <sid> <runId | latest> <fieldName>\n                                               Print any top-level audit field. String/\n                                               number/bool print verbatim; null prints\n                                               empty; object/array prints compact JSON.\n  agent-qa audit count <sid>                   Print the number of runs under <sid>\n  agent-qa audit duration <sid> <runId | latest>\n                                               Print the run's duration in seconds\n                                               (finishedAt - startedAt, 3 decimals)\n  agent-qa audit flaky <sid> [--min-flips N] [--min-runs N] [--json]\n                                               Flag steps whose outcome interleaves\n                                               pass/fail across runs (outcome churn;\n                                               heal-chronic covers locator churn)\n  agent-qa audit slow <sid> [--pct N] [--min-ms N] [--recent N] [--min-runs N] [--json]\n                                               Flag steps whose recent pass median\n                                               regressed vs their earlier-run median\n                                               (default: last 2 runs >50% and >250ms\n                                               over baseline)\n  agent-qa audit health [--json]           Cross-scenario rollup of flaky + slow +
+                "agent-qa audit \u{2014} inspect a replay's audit.json\n\nUsage:\n  agent-qa audit show <sid> [<runId | latest>] [--json | --format text|json|github]\n  agent-qa audit list <sid>                    Table view: every run's\n                                               summary / exit / profile / tag\n  agent-qa audit list <sid> --json             Structured rows on stdout\n  agent-qa audit list <sid> [--passed | --failed] [--tag <pat>] [--profile <pat>] [--limit N] [--slow <secs>] [--sort duration|runId-desc] [--since <iso-ts>] [--until <iso-ts>] [--format text|json|github]\n                                               Filters: case-insensitive substring\n                                               --passed/--failed are exit-code partitions\n  agent-qa audit stats <sid> [--since <iso-ts>] [--until <iso-ts>]\n                                               Pass/fail/tag rollup for one scenario\n  agent-qa audit stats <sid> --json            Structured rollup on stdout\n  agent-qa audit stats-all                     Per-scenario + overall pass/fail rollup\n  agent-qa audit stats-all --json              Structured rollup on stdout\n  agent-qa audit stats-all [--since <iso-ts>] [--until <iso-ts>]\n                                               Constrain to a date window\n  agent-qa audit diff <sid> <runIdA> <runIdB>  Unified diff between two replays'\n                                               audit.json (canonicalised JSON;\n                                               'latest' accepted for either side;\n                                               exit 1 on difference)\n  agent-qa audit summary <sid> [<runId | latest>]\n                                               Print just the summary line (one line out)\n  agent-qa audit exit-code <sid> [<runId | latest>]\n                                               Print just the run's exitCode (-1 if missing)\n  agent-qa audit field <sid> <runId | latest> <fieldName>\n                                               Print any top-level audit field. String/\n                                               number/bool print verbatim; null prints\n                                               empty; object/array prints compact JSON.\n  agent-qa audit count <sid>                   Print the number of runs under <sid>\n  agent-qa audit duration <sid> [<runId | latest>]\n                                               Print the run's duration in seconds\n                                               (finishedAt - startedAt, 3 decimals)\n  agent-qa audit flaky <sid> [--min-flips N] [--min-runs N] [--json]\n                                               Flag steps whose outcome interleaves\n                                               pass/fail across runs (outcome churn;\n                                               heal-chronic covers locator churn)\n  agent-qa audit slow <sid> [--pct N] [--min-ms N] [--recent N] [--min-runs N] [--json]\n                                               Flag steps whose recent pass median\n                                               regressed vs their earlier-run median\n                                               (default: last 2 runs >50% and >250ms\n                                               over baseline)\n  agent-qa audit health [--json]           Cross-scenario rollup of flaky + slow +
                                                heal-chronic — one row per scenario
-                                               that has silent degradation\n  agent-qa audit verdict <sid> <runId | latest> [--json]\n                                               One-word run triage: PASS (exit 0) clean\n                                               green, FIX (exit 2) green but self-\n                                               corrected, BLOCK (exit 1) failed\n  agent-qa audit verdict --all [--json]\n                                               Suite triage board: one verdict row per\n                                               scenario's latest run; exit 1 if any\n                                               BLOCK (FIX rows are warnings only)\n  agent-qa audit cluster [--min-size N] [--json]\n                                               Group step failures across every scenario\n                                               by normalized error signature — one root\n                                               cause across N runs reads as one item\n  agent-qa audit trend <sid> [--limit N] [--json]\n                                               Outcome + duration trend for the last N\n                                               runs (default all): pass%, median secs,\n                                               a ✓/✗ outcome line + a duration sparkline\n  agent-qa audit trend --all [--limit N] [--json]\n                                               Suite board: one trend row per scenario\n\n'latest' resolves to <sid>/replays/latest.txt if present, otherwise the\nhighest lex-sorted run directory (run_id is timestamp-prefixed)."
+                                               that has silent degradation\n  agent-qa audit verdict <sid> [<runId | latest>] [--json]\n                                               One-word run triage: PASS (exit 0) clean\n                                               green, FIX (exit 2) green but self-\n                                               corrected, BLOCK (exit 1) failed\n  agent-qa audit verdict --all [--json]\n                                               Suite triage board: one verdict row per\n                                               scenario's latest run; exit 1 if any\n                                               BLOCK (FIX rows are warnings only)\n  agent-qa audit cluster [--min-size N] [--json]\n                                               Group step failures across every scenario\n                                               by normalized error signature — one root\n                                               cause across N runs reads as one item\n  agent-qa audit trend <sid> [--limit N] [--json]\n                                               Outcome + duration trend for the last N\n                                               runs (default all): pass%, median secs,\n                                               a ✓/✗ outcome line + a duration sparkline\n  agent-qa audit trend --all [--limit N] [--json]\n                                               Suite board: one trend row per scenario\n\n'latest' resolves to <sid>/replays/latest.txt if present, otherwise the\nhighest lex-sorted run directory (run_id is timestamp-prefixed)."
 
 
     );
