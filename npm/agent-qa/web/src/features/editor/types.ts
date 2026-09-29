@@ -43,5 +43,6 @@ export type LiveInput =
   | { type: 'scroll'; nx: number; ny: number; dx: number; dy: number }
   | { type: 'key'; text?: string; key?: string; mods?: { ctrl?: boolean; shift?: boolean; alt?: boolean; meta?: boolean }; record?: boolean }
   | { type: 'back' } | { type: 'forward' } | { type: 'reload' } | { type: 'navigate'; url: string; record?: boolean }
+  | { type: 'captureState' }
 export interface ComposeForm { verb: string; role: string; name: string; value: string; intent: string }
 export const EMPTY_FORM: ComposeForm = { verb: 'click', role: '', name: '', value: '', intent: '' }
