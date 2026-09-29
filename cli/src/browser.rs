@@ -834,19 +834,17 @@ pub fn network_requests(session: &str) -> Result<Vec<CapturedRequest>, AgentBrow
         });
     }
     requests.extend(hops);
-    requests.extend(mocked_requests(session));
-    Ok(requests)
     // WebSockets are invisible to the daemon's fetch/XHR capture — merge
     // the entries our own CDP listener saw (`cdpws-*`).
     if let Ok(ws_entries) = crate::cdp::ws_entries(session) {
         for e in ws_entries {
             if let Ok(req) = serde_json::from_value::<CapturedRequest>(e) {
-                reqs.push(req);
+                requests.push(req);
             }
         }
     }
-    reqs.extend(mocked_requests(session));
-    Ok(reqs)
+    requests.extend(mocked_requests(session));
+    Ok(requests)
 }
 
 /// Requests the in-page mock intercepted (ids `mock-*`). Best-effort — a
