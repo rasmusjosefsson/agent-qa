@@ -230,7 +230,11 @@
     "golden:state:tc01": "bun golden/state-tc01.ts",
     "golden:ws:tc01": "bun golden/ws-tc01.ts",
     "golden:idb:tc01": "bun golden/idb-tc01.ts",
-    "golden:shub:tc01": "bun golden/shadow-dom-tc01.ts"
+    "golden:shub:tc01": "bun golden/shadow-dom-tc01.ts",
+    "golden:wiki:tc01": "bun golden/wiki-tc01.ts",
+    "golden:wiki:tc02": "bun golden/wiki-tc02.ts",
+    "golden:wiki:tc03": "bun golden/wiki-tc03.ts",
+    "golden:wiki:tc04": "bun golden/wiki-tc04.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"
