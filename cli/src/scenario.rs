@@ -186,6 +186,18 @@ pub enum Verb {
     /// clears. Values go through scenario-var substitution. Apply before
     /// `goto` (or before `reload`) for the app to observe the state.
     State,
+    /// Press-and-hold an element: dispatches pointerdown/mousedown (and
+    /// touchstart where the constructor exists) at the element's center,
+    /// sleeps `params.ms` (default 500), then releases with
+    /// pointerup/mouseup/touchend — deliberately no click. For long-press
+    /// menus and press-to-confirm buttons that arm on down events.
+    Hold,
+    /// Swipe gesture: `params.direction` (up/down/left/right — the
+    /// direction the finger travels), `params.distance` px (default 300).
+    /// `on` picks the origin element; absent `on` swipes from the viewport
+    /// center. Dispatches the touch event chain plus pointer/mouse events
+    /// so both touch- and pointer-driven handlers fire.
+    Swipe,
     /// Switch the session's frame context: `params.selector` = a CSS
     /// selector for the iframe to enter, or `params.main = true` to return
     /// to the top document. Locators on later steps resolve inside the
