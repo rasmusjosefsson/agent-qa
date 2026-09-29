@@ -811,8 +811,16 @@ pub fn network_requests(session: &str) -> Result<Vec<CapturedRequest>, AgentBrow
             hint: String::new(),
         })?;
     // Redirect hops the daemon never lists — the own-CDP Network
-    // capture recovers their statuses (see cdp_net).
-    requests.extend(crate::cdp_net::redirect_entries(session));
+    // capture recovers their statuses (see cdp_net). The daemon logs the
+    // hop too but with a null status: drop that stub when a CDP hop entry
+    // for the same url+method exists so the log reads as one 302 row.
+    let hops = crate::cdp_net::redirect_entries(session);
+    for hop in &hops {
+        requests.retain(|r| {
+            !(r.status.is_none() && r.url == hop.url && r.method.eq_ignore_ascii_case(&hop.method))
+        });
+    }
+    requests.extend(hops);
     Ok(requests)
 }
 
