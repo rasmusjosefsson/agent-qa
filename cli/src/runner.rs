@@ -414,33 +414,17 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     // (`replay --all` suites, workbench runs) — start clean.
     crate::mock::clear(&opts.session_name, None);
 
-    // The browser's request capture is per-session: a replayed session
-    // still holds the previous run's traffic. Clear it so this run's
-    // network.json (and {"network"} claims) sees only its own requests.
-    // Best-effort — a session that doesn't exist yet just warns.
+    // The browser's request + console captures are per-session: a replayed
+    // session still holds the previous run's traffic and messages. Clear
+    // both so this run's network.json / console.json (and {"network"} /
+    // {"console"} claims) see only its own activity. Best-effort — a
+    // session that doesn't exist yet just warns.
     if !opts.dry_run {
         if let Err(e) = crate::browser::network_clear(&opts.session_name) {
             eprintln!("[v2-replay] network log clear skipped: {e}");
         }
-    }
-
-    // The browser's request capture is per-session: a replayed session
-    // still holds the previous run's traffic. Clear it so this run's
-    // network.json (and {"network"} claims) sees only its own requests.
-    // Best-effort — a session that doesn't exist yet just warns.
-    if !opts.dry_run {
-        if let Err(e) = crate::browser::network_clear(&opts.session_name) {
-            eprintln!("[v2-replay] network log clear skipped: {e}");
-        }
-    }
-
-    // The browser's request capture is per-session: a replayed session
-    // still holds the previous run's traffic. Clear it so this run's
-    // network.json (and {"network"} claims) sees only its own requests.
-    // Best-effort — a session that doesn't exist yet just warns.
-    if !opts.dry_run {
-        if let Err(e) = crate::browser::network_clear(&opts.session_name) {
-            eprintln!("[v2-replay] network log clear skipped: {e}");
+        if let Err(e) = crate::browser::console_clear(&opts.session_name) {
+            eprintln!("[v2-replay] console log clear skipped: {e}");
         }
     }
 
@@ -3389,8 +3373,6 @@ mod tests {
             har: false,
             mock_from: None,
             offline: false,
-            persona: None,
-            environment: None,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3455,8 +3437,6 @@ mod tests {
             har: false,
             mock_from: None,
             offline: false,
-            persona: None,
-            environment: None,
         };
         let err = run(&opts).unwrap_err();
         assert!(
