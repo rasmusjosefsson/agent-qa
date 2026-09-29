@@ -483,10 +483,11 @@ commits — a synthetic click ~0ms after a render check (`#error` text,
 details `#edit-contact`, navbar `#logout`) is a *silent no-op* (element
 exists, click dispatches, nothing happens). Rows rendering is NOT proof
 handlers are bound. Mitigation in the sweep: short recorded `wait`
-settles (~700ms) before each nav click. Candidate product feature: a
-recorded click that produces no DOM/network/location change within ~1s
-should self-warn or retry — "click had no effect" is currently invisible
-at record time.
+settles (~700ms) before each nav click. Replay side now self-warns:
+`click_locator` arms a MutationObserver + url/resource probe and
+eprintlns "click produced no observable effect" when nothing changed
+(landed in #362); record-side detection stays open — the live pane's
+click goes through agent-browser, not our verb path.
 
 Site vetoes catalogued while scouting: `uitestingplayground.com` has a
 broken cert (ERR_CERT_COMMON_NAME_INVALID, apex + www; http blocked),
