@@ -217,13 +217,16 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
         Verb::Wait => {
             // `params.ms` → wait by ms; `params.until` → wait --load <state>;
             // `params.url` → poll resource timing until a matching request
-            // completed; `params.idle`/`idleMs` → session-level network
-            // quiescence (zero pending requests for idleMs, default 500ms);
-            // `params.timeoutMs` (default 10s) bounds the last two; neither
-            // → soft wait for networkidle.
+            // completed; `params.locator` (+`state` attached|visible|hidden|
+            // detached, `timeoutMs`) → poll the element's DOM state;
+            // `params.idle`/`idleMs` → session-level network quiescence
+            // (zero pending requests for idleMs, default 500ms);
+            // `params.timeoutMs` (default 10s) bounds url/locator/idle;
+            // none → soft wait for networkidle.
             let ms = params.and_then(|p| p.get("ms")).and_then(|v| v.as_u64());
             let until = params.and_then(|p| p.get("until")).and_then(|v| v.as_str());
             let url = params.and_then(|p| p.get("url")).and_then(|v| v.as_str());
+            let locator = params.and_then(|p| p.get("locator"));
             let idle = params.and_then(|p| p.get("idle")).and_then(|v| v.as_bool());
             let idle_ms = params
                 .and_then(|p| p.get("idleMs"))
@@ -233,12 +236,20 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                 .and_then(|p| p.get("timeoutMs"))
                 .and_then(|v| v.as_u64())
                 .unwrap_or(10_000);
-            match (ms, until, url, wants_idle) {
-                (Some(ms), _, _, _) => browser::wait_ms(ctx.session, ms)?,
-                (_, Some(state), _, _) => browser::wait_for_load(ctx.session, state)?,
-                (_, _, Some(url), _) => browser::wait_for_resource(ctx.session, url, timeout_ms)
+            match (ms, until, url, locator, wants_idle) {
+                (Some(ms), _, _, _, _) => browser::wait_ms(ctx.session, ms)?,
+                (_, Some(state), _, _, _) => browser::wait_for_load(ctx.session, state)?,
+                (_, _, Some(url), _, _) => browser::wait_for_resource(ctx.session, url, timeout_ms)
                     .map_err(|e| anyhow!("step '{id}' wait url {url}: {e}"))?,
-                (_, _, _, true) => {
+                (_, _, _, Some(loc), _) => wait_for_element_state(
+                    ctx,
+                    loc,
+                    params.and_then(|p| p.get("state")).and_then(|v| v.as_str()),
+                    timeout_ms,
+                    scope,
+                    id,
+                )?,
+                (_, _, _, _, true) => {
                     browser::wait_for_idle(ctx.session, idle_ms.unwrap_or(500), timeout_ms)
                         .map_err(|e| anyhow!("step '{id}' wait idle: {e}"))?
                 }
@@ -1409,6 +1420,52 @@ fn dialog_blocking_error(e: &anyhow::Error) -> bool {
     msg.contains("dialog is blocking") || msg.contains("timed out")
 }
 
+/// `wait {locator, state?, timeoutMs?}` — poll the element's DOM state
+/// until it reaches `state` (default `attached`): `attached` resolves
+/// regardless of visibility, `visible` needs a layout box and no
+/// `display:none`/`visibility:hidden`, `hidden` is satisfied by either
+/// absent or non-visible, `detached` wants it gone entirely.
+fn wait_for_element_state(
+    ctx: &DoContext<'_>,
+    loc_json: &Json,
+    state: Option<&str>,
+    timeout_ms: u64,
+    scope: &mut ValueScope,
+    id: &str,
+) -> Result<()> {
+    let state = state.unwrap_or("attached");
+    if !matches!(state, "attached" | "visible" | "hidden" | "detached") {
+        bail!("step '{id}' wait: params.state must be attached|visible|hidden|detached, got '{state}'");
+    }
+    let loc: Locator = serde_json::from_value(loc_json.clone())
+        .map_err(|e| anyhow!("step '{id}' wait: params.locator is not a locator: {e}"))?;
+    let ep = drag_endpoint(&loc, scope, ctx.scenario_dir)
+        .map_err(|e| anyhow!("step '{id}' wait locator: {e}"))?;
+    let js = crate::dom_activate::build_element_state_js(&ep);
+    let start = std::time::Instant::now();
+    loop {
+        let got = browser::eval_expression(ctx.session, &js)
+            .ok()
+            .map(|s| s.trim().trim_matches('"').to_string());
+        let reached = match state {
+            "detached" => got.as_deref() == Some("detached"),
+            "visible" => got.as_deref() == Some("visible"),
+            "hidden" => matches!(got.as_deref(), Some("hidden") | Some("detached")),
+            _ => matches!(got.as_deref(), Some("visible") | Some("hidden")),
+        };
+        if reached {
+            return Ok(());
+        }
+        if start.elapsed().as_millis() as u64 >= timeout_ms {
+            bail!(
+                "step '{id}' wait: locator never reached state '{state}' within {timeout_ms}ms (last probe: {})",
+                got.as_deref().unwrap_or("eval failed")
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(120));
+    }
+}
+
 /// Resolve a role locator's `name` to the literal accessible name. Plain and
 /// pattern strings get `{{vars}}` substitution; `i18nKey` resolves through
 /// `i18n.json` beside the scenario (then substitutes vars in the result).
@@ -2000,6 +2057,116 @@ mod tests {
         clear_fake();
         assert!(
             err.to_string().contains("no resource matching"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn wait_with_locator_polls_until_visible() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        // eval answers "visible" → the locator poll resolves on the first try.
+        let body = format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\nif [ \"$3\" = eval ]; then printf '\"visible\"'; fi\nexit 0\n",
+            log.display()
+        );
+        let bin = write_exec(tmp.path(), "agent-browser", &body);
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "wait",
+            "params": { "locator": { "raw": { "kind": "css", "value": "#ready" }, "reason": "" }, "state": "visible" }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        assert!(out.contains("eval"), "got: {out}");
+        assert!(out.contains("#ready"), "got: {out}");
+        assert!(out.contains("__aqWaitState"), "got: {out}");
+    }
+
+    #[test]
+    fn wait_with_locator_detached_accepts_absent_element() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        let body = format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\nif [ \"$3\" = eval ]; then printf '\"detached\"'; fi\nexit 0\n",
+            log.display()
+        );
+        let bin = write_exec(tmp.path(), "agent-browser", &body);
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "wait",
+            "params": { "locator": { "raw": { "kind": "css", "value": ".modal" }, "reason": "" }, "state": "detached" }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+        clear_fake();
+    }
+
+    #[test]
+    fn wait_with_locator_times_out_when_state_never_reached() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        // Plain fake: eval stdout is empty → element state never matches.
+        install_fake(tmp.path(), &log);
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "wait",
+            "params": { "locator": { "raw": { "kind": "css", "value": "#never" }, "reason": "" }, "state": "visible", "timeoutMs": 50 }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err();
+        clear_fake();
+        assert!(
+            err.to_string().contains("never reached state 'visible'"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn wait_with_locator_rejects_unknown_state() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "wait",
+            "params": { "locator": { "raw": { "kind": "css", "value": "#x" }, "reason": "" }, "state": "bogus" }
+        }));
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake(tmp.path(), &log);
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err();
+        clear_fake();
+        assert!(
+            err.to_string().contains("attached|visible|hidden|detached"),
             "got: {err}"
         );
     }
