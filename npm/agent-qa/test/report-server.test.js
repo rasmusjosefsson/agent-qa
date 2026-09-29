@@ -1813,9 +1813,26 @@ test('chat recording controls run buffer verbs in the chat record dir', async (t
     ['resume', ['record', 'resume']],
     ['step-delete', ['buffer', 'delete', '1']],
     ['step-edit', ['buffer', 'edit', '0', JSON.stringify({ verb: 'click', on: '#a' })]],
+    [
+      'step-insert',
+      [
+        'buffer',
+        'insert',
+        '0',
+        'check',
+        JSON.stringify({ intent: 'page looks right', claim: { subject: { shot: 's0' }, predicate: 'matches' } }),
+      ],
+    ],
     ['check', ['buffer', 'check']],
   ]) {
-    const body = sub === 'step-delete' ? { index: 1 } : sub === 'step-edit' ? { index: 0, payload: { verb: 'click', on: '#a' } } : {};
+    const body =
+      sub === 'step-delete'
+        ? { index: 1 }
+        : sub === 'step-edit'
+          ? { index: 0, payload: { verb: 'click', on: '#a' } }
+          : sub === 'step-insert'
+            ? { index: 0, kind: 'check', payload: { intent: 'page looks right', claim: { subject: { shot: 's0' }, predicate: 'matches' } } }
+            : {};
     const r = await j('POST', `/api/chat/c/${chat.id}/recording/${sub}`, body);
     assert.equal(r.status, 200, sub);
     const last = calls.at(-1);
