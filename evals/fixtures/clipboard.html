@@ -1,0 +1,32 @@
+<!doctype html>
+<html>
+<head><title>clipboard fixture</title></head>
+<body>
+  <h1>Clipboard</h1>
+  <textarea id="src" rows="2" cols="30">copy me please</textarea>
+  <button id="copyBtn">Copy via clipboard API</button>
+  <button id="readBtn">Read clipboard</button>
+  <div id="clipOut"></div>
+  <script>
+    document.getElementById("copyBtn").addEventListener("click", async () => {
+      const text = document.getElementById("src").value;
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch (e) {
+        // execCommand fallback for contexts where writeText is denied.
+        const t = document.getElementById("src");
+        t.select();
+        document.execCommand("copy");
+      }
+    });
+    document.getElementById("readBtn").addEventListener("click", async () => {
+      const out = document.getElementById("clipOut");
+      try {
+        out.textContent = "clip:" + (await navigator.clipboard.readText());
+      } catch (e) {
+        out.textContent = "clip-err:" + e.name;
+      }
+    });
+  </script>
+</body>
+</html>

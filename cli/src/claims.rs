@@ -33,6 +33,7 @@ use regex::Regex;
 use serde_json::Value as Json;
 
 use crate::browser::{self, CapturedRequest, RoleAct};
+use crate::cdp;
 use crate::scenario::{
     Claim, ClaimSubject, HttpMethod, Locator, NetworkClaimKind, NetworkMatcher, Predicate,
     RawLocatorKind,
@@ -163,6 +164,12 @@ pub fn dispatch_check(
         ),
         ClaimSubject::Cookie { cookie } => {
             check_cookie(cookie, &claim.predicate, claim.value.as_ref(), ctx, scope)
+        }
+        ClaimSubject::Clipboard { clipboard } => {
+            if !*clipboard {
+                bail!("clipboard subject requires clipboard=true");
+            }
+            check_clipboard(&claim.predicate, claim.value.as_ref(), ctx, scope)
         }
         ClaimSubject::Timing { timing } => {
             check_timing(timing, &claim.predicate, claim.value.as_ref(), ctx, scope)
@@ -736,6 +743,42 @@ fn check_cookie(
         Json::String(serde_json::from_str(raw).unwrap_or_else(|_| raw.to_string()))
     };
     check_value(&actual, predicate, expected, scope).map_err(|e| anyhow!("cookie {name:?}: {e:#}"))
+}
+
+/// `{"clipboard": true}` — read the clipboard's text via
+/// `navigator.clipboard.readText()`. That API needs `clipboard-read`
+/// granted for the page's origin plus a focused document —
+/// `cdp::ensure_clipboard_access` does both over the pooled connection
+/// (headless pages report no focus otherwise). An empty clipboard reads
+/// as `""` and maps to Null, so `exists` means "holds text".
+fn check_clipboard(
+    predicate: &Predicate,
+    expected: Option<&Json>,
+    ctx: &CheckContext,
+    scope: &mut ValueScope,
+) -> Result<()> {
+    cdp::ensure_clipboard_access(ctx.session, false)?;
+    let raw = browser::eval_expression(
+        ctx.session,
+        "(async () => { if (!navigator.clipboard) return '__aq_clip_unsupported__'; \
+         try { return await navigator.clipboard.readText(); } catch (e) { return '__aq_clip_err__' + e.name; } })()",
+    )?;
+    let raw = raw.trim();
+    if raw == "\"__aq_clip_unsupported__\"" {
+        bail!("clipboard: navigator.clipboard is not available (insecure context?)");
+    }
+    if let Some(err) = raw
+        .strip_prefix("\"__aq_clip_err__")
+        .and_then(|s| s.strip_suffix('"'))
+    {
+        bail!("clipboard readText rejected: {err}");
+    }
+    let actual: Json = if raw.is_empty() || raw == "null" || raw == "\"\"" {
+        Json::Null
+    } else {
+        Json::String(serde_json::from_str(raw).unwrap_or_else(|_| raw.to_string()))
+    };
+    check_value(&actual, predicate, expected, scope).map_err(|e| anyhow!("clipboard: {e:#}"))
 }
 
 // ---------- timing ----------
@@ -2432,6 +2475,71 @@ mod tests {
             };
             dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
             clear();
+        }
+
+        #[test]
+        fn clipboard_subject_parses_and_reads_text() {
+            let _g = lock_env();
+            let tmp = TempDir::new().unwrap();
+            install_fake_eval(tmp.path(), "\"aq-copied-text\"");
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "clipboard": true },
+                "predicate": "contains",
+                "value": "aq-copied"
+            }))
+            .unwrap();
+            assert!(matches!(claim.subject, ClaimSubject::Clipboard { .. }));
+            let mut scope = ValueScope::default();
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: Path::new("."),
+                run_dir: None,
+            };
+            dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+            clear();
+        }
+
+        #[test]
+        fn clipboard_empty_text_reads_as_null() {
+            let _g = lock_env();
+            let tmp = TempDir::new().unwrap();
+            install_fake_eval(tmp.path(), "\"\"");
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "clipboard": true },
+                "predicate": "notExists"
+            }))
+            .unwrap();
+            let mut scope = ValueScope::default();
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: Path::new("."),
+                run_dir: None,
+            };
+            dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+            clear();
+        }
+
+        #[test]
+        fn clipboard_read_error_bails_with_reason() {
+            let _g = lock_env();
+            let tmp = TempDir::new().unwrap();
+            install_fake_eval(tmp.path(), "\"__aq_clip_err__NotAllowedError\"");
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "clipboard": true },
+                "predicate": "exists"
+            }))
+            .unwrap();
+            let mut scope = ValueScope::default();
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: Path::new("."),
+                run_dir: None,
+            };
+            let err = dispatch_check(&claim, &ctx, &mut scope, None)
+                .unwrap_err()
+                .to_string();
+            clear();
+            assert!(err.contains("NotAllowedError"), "got: {err}");
         }
 
         #[test]

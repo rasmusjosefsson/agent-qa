@@ -332,6 +332,13 @@
         },
         {
           "type": "object",
+          "required": ["clipboard"],
+          "additionalProperties": false,
+          "properties": { "clipboard": { "const": true } },
+          "$comment": "clipboard claim subject — assert on the clipboard's text (navigator.clipboard.readText; grants clipboard-read + focus emulation via CDP). exists/notExists = holds/no text; string predicates compare the text."
+        },
+        {
+          "type": "object",
           "required": ["console"],
           "additionalProperties": false,
           "properties": {

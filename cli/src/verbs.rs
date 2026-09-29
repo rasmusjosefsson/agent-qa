@@ -24,6 +24,7 @@ use serde_json::Value as Json;
 use std::path::{Path, PathBuf};
 
 use crate::browser::{self, RoleAct};
+use crate::cdp;
 use crate::scenario::{Locator, NameMatch, RawLocatorKind, Step, Value, Verb};
 use crate::value::{resolve_value, value_to_string, ValueScope};
 use crate::verb_shape::assert_verb_shape;
@@ -776,6 +777,7 @@ fn state_apply(
         "clearCookies",
         "clearLocalStorage",
         "clearSessionStorage",
+        "clipboard",
     ];
     for k in obj.keys() {
         if !KEYS.contains(&k.as_str()) {
@@ -831,6 +833,21 @@ fn state_apply(
             }
         }
     }
+    // Clipboard seeding runs in the same eval but needs the async
+    // clipboard API — the text lands in `tail` appended to an async
+    // body when present.
+    let mut tail = String::new();
+    if let Some(clip) = obj.get("clipboard") {
+        let text = clip
+            .as_str()
+            .ok_or_else(|| anyhow!("params.clipboard must be a string"))?;
+        let text = crate::value::substitute_scenario_vars(text, scope);
+        tail = format!(
+            "if (!navigator.clipboard) throw new Error('clipboard API unavailable'); \
+             await navigator.clipboard.writeText({});",
+            json_str(&text)
+        );
+    }
     if let Some(cookies) = obj.get("cookies") {
         let list = cookies
             .as_array()
@@ -864,7 +881,14 @@ fn state_apply(
             body.push_str(&format!("document.cookie = {};", json_str(&assignment)));
         }
     }
-    let expr = format!("(() => {{ {body} }})()");
+    let expr = if tail.is_empty() {
+        format!("(() => {{ {body} }})()")
+    } else {
+        // writeText rejects on an unfocused document without a
+        // permission grant — ensure_clipboard_access covers both.
+        cdp::ensure_clipboard_access(session, true)?;
+        format!("(async () => {{ {body} {tail} }})()")
+    };
     browser::eval_expression(session, &expr)?;
     Ok(())
 }
@@ -2951,5 +2975,58 @@ mod tests {
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         clear_fake();
         assert!(err.contains("i18n.json"), "got: {err}");
+    }
+
+    #[test]
+    fn state_clipboard_writes_text_in_an_async_eval() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake_eval_true(tmp.path(), &log);
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "state",
+            "params": { "clipboard": "aq-seeded-clip", "localStorage": {"k": "v"} }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        assert!(out.contains("(async () =>"), "async body: {out}");
+        assert!(
+            out.contains("navigator.clipboard.writeText(\"aq-seeded-clip\")"),
+            "writeText call: {out}"
+        );
+        assert!(
+            out.contains("localStorage.setItem"),
+            "storage seeds too: {out}"
+        );
+    }
+
+    #[test]
+    fn state_clipboard_requires_a_string() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake_eval_true(tmp.path(), &log);
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "state",
+            "params": { "clipboard": 42 }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
+        clear_fake();
+        assert!(err.contains("clipboard must be a string"), "got: {err}");
     }
 }

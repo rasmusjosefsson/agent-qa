@@ -409,6 +409,31 @@ fn set_locale_override_in(session: &str, locale: &str) -> Result<bool> {
     })
 }
 
+/// Prepare the page for async-clipboard access: grant `clipboard-read`
+/// (plus `clipboard-write`/`clipboard-sanitized-write` when `write`) for
+/// the active page's origin and enable focus emulation — without a
+/// focused document `readText`/`writeText` reject `NotAllowedError`
+/// even with the permission granted. Grants/overrides live on this
+/// pooled connection; returns Ok(()) when no CDP endpoint exists so the
+/// caller's eval surfaces the real clipboard error instead.
+pub fn ensure_clipboard_access(session: &str, write: bool) -> Result<()> {
+    let perms: &[&str] = if write {
+        // `clipboard-sanitized-write` exists in blink but is rejected by
+        // `Browser.setPermission` — `clipboard-write` alone carries it.
+        &["clipboard-read", "clipboard-write"]
+    } else {
+        &["clipboard-read"]
+    };
+    let origin = active_page_origin(session)?;
+    let _ = grant_permissions(session, perms, origin.as_deref())?;
+    let _ = emulate_override(
+        session,
+        "Emulation.setFocusEmulationEnabled",
+        json!({ "enabled": true }),
+    )?;
+    Ok(())
+}
+
 /// Attach to the active page via flat session and switch on
 /// `Network.enable` there, so `webSocketCreated`/`webSocketFrame*`
 /// events start arriving on this connection. Idempotent per connection;
