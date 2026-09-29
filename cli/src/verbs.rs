@@ -234,7 +234,11 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                 .and_then(|v| v.as_u64())
                 .unwrap_or(10_000);
             match (ms, until, url, wants_idle) {
-                (Some(ms), _, _, _) => browser::wait_ms(ctx.session, ms)?,
+                (Some(ms), _, _, _) => {
+                    // Pure wall-clock sleep — no browser round-trip, so a
+                    // pending native dialog can't wedge it.
+                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                }
                 (_, Some(state), _, _) => browser::wait_for_load(ctx.session, state)?,
                 (_, _, Some(url), _) => browser::wait_for_resource(ctx.session, url, timeout_ms)
                     .map_err(|e| anyhow!("step '{id}' wait url {url}: {e}"))?,

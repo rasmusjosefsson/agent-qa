@@ -78,10 +78,9 @@ export interface EdgeGolden extends GoldenContext {
   waitSelectorAbsent(selector: string, intent: string): Promise<void>;
   waitSelectorText(selector: string, text: string, intent: string): Promise<void>;
   waitLoad(state: string, intent: string): Promise<void>;
-  // `wait url` — poll resource timing until a matching request completed.
-  // Record-side nothing is pending (the request already fired); the wait
-  // exists for replay.
-  waitRequest(pattern: string, intent: string): Promise<void>;
+  // `wait url` — poll resource timing until a matching request completed,
+  // live at record and in the replayed scenario (`params.timeoutMs` honored).
+  waitRequest(pattern: string, intent: string, timeoutMs?: number): Promise<void>;
   assertElementText(selector: string, expected: string, intent: string): Promise<void>;
   assertElementAttribute(selector: string, attribute: string, predicate: string, expected: string, intent: string): Promise<void>;
   assertElementAbsent(selector: string, intent: string): Promise<void>;
@@ -313,8 +312,31 @@ export async function runEdgeGolden(
     async waitLoad(state, stepIntent) {
       await record(ctx, "wait", { condition: { kind: "loadState", state }, intent: stepIntent });
     },
-    async waitRequest(pattern, stepIntent) {
-      await record(ctx, "wait", { condition: { kind: "networkRequest", pattern }, intent: stepIntent });
+    async waitRequest(pattern, stepIntent, timeoutMs = 10_000) {
+      // Record-time: poll the page's resource timing until a matching entry
+      // completes, so steps that depend on the request's side effects (e.g.
+      // an alert fired on ajax success) can observe them live.
+      const deadline = Date.now() + timeoutMs;
+      const glob = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replaceAll("*", ".*");
+      const re = new RegExp(glob);
+      for (;;) {
+        const probe = await run(ctx, `poll ${pattern}`, [
+          ctx.agentBrowser, "--session", ctx.session, "--json", "eval",
+          `JSON.stringify(performance.getEntriesByType('resource').map(e=>e.name))`,
+        ]);
+        try {
+          const names = JSON.parse(JSON.parse(probe).data ?? "[]") as string[];
+          if (names.some((n) => re.test(n))) break;
+        } catch { /* fall through to deadline check */ }
+        if (Date.now() > deadline) {
+          throw new Error(`${stepIntent}: no request matched ${pattern} within ${timeoutMs}ms`);
+        }
+        await Bun.sleep(400);
+      }
+      await record(ctx, "wait", {
+        condition: { kind: "networkRequest", pattern, timeoutMs },
+        intent: stepIntent,
+      });
     },
     async assertElementText(selector, expected, stepIntent) {
       await record(ctx, "assert", { kind: "elementText", args: [selector, expected], intent: stepIntent });

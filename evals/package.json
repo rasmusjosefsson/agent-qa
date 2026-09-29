@@ -223,7 +223,11 @@
     "golden:parabank:tc01": "bun golden/parabank-tc01.ts",
     "golden:parabank:tc02": "bun golden/parabank-tc02.ts",
     "golden:parabank:tc03": "bun golden/parabank-tc03.ts",
-    "golden:parabank:tc04": "bun golden/parabank-tc04.ts"
+    "golden:parabank:tc04": "bun golden/parabank-tc04.ts",
+    "golden:demoblaze:tc01": "bun golden/demoblaze-tc01.ts",
+    "golden:demoblaze:tc02": "bun golden/demoblaze-tc02.ts",
+    "golden:demoblaze:tc03": "bun golden/demoblaze-tc03.ts",
+    "golden:demoblaze:tc04": "bun golden/demoblaze-tc04.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"
