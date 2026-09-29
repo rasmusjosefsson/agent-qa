@@ -11,7 +11,7 @@ use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use crate::scenario::Scenario;
+use crate::scenario::{InputDecl, InputType, Locator, Scenario, Step, Value};
 use crate::schema;
 
 pub fn run(args: &[String]) -> Result<u8> {
@@ -548,6 +548,82 @@ pub fn run(args: &[String]) -> Result<u8> {
             let json_out = args.iter().any(|a| a == "--json");
             inputs(Path::new(file), json_out)
         }
+        Some("redact") => {
+            let mut file: Option<&str> = None;
+            let mut name: Option<String> = None;
+            let mut value: Option<String> = None;
+            let mut selector: Option<String> = None;
+            let mut step: Option<String> = None;
+            let mut dry_run = false;
+            let mut it = args[1..].iter();
+            while let Some(a) = it.next() {
+                match a.as_str() {
+                    "--dry-run" => dry_run = true,
+                    "--name" => {
+                        name = Some(
+                            it.next()
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--name requires an identifier"))?,
+                        )
+                    }
+                    s if s.starts_with("--name=") => {
+                        name = Some(s["--name=".len()..].to_string())
+                    }
+                    "--value" => {
+                        value = Some(
+                            it.next()
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--value requires the literal to redact"))?,
+                        )
+                    }
+                    s if s.starts_with("--value=") => {
+                        value = Some(s["--value=".len()..].to_string())
+                    }
+                    "--selector" => {
+                        selector = Some(
+                            it.next()
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--selector requires a css selector"))?,
+                        )
+                    }
+                    s if s.starts_with("--selector=") => {
+                        selector = Some(s["--selector=".len()..].to_string())
+                    }
+                    "--step" => {
+                        step = Some(
+                            it.next()
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--step requires a step id"))?,
+                        )
+                    }
+                    s if s.starts_with("--step=") => {
+                        step = Some(s["--step=".len()..].to_string())
+                    }
+                    other if other.starts_with("--") => bail!("unknown flag {other:?}"),
+                    other => {
+                        if file.is_none() {
+                            file = Some(other);
+                        } else {
+                            bail!("unexpected positional {other:?}");
+                        }
+                    }
+                }
+            }
+            let file = file.ok_or_else(|| {
+                anyhow!(
+                    "usage: scenario redact <file> --name <VAR> (--value <literal> | --selector <css> | --step <stepId>) [--dry-run]"
+                )
+            })?;
+            let name = name.ok_or_else(|| anyhow!("--name is required"))?;
+            redact(
+                Path::new(file),
+                &name,
+                value.as_deref(),
+                selector.as_deref(),
+                step.as_deref(),
+                dry_run,
+            )
+        }
         Some("insert") => {
             let mut file: Option<&str> = None;
             let mut kind: Option<&str> = None;
@@ -658,6 +734,12 @@ fn help() {
                                             Splice a validated step into a saved scenario.
                                             Draft shape matches record-step (id/kind
                                             omitted); position defaults to the end.
+  agent-qa scenario redact <file> --name <VAR> (--value <literal> | --selector <css> | --step <stepId>) [--dry-run]
+                                            Replace a recorded literal (password, token) with a
+                                            sensitive inputs.<VAR> reference so the file is safe to
+                                            commit. --value sweeps every step's strings; --selector /
+                                            --step rewrite a do-step's value without the secret on
+                                            the command line.
   agent-qa scenario diff <a> <b>             Unified diff between two scenario.json files\n                                            (canonicalised JSON; exit 1 on difference)\n  agent-qa scenario hash <file>              SHA-256 of scenario.json bytes (same algorithm\n                                            replay + heal-promote use for the rebase guard)\n  agent-qa scenario id <file>                Print the scenario's id field (one line)\n  agent-qa scenario intent <file>            Print the scenario's intent field (one line)\n  agent-qa scenario step-ids <file>          Print every step id, one per line\n  agent-qa scenario field <file> <name>      Print any top-level scenario field (id, intent,\n                                            schema, etc.); object/array → compact JSON.\n  agent-qa scenario coverage <file> [--json] Per-step check coverage: how many do steps are\n                                            followed by a check claim, and how many are bare.\n  agent-qa scenario coverage-all [--filter <substr>] [--json]\n                                            The same ratio rolled up across every scenario under\n                                            the root — per-scenario rows sorted worst-first plus\n                                            an OVERALL rollup.\n  agent-qa scenario lint <file> [--json] [--strict] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run common lints (use '-' for stdin)\n                                            (duplicate ids, empty intent, bare do,\n                                            undeclared/unused inputs). Exit 1 iff\n                                            any errors are reported (--strict treats\n                                            warnings as errors). --rule narrows to specific\n                                            codes; --exclude-rule subtracts (both repeatable).\n                                            --format github emits GitHub Actions annotations.\n  agent-qa scenario lint --list-rules [--json]\n                                            Enumerate the lint rules + their severities.\n  agent-qa scenario lint-all [--json] [--strict] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run lints against every scenario under the\n                                            scenarios root; exit 1 iff any errors are reported\n                                            (--strict treats warnings as errors). --rule\n                                            narrows to specific codes; --exclude-rule\n                                            subtracts (both repeatable).\n  agent-qa scenario rename <sid> <new-sid>   Rename a scenario: patches scenario.json's id\n                                            field, then moves the directory under the\n                                            scenarios root. (refuses to overwrite).\n  agent-qa scenario copy <sid> <new-sid>     Copy a scenario (scenario.json with id patched +\n                                            baselines/ carried; replays NOT copied). Refuses to overwrite.\n  agent-qa scenario delete <sid> [--yes/-y]  Remove a scenario directory + all its replays.\n                                            Dry-run by default; --yes confirms.\n  agent-qa scenario prune-replays <sid> --keep N [--yes] [--keep-failed]\n                                            Keep the N most recent replays under\n                                            <sid>/replays/; dry-run by default.\n                                            --keep-failed preserves all non-zero-exit\n                                            runs regardless of N.\n  agent-qa scenario prune-all --keep N [--yes] [--keep-failed]\n                                            Like prune-replays but across every scenario\n                                            under the scenarios root. --keep-failed\n                                            preserves failed runs per scenario."
     );
 }
@@ -766,6 +848,191 @@ fn insert(
     println!(
         "inserted {kind_arg} step at {pos} (id={step_id}); {} step(s)",
         sc.steps.len()
+    );
+    Ok(0)
+}
+
+/// Recursively rewrite occurrences of `needle` inside every string in `v` to
+/// `token` (`{{vars.NAME}}`). Returns the number of strings touched.
+fn replace_in_json(v: &mut serde_json::Value, needle: &str, token: &str) -> usize {
+    match v {
+        serde_json::Value::String(s) => {
+            if s.contains(needle) {
+                *s = s.replace(needle, token);
+                1
+            } else {
+                0
+            }
+        }
+        serde_json::Value::Array(items) => items
+            .iter_mut()
+            .map(|i| replace_in_json(i, needle, token))
+            .sum(),
+        serde_json::Value::Object(map) => map
+            .values_mut()
+            .map(|i| replace_in_json(i, needle, token))
+            .sum(),
+        _ => 0,
+    }
+}
+
+/// `scenario redact` — pull a recorded literal (a typed password, a token)
+/// out of the committed scenario.json and replace it with a declared
+/// `inputs.<name>` (sensitive) reference, so the file is safe to commit.
+///
+/// Three ways to find the secret carrier:
+///   --value <literal>   sweep every step for strings containing the
+///                       literal; whole `value.literal` matches upgrade to
+///                       `{from: "input"}` refs, substring occurrences get a
+///                       `{{vars.NAME}}` token (also covers claim values,
+///                       params, templates).
+///   --selector <css>    rewrite the `value` of every do-step whose raw css
+///                       locator matches — no secret on the command line.
+///   --step <stepId>     same, addressed by step id.
+///
+/// Both reference channels resolve at replay: `{"from": "input"}` reads
+/// `inputs.<name>` and `{{vars.NAME}}` substitutes it too.
+fn redact(
+    path: &Path,
+    name: &str,
+    value: Option<&str>,
+    selector: Option<&str>,
+    step_id: Option<&str>,
+    dry_run: bool,
+) -> Result<u8> {
+    if [value.is_some(), selector.is_some(), step_id.is_some()]
+        .iter()
+        .filter(|b| **b)
+        .count()
+        != 1
+    {
+        bail!("pass exactly one of --value / --selector / --step");
+    }
+    let mut chars = name.chars();
+    let valid = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !valid {
+        bail!("--name {name:?} must be an identifier ([A-Za-z_][A-Za-z0-9_]*)");
+    }
+    if let Some(v) = value {
+        if v.is_empty() {
+            bail!("--value must not be empty");
+        }
+    }
+    let token = format!("{{{{vars.{name}}}}}");
+    let mut sc = load_scenario(path)?;
+    let mut upgraded = 0usize;
+    let mut swept = 0usize;
+    for step in sc.steps.iter_mut() {
+        match step {
+            Step::Do {
+                id,
+                on,
+                value: step_value,
+                ..
+            } => {
+                let targeted = if let Some(want) = step_id {
+                    id == want
+                } else if let Some(want) = selector {
+                    matches!(
+                        on,
+                        Some(Locator::Raw(raw)) if raw.raw.value == want
+                    )
+                } else {
+                    false
+                };
+                if targeted {
+                    match step_value {
+                        Some(Value::Literal { literal }) if literal.is_string() => {
+                            *step_value = Some(Value::Input {
+                                input: name.to_string(),
+                            });
+                            upgraded += 1;
+                        }
+                        Some(Value::Literal { .. }) => {
+                            bail!("step {id}: value literal is not a string — edit it by hand")
+                        }
+                        _ => bail!("step {id}: no literal value to redact"),
+                    }
+                    continue;
+                }
+                if let Some(secret) = value {
+                    // Whole-literal match upgrades to the typed input channel…
+                    if let Some(Value::Literal {
+                        literal: serde_json::Value::String(s),
+                    }) = step_value
+                    {
+                        if *s == secret {
+                            *step_value = Some(Value::Input {
+                                input: name.to_string(),
+                            });
+                            upgraded += 1;
+                            continue;
+                        }
+                    }
+                    // …otherwise substring-sweep the whole step (params too).
+                    let mut j = serde_json::to_value(&*step)?;
+                    let n = replace_in_json(&mut j, secret, &token);
+                    if n > 0 {
+                        *step = serde_json::from_value(j)
+                            .context("step failed to re-parse after redaction")?;
+                        swept += n;
+                    }
+                }
+            }
+            Step::Check { .. } => {
+                if let Some(secret) = value {
+                    let mut j = serde_json::to_value(&*step)?;
+                    let n = replace_in_json(&mut j, secret, &token);
+                    if n > 0 {
+                        *step = serde_json::from_value(j)
+                            .context("step failed to re-parse after redaction")?;
+                        swept += n;
+                    }
+                }
+            }
+        }
+    }
+    if upgraded + swept == 0 {
+        bail!("nothing matched — no step carries that value/selector/step id");
+    }
+    let inputs = sc
+        .inputs
+        .get_or_insert_with(std::collections::BTreeMap::new);
+    match inputs.get(name) {
+        Some(existing) if existing.sensitive == Some(true) => {}
+        Some(_) => bail!("inputs.{name} is already declared non-sensitive — pick another name"),
+        None => {
+            inputs.insert(
+                name.to_string(),
+                InputDecl {
+                    ty: InputType::String,
+                    default: None,
+                    sensitive: Some(true),
+                    items: None,
+                    properties: None,
+                    description: None,
+                },
+            );
+        }
+    }
+    let body = serde_json::to_value(&sc)?;
+    schema::validate_value(&body).context("redacted scenario failed schema validation")?;
+    if dry_run {
+        println!(
+            "dry-run: would rewrite {upgraded} step value(s) to {{from: \"input\", input: \"{name}\"}} \
+             and sweep {swept} string(s) to {token}; adds inputs.{name} (sensitive)"
+        );
+        return Ok(0);
+    }
+    let mut bytes = serde_json::to_string_pretty(&body)?.into_bytes();
+    bytes.push(b'\n');
+    fs::write(path, &bytes).with_context(|| format!("write {}", path.display()))?;
+    println!(
+        "redacted {upgraded} step value(s) → input:{name} + {swept} embedded occurrence(s) → {token}; \
+         declared inputs.{name} (sensitive). Supply it at replay: replay --input {name}=…"
     );
     Ok(0)
 }
@@ -3492,6 +3759,85 @@ mod tests {
         )
         .is_err());
         assert_eq!(fs::read_to_string(&p).unwrap(), before);
+    }
+
+    #[test]
+    fn redact_rewrites_literal_to_input_and_declares_sensitive() {
+        let tmp = TempDir::new().unwrap();
+        let p = write(
+            tmp.path(),
+            r##"{
+              "schema": "scenario/2", "id": "demo", "intent": "login",
+              "steps": [
+                { "id": "s0", "intent": "go", "kind": "do", "verb": "reload" },
+                { "id": "s1", "intent": "type password", "kind": "do", "verb": "type",
+                  "on": { "raw": { "kind": "css", "value": "input[name=pw]" }, "reason": "test" },
+                  "value": { "from": "literal", "literal": "hunter2" } },
+                { "id": "s2", "intent": "note hunter2 was used", "kind": "do", "verb": "wait",
+                  "params": { "label": "typed hunter2" } },
+                { "id": "s3", "intent": "pw visible", "kind": "check",
+                  "claim": { "subject": { "element": { "raw": { "kind": "css", "value": ".echo" }, "reason": "test" } },
+                             "predicate": "contains", "value": "hunter2" } }
+              ]
+            }"##,
+        );
+        // --value: s1's whole literal upgrades to an input ref; s2's params
+        // and s3's claim value get {{vars.…}} tokens.
+        redact(&p, "PASS", Some("hunter2"), None, None, false).unwrap();
+        let sc = load_scenario(&p).unwrap();
+        let inputs = sc.inputs.clone().unwrap();
+        assert_eq!(inputs["PASS"].sensitive, Some(true));
+        match &sc.steps[1] {
+            Step::Do { value, .. } => {
+                assert!(matches!(value, Some(Value::Input { input }) if input == "PASS"))
+            }
+            _ => panic!(),
+        }
+        let body = serde_json::to_value(&sc).unwrap();
+        let text = body.to_string();
+        assert!(!text.contains("hunter2"), "secret must not survive: {text}");
+        assert!(text.contains("{{vars.PASS}}"));
+    }
+
+    #[test]
+    fn redact_by_selector_without_the_secret_on_cmdline() {
+        let tmp = TempDir::new().unwrap();
+        let p = write(
+            tmp.path(),
+            r#"{
+              "schema": "scenario/2", "id": "demo", "intent": "login",
+              "steps": [
+                { "id": "s0", "intent": "type pw", "kind": "do", "verb": "type",
+                  "on": { "raw": { "kind": "css", "value": "input[type=password]" }, "reason": "test" },
+                  "value": { "from": "literal", "literal": "whatever" } },
+                { "id": "s1", "intent": "unrelated", "kind": "do", "verb": "reload" }
+              ]
+            }"#,
+        );
+        // dry-run reports the match but does not write
+        let before = fs::read_to_string(&p).unwrap();
+        redact(&p, "PASS", None, Some("input[type=password]"), None, true).unwrap();
+        assert_eq!(fs::read_to_string(&p).unwrap(), before);
+        redact(&p, "PASS", None, Some("input[type=password]"), None, false).unwrap();
+        let sc = load_scenario(&p).unwrap();
+        match &sc.steps[0] {
+            Step::Do { value, .. } => {
+                assert!(matches!(value, Some(Value::Input { input }) if input == "PASS"))
+            }
+            _ => panic!(),
+        }
+        // unmatched steps untouched
+        assert!(matches!(&sc.steps[1], Step::Do { value: None, .. }));
+        // --step addresses the same way
+        assert!(redact(&p, "X", None, None, Some("nope"), false).is_err());
+        // nothing-to-do is an error, not a silent write
+        assert!(redact(&p, "X", Some("absent"), None, None, false).is_err());
+        // exactly one selector mode
+        assert!(redact(&p, "X", Some("a"), Some("b"), None, false).is_err());
+        // identifier validation
+        assert!(redact(&p, "1bad", Some("whatever"), None, None, true).is_err());
+        // an already-Input step can't be re-redacted
+        assert!(redact(&p, "Z", None, Some("input[type=password]"), None, false).is_err());
     }
 
     #[test]
