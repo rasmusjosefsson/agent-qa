@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Console + wait fixture</title>
+  </head>
+  <body>
+    <!-- Served over http by the golden runner's in-process static server —
+         the slow endpoint is provided by the runner itself. -->
+    <h1>Console + waits</h1>
+    <button id="log" data-testid="log">Log</button>
+    <button id="warn" data-testid="warn">Warn</button>
+    <button id="err" data-testid="err">Error</button>
+    <button id="slow" data-testid="slow">Slow fetch</button>
+    <button id="slow2" data-testid="slow2">Two parallel slow fetches</button>
+    <div id="out" data-testid="out">idle</div>
+    <script>
+      console.log("boot ok");
+      const out = document.getElementById("out");
+      document.getElementById("log").addEventListener("click", () => console.log("log clicked"));
+      document.getElementById("warn").addEventListener("click", () => console.warn("warn clicked"));
+      document.getElementById("err").addEventListener("click", () => console.error("boom"));
+      document.getElementById("slow").addEventListener("click", async () => {
+        out.textContent = "slow loading";
+        const r = await fetch("api/slow.json");
+        await r.json();
+        out.textContent = "slow done";
+      });
+      document.getElementById("slow2").addEventListener("click", async () => {
+        out.textContent = "slow2 loading";
+        await Promise.all([fetch("api/slow.json"), fetch("api/slow2.json")]);
+        out.textContent = "slow2 done";
+      });
+    </script>
+  </body>
+</html>

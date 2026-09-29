@@ -217,7 +217,17 @@
     "golden:tp:tc01": "bun golden/tp-tc01.ts",
     "golden:tp:tc02": "bun golden/tp-tc02.ts",
     "golden:tp:tc03": "bun golden/tp-tc03.ts",
-    "golden:tp:tc04": "bun golden/tp-tc04.ts"
+    "golden:tp:tc04": "bun golden/tp-tc04.ts",
+    "golden:gestures:tc01": "bun run golden/gestures-tc01.ts",
+    "golden:crawl:tc01": "bun golden/crawl-tc01.ts",
+    "golden:todomvc:tc01": "bun golden/todomvc-tc01.ts",
+    "golden:todomvc:tc02": "bun golden/todomvc-tc02.ts",
+    "golden:todomvc:tc03": "bun golden/todomvc-tc03.ts",
+    "golden:todomvc:tc04": "bun golden/todomvc-tc04.ts",
+    "golden:emulate:tc02": "bun golden/emulate-tc02.ts",
+    "golden:hermetic:tc01": "bun golden/hermetic-tc01.ts",
+    "golden:claims:tc01": "bun golden/claims-tc01.ts",
+    "golden:state:tc01": "bun golden/state-tc01.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"
