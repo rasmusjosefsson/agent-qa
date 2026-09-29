@@ -43,6 +43,7 @@ export interface EdgeGolden extends GoldenContext {
   openPage(): Promise<void>;
   clickSelector(selector: string, intent: string): Promise<void>;
   fillSelector(selector: string, value: string, intent: string): Promise<void>;
+  fillSelectorReplayValue(selector: string, liveValue: string, replayValue: string, intent: string): Promise<void>;
   selectOption(selector: string, value: string, intent: string): Promise<void>;
   checkSelector(selector: string, intent: string): Promise<void>;
   hoverSelector(selector: string, intent: string): Promise<void>;
@@ -182,6 +183,13 @@ export async function runEdgeGolden(
       await run(ctx, `fill ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, value]);
       await record(ctx, "action", { method: "fillBySelector", args: [selector, value], intent: stepIntent });
     },
+    async fillSelectorReplayValue(selector, liveValue, replayValue, stepIntent) {
+      // Fill the live field with the literal but record a template (e.g.
+      // {{vars._unique}}) — signups and other unique-value flows replay
+      // with a fresh value instead of the recorded literal.
+      await run(ctx, `fill ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, liveValue]);
+      await record(ctx, "action", { method: "fillBySelector", args: [selector, replayValue], intent: stepIntent });
+    },
     async selectOption(selector, value, stepIntent) {
       await run(ctx, `select ${value}`, [ctx.agentBrowser, "--session", ctx.session, "select", selector, value]);
       await record(ctx, "action", { method: "selectBySelector", args: [selector, value], intent: stepIntent });
@@ -243,15 +251,24 @@ export async function runEdgeGolden(
       await record(ctx, "action", { method: "dialogDismiss", args: [], intent: stepIntent });
     },
     async assertDialogText(text, stepIntent) {
-      const out = await run(ctx, `dialog status ${stepIntent}`, [
-        ctx.agentBrowser, "--session", ctx.session, "--json", "dialog", "status",
-      ]);
-      const data = (JSON.parse(out).data ?? {}) as { hasDialog?: boolean; message?: string };
-      if (!data.hasDialog) throw new Error(`${stepIntent}: no dialog is currently open`);
-      if (!(data.message ?? "").includes(text)) {
-        throw new Error(`${stepIntent}: dialog text ${JSON.stringify(data.message)} does not contain ${JSON.stringify(text)}`);
+      // Alerts fired from async handlers (XHR `.then`, timers) surface a
+      // beat after the triggering action returns, so poll like the
+      // selector waits do instead of racing them.
+      const deadline = Date.now() + 8000;
+      let last = "";
+      while (Date.now() < deadline) {
+        const out = await run(ctx, `dialog status ${stepIntent}`, [
+          ctx.agentBrowser, "--session", ctx.session, "--json", "dialog", "status",
+        ]);
+        const data = (JSON.parse(out).data ?? {}) as { hasDialog?: boolean; message?: string };
+        if (data.hasDialog && (data.message ?? "").includes(text)) {
+          await record(ctx, "assert", { kind: "dialogText", args: [text], intent: stepIntent });
+          return;
+        }
+        last = data.hasDialog ? `dialog ${JSON.stringify(data.message)}` : "no dialog open";
+        await new Promise((r) => setTimeout(r, 250));
       }
-      await record(ctx, "assert", { kind: "dialogText", args: [text], intent: stepIntent });
+      throw new Error(`${stepIntent}: expected dialog containing ${JSON.stringify(text)}; last status: ${last}`);
     },
     async assertDialogClosed(stepIntent) {
       await record(ctx, "assert", { kind: "dialogClosed", args: [], intent: stepIntent });
