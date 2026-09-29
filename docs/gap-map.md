@@ -15,7 +15,7 @@ the picture shifts materially.
 | Audit | `flaky`, `slow`, `heal-chronic` (+`--all`), `verdict` (+`--all`), `cluster`, `trend` (+`--all`), `health`, run-vs-run compare (CLI + workbench) |
 | Lint | `no-visual-check`, `shot-without-baseline`, `domshot-without-baseline`, `orphan-baseline`, `brittle-locator`, `fixed-sleep`, `check-all` in smoke |
 | CI | `qa-gate` (fixture goldens + sticky verdict + run-report artifacts), `ui-goldens` (visual gate w/ embedded before/after/diff images), `qa-crawl` (draft coverage on UI PRs), `qa-adopt` + `/qa accept` commands, composite `action.yml` (+npm install mode, +app-under-test boot), `evals-nightly`, changelog-driven releases |
-| Golden suites | ~30 QA Playground pages, ~34 the-internet edge cases (six sweeps), saucedemo suite (login/sort, full 21-step purchase, negative auth, logout, cookie+storage lifecycle), expandtesting (login round-trip, dynamic table, infinite scroll), todomvc (stateful SPA), demoqa widgets, httpbin hermetic-mock loop, workbench selftest goldens, quotes.toscrape.com (pagination, HttpOnly cookie claims, scroll offsets), parabank (registration with `{{vars._unique}}`, login/logout, profile update — volatile-URL claims normalized), demoblaze (category filters, add-to-cart alert claims, cart session persistence across reload, full purchase flow), automation-exercise (signup+cart lifecycle), wikipedia (search nav, TOC, history, REST API claims), formy (full form, bootstrap modal, jQuery datepicker, JS dropdown), testpages (ajax cascade, form POST echo, native dialogs, onblur validation), coffee-cart (cart badge, promo modal, checkout form, quantity steppers), globalsqa XYZ Bank (AngularJS login, deposit/withdraw, transactions ledger, manager console) |
+| Golden suites | ~30 QA Playground pages, ~34 the-internet edge cases (six sweeps), saucedemo suite (login/sort, full 21-step purchase, negative auth, logout, cookie+storage lifecycle), expandtesting (login round-trip, dynamic table, infinite scroll), todomvc (stateful SPA), demoqa widgets, httpbin hermetic-mock loop, workbench selftest goldens, quotes.toscrape.com (pagination, HttpOnly cookie claims, scroll offsets), parabank (registration with `{{vars._unique}}`, login/logout, profile update — volatile-URL claims normalized), demoblaze (category filters, add-to-cart alert claims, cart session persistence across reload, full purchase flow), automation-exercise (signup+cart lifecycle), wikipedia (search nav, TOC, history, REST API claims), formy (full form, bootstrap modal, jQuery datepicker, JS dropdown), testpages (ajax cascade, form POST echo, native dialogs, onblur validation), coffee-cart (cart badge, promo modal, checkout form, quantity steppers), globalsqa XYZ Bank (AngularJS login, deposit/withdraw, transactions ledger, manager console), hackernews (live HN API claims), selectorshub (shadow-DOM fills + snapshot attribute reads), practicesoftwaretesting (search, cart, login + QUERY-method API claims), lambdatest OpenCart (GET-form search with percent-encoded routes, hidden sticky-bar twins, delegated jQuery cart POST, cart page quantity rows) |
 
 ## Ranked gaps
 
@@ -88,6 +88,37 @@ the picture shifts materially.
     through `find_role_act` unguarded (resolving role+name in-page needs
     the role engine), and a daemon-side fix upstream would be the real
     close.
+13. **Record-side resolution is still first-match** — replay prefers the
+    first *visible* css match (#348), but the live `agent-browser`
+    `click`/`wait`/`fill` that golden runners drive keep first-match
+    semantics: a hidden twin refuses the trusted click (`covered by
+    #main-header`) or hangs `wait` forever. Lambdatest exposed this on
+    the record path — worked around with `clickSelectorForce` (eval
+    `.click()` on the first match, safe because the twins share the
+    delegated handler). Real closes: an upstream prefer-visible in
+    agent-browser, or a record-side helper that resolves visibility
+    first and drives the chosen node by ref.
+
+### P5 — uncovered surfaces (smaller, real)
+
+14. **IndexedDB is not assertable** — `storage` claims cover localStorage/
+    sessionStorage and `cookie` covers the CDP jar; IndexedDB (the store
+    real apps actually use for offline data) has no claim or seeding
+    path.
+15. **Clipboard** — no claim or step can read/set clipboard contents, so
+    copy-to-clipboard UX can't be covered.
+16. **Service-worker-served responses** — cache-first PWAs answer from
+    the SW without a `Network.*` hit on the page target; `network`
+    claims on those endpoints would time out. Untested whether the
+    own-CDP client sees SW-target traffic — needs a probe.
+17. **Closed shadow roots are unreachable** — role locators pierce *open*
+    roots via the a11y tree; closed roots hide everything by design.
+    Worth documenting as a hard limit rather than a gap to fix.
+18. **`set` toggles without a clear state** — #349 resets `offline` +
+    `headers` at run start, but `viewport`/`device`/`geo`/`credentials`/
+    `media` still leak across replays on a reused session with no
+    `set`-level off. Needs either upstream clear verbs or a tracked
+    reset baseline in the runner.
 
 ## Entry-point dogfood pass (`init → start → record-step → buffer → flush → replay → audit`)
 
@@ -222,8 +253,48 @@ Real sites taught durable patterns:
   fillSelector's recorded `fillBySelector` keeps the template so replay
   mints fresh uniqueness per run (parabank registration, xyz last name).
 
+## Dogfood pass IV — OpenCart (lambdatest): hidden twins + daemon state
+
+Record→replay on a server-rendered OpenCart store surfaced a systemic
+class the sweep list hadn't hit yet:
+
+- **Hidden duplicate controls are everywhere on real storefronts** —
+  `button.btn-cart` exists twice per product page; the first DOM match
+  is a 0×0 sticky-bar twin covered by `#main-header`. Replay-side fix
+  (#348): every css resolution for an action target picks
+  `els.find(visible) || els[0]`. Record-side is still first-match (gap
+  13). The same page puts a visible *category dropdown-toggle* before
+  the submit button inside the search form — a comma selector's "first
+  visible" pick hits the wrong control; tighten to the actual submit
+  (`form button.type-text`).
+- **`agent-browser set` toggles are daemon-side and persist across
+  replays** — a leftover `offline on` silently drops every request
+  while the warm-goto skip means no navigation ever fires, so
+  `network.json` is empty and `{"network"}` claims time out with a
+  misleading `no request matched`. #349 resets `offline`+`headers` at
+  run start; viewport/device/geo/credentials/media still lack clears
+  (gap 18).
+- **The deferred click dispatch can outlive its node** — the setTimeout
+  that dodges dialog-blocking evals captured `el` before the theme's
+  hydration re-render could detach it; it now re-resolves inside the
+  timeout (also #348).
+- **GET forms percent-encode route params** — OpenCart search submits
+  to `route=product%2Fsearch` (encoded slash). URL and network regexes
+  need `product(%2F|/)search`; the same applies to any server that
+  encodes slashes in params.
+- **`press Enter` doesn't submit every form** — the search input's
+  Enter handler is a no-op on this theme; a real submit-button click
+  is required. When a type+Enter pattern stalls on a new site, reach
+  for the submit control first.
+
 ## Recently closed (for orientation)
 
+- OpenCart/lambdatest findings: prefer-visible css resolution + deferred
+  click re-resolve (#348), persistent-emulation reset at run start +
+  `network requests --clear` dedupe (#349), lambdatest goldens (#350)
+- selectorshub shadow-DOM sweep (#344), practicesoftwaretesting sweep
+  incl. QUERY-method API claims (#345), agent-driveable `@eN` refs +
+  gotchas skill notes (#346), record-translate dead-arm cleanup (#347)
 - Authoring ergonomics dogfood (#325–#341): `init` literal fix +
   claim-value lint, `run-report`/`compare`/`audit` `latest` resolution,
   scenario readers take sids, locator shorthand (`css:…`), `-h` anywhere,
