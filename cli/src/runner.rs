@@ -512,9 +512,14 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     };
     write_run_audit(&run, &audit)?;
 
-    // 4. Resolve inputs (declared defaults + --param overrides).
-    let (resolved_inputs, audit_params) =
-        resolve_inputs(scenario.inputs.as_ref(), &opts.input_overrides)?;
+    // 4. Resolve inputs (declared defaults + --param overrides +
+    //    inputs.local.json beside the scenario).
+    let local_inputs = load_local_inputs(&scenario_dir);
+    let (resolved_inputs, audit_params) = resolve_inputs(
+        scenario.inputs.as_ref(),
+        &opts.input_overrides,
+        &local_inputs,
+    )?;
     audit.parameters = if audit_params.is_empty() {
         None
     } else {
@@ -1529,9 +1534,25 @@ fn load_heal_overrides(
 /// Unknown override names are rejected with a clear error.
 /// Sensitive entries store `[REDACTED]` in audit.parameters but
 /// flow the real value into `scope.inputs`.
+/// Read `<scenario_dir>/inputs.local.json` — the gitignored file `flush`
+/// writes recorded secrets into so a committed scenario still replays on
+/// the machine that recorded it. Missing or unparsable → empty map.
+fn load_local_inputs(scenario_dir: &std::path::Path) -> BTreeMap<String, serde_json::Value> {
+    let p = scenario_dir.join("inputs.local.json");
+    match fs::read(&p) {
+        Ok(bytes) => serde_json::from_slice::<BTreeMap<String, serde_json::Value>>(&bytes)
+            .unwrap_or_else(|e| {
+                eprintln!("[v2-replay] {} unparsable, ignoring: {e}", p.display());
+                BTreeMap::new()
+            }),
+        Err(_) => BTreeMap::new(),
+    }
+}
+
 fn resolve_inputs(
     declared: Option<&BTreeMap<String, InputDecl>>,
     overrides: &BTreeMap<String, String>,
+    local: &BTreeMap<String, serde_json::Value>,
 ) -> Result<(
     std::collections::HashMap<String, serde_json::Value>,
     Vec<RunAuditParameter>,
@@ -1568,7 +1589,10 @@ fn resolve_inputs(
             ),
             None => match &decl.default {
                 Some(v) => (v.clone(), ParameterSource::Default),
-                None => continue,
+                None => match local.get(name) {
+                    Some(v) => (v.clone(), ParameterSource::Local),
+                    None => continue,
+                },
             },
         };
         let sensitive = decl.sensitive.unwrap_or(false);
@@ -3996,7 +4020,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         );
         let mut overrides = BTreeMap::new();
         overrides.insert("secret".to_string(), "hunter2".to_string());
-        let (scope, params) = resolve_inputs(Some(&declared), &overrides).unwrap();
+        let (scope, params) =
+            resolve_inputs(Some(&declared), &overrides, &BTreeMap::new()).unwrap();
         assert_eq!(scope.get("name").unwrap(), &serde_json::json!("bob"));
         assert_eq!(scope.get("secret").unwrap(), &serde_json::json!("hunter2"));
         let secret_param = params.iter().find(|p| p.name == "secret").unwrap();
@@ -4008,10 +4033,59 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         let declared: BTreeMap<String, InputDecl> = BTreeMap::new();
         let mut overrides = BTreeMap::new();
         overrides.insert("nope".to_string(), "x".to_string());
-        let err = resolve_inputs(Some(&declared), &overrides)
+        let err = resolve_inputs(Some(&declared), &overrides, &BTreeMap::new())
             .unwrap_err()
             .to_string();
         assert!(err.contains("not declared") || err.contains("no inputs"));
+    }
+
+    #[test]
+    fn resolve_inputs_local_file_is_the_last_resort() {
+        let mut declared = BTreeMap::new();
+        declared.insert(
+            "secret".to_string(),
+            InputDecl {
+                ty: InputType::String,
+                default: None,
+                sensitive: Some(true),
+                items: None,
+                properties: None,
+                description: None,
+            },
+        );
+        declared.insert(
+            "with_default".to_string(),
+            InputDecl {
+                ty: InputType::String,
+                default: Some(serde_json::json!("decl")),
+                sensitive: None,
+                items: None,
+                properties: None,
+                description: None,
+            },
+        );
+        let mut local = BTreeMap::new();
+        local.insert("secret".to_string(), serde_json::json!("hunter2"));
+        local.insert(
+            "with_default".to_string(),
+            serde_json::json!("local-ignored"),
+        );
+        let (scope, params) = resolve_inputs(Some(&declared), &BTreeMap::new(), &local).unwrap();
+        // Declared default still wins over the local file; the file only
+        // covers inputs with no default and no --param.
+        assert_eq!(
+            scope.get("with_default").unwrap(),
+            &serde_json::json!("decl")
+        );
+        assert_eq!(scope.get("secret").unwrap(), &serde_json::json!("hunter2"));
+        let secret_param = params.iter().find(|p| p.name == "secret").unwrap();
+        assert_eq!(secret_param.value, serde_json::json!("[REDACTED]"));
+        assert_eq!(secret_param.source, ParameterSource::Local);
+        // --param still beats the local file
+        let mut overrides = BTreeMap::new();
+        overrides.insert("secret".to_string(), "cli-wins".to_string());
+        let (scope, _) = resolve_inputs(Some(&declared), &overrides, &local).unwrap();
+        assert_eq!(scope.get("secret").unwrap(), &serde_json::json!("cli-wins"));
     }
 
     #[test]

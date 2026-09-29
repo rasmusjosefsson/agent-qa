@@ -14,6 +14,7 @@ pub fn run(args: &[String]) -> Result<u8> {
     let mut auto_shots = false;
     let mut auto_network = true;
     let mut auto_errors = true;
+    let mut auto_secrets = true;
     for arg in args {
         match arg.as_str() {
             "-h" | "--help" | "help" => {
@@ -23,12 +24,14 @@ pub fn run(args: &[String]) -> Result<u8> {
             "--auto-shots" => auto_shots = true,
             "--auto-network" => auto_network = true,
             "--auto-errors" => auto_errors = true,
+            "--auto-secrets" => auto_secrets = true,
             "--no-auto-network" => auto_network = false,
             "--no-auto-errors" => auto_errors = false,
+            "--no-auto-secrets" => auto_secrets = false,
             other => bail!("flush: unknown argument {other:?}"),
         }
     }
-    let summary = flush(auto_shots, auto_network, auto_errors)?;
+    let summary = flush(auto_shots, auto_network, auto_errors, auto_secrets)?;
     println!("flushed sid={} steps={}", summary.sid, summary.steps);
     println!("wrote   {}", summary.scenario_file.display());
     Ok(0)
@@ -53,6 +56,11 @@ Options:
   --auto-errors  Append a {{\"pageError\": true}} notExists check — a page
                 that starts throwing uncaught exceptions fails the replay.
                 ON by default; --no-auto-errors disables.
+  --auto-secrets Lift literal values typed into password-shaped fields out
+                of scenario.json: each becomes a {{from: input}} ref + a
+                sensitive inputs entry, and the real value lands in
+                inputs.local.json beside the scenario (gitignored). ON by
+                default; --no-auto-secrets disables.
   --auto-shots stays opt-in: shot claims need minted baselines.
 
 Writes:
@@ -60,6 +68,9 @@ Writes:
   <scenarios_root>/<sid>/replays/recorded/network.har  — the session's
     traffic while recording; `replay <sid> --mock-from recorded` replays
     the scenario offline from those recorded responses.
+  <scenarios_root>/<sid>/inputs.local.json  — recorded secrets lifted out
+    of scenario.json by --auto-secrets; gitignored, consumed by replay as
+    a last-resort input source.
 
 On success it removes the active recorder state."
     );
@@ -133,6 +144,100 @@ pub(crate) fn assemble_scenario(state: &RecorderState) -> Result<serde_json::Val
     schema::validate_value(&scenario_json)
         .context("assembled scenario failed schema validation")?;
     Ok(scenario_json)
+}
+
+/// True when any string inside a step's `on` locator mentions "password"
+/// — css `input[type=password]`, a role name like "Password", a password-y
+/// testid. Same detector the `hardcoded-secret` lint runs.
+fn locator_mentions_password(on: &serde_json::Value) -> bool {
+    let mut stack = vec![on];
+    while let Some(v) = stack.pop() {
+        match v {
+            serde_json::Value::String(s) if s.to_lowercase().contains("password") => return true,
+            serde_json::Value::Object(m) => stack.extend(m.values()),
+            serde_json::Value::Array(a) => stack.extend(a.iter()),
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Rewrite `type` steps whose literal value lands in a password-shaped
+/// field: `{"from":"literal","literal":"hunter2"}` becomes
+/// `{"from":"input","input":"PASSWORD"}` and `inputs.PASSWORD` is declared
+/// `{type: string, sensitive: true}`. Returns the (name, literal) pairs to
+/// stash in `inputs.local.json` — the committed scenario stays
+/// secret-free while replay still resolves the real value locally.
+fn sweep_secret_literals(doc: &mut serde_json::Value) -> Vec<(String, String)> {
+    let mut found: Vec<(String, String)> = Vec::new();
+    let mut taken: std::collections::HashSet<String> = doc
+        .get("inputs")
+        .and_then(|i| i.as_object())
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default();
+    let Some(steps) = doc.get_mut("steps").and_then(|s| s.as_array_mut()) else {
+        return found;
+    };
+    for step in steps.iter_mut() {
+        if step.get("verb").and_then(|v| v.as_str()) != Some("type") {
+            continue;
+        }
+        let literal = step
+            .get("value")
+            .and_then(|v| v.get("literal"))
+            .and_then(|l| l.as_str())
+            .map(str::to_string);
+        let Some(literal) = literal.filter(|l| !l.is_empty()) else {
+            continue;
+        };
+        if !step.get("on").is_some_and(locator_mentions_password) {
+            continue;
+        }
+        let mut n = 1u32;
+        let name = loop {
+            let cand = if n == 1 {
+                "PASSWORD".to_string()
+            } else {
+                format!("PASSWORD_{n}")
+            };
+            if !taken.contains(&cand) {
+                break cand;
+            }
+            n += 1;
+        };
+        taken.insert(name.clone());
+        step["value"] = serde_json::json!({ "from": "input", "input": name });
+        found.push((name, literal));
+    }
+    if !found.is_empty() {
+        let obj = doc.as_object_mut().expect("scenario doc is an object");
+        let inputs = obj.entry("inputs").or_insert_with(|| serde_json::json!({}));
+        let inputs = inputs.as_object_mut().expect("inputs is an object");
+        for (name, _) in &found {
+            inputs
+                .entry(name.clone())
+                .or_insert_with(|| serde_json::json!({ "type": "string", "sensitive": true }));
+        }
+    }
+    found
+}
+
+/// Merge (name, literal) pairs into `<scenario_dir>/inputs.local.json` —
+/// a gitignored local store `resolve_inputs` consults last.
+fn merge_local_inputs(dir: &std::path::Path, secrets: &[(String, String)]) -> Result<()> {
+    let p = dir.join("inputs.local.json");
+    let mut map: serde_json::Map<String, serde_json::Value> = match fs::read(&p) {
+        Ok(bytes) => {
+            serde_json::from_slice(&bytes).with_context(|| format!("parse {}", p.display()))?
+        }
+        Err(_) => serde_json::Map::new(),
+    };
+    for (name, literal) in secrets {
+        map.insert(name.clone(), serde_json::Value::String(literal.clone()));
+    }
+    let mut bytes = serde_json::to_string_pretty(&serde_json::Value::Object(map))?.into_bytes();
+    bytes.push(b'\n');
+    atomic_write_file(&p, &bytes)
 }
 
 /// Insert a {\"shot\": \"<doStepId>\"} check after every do-step; renumber
@@ -245,7 +350,12 @@ fn append_auto_error_claims(steps: &mut Vec<crate::scenario::Step>) {
     crate::buffer::normalize_ids(steps);
 }
 
-fn flush(auto_shots: bool, auto_network: bool, auto_errors: bool) -> Result<Summary> {
+fn flush(
+    auto_shots: bool,
+    auto_network: bool,
+    auto_errors: bool,
+    auto_secrets: bool,
+) -> Result<Summary> {
     let mut state = RecorderState::load_active()?;
     if auto_shots {
         insert_auto_shot_claims(&mut state.steps);
@@ -259,7 +369,15 @@ fn flush(auto_shots: bool, auto_network: bool, auto_errors: bool) -> Result<Summ
     if auto_errors {
         append_auto_error_claims(&mut state.steps);
     }
-    let scenario_json = assemble_scenario(&state)?;
+    let mut scenario_json = assemble_scenario(&state)?;
+    let mut secrets = Vec::new();
+    if auto_secrets {
+        secrets = sweep_secret_literals(&mut scenario_json);
+        if !secrets.is_empty() {
+            schema::validate_value(&scenario_json)
+                .context("scenario failed schema validation after the secret sweep")?;
+        }
+    }
 
     let scenario_dir = paths::scenario_dir(&state.sid)?;
     fs::create_dir_all(&scenario_dir)
@@ -287,6 +405,14 @@ fn flush(auto_shots: bool, auto_network: bool, auto_errors: bool) -> Result<Summ
             state.sid
         ),
         Err(e) => eprintln!("[v2-record] har stop skipped: {e}"),
+    }
+
+    if !secrets.is_empty() {
+        merge_local_inputs(&scenario_dir, &secrets)?;
+        eprintln!(
+            "[v2-record] {} secret value(s) → sensitive inputs; real values in inputs.local.json (gitignored)",
+            secrets.len()
+        );
     }
 
     RecorderState::clear()?;
@@ -332,7 +458,7 @@ mod tests {
         )
         .unwrap();
 
-        let summary = flush(false, false, false).unwrap();
+        let summary = flush(false, false, false, false).unwrap();
         let scenario: serde_json::Value =
             serde_json::from_slice(&fs::read(&summary.scenario_file).unwrap()).unwrap();
         assert_eq!(summary.steps, 2);
@@ -380,7 +506,7 @@ mod tests {
         }))
         .unwrap();
         state.save().unwrap();
-        flush(false, false, false).unwrap();
+        flush(false, false, false, false).unwrap();
 
         let scenario: serde_json::Value =
             serde_json::from_slice(&fs::read(dir.join("scenario.json")).unwrap()).unwrap();
@@ -390,6 +516,84 @@ mod tests {
         assert_eq!(scenario["env"]["close"], json!([{ "kind": "fresh" }]));
         assert_eq!(scenario["env"]["open"][0]["kind"], "nav");
         assert_eq!(scenario["steps"][0]["intent"], "edited");
+        std::env::remove_var(paths::SCENARIOS_DIR_ENV);
+        std::env::remove_var(paths::RECORD_DIR_ENV);
+        std::env::remove_var("AGENT_QA_RECORD_SKIP_SIDECARS");
+    }
+
+    #[test]
+    fn flush_auto_secrets_lifts_password_literals_into_local_inputs() {
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var(paths::SCENARIOS_DIR_ENV, tmp.path());
+        std::env::set_var(paths::RECORD_DIR_ENV, tmp.path().join("record"));
+        std::env::set_var("AGENT_QA_RECORD_SKIP_SIDECARS", "1");
+        let mut state = RecorderState::new(
+            "login".into(),
+            "login flow".into(),
+            "default".into(),
+            RecorderBaseline::Fresh,
+            None,
+            BrowserConnection::default(),
+        );
+        record_draft(&mut state, StepKind::Do, &json!({"intent":"go","verb":"goto","value":{"from":"literal","literal":"https://example.com/"}}), "default").unwrap();
+        record_draft(&mut state, StepKind::Do, &json!({"intent":"type password","verb":"type","on":{"raw":{"kind":"css","value":"input[type=password]"},"reason":"css"},"value":{"from":"literal","literal":"hunter2"}}), "default").unwrap();
+        // A plain literal on a non-secret field stays literal.
+        record_draft(&mut state, StepKind::Do, &json!({"intent":"type email","verb":"type","on":{"raw":{"kind":"css","value":"input[name=email]"},"reason":"css"},"value":{"from":"literal","literal":"a@b"}}), "default").unwrap();
+
+        let summary = flush(false, false, false, true).unwrap();
+        let scenario: serde_json::Value =
+            serde_json::from_slice(&fs::read(&summary.scenario_file).unwrap()).unwrap();
+        // The secret became an input ref + a sensitive declaration; the
+        // literal is gone from the committable file.
+        assert_eq!(
+            scenario["steps"][1]["value"],
+            json!({ "from": "input", "input": "PASSWORD" })
+        );
+        assert_eq!(
+            scenario["inputs"]["PASSWORD"],
+            json!({ "type": "string", "sensitive": true })
+        );
+        assert_eq!(
+            scenario["steps"][2]["value"],
+            json!({ "from": "literal", "literal": "a@b" })
+        );
+        assert!(!scenario.to_string().contains("hunter2"));
+        // The real value lives in the gitignored local store replay reads.
+        let local: serde_json::Value =
+            serde_json::from_slice(&fs::read(tmp.path().join("login/inputs.local.json")).unwrap())
+                .unwrap();
+        assert_eq!(local["PASSWORD"], "hunter2");
+        std::env::remove_var(paths::SCENARIOS_DIR_ENV);
+        std::env::remove_var(paths::RECORD_DIR_ENV);
+        std::env::remove_var("AGENT_QA_RECORD_SKIP_SIDECARS");
+    }
+
+    #[test]
+    fn flush_auto_secrets_disabled_keeps_the_literal() {
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var(paths::SCENARIOS_DIR_ENV, tmp.path());
+        std::env::set_var(paths::RECORD_DIR_ENV, tmp.path().join("record"));
+        std::env::set_var("AGENT_QA_RECORD_SKIP_SIDECARS", "1");
+        let mut state = RecorderState::new(
+            "login2".into(),
+            "login flow".into(),
+            "default".into(),
+            RecorderBaseline::Fresh,
+            None,
+            BrowserConnection::default(),
+        );
+        record_draft(&mut state, StepKind::Do, &json!({"intent":"type password","verb":"type","on":{"raw":{"kind":"css","value":"input[type=password]"},"reason":"css"},"value":{"from":"literal","literal":"hunter2"}}), "default").unwrap();
+        let summary = flush(false, false, false, false).unwrap();
+        let scenario: serde_json::Value =
+            serde_json::from_slice(&fs::read(&summary.scenario_file).unwrap()).unwrap();
+        assert_eq!(
+            scenario["steps"][0]["value"],
+            json!({ "from": "literal", "literal": "hunter2" })
+        );
+        assert!(scenario["inputs"].is_null() || scenario.get("inputs").is_none());
+        assert!(!tmp.path().join("login2/inputs.local.json").exists());
         std::env::remove_var(paths::SCENARIOS_DIR_ENV);
         std::env::remove_var(paths::RECORD_DIR_ENV);
         std::env::remove_var("AGENT_QA_RECORD_SKIP_SIDECARS");
@@ -426,7 +630,7 @@ mod tests {
         )
         .unwrap();
 
-        let summary = flush(true, false, false).unwrap();
+        let summary = flush(true, false, false, false).unwrap();
         let scenario: serde_json::Value =
             serde_json::from_slice(&fs::read(&summary.scenario_file).unwrap()).unwrap();
         let steps = scenario["steps"].as_array().unwrap();
