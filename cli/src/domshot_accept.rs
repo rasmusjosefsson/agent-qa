@@ -48,7 +48,7 @@ pub fn run(args: &[String]) -> Result<u8> {
             "--json" => json = true,
             "--dry-run" | "-n" => dry_run = true,
             "--help" | "-h" => {
-                println!("agent-qa domshot-accept — mint ARIA-snapshot baselines from a run\n\nUsage:\n  agent-qa domshot-accept <sid> [--run <runId>] [--steps <csv>] [--json] [--dry-run]\n\nCopies <sid>/replays/<run>/snapshots/<stepId>.txt to\n<sid>/baselines/<stepId>.snap.txt for {{\"domshot\"}} claims.\nDefaults: latest run, every captured snapshot. --dry-run previews:\nper step it reports new / identical / update (with the changed-line\ncount) and writes nothing.");
+                println!("agent-qa domshot-accept — mint ARIA-snapshot baselines from a run\n\nUsage:\n  agent-qa domshot-accept <sid> [--run <runId>] [--steps <csv>] [--json] [--dry-run]\n\nCopies <sid>/replays/<run>/snapshots/<stepId>.txt to\n<sid>/baselines/<stepId>.snap.txt for {{\"domshot\"}} claims.\nDefaults: latest run, every step a domshot claim references. --dry-run previews:\nper step it reports new / identical / update (with the changed-line\ncount) and writes nothing.");
                 return Ok(0);
             }
             v if sid.is_none() => sid = Some(v.to_string()),

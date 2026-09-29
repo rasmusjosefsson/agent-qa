@@ -131,6 +131,13 @@ function makeFixture() {
   fs.mkdirSync(path.join(runDir, 'shots-diff'), { recursive: true });
   fs.writeFileSync(path.join(runDir, 'shots-diff', 'navHome.diff.png'), 'DIFFDATA-navHome');
 
+  // A unified text diff for a {"domshot"} miss on navHome.
+  fs.mkdirSync(path.join(runDir, 'domshots-diff'), { recursive: true });
+  fs.writeFileSync(
+    path.join(runDir, 'domshots-diff', 'navHome.diff.txt'),
+    '--- baselines/navHome.snap.txt\n+++ snapshots/navHome.txt\n- heading "Old" [ref=@e]\n+ heading "New" [ref=@e]\n',
+  );
+
   fs.writeFileSync(
     path.join(runDir, 'diffs', 'navHome.patch.json'),
     JSON.stringify({
@@ -580,6 +587,73 @@ test('report viewer endpoints', async (t) => {
       body: JSON.stringify({ stepId: 'nope' }),
     });
     assert.equal(res2.status, 404);
+  });
+
+  await t.test('GET /runs/:runId lists stepIds with a domshot diff', async () => {
+    const res = await fetch(`${base}/api/scenarios/${fx.sid}/runs/${fx.runId}`);
+    const body = await res.json();
+    assert.deepEqual(body.domshotDiffs, ['navHome']);
+  });
+
+  await t.test('GET artifact streams a domshot diff as plain text', async () => {
+    const res = await fetch(
+      `${base}/api/scenarios/${fx.sid}/runs/${fx.runId}/artifact/domshots-diff/navHome`,
+    );
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-type') || '', /text\/plain/);
+    assert.match(await res.text(), /heading "New"/);
+  });
+
+  await t.test('POST domshot-accept runs the CLI verb with --steps', async () => {
+    const calls = [];
+    const { server: dSrv, base: dBase } = await boot(fx.root, {
+      runCli: async (args) => {
+        calls.push(args);
+        return { code: 0, stdout: '["navHome"]\n', stderr: '' };
+      },
+    });
+    try {
+      const res = await fetch(`${dBase}/api/scenarios/${fx.sid}/runs/${fx.runId}/domshot-accept`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ stepId: 'navHome' }),
+      });
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.equal(body.ok, true);
+      assert.deepEqual(body.minted, ['navHome']);
+      assert.deepEqual(calls, [
+        ['domshot-accept', fx.sid, '--run', fx.runId, '--json', '--steps', 'navHome'],
+      ]);
+
+      // {all:true} mints every step a domshot claim references (no --steps).
+      const res2 = await fetch(`${dBase}/api/scenarios/${fx.sid}/runs/${fx.runId}/domshot-accept`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ all: true }),
+      });
+      assert.equal(res2.status, 200);
+      assert.deepEqual(calls[1], ['domshot-accept', fx.sid, '--run', fx.runId, '--json']);
+    } finally {
+      dSrv.close();
+    }
+  });
+
+  await t.test('POST domshot-accept surfaces a non-zero CLI exit as 422', async () => {
+    const { server: dSrv, base: dBase } = await boot(fx.root, {
+      runCli: async () => ({ code: 1, stdout: '', stderr: 'no domshot claims' }),
+    });
+    try {
+      const res = await fetch(`${dBase}/api/scenarios/${fx.sid}/runs/${fx.runId}/domshot-accept`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ all: true }),
+      });
+      assert.equal(res.status, 422);
+      assert.match((await res.json()).error, /no domshot claims/);
+    } finally {
+      dSrv.close();
+    }
   });
 
   await t.test('POST /api/scenarios/crawl spawns the crawl verb with flags', async () => {
