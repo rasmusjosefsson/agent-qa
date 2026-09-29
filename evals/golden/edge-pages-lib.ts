@@ -76,6 +76,7 @@ export interface EdgeGolden extends GoldenContext {
   waitLoad(state: string, intent: string): Promise<void>;
   assertElementText(selector: string, expected: string, intent: string): Promise<void>;
   assertElementAttribute(selector: string, attribute: string, predicate: string, expected: string, intent: string): Promise<void>;
+  assertElementCount(selector: string, predicate: string, count: number, intent: string): Promise<void>;
   assertElementAbsent(selector: string, intent: string): Promise<void>;
   assertElementPresent(selector: string, intent: string): Promise<void>;
   assertUrlContains(fragment: string, intent: string): Promise<void>;
@@ -161,6 +162,19 @@ async function record(ctx: GoldenContext, kind: string, payload: unknown): Promi
   await run(ctx, `record ${kind}`, [ctx.agentQa, "record-step", draftKind, JSON.stringify(draft)]);
 }
 
+// A synthetic click on an element whose centre isn't hit-testable (below
+// the fold, zero-size, or covered) dispatches to nothing while the driver
+// still reports success — the recorded scenario then replays a click that
+// never landed. Scroll it into view first so the scenario stays faithful;
+// the scroll is recorded as its own step.
+async function ensureHittable(ctx: GoldenContext, selector: string, stepIntent: string): Promise<void> {
+  const expr = `(()=>{const el=document.querySelector(${JSON.stringify(selector)});if(!el)return'missing';const r=el.getBoundingClientRect();if(r.width===0||r.height===0)return'empty';const x=r.x+r.width/2,y=r.y+r.height/2;if(x<0||y<0||x>window.innerWidth||y>window.innerHeight)return'offscreen';const t=document.elementFromPoint(x,y);if(!t)return'uncovered';return t===el||el.contains(t)||t.contains(el)?'ok':'blocked'})()`;
+  const hit = (await run(ctx, `hit-test ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "eval", expr])).replace(/"/g, "").trim();
+  if (hit === "ok") return;
+  await run(ctx, `scroll ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "scrollintoview", selector]);
+  await record(ctx, "action", { method: "scrollToBySelector", args: [selector], intent: `bring ${stepIntent} into view` });
+}
+
 // Role+name → snapshot ref. The a11y snapshot's refs map pierces open
 // shadow roots; agent-browser's `fill`/`click` accept `@<ref>` targets.
 async function resolveSnapshotRef(ctx: GoldenContext, role: string, name: string): Promise<string> {
@@ -211,6 +225,7 @@ export async function runEdgeGolden(
       await record(ctx, "wait", { condition: { kind: "selector", selector: readySelector }, intent: "page rendered" });
     },
     async clickSelector(selector, stepIntent) {
+      await ensureHittable(ctx, selector, stepIntent);
       await run(ctx, `click ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "click", selector]);
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
@@ -223,6 +238,7 @@ export async function runEdgeGolden(
       await record(ctx, "action", { method: "selectBySelector", args: [selector, value], intent: stepIntent });
     },
     async checkSelector(selector, stepIntent) {
+      await ensureHittable(ctx, selector, stepIntent);
       await run(ctx, `check ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "check", selector]);
       await record(ctx, "action", { method: "checkBySelector", args: [selector], intent: stepIntent });
     },
@@ -336,6 +352,9 @@ export async function runEdgeGolden(
     },
     async assertElementAttribute(selector, attribute, predicate, expected, stepIntent) {
       await record(ctx, "assert", { kind: "elementAttribute", args: [selector, attribute, predicate, expected], intent: stepIntent });
+    },
+    async assertElementCount(selector, predicate, count, stepIntent) {
+      await record(ctx, "assert", { kind: "elementCount", args: [selector, predicate, count], intent: stepIntent });
     },
     async assertElementAbsent(selector, stepIntent) {
       await record(ctx, "assert", { kind: "elementAbsent", args: [selector], intent: stepIntent });
