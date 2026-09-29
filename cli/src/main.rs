@@ -65,6 +65,7 @@ mod sidecar;
 mod skills;
 mod smart_click;
 mod start;
+mod telemetry;
 mod test_util;
 mod time;
 mod truncate;

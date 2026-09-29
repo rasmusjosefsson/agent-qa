@@ -367,53 +367,6 @@ fn page_links(page: &Value, seen: &mut std::collections::BTreeSet<String>) -> Ve
         .unwrap_or_default()
 }
 
-/// Analytics/telemetry collectors — fire-and-forget beacons the page is
-/// not guaranteed to resend on replay (and whose URLs carry per-visitor
-/// nonces). Claiming them produces drafts that flake on the second run.
-const TELEMETRY_HOSTS: &[&str] = &[
-    "optimizely.com",
-    "google-analytics.com",
-    "googletagmanager.com",
-    "analytics.google.com",
-    "segment.io",
-    "segment.com",
-    "mixpanel.com",
-    "amplitude.com",
-    "hotjar.com",
-    "datadoghq.com",
-    "sentry.io",
-    "newrelic.com",
-    "nr-data.net",
-    "fullstory.com",
-    "logrocket.com",
-    "pendo.io",
-    "heapanalytics.com",
-    "doubleclick.net",
-    "clarity.ms",
-    "bugsnag.com",
-    "intercom.io",
-    "plausible.io",
-    "mouseflow.com",
-    "crazyegg.com",
-    "luckyorange.com",
-    "criteo.com",
-    "adservice.google.com",
-];
-
-fn is_telemetry_url(url: &str) -> bool {
-    let host = url
-        .split("://")
-        .nth(1)
-        .and_then(|rest| rest.split('/').next())
-        .unwrap_or("")
-        .split(':')
-        .next()
-        .unwrap_or("");
-    TELEMETRY_HOSTS
-        .iter()
-        .any(|d| host == *d || host.ends_with(&format!(".{d}")))
-}
-
 /// A query value that will differ every page load — epoch timestamps and
 /// nonce/hash strings — so baking it into `urlMatches` guarantees the
 /// claim times out on the next replay.
@@ -471,7 +424,10 @@ fn network_claim_steps(reqs: &[crate::browser::CapturedRequest], idx: &mut usize
             .as_deref()
             .map(|t| matches!(t.to_ascii_lowercase().as_str(), "xhr" | "fetch"))
             .unwrap_or(false);
-        if !is_api || is_telemetry_url(&r.url) || !seen.insert((r.method.clone(), r.url.clone())) {
+        if !is_api
+            || crate::telemetry::is_telemetry_url(&r.url)
+            || !seen.insert((r.method.clone(), r.url.clone()))
+        {
             continue;
         }
         if out.len() >= CAP {
@@ -625,15 +581,5 @@ mod tests {
             m1["urlMatches"].as_str().unwrap(),
             "https://api\\.example\\.com/items\\?page=2"
         );
-    }
-
-    #[test]
-    fn telemetry_hosts_match_domain_suffixes_only() {
-        assert!(is_telemetry_url("https://log.optimizely.com/e"));
-        assert!(is_telemetry_url("https://sentry.io/api/1/store/"));
-        assert!(is_telemetry_url("https://www.google-analytics.com/collect"));
-        assert!(!is_telemetry_url("https://api.optimizelyx.com/v1"));
-        assert!(!is_telemetry_url("https://my-sentry.internal/health"));
-        assert!(!is_telemetry_url("https://api.example.com/analytics"));
     }
 }
