@@ -667,6 +667,7 @@ pub fn run(args: &[String]) -> Result<u8> {
                 .ok_or_else(|| anyhow!("usage: scenario inputs <file> [--json]"))?;
             let json_out = args.iter().any(|a| a == "--json");
             inputs(&scenario_file_arg(file), json_out)
+            inputs(&scenario_file_arg(file), json_out)
         }
         Some("redact") => {
             let mut file: Option<&str> = None;
@@ -4319,6 +4320,33 @@ mod tests {
         assert_eq!(coverage_all(None, true, None).unwrap(), 0);
         // --filter narrows the rollup
         assert_eq!(coverage_all(Some("full"), true, None).unwrap(), 0);
+        match prev {
+            Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    #[test]
+    fn scenario_file_arg_accepts_sid_and_keeps_paths() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        let dir = tmp.path().join("hello");
+        std::fs::create_dir_all(&dir).unwrap();
+        let sc = dir.join("scenario.json");
+        fs::write(&sc, "{}").unwrap();
+        // sid resolves to its scenario.json
+        assert_eq!(scenario_file_arg("hello"), sc);
+        // existing file paths pass through untouched
+        let loose = tmp.path().join("loose.json");
+        fs::write(&loose, "{}").unwrap();
+        assert_eq!(scenario_file_arg(loose.to_str().unwrap()), loose);
+        // unknown args fall back to the literal path (read error surfaces later)
+        assert_eq!(
+            scenario_file_arg("no-such-sid"),
+            Path::new("no-such-sid").to_path_buf()
+        );
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
