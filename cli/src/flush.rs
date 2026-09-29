@@ -186,7 +186,10 @@ fn insert_auto_network_claims(
         if !is_api {
             continue;
         }
-        let path = r.url.split(['?', '#']).next().unwrap_or(&r.url);
+        // `;` cuts matrix params — Java containers append a volatile
+        // `;jsessionid=<id>` path segment whose record-time value can never
+        // match a fresh replay session.
+        let path = r.url.split(['?', '#', ';']).next().unwrap_or(&r.url);
         if !seen.insert((r.method.clone(), path.to_string())) {
             continue;
         }
@@ -471,10 +474,11 @@ mod tests {
             req("POST", "https://x/api/login?a=1", "XHR"),
             req("POST", "https://x/api/login?a=2", "XHR"),
             req("GET", "https://x/api/me", "Fetch"),
+            req("POST", "https://x/app;jsessionid=abc123?x=1", "XHR"),
         ];
         insert_auto_network_claims(&mut steps, &requests);
-        // css is dropped, the dup POST collapses to one claim → 2 appended
-        assert_eq!(steps.len(), 3);
+        // css is dropped, the dup POST collapses to one claim → 3 appended
+        assert_eq!(steps.len(), 4);
         let subj = &steps[1];
         let json = serde_json::to_value(subj).unwrap();
         assert_eq!(json["claim"]["subject"]["network"]["method"], "POST");
@@ -488,6 +492,11 @@ mod tests {
         assert_eq!(
             json2["claim"]["subject"]["network"]["urlMatches"],
             "https://x/api/me"
+        );
+        let json3 = serde_json::to_value(&steps[3]).unwrap();
+        assert_eq!(
+            json3["claim"]["subject"]["network"]["urlMatches"],
+            "https://x/app"
         );
     }
 

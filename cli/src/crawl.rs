@@ -362,8 +362,10 @@ fn network_claim_steps(reqs: &[crate::browser::CapturedRequest], idx: &mut usize
             break;
         }
         *idx += 1;
-        let escaped: String = r
-            .url
+        // `;` cuts matrix params — Java containers append a volatile
+        // `;jsessionid=<id>` path segment that can't match a fresh run.
+        let url = r.url.split(';').next().unwrap_or(&r.url);
+        let escaped: String = url
             .chars()
             .flat_map(|c| {
                 if "\\.^$+?()[]{}|*".contains(c) {
@@ -469,10 +471,11 @@ mod tests {
             req("https://x/api/u?a=(1)", "GET", Some("xhr")),
             req("https://x/api/u?a=(1)", "GET", Some("fetch")), // dup
             req("https://x/api/save", "POST", Some("fetch")),
+            req("https://x/app;jsessionid=v0latile", "POST", Some("xhr")),
         ];
         let mut idx = 0;
         let steps = network_claim_steps(&reqs, &mut idx);
-        assert_eq!(steps.len(), 2);
+        assert_eq!(steps.len(), 3);
         let m = &steps[0]["claim"]["subject"]["network"];
         // regex-escaped: the literal '?' and parens can't regex-match wild
         assert_eq!(
@@ -485,5 +488,12 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("POST https://x/api/save"));
+        // matrix params are volatile — the matcher drops `;jsessionid=…`
+        assert_eq!(
+            steps[2]["claim"]["subject"]["network"]["urlMatches"]
+                .as_str()
+                .unwrap(),
+            "https://x/app"
+        );
     }
 }
