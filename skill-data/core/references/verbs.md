@@ -56,6 +56,7 @@ without a `heal-promote` step.
 | `audit health` | Suite rollup: flaky + slow + heal-chronic step ids per scenario. |
 | `audit flaky <sid> [--min-runs N]` / `audit slow <sid>` | Steps whose pass/fail interleaves; steps whose duration regressed. |
 | `audit show <sid> <runId\|latest>` / `audit list <sid>` | One run's audit.json; every recorded run. |
+| `audit explain <sid> [runId\|latest]` | Failure digest for a run: verdict + failed steps + heals + console errors + bad requests + next commands. Exit mirrors `audit verdict`. |
 | `heal-list <sid>` / `heal-chronic <sid>` / `heal-promote <sid> --apply` | Pending suggested patches; steps re-healing every run; absorb patches into `scenario.json`. |
 | `doctor` | Environment sanity (binary, browser, config). |
 `replay <sid-or-path> [--session <name>] [--profile <name>] [--update-baselines]`
