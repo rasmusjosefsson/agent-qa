@@ -106,6 +106,8 @@ Usage:
   agent-qa compare <sid> <runA>                <runA> vs the previous run
   agent-qa compare <sid> <runA> <runB>         <runA> vs <runB>
 
+  `latest` is accepted as either run id and resolves to the newest run.
+
 Flags:
   --strict                                     Exit non-zero on any change
   --pixel-threshold <0..1>                     Tolerated fraction of differing pixels (default 0)
@@ -134,9 +136,10 @@ fn pick_runs(scenario_dir: &Path, args: &[String]) -> Result<(String, String)> {
         }
         [one] => {
             let mut runs = list_run_ids(scenario_dir)?;
+            let one = resolve_run_id(&runs, one);
             let idx = runs
                 .iter()
-                .position(|r| r == one)
+                .position(|r| r == &one)
                 .ok_or_else(|| anyhow!("run id {one:?} not found under replays/"))?;
             if idx == 0 {
                 bail!("run id {one:?} has no predecessor to compare against");
@@ -145,21 +148,35 @@ fn pick_runs(scenario_dir: &Path, args: &[String]) -> Result<(String, String)> {
             let a = runs.remove(idx - 1);
             Ok((a, b))
         }
-        [a, b] => Ok((a.clone(), b.clone())),
+        [a, b] => {
+            let runs = list_run_ids(scenario_dir)?;
+            let a = resolve_run_id(&runs, a);
+            let b = resolve_run_id(&runs, b);
+            for (which, id) in [("runA", &a), ("runB", &b)] {
+                if !runs.iter().any(|r| r == id) {
+                    bail!("{which} {id:?} not found under replays/");
+                }
+            }
+            Ok((a, b))
+        }
         _ => bail!("at most two positional run ids; got {}", args.len()),
     }
 }
 
+/// `latest` resolves to the newest run id; anything else passes through.
+fn resolve_run_id(runs: &[String], arg: &str) -> String {
+    if arg == "latest" {
+        runs.last().cloned().unwrap_or_else(|| arg.to_string())
+    } else {
+        arg.to_string()
+    }
+}
+
 fn list_run_ids(scenario_dir: &Path) -> Result<Vec<String>> {
-    let replays = scenario_dir.join("replays");
-    let mut out: Vec<String> = fs::read_dir(&replays)
-        .with_context(|| format!("read {}", replays.display()))?
-        .flatten()
-        .filter(|e| e.path().is_dir())
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect();
-    out.sort();
-    Ok(out)
+    Ok(crate::paths::run_dirs(&scenario_dir.join("replays"))
+        .iter()
+        .filter_map(|p| p.file_name().map(|s| s.to_string_lossy().into_owned()))
+        .collect())
 }
 
 // ---------- compare result ----------
@@ -418,13 +435,22 @@ mod tests {
         fs::write(dir.join(format!("{step}.txt")), body).unwrap();
     }
 
+    fn mk_run(jdir: &Path, run: &str) {
+        let dir = jdir.join("replays").join(run);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("audit.json"), "{}").unwrap();
+    }
+
     #[test]
     fn pick_runs_no_args_picks_latest_two() {
         let tmp = TempDir::new().unwrap();
         let jdir = tmp.path().to_path_buf();
-        fs::create_dir_all(jdir.join("replays").join("2026-01-01__a")).unwrap();
-        fs::create_dir_all(jdir.join("replays").join("2026-01-02__b")).unwrap();
-        fs::create_dir_all(jdir.join("replays").join("2026-01-03__c")).unwrap();
+        mk_run(&jdir, "2026-01-01__a");
+        mk_run(&jdir, "2026-01-02__b");
+        mk_run(&jdir, "2026-01-03__c");
+        // flush's record-time HAR dir is not a run — it sorts last and
+        // must not win "latest".
+        fs::create_dir_all(jdir.join("replays").join("recorded")).unwrap();
         let (a, b) = pick_runs(&jdir, &[]).unwrap();
         assert_eq!(a, "2026-01-02__b");
         assert_eq!(b, "2026-01-03__c");
@@ -434,12 +460,36 @@ mod tests {
     fn pick_runs_one_arg_uses_predecessor() {
         let tmp = TempDir::new().unwrap();
         let jdir = tmp.path().to_path_buf();
-        fs::create_dir_all(jdir.join("replays").join("r1")).unwrap();
-        fs::create_dir_all(jdir.join("replays").join("r2")).unwrap();
-        fs::create_dir_all(jdir.join("replays").join("r3")).unwrap();
+        mk_run(&jdir, "r1");
+        mk_run(&jdir, "r2");
+        mk_run(&jdir, "r3");
         let (a, b) = pick_runs(&jdir, &["r3".into()]).unwrap();
         assert_eq!(a, "r2");
         assert_eq!(b, "r3");
+    }
+
+    #[test]
+    fn pick_runs_latest_resolves_in_both_positions() {
+        let tmp = TempDir::new().unwrap();
+        let jdir = tmp.path().to_path_buf();
+        mk_run(&jdir, "r1");
+        mk_run(&jdir, "r2");
+        mk_run(&jdir, "r3");
+        fs::create_dir_all(jdir.join("replays").join("recorded")).unwrap();
+        let (a, b) = pick_runs(&jdir, &["r1".into(), "latest".into()]).unwrap();
+        assert_eq!((a.as_str(), b.as_str()), ("r1", "r3"));
+        let (a, b) = pick_runs(&jdir, &["latest".into()]).unwrap();
+        assert_eq!((a.as_str(), b.as_str()), ("r2", "r3"));
+    }
+
+    #[test]
+    fn pick_runs_two_args_errors_on_missing_run() {
+        let tmp = TempDir::new().unwrap();
+        let jdir = tmp.path().to_path_buf();
+        mk_run(&jdir, "r1");
+        mk_run(&jdir, "r2");
+        let err = pick_runs(&jdir, &["r1".into(), "typo".into()]).unwrap_err();
+        assert!(err.to_string().contains("typo"));
     }
 
     #[test]
