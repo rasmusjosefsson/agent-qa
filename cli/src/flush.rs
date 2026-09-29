@@ -168,6 +168,32 @@ fn insert_auto_shot_claims(steps: &mut Vec<crate::scenario::Step>) {
     crate::buffer::normalize_ids(steps);
 }
 
+/// Rewrite volatile resource-id path segments into regex classes.
+/// `urlMatches` is already a regex, so a recorded entity URL like
+/// `/contacts/6abbfc58b45a2a0015047afa` becomes
+/// `/contacts/[0-9a-fA-F-]{16,}` and the next replay's fresh entity
+/// still matches — the literal id could never.
+fn volatile_segment_pattern(path: &str) -> String {
+    let mut out = String::with_capacity(path.len() + 16);
+    for (i, seg) in path.split('/').enumerate() {
+        if i > 0 {
+            out.push('/');
+        }
+        if seg.len() >= 16
+            && seg
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() || c == '-')
+        {
+            out.push_str("[0-9a-fA-F-]{16,}");
+        } else if seg.len() >= 6 && seg.chars().all(|c| c.is_ascii_digit()) {
+            out.push_str("[0-9]+");
+        } else {
+            out.push_str(seg);
+        }
+    }
+    out
+}
+
 /// Append a `networkFired` check per distinct (method, path) the session
 /// captured — XHR/Fetch/EventSource/WebSocket plus any non-GET (POSTs are
 /// API calls whatever the resource type reports). Document/script/css
@@ -187,7 +213,11 @@ fn insert_auto_network_claims(
             continue;
         }
         let path = r.url.split(['?', '#']).next().unwrap_or(&r.url);
-        if !seen.insert((r.method.clone(), path.to_string())) {
+        // `urlMatches` is a regex — rewrite volatile resource ids
+        // (mongo `_id`s, uuids, long numeric keys) so a recorded entity
+        // URL matches the fresh entity the next replay creates.
+        let pattern = volatile_segment_pattern(path);
+        if !seen.insert((r.method.clone(), pattern.clone())) {
             continue;
         }
         added += 1;
@@ -209,7 +239,7 @@ fn insert_auto_network_claims(
             claim: crate::scenario::Claim {
                 subject: crate::scenario::ClaimSubject::Network {
                     network: crate::scenario::NetworkMatcher {
-                        url_matches: Some(path.to_string()),
+                        url_matches: Some(pattern),
                         method,
                         ..Default::default()
                     },
@@ -489,6 +519,45 @@ mod tests {
             json2["claim"]["subject"]["network"]["urlMatches"],
             "https://x/api/me"
         );
+    }
+
+    #[test]
+    fn flush_auto_network_rewrites_entity_id_segments() {
+        use crate::browser::CapturedRequest;
+        let req = |method: &str, url: &str, rt: &str| CapturedRequest {
+            request_id: String::new(),
+            url: url.to_string(),
+            method: method.to_string(),
+            status: Some(200),
+            resource_type: Some(rt.to_string()),
+            mime_type: None,
+            post_data: None,
+        };
+        let mut steps = vec![];
+        insert_auto_network_claims(
+            &mut steps,
+            &[
+                req("GET", "https://x/api/contacts/6abbfc58b45a2a0015047afa", "XHR"),
+                // a second entity id collapses onto the same pattern claim
+                req("GET", "https://x/api/contacts/00112233445566778899aabb", "XHR"),
+                req("GET", "https://x/api/items/1234567", "XHR"),
+                req("GET", "https://x/api/v2/users", "XHR"),
+            ],
+        );
+        assert_eq!(steps.len(), 3);
+        let urls: Vec<String> = steps
+            .iter()
+            .map(|s| {
+                serde_json::to_value(s).unwrap()["claim"]["subject"]["network"]["urlMatches"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(urls[0], "https://x/api/contacts/[0-9a-fA-F-]{16,}");
+        assert_eq!(urls[1], "https://x/api/items/[0-9]+");
+        // short segments and api versions stay literal
+        assert_eq!(urls[2], "https://x/api/v2/users");
     }
 
     #[test]

@@ -245,7 +245,10 @@
     "golden:frame:tc01": "bun golden/frame-tc01.ts",
     "golden:db:tc01": "bun golden/demoblaze-tc01.ts",
     "golden:db:tc02": "bun golden/demoblaze-tc02.ts",
-    "golden:db:tc03": "bun golden/demoblaze-tc03.ts"
+    "golden:db:tc03": "bun golden/demoblaze-tc03.ts",
+    "golden:cl:tc01": "bun golden/cl-tc01.ts",
+    "golden:cl:tc02": "bun golden/cl-tc02.ts",
+    "golden:cl:tc03": "bun golden/cl-tc03.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"
