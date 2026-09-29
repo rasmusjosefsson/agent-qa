@@ -507,6 +507,8 @@
             "mock",
             "unmock",
             "state",
+            "hold",
+            "swipe",
             "frame",
             "emulate",
             "loop",
