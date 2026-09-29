@@ -426,6 +426,10 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         if let Err(e) = crate::browser::console_clear(&opts.session_name) {
             eprintln!("[v2-replay] console log clear skipped: {e}");
         }
+        // Own Network.* event capture — redirect-hop statuses and
+        // in-flight tracking the daemon's netlog doesn't expose. A fresh
+        // store per run; silently skipped without a CDP endpoint.
+        crate::cdp_net::start(&opts.session_name);
     }
 
     // 1. Load + validate.

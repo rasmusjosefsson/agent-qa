@@ -120,6 +120,8 @@ describe("toRecordDraft — emitted verbs are shipped", () => {
     ["assert", { kind: "elementAbsent", args: ["#x"] }],
     ["assert", { kind: "elementText", args: ["#x", "hi"] }],
     ["assert", { kind: "elementAttribute", args: ["#x", "href", "equals", "/a"] }],
+    ["assert", { kind: "elementCount", args: [".item", "equals", 30] }],
+    ["assert", { kind: "elementCount", args: [".item", "gte", 1] }],
     ["assert", { kind: "roleAttribute", args: ["textbox", "user name field", "value", "x"] }],
     ["assert", { kind: "elementChecked", args: ["#c"] }],
     ["assert", { kind: "elementChecked", args: ["#c", false] }],
@@ -306,6 +308,25 @@ describe("toRecordDraft — new mappings land the right fields", () => {
   test("loadState wait maps to wait params.until", () => {
     const [, d] = wait({ kind: "loadState", state: "networkidle" });
     expect(d).toMatchObject({ verb: "wait", params: { until: "networkidle" } });
+  });
+  test("networkRequest wait maps to wait params.url", () => {
+    const [, d] = wait({ kind: "networkRequest", pattern: "*/api/quotes*" });
+    expect(d).toMatchObject({ verb: "wait", params: { url: "*/api/quotes*" } });
+  });
+  test("networkRequest wait threads timeoutMs", () => {
+    const [, d] = wait({ kind: "networkRequest", pattern: "*/x*", timeoutMs: 3000 });
+    expect(d).toMatchObject({
+      verb: "wait",
+      params: { url: "*/x*", timeoutMs: 3000 },
+    });
+  });
+  test("scrollTop sentinel maps to params.to bottom", () => {
+    const [, d] = action("scrollTop", [999999]);
+    expect(d).toMatchObject({ verb: "scrollTo", params: { to: "bottom" } });
+  });
+  test("scrollTop finite offset maps to params.y", () => {
+    const [, d] = action("scrollTop", [300]);
+    expect(d).toMatchObject({ verb: "scrollTo", params: { y: 300 } });
   });
   test("unknown methods still throw", () => {
     expect(() => action("nopeNever")).toThrow(/unknown action method/);

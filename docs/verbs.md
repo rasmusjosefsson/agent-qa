@@ -16,7 +16,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `record continue <sid>` | Extend an existing scenario: replay it to its end state in `--session` (default `default`), seed the buffer with its steps, keep recording — `flush` writes the extended scenario back to the same sid. `--skip-replay` when hand-driving to the end state. |
 | `run-step <do|check> <draft-json>` | Dispatch ONE trigger payload against the live session for author-time feedback, without recording. Same direct draft shapes as `record-step`; prints a `{ok,…}` JSON line. `--session`. |
 | `aria-snapshot` | Dump the live page's accessibility tree as structured picker rows (a thin adapter over `agent-browser snapshot`). Flags: `--interactive`, `--session`. |
-| `cdp-url [--session] [--json]` | Print the live session's CDP WebSocket endpoint. Powers the editor's inline live-browser pane (screencast + drive-to-record: clicks, typing, select commits, checkbox/radio toggles, and named-key presses all land as steps). Read-only. |
+| `cdp-url [--session] [--json]` | Print the live session's CDP WebSocket endpoint. Powers the editor's inline live-browser pane (screencast + drive-to-record: clicks, typing, select commits, checkbox/radio toggles, and named-key presses, right-clicks, file uploads, dialogs, page state, iframe moves, viewport resizes, gestures, and downloads all land as steps). Read-only. |
 | `buffer list \| delete <i> \| move <from> <to> \| edit <i> <draft-json> \| load <sid> [--force] \| clear` | Inspect / reorder / rewrite / delete rows in the in-flight buffer; delete + move re-index `s0,s1,…` so `flush` stays clean. `edit` re-validates the draft and preserves the step's id/kind. `load` copies a saved scenario's steps into the buffer for editing — `flush` then writes back to the same `<sid>` and keeps fields the buffer doesn't model (`id`, `tags`, `inputs`, `templates`, `env.close`). `list --json` (includes `paused`, `editing`). |
 | `fill-unique` | Locator-uniqueness helper for `type`/`fill` style do steps |
 | `smart-click` | High-level click that resolves a label to a unique locator |
@@ -58,6 +58,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 
 | `audit cluster` | Group step failures across every scenario's runs by normalized error signature (quoted literals + digit runs stripped) — one root cause across N runs reads as one cluster with its member list. `--min-size N` (default 2) hides lone failures; `--json` for the structured list. |
 | `audit verdict <sid> <runId \| latest>` | One-word triage for the run: `PASS` (exit 0) green and clean, `FIX` (exit 2) green but self-corrected (auto-heals or value-rejections — review heal.jsonl + promote), `BLOCK` (exit 1) failed. `--json` for the structured verdict incl. the offending stepIds. |
+| `audit explain <sid> [runId \| latest]` | One-block failure digest for a run: verdict + failing steps (error + screenshot pointer) + heal trail + console errors + failed/pending requests, plus a `next:` list of the follow-up commands that fit the evidence. Exit code mirrors `audit verdict` (0/1/2). `--json` prints the same digest structurally — the single read an agent needs to repair a broken run. |
 
 
 
@@ -82,7 +83,7 @@ Plans/cases/sets are the workbench's run-scope records under `<root>/_plans`, `_
 | `heal-promote <sid>` | Apply replay-side patches into `scenario.json` (rebase-guarded) |
 | `heal-apply <sid>` | Mark a heal-response as consumed |
 | `heal-list <sid>` | List heal-responses. Flags: `--run <runId>`, `--mode value-correction\|reject`, `--applied`, `--unapplied`, `--json` |
-| `heal-chronic <sid>` | Flag steps that auto-healed in ≥ `--min-runs` distinct runs (default 2) — silent locator debt. Prints the `heal-promote` command per step. Flags: `--min-runs N`, `--json` |
+| `heal-chronic <sid>` | Flag steps that auto-healed in ≥ `--min-runs` distinct runs (default 2) — silent locator debt. Prints the `heal-promote` command per step. Flags: `--min-runs N`, `--json`, `--issue` (paste-ready markdown issue body for the handoff) |
 | `shot-accept <sid>` | Mint screenshot baselines for `{"shot"}` claims: copies the run's per-step PNGs into `<sid>/baselines/`. Flags: `--run <runId>` (default `latest.txt`), `--steps <csv>` (default every captured shot), `--json` |
 
 ### `{"shot"}` claims — visual diff vs a baseline
