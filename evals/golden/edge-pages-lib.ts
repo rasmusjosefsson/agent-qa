@@ -37,12 +37,20 @@ interface GoldenContext {
   agentBrowser: string;
   env: Record<string, string>;
   results: StepResult[];
+  // Per-session mint for fillUnique: mirrors replay's scenario-scoped
+  // {{vars._unique}} cache so two fields sharing one template (password +
+  // confirm) observe the same record-side value.
+  uniqueMint?: string;
 }
 
 export interface EdgeGolden extends GoldenContext {
   openPage(): Promise<void>;
   clickSelector(selector: string, intent: string): Promise<void>;
   fillSelector(selector: string, value: string, intent: string): Promise<void>;
+  // Fill a selector with a template containing `{{vars._unique}}`: mints a
+  // fresh value at record time for the live fill, and records the template
+  // verbatim so replay mints a different one (uniqueness-constrained fields).
+  fillUnique(selector: string, template: string, intent: string): Promise<void>;
   selectOption(selector: string, value: string, intent: string): Promise<void>;
   checkSelector(selector: string, intent: string): Promise<void>;
   hoverSelector(selector: string, intent: string): Promise<void>;
@@ -187,6 +195,14 @@ export async function runEdgeGolden(
     async fillSelector(selector, value, stepIntent) {
       await run(ctx, `fill ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, value]);
       await record(ctx, "action", { method: "fillBySelector", args: [selector, value], intent: stepIntent });
+    },
+    async fillUnique(selector, template, stepIntent) {
+      ctx.uniqueMint ??= Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) =>
+        b.toString(16).padStart(2, "0"),
+      ).join("");
+      const resolved = template.replaceAll("{{vars._unique}}", ctx.uniqueMint);
+      await run(ctx, `fill ${selector} (unique)`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, resolved]);
+      await record(ctx, "action", { method: "fillBySelector", args: [selector, template], intent: stepIntent });
     },
     async selectOption(selector, value, stepIntent) {
       await run(ctx, `select ${value}`, [ctx.agentBrowser, "--session", ctx.session, "select", selector, value]);
