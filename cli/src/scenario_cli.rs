@@ -80,6 +80,7 @@ pub fn run(args: &[String]) -> Result<u8> {
         Some("ls") => {
             let mut filter: Option<String> = None;
             let mut json_out = false;
+            let mut root: Option<PathBuf> = None;
             let mut it = args.iter().skip(1).peekable();
             while let Some(a) = it.next() {
                 match a.as_str() {
@@ -94,13 +95,24 @@ pub fn run(args: &[String]) -> Result<u8> {
                     s if s.starts_with("--filter=") => {
                         filter = Some(s["--filter=".len()..].to_string())
                     }
+                    "--root" => {
+                        root = Some(PathBuf::from(
+                            it.next()
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--root requires a directory"))?,
+                        ));
+                    }
+                    s if s.starts_with("--root=") => {
+                        root = Some(PathBuf::from(&s["--root=".len()..]));
+                    }
                     other => bail!("unknown flag {other:?}"),
                 }
             }
-            ls(filter.as_deref(), json_out)
+            ls(filter.as_deref(), json_out, root.as_deref())
         }
         Some("latest") => {
             let mut filter: Option<String> = None;
+            let mut root: Option<PathBuf> = None;
             let mut it = args.iter().skip(1).peekable();
             while let Some(a) = it.next() {
                 match a.as_str() {
@@ -114,14 +126,25 @@ pub fn run(args: &[String]) -> Result<u8> {
                     s if s.starts_with("--filter=") => {
                         filter = Some(s["--filter=".len()..].to_string())
                     }
+                    "--root" => {
+                        root = Some(PathBuf::from(
+                            it.next()
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--root requires a directory"))?,
+                        ));
+                    }
+                    s if s.starts_with("--root=") => {
+                        root = Some(PathBuf::from(&s["--root=".len()..]));
+                    }
                     other => bail!("unknown flag {other:?}"),
                 }
             }
-            latest(filter.as_deref())
+            latest(filter.as_deref(), root.as_deref())
         }
         Some("count") => {
             let mut filter: Option<String> = None;
             let mut json_out = false;
+            let mut root: Option<PathBuf> = None;
             let mut it = args.iter().skip(1).peekable();
             while let Some(a) = it.next() {
                 match a.as_str() {
@@ -136,10 +159,20 @@ pub fn run(args: &[String]) -> Result<u8> {
                     s if s.starts_with("--filter=") => {
                         filter = Some(s["--filter=".len()..].to_string())
                     }
+                    "--root" => {
+                        root = Some(PathBuf::from(
+                            it.next()
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--root requires a directory"))?,
+                        ));
+                    }
+                    s if s.starts_with("--root=") => {
+                        root = Some(PathBuf::from(&s["--root=".len()..]));
+                    }
                     other => bail!("unknown flag {other:?}"),
                 }
             }
-            count(filter.as_deref(), json_out)
+            count(filter.as_deref(), json_out, root.as_deref())
         }
         Some("diff") => {
             let a = args
@@ -193,6 +226,7 @@ pub fn run(args: &[String]) -> Result<u8> {
         Some("coverage-all") => {
             let mut filter: Option<String> = None;
             let mut json_out = false;
+            let mut root: Option<PathBuf> = None;
             let mut it = args.iter().skip(1).peekable();
             while let Some(a) = it.next() {
                 match a.as_str() {
@@ -207,10 +241,20 @@ pub fn run(args: &[String]) -> Result<u8> {
                     s if s.starts_with("--filter=") => {
                         filter = Some(s["--filter=".len()..].to_string())
                     }
+                    "--root" => {
+                        root = Some(PathBuf::from(
+                            it.next()
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--root requires a directory"))?,
+                        ));
+                    }
+                    s if s.starts_with("--root=") => {
+                        root = Some(PathBuf::from(&s["--root=".len()..]));
+                    }
                     other => bail!("unknown flag {other:?}"),
                 }
             }
-            coverage_all(filter.as_deref(), json_out)
+            coverage_all(filter.as_deref(), json_out, root.as_deref())
         }
         Some("check") => {
             let file = args.get(1).ok_or_else(|| {
@@ -547,7 +591,8 @@ pub fn run(args: &[String]) -> Result<u8> {
             let mut keep: Option<usize> = None;
             let mut confirmed = false;
             let mut keep_failed = false;
-            let mut it = args.iter().skip(1);
+            let mut root: Option<PathBuf> = None;
+            let mut it = args.iter().skip(1).peekable();
             while let Some(a) = it.next() {
                 match a.as_str() {
                     "--yes" | "-y" => confirmed = true,
@@ -566,11 +611,21 @@ pub fn run(args: &[String]) -> Result<u8> {
                             anyhow!("--keep expects a non-negative integer, got {v:?}")
                         })?);
                     }
+                    "--root" => {
+                        root = Some(PathBuf::from(
+                            it.next()
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--root requires a directory"))?,
+                        ));
+                    }
+                    s if s.starts_with("--root=") => {
+                        root = Some(PathBuf::from(&s["--root=".len()..]));
+                    }
                     other => bail!("unknown flag {other:?}"),
                 }
             }
             let keep = keep.ok_or_else(|| anyhow!("--keep <N> is required"))?;
-            prune_all(keep, confirmed, keep_failed)
+            prune_all(keep, confirmed, keep_failed, root.as_deref())
         }
         Some("summary") => {
             let file = args.get(1).ok_or_else(|| {
@@ -710,11 +765,11 @@ pub fn run(args: &[String]) -> Result<u8> {
 
 fn help() {
     println!(
-        "agent-qa scenario — operations on a scenario JSON\n\nUsage:\n  agent-qa scenario validate <file> [--json | --format text|json|github]\n                                            Schema-validate the scenario (use '-' for stdin)\n  agent-qa scenario check <file> [--strict]  Schema-validate AND lint in one pass\n                                            (combined exit code: 0 iff both pass).\n                                            (use '-' for stdin)\n  agent-qa scenario check-all [--strict] [--root <dir>] [--format text|json|github]\n                                            Same combo across every scenario under the\n                                            scenarios root (--root overrides it);\n                                            exit 1 iff any fail.\n  agent-qa scenario validate-all [--root <dir>] [--json | --format text|json|github]\n                                            Schema-validate every scenario under the\n                                            scenarios root (--root overrides it);\n                                            exit 1 iff any fail\n  agent-qa scenario ls [--filter <substr>] [--json]\n                                            Print every sid under the scenarios root,\n                                            one per line (lex sort).\n  agent-qa scenario latest [--filter <substr>]\n                                            Print the sid whose scenario.json was most\n                                            recently modified.\n  agent-qa scenario count [--filter <substr>] [--json]\n                                            Print the number of scenarios under the root.\n                                            --filter narrows to sids containing <substr>.\n                                            --json wraps the count + filter in a JSON object.\n  agent-qa scenario summary  <file> [--filter <substr>] [--json]\n                                            Per-step summary (id, kind, verb/claim).\n                                            (use '-' for stdin)\n                                            --filter: case-insensitive substring\n                                            matched against id/intent/verb.\n  agent-qa scenario inputs   <file> [--json] List declared inputs (type/default/sensitive)\n  agent-qa scenario new      <file>          Scaffold a minimal valid scenario.json\n                                            (--force to overwrite, --url, --intent)\n  agent-qa scenario insert <file> <do|check> <draft-json> [--after <stepId> | --at <index>]
+        "agent-qa scenario — operations on a scenario JSON\n\nUsage:\n  agent-qa scenario validate <file> [--json | --format text|json|github]\n                                            Schema-validate the scenario (use '-' for stdin)\n  agent-qa scenario check <file> [--strict]  Schema-validate AND lint in one pass\n                                            (combined exit code: 0 iff both pass).\n                                            (use '-' for stdin)\n  agent-qa scenario check-all [--strict] [--root <dir>] [--format text|json|github]\n                                            Same combo across every scenario under the\n                                            scenarios root (--root overrides it);\n                                            exit 1 iff any fail.\n  agent-qa scenario validate-all [--root <dir>] [--json | --format text|json|github]\n                                            Schema-validate every scenario under the\n                                            scenarios root (--root overrides it);\n                                            exit 1 iff any fail\n  agent-qa scenario ls [--filter <substr>] [--root <dir>] [--json]\n                                            Print every sid under the scenarios root\n                                            (--root overrides it),\n                                            one per line (lex sort).\n  agent-qa scenario latest [--filter <substr>] [--root <dir>]\n                                            Print the sid whose scenario.json was most\n                                            recently modified (--root overrides the root).\n  agent-qa scenario count [--filter <substr>] [--root <dir>] [--json]\n                                            Print the number of scenarios under the root\n                                            (--root overrides it).\n                                            --filter narrows to sids containing <substr>.\n                                            --json wraps the count + filter in a JSON object.\n  agent-qa scenario summary  <file> [--filter <substr>] [--json]\n                                            Per-step summary (id, kind, verb/claim).\n                                            (use '-' for stdin)\n                                            --filter: case-insensitive substring\n                                            matched against id/intent/verb.\n  agent-qa scenario inputs   <file> [--json] List declared inputs (type/default/sensitive)\n  agent-qa scenario new      <file>          Scaffold a minimal valid scenario.json\n                                            (--force to overwrite, --url, --intent)\n  agent-qa scenario insert <file> <do|check> <draft-json> [--after <stepId> | --at <index>]
                                             Splice a validated step into a saved scenario.
                                             Draft shape matches record-step (id/kind
                                             omitted); position defaults to the end.
-  agent-qa scenario diff <a> <b>             Unified diff between two scenario.json files\n                                            (canonicalised JSON; exit 1 on difference)\n  agent-qa scenario hash <file>              SHA-256 of scenario.json bytes (same algorithm\n                                            replay + heal-promote use for the rebase guard)\n  agent-qa scenario id <file>                Print the scenario's id field (one line)\n  agent-qa scenario intent <file>            Print the scenario's intent field (one line)\n  agent-qa scenario step-ids <file>          Print every step id, one per line\n  agent-qa scenario field <file> <name>      Print any top-level scenario field (id, intent,\n                                            schema, etc.); object/array → compact JSON.\n  agent-qa scenario coverage <file> [--json] Per-step check coverage: how many do steps are\n                                            followed by a check claim, and how many are bare.\n  agent-qa scenario coverage-all [--filter <substr>] [--json]\n                                            The same ratio rolled up across every scenario under\n                                            the root — per-scenario rows sorted worst-first plus\n                                            an OVERALL rollup.\n  agent-qa scenario lint <file> [--json] [--strict] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run common lints (use '-' for stdin)\n                                            (duplicate ids, empty intent, bare do,\n                                            undeclared/unused inputs). Exit 1 iff\n                                            any errors are reported (--strict treats\n                                            warnings as errors). --rule narrows to specific\n                                            codes; --exclude-rule subtracts (both repeatable).\n                                            --format github emits GitHub Actions annotations.\n  agent-qa scenario lint --list-rules [--json]\n                                            Enumerate the lint rules + their severities.\n  agent-qa scenario lint-all [--json] [--strict] [--root <dir>] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run lints against every scenario under the\n                                            scenarios root (--root overrides it);\n                                            exit 1 iff any errors are reported\n                                            (--strict treats warnings as errors). --rule\n                                            narrows to specific codes; --exclude-rule\n                                            subtracts (both repeatable).\n  agent-qa scenario rename <sid> <new-sid>   Rename a scenario: patches scenario.json's id\n                                            field, then moves the directory under the\n                                            scenarios root. (refuses to overwrite).\n  agent-qa scenario copy <sid> <new-sid>     Copy a scenario (scenario.json with id patched +\n                                            baselines/ carried; replays NOT copied). Refuses to overwrite.\n  agent-qa scenario delete <sid> [--yes/-y]  Remove a scenario directory + all its replays.\n                                            Dry-run by default; --yes confirms.\n  agent-qa scenario prune-replays <sid> --keep N [--yes] [--keep-failed]\n                                            Keep the N most recent replays under\n                                            <sid>/replays/; dry-run by default.\n                                            --keep-failed preserves all non-zero-exit\n                                            runs regardless of N.\n  agent-qa scenario prune-all --keep N [--yes] [--keep-failed]\n                                            Like prune-replays but across every scenario\n                                            under the scenarios root. --keep-failed\n                                            preserves failed runs per scenario."
+  agent-qa scenario diff <a> <b>             Unified diff between two scenario.json files\n                                            (canonicalised JSON; exit 1 on difference)\n  agent-qa scenario hash <file>              SHA-256 of scenario.json bytes (same algorithm\n                                            replay + heal-promote use for the rebase guard)\n  agent-qa scenario id <file>                Print the scenario's id field (one line)\n  agent-qa scenario intent <file>            Print the scenario's intent field (one line)\n  agent-qa scenario step-ids <file>          Print every step id, one per line\n  agent-qa scenario field <file> <name>      Print any top-level scenario field (id, intent,\n                                            schema, etc.); object/array → compact JSON.\n  agent-qa scenario coverage <file> [--json] Per-step check coverage: how many do steps are\n                                            followed by a check claim, and how many are bare.\n  agent-qa scenario coverage-all [--filter <substr>] [--root <dir>] [--json]\n                                            The same ratio rolled up across every scenario under\n                                            the root (--root overrides it) — per-scenario rows sorted worst-first plus\n                                            an OVERALL rollup.\n  agent-qa scenario lint <file> [--json] [--strict] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run common lints (use '-' for stdin)\n                                            (duplicate ids, empty intent, bare do,\n                                            undeclared/unused inputs). Exit 1 iff\n                                            any errors are reported (--strict treats\n                                            warnings as errors). --rule narrows to specific\n                                            codes; --exclude-rule subtracts (both repeatable).\n                                            --format github emits GitHub Actions annotations.\n  agent-qa scenario lint --list-rules [--json]\n                                            Enumerate the lint rules + their severities.\n  agent-qa scenario lint-all [--json] [--strict] [--root <dir>] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run lints against every scenario under the\n                                            scenarios root (--root overrides it);\n                                            exit 1 iff any errors are reported\n                                            (--strict treats warnings as errors). --rule\n                                            narrows to specific codes; --exclude-rule\n                                            subtracts (both repeatable).\n  agent-qa scenario rename <sid> <new-sid>   Rename a scenario: patches scenario.json's id\n                                            field, then moves the directory under the\n                                            scenarios root. (refuses to overwrite).\n  agent-qa scenario copy <sid> <new-sid>     Copy a scenario (scenario.json with id patched +\n                                            baselines/ carried; replays NOT copied). Refuses to overwrite.\n  agent-qa scenario delete <sid> [--yes/-y]  Remove a scenario directory + all its replays.\n                                            Dry-run by default; --yes confirms.\n  agent-qa scenario prune-replays <sid> --keep N [--yes] [--keep-failed]\n                                            Keep the N most recent replays under\n                                            <sid>/replays/; dry-run by default.\n                                            --keep-failed preserves all non-zero-exit\n                                            runs regardless of N.\n  agent-qa scenario prune-all --keep N [--yes] [--keep-failed] [--root <dir>]\n                                            Like prune-replays but across every scenario\n                                            under the scenarios root (--root overrides it). --keep-failed\n                                            preserves failed runs per scenario."
     );
 }
 
@@ -1251,8 +1306,15 @@ fn delete(sid: &str, confirmed: bool) -> Result<u8> {
     Ok(0)
 }
 
-fn prune_all(keep: usize, confirmed: bool, keep_failed: bool) -> Result<u8> {
-    let root = crate::paths::scenarios_root();
+fn prune_all(
+    keep: usize,
+    confirmed: bool,
+    keep_failed: bool,
+    root_override: Option<&std::path::Path>,
+) -> Result<u8> {
+    let root = root_override
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(crate::paths::scenarios_root);
     let entries: Vec<std::path::PathBuf> = match std::fs::read_dir(&root) {
         Ok(it) => it
             .flatten()
@@ -2389,8 +2451,14 @@ fn coverage(path: &Path, json_out: bool) -> Result<u8> {
 /// scenario under the root. Per-file `coverage` answers "is this scenario
 /// thin?"; this answers "where does the suite leave do steps unchecked" —
 /// rows sort worst-first so gaps surface at the top.
-fn coverage_all(filter: Option<&str>, json_out: bool) -> Result<u8> {
-    let root = crate::paths::scenarios_root();
+fn coverage_all(
+    filter: Option<&str>,
+    json_out: bool,
+    root_override: Option<&std::path::Path>,
+) -> Result<u8> {
+    let root = root_override
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(crate::paths::scenarios_root);
     let needle = filter.map(|s| s.to_ascii_lowercase());
     let mut rows: Vec<(String, String, CoverageCounts)> = Vec::new(); // sid, intent, counts
     if let Ok(entries) = fs::read_dir(&root) {
@@ -2937,8 +3005,14 @@ fn lint_collect(
     Ok((errors, warnings))
 }
 
-fn count(filter: Option<&str>, json_out: bool) -> Result<u8> {
-    let root = crate::paths::scenarios_root();
+fn count(
+    filter: Option<&str>,
+    json_out: bool,
+    root_override: Option<&std::path::Path>,
+) -> Result<u8> {
+    let root = root_override
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(crate::paths::scenarios_root);
     let mut n = 0u32;
     let needle = filter.map(|s| s.to_ascii_lowercase());
     if let Ok(entries) = fs::read_dir(&root) {
@@ -2968,8 +3042,10 @@ fn count(filter: Option<&str>, json_out: bool) -> Result<u8> {
     Ok(0)
 }
 
-fn latest(filter: Option<&str>) -> Result<u8> {
-    let root = crate::paths::scenarios_root();
+fn latest(filter: Option<&str>, root_override: Option<&std::path::Path>) -> Result<u8> {
+    let root = root_override
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(crate::paths::scenarios_root);
     let needle = filter.map(|s| s.to_ascii_lowercase());
     let mut best: Option<(std::time::SystemTime, String)> = None;
     if let Ok(entries) = fs::read_dir(&root) {
@@ -3041,8 +3117,10 @@ pub(crate) fn all_sids(root: &Path, filter: Option<&str>) -> Vec<String> {
     sids
 }
 
-fn ls(filter: Option<&str>, json_out: bool) -> Result<u8> {
-    let root = crate::paths::scenarios_root();
+fn ls(filter: Option<&str>, json_out: bool, root_override: Option<&std::path::Path>) -> Result<u8> {
+    let root = root_override
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(crate::paths::scenarios_root);
     let sids = all_sids(&root, filter);
     if json_out {
         let body = serde_json::json!({
@@ -3818,10 +3896,10 @@ mod tests {
             }"#,
         )
         .unwrap();
-        assert_eq!(coverage_all(None, false).unwrap(), 0);
-        assert_eq!(coverage_all(None, true).unwrap(), 0);
+        assert_eq!(coverage_all(None, false, None).unwrap(), 0);
+        assert_eq!(coverage_all(None, true, None).unwrap(), 0);
         // --filter narrows the rollup
-        assert_eq!(coverage_all(Some("full"), true).unwrap(), 0);
+        assert_eq!(coverage_all(Some("full"), true, None).unwrap(), 0);
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
@@ -4697,7 +4775,7 @@ mod tests {
             r#"{"schema":"scenario/2","id":"b","intent":"updated","steps":[]}"#,
         )
         .unwrap();
-        assert_eq!(latest(None).unwrap(), 0);
+        assert_eq!(latest(None, None).unwrap(), 0);
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
@@ -4722,7 +4800,7 @@ mod tests {
             .unwrap();
         }
         fs::create_dir_all(tmp.path().join("no-scenario")).unwrap();
-        assert_eq!(count(None, false).unwrap(), 0);
+        assert_eq!(count(None, false, None).unwrap(), 0);
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
@@ -4735,7 +4813,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
         std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path().join("empty"));
-        assert_eq!(count(None, false).unwrap(), 0);
+        assert_eq!(count(None, false, None).unwrap(), 0);
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
@@ -4748,7 +4826,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
         std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path().join("empty"));
-        let err = latest(None).unwrap_err().to_string();
+        let err = latest(None, None).unwrap_err().to_string();
         assert!(err.contains("no scenarios"));
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
@@ -4774,7 +4852,7 @@ mod tests {
             .unwrap();
         }
         fs::create_dir_all(tmp.path().join("no-scenario")).unwrap();
-        assert_eq!(ls(None, false).unwrap(), 0);
+        assert_eq!(ls(None, false, None).unwrap(), 0);
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
@@ -5439,7 +5517,7 @@ mod tests {
                 .unwrap();
             }
         }
-        assert_eq!(prune_all(2, true, false).unwrap(), 0);
+        assert_eq!(prune_all(2, true, false, None).unwrap(), 0);
         let kept_a: Vec<_> = std::fs::read_dir(tmp.path().join("a").join("replays"))
             .unwrap()
             .flatten()
@@ -5462,7 +5540,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
         std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path().join("empty"));
-        assert_eq!(prune_all(3, true, false).unwrap(), 0);
+        assert_eq!(prune_all(3, true, false, None).unwrap(), 0);
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),

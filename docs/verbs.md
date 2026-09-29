@@ -152,9 +152,9 @@ reload with `params.reload: true`.
 | `scenario tag <sid>` | List or mutate a scenario's `tags[]` — the field `replay --tags` selects on. Flags: `--add <a,b>`, `--remove <c,d>`, `--json` |
 | `scenario delete <sid>` | Remove a scenario directory. `--yes` / `-y` confirms; otherwise dry-run. |
 | `scenario prune-replays <sid> --keep N` | Keep most recent N replays. `--yes` / `-y` confirms. |
-| `scenario prune-all --keep N` | Same across every scenario. `--yes` / `-y` confirms. |
+| `scenario prune-all --keep N` | Same across every scenario. `--yes` / `-y` confirms; `--root <dir>` overrides the root. |
 | `scenario coverage <file>` | Per-step check coverage ratio. `--json`. |
-| `scenario coverage-all` | The same do→check ratio rolled up across every scenario in the root — rows sorted worst-first + OVERALL rollup. `--filter <substr>`, `--json`. |
+| `scenario coverage-all` | The same do→check ratio rolled up across every scenario in the root — rows sorted worst-first + OVERALL rollup. `--filter <substr>`, `--root <dir>`, `--json`. |
 | `scenario lint <file>` | Common-smell linter. Flags: `--json`, `--format text\|json\|github`, `--strict`, `--rule <code>` (repeatable), `--exclude-rule <code>` (repeatable), `--list-rules`. |
 | `scenario lint-all` | Same across every scenario under the root. Flags: `--root <dir>` (overrides the configured root), `--json`, `--format`, `--strict`, `--rule`, `--exclude-rule`. |
 | `scenario check <file>` | Schema validate + lint in one pass. Flags: `--strict`, `--format`. |
