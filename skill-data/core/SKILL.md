@@ -95,9 +95,9 @@ agent-qa record-step check '{
 }'
 ```
 
-`smart-click` and `fill-unique` record direct `do` drafts. For a fixed manual
-fill, drive the field and record a direct `type` draft. `record-step` accepts
-only `do` and `check` drafts.
+`smart-click`, `smart-fill`, and `fill-unique` record direct `do` drafts.
+`smart-fill "<label>" <value>` is the fixed manual fill — it records the
+`type` draft for you. `record-step` accepts only `do` and `check` drafts.
 
 Flush and verify the sealed contract.
 
