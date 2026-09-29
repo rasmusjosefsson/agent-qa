@@ -214,10 +214,10 @@
     "golden:edge:tc35": "bun golden/edge-tc35.ts",
     "golden:struct:tc01": "bun golden/struct-tc01.ts",
     "golden:emulate:tc01": "bun golden/emulate-tc01.ts",
-    "golden:tp:tc01": "bun golden/tp-tc01.ts",
-    "golden:tp:tc02": "bun golden/tp-tc02.ts",
-    "golden:tp:tc03": "bun golden/tp-tc03.ts",
-    "golden:tp:tc04": "bun golden/tp-tc04.ts",
+    "golden:formy:tc01": "bun golden/formy-tc01.ts",
+    "golden:formy:tc02": "bun golden/formy-tc02.ts",
+    "golden:formy:tc03": "bun golden/formy-tc03.ts",
+    "golden:formy:tc04": "bun golden/formy-tc04.ts",
     "golden:gestures:tc01": "bun run golden/gestures-tc01.ts",
     "golden:crawl:tc01": "bun golden/crawl-tc01.ts",
     "golden:todomvc:tc01": "bun golden/todomvc-tc01.ts",
@@ -263,7 +263,11 @@
     "golden:petstore:tc01": "bun golden/petstore-tc01.ts",
     "golden:petstore:tc02": "bun golden/petstore-tc02.ts",
     "golden:petstore:tc03": "bun golden/petstore-tc03.ts",
-    "golden:petstore:tc04": "bun golden/petstore-tc04.ts"
+    "golden:petstore:tc04": "bun golden/petstore-tc04.ts",
+    "golden:tp:tc01": "bun golden/tp-tc01.ts",
+    "golden:tp:tc02": "bun golden/tp-tc02.ts",
+    "golden:tp:tc03": "bun golden/tp-tc03.ts",
+    "golden:tp:tc04": "bun golden/tp-tc04.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"
