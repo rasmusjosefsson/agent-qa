@@ -493,3 +493,30 @@ Site vetoes catalogued while scouting: `uitestingplayground.com` has a
 broken cert (ERR_CERT_COMMON_NAME_INVALID, apex + www; http blocked),
 `computer-database.gatling.io` is DNS-dead, `demo.nopcommerce.com` is
 Cloudflare-gated, `automationintesting.com` is now a landing page.
+
+## Dogfood pass X — letcode.in: Angular workspace pages (#363)
+
+Four cases (`let-tc01..04`): input fills + element-state claims, the
+alert/confirm/prompt triad (prompt value echoes back into the DOM — a
+full request/response round-trip through the dialog pipeline), the
+`frame` verb driving fills inside a same-origin `/frameui` iframe, and
+radio-group checked-state assertions.
+
+Surfaced **a telemetry-list gap**: Google's consent CMP
+(`fundingchoicesmessages.google.com`) and ad-quality beacon
+(`ep1.adtrafficquality.google`) are NOT analytics hosts — they fire
+nonce'd POSTs that became unmatchable auto-network claims (5s timeout,
+run fails). Added them + `googlesyndication.com`/`consent.google.com`
+to `telemetry.rs` on the sweep branch (stacked on #315). Lesson: any
+ad-consent CMP host will produce this failure mode — the host list
+wants a maintenance note or a pattern heuristic later.
+
+Deliberately-broken-by-design pages exist: letcode's `/radio` checkbox
+section demos a bug where `.click()` on the input does not check it.
+Sweep wrote around it; worth remembering when a "click had no effect"
+looks like a tool bug — sometimes it IS the app (the #362 warning now
+surfaces exactly this signal on replay).
+
+`edge-pages-lib` gained `frameInto`/`frameMain`/`fillInFrame` +
+`record-translate`'s `frame` method — iframe scenarios are now
+recordable from the runner DSL, not just authored JSON.
