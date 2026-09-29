@@ -8,88 +8,73 @@ the picture shifts materially.
 
 | Layer | What exists |
 | --- | --- |
-| Do verbs (31) | navigation (`goto`/`reload`/`back`/`forward`), input (`click`/`dblclick`/`type`/`clear`/`press`/`hover`/`select`/`check`/`uncheck`/`upload`/`focus`/`blur`/`drag`/`scrollTo`), dialogs (`dialog`), files (`download`/`fileChooser`), system (`wait`/`read`/`state`/`mock`/`unmock`/`callGql`/`tab`/`viewport`), structure (`loop`/`group`/`useTemplate`) |
-| Claim subjects (15) | `element` (text/value/count/attribute), `url`, `network` (fired/status/responseJsonPath), `data`, `flag`, `dialog`, `file`, `shot` (visual diff, clip, mask), `storage`, `cookie`, `console`, `pageError`, `a11y` (axe-core) |
-| Record vocabulary | ~50 methods covering every verb + claim kind; parity-gate tested |
-| Suite flags | `--all`/`--shard`/`--filter`/`--tags`/`--jobs`, `--retry`/`--until-fail`/`--watch`/`--keep-going`, `--har`/`--offline`/`--mock-from`/`--freeze`/`--base-url`, `--auto-promote`/`--update-baselines`, `--junit`/`--report`/`--record-video`, `--from`/`--until` |
+| Do verbs (~40) | navigation (`goto`/`reload`/`back`/`forward`), input (`click`/`dblclick`/`rightclick`/`type`/`clear`/`press`/`hover`/`select`/`check`/`uncheck`/`upload`/`focus`/`blur`/`drag`/`scrollTo`), touch gestures (`hold`/`swipe`/`pinch`/`rotate`), dialogs (`dialog`), files (`download`/`fileChooser`), system (`wait`/`read`/`state`/`mock`/`unmock`/`callGql`/`tab`/`viewport`), emulation (`frame`/`emulate` incl. device/geo/tz/locale/media/offline/headers/credentials), structure (`loop`/`group`/`useTemplate`) |
+| Claim subjects (~16) | `element` (text/value/count/attribute incl. `style:<prop>` + `focused`), `url`, `network` (fired/status/responseJsonPath/postDataContains, ws/sse frames), `data`, `flag`, `dialog`, `file`, `shot` (visual diff, clip, mask, AA-tolerant), `domshot` (ARIA text snapshot, skip-regex), `storage`, `cookie`, `console`, `pageError`, `a11y` (axe-core), `timing` |
+| Record vocabulary | ~50 methods covering every verb + claim kind; parity-gate tested; auto-claims for network + page errors on flush (default on) |
+| Suite flags | `--all`/`--shard`/`--filter`/`--tags`/`--jobs`, `--retry`/`--until-fail`/`--watch`/`--keep-going`, `--har`/`--offline`/`--mock-from`/`--freeze`/`--base-url`, `--auto-promote`/`--update-baselines`, `--junit`/`--report`/`--record-video`, `--from`/`--until`, `--persona`/`--environment` |
 | Audit | `flaky`, `slow`, `heal-chronic` (+`--all`), `verdict` (+`--all`), `cluster`, `trend` (+`--all`), `health`, run-vs-run compare (CLI + workbench) |
-| CI | `qa-gate` (fixture goldens + sticky verdict), `ui-goldens` (visual gate w/ embedded diffs), `qa-crawl` (draft coverage on UI PRs), `qa-adopt` + `/qa accept` commands, composite `action.yml`, `evals-nightly`, changelog-driven releases |
-| Golden suites | ~30 QA Playground pages, ~34 the-internet edge cases (six sweeps), saucedemo suite (login/sort, full 21-step purchase, negative auth, logout), workbench selftest goldens |
+| Lint | `no-visual-check`, `shot-without-baseline`, `domshot-without-baseline`, `orphan-baseline`, `brittle-locator`, `fixed-sleep`, `check-all` in smoke |
+| CI | `qa-gate` (fixture goldens + sticky verdict + run-report artifacts), `ui-goldens` (visual gate w/ embedded before/after/diff images), `qa-crawl` (draft coverage on UI PRs), `qa-adopt` + `/qa accept` commands, composite `action.yml` (+npm install mode, +app-under-test boot), `evals-nightly`, changelog-driven releases |
+| Golden suites | ~30 QA Playground pages, ~34 the-internet edge cases (six sweeps), saucedemo suite (login/sort, full 21-step purchase, negative auth, logout, cookie+storage lifecycle), expandtesting (login round-trip, dynamic table, infinite scroll), todomvc (stateful SPA), demoqa widgets, httpbin hermetic-mock loop, workbench selftest goldens |
 
 ## Ranked gaps
 
-### P0 — the loop isn't closed for recorded users
+### P1 — the golden loop is asymmetric for domshot
 
-1. ~~Record → network claims~~ **done in #252 + default-on in #256** —
-   `flush --auto-network` appends deduped `networkFired` claims for
-   XHR/fetch/non-GET traffic; on by default, `--no-auto-network` opts out.
-2. ~~`pageError`/`console` claims in record~~ **done in #252 +
-   default-on in #256** — `flush --auto-errors` appends
-   `pageError notExists`; on by default, `--no-auto-errors` opts out.
+1. **`/qa accept` only re-mints `shot` baselines** — the workflow runs
+   `agent-qa shot-accept`; a domshot diff on a UI PR can't be accepted by
+   comment, it needs a local `domshot-accept`. `accept.ts` should call
+   both (or a unified `goldens-accept`).
+2. **Coverage metric counts shots, not domshots** — the `shot%` rollup
+   ignores structural baselines, so a scenario covered only by domshots
+   reports 0% visual coverage.
+3. **WS/SSE capture (#278) has no golden** — none of the practice sites
+   open a socket; needs a small fixture page (echo server + page) so the
+   `network` claim's ws/sse frames are exercised end to end.
 
-### P1 — shipped verbs with no golden coverage
+### P2 — record path still trails replay
 
-3. ~~`emulate` (#242) and `frame` (#245)~~ — goldens land in #257
-   (frame: TinyMCE iframe read/claims/back-out) and #258 (emulate:
-   device-UA + custom-header echo via httpbingo). **Found while probing:**
-   `set geo` applies the CDP override but nothing grants the geolocation
-   permission — `navigator.geolocation` hangs in headless, so no
-   `/geolocation` golden until a grant path lands upstream or via a CDP
-   passthrough verb.
-4. ~~`storage`/`cookie` claims (#239)~~ **done in #253** —
-   `cookiePresent`/`storagePresent` vocab + `assertCookie`/`assertStorage`
-   helpers + sauce-tc05 (cookie lifecycle) / sauce-tc06 (`do/state`
-   cookie seed lands logged-in).
-5. ~~`loop`/`group`/`useTemplate`~~ **done in #255** —
-   `runAuthoredGolden` writes authored scenario/2 docs straight into the
-   golden scenarios root; struct-tc01 expands a login `useTemplate` plus
-   a `group`→`loop` over the four saucedemo sort orders (17/17).
+4. **Touch/gesture capture** — `hold`/`swipe`/`pinch`/`rotate`/`rightclick`
+   replay fine, but the recorder never emits them (rightclick capture
+   landed in #268; the rest produce nothing). Real-device recording would
+   need CDP touch-event bridging.
+5. **Hermetic capture** — `--mock-from`/`--offline` are replay-only; there
+   is no `record` path that stubs the backend while recording, so the
+   httpbin-style hermetic scenario has to be authored by hand.
+6. **Live-input divergence** (carried from #253): agent-browser's real
+   input click doesn't trigger React state on saucedemo's add-to-cart;
+   recorded `click` replays fine via native DOM click. If live clicks
+   keep missing delegated handlers, the record path may silently drop
+   user actions worth capturing — watch for it.
 
-### P1 — claim subjects still missing
+### P3 — polish
 
-6. ~~`computedStyle` claim~~ **done in #254** — no new subject needed:
-   `element` + `attribute: "style:<prop>"` reads `getComputedStyle`
-   (edge-tc35 proves `display:none`→`block` on `/dynamic_loading`).
-7. ~~`focus` claim~~ — already covered: `element` + `elementFocused`
-   predicate (`{element: <locator>, attribute: "focused"}`); no new
-   subject needed. (Listed in error.)
-8. ~~`timing` claim~~ **done in #255** — `{"timing": "<stepId>"}` reads
-   the run's own `events.jsonl` (latest terminal row's `ms`), numeric
-   predicates compare; `stepTiming` vocab kind; struct-tc01 pins the
-   login click <15s and each sort select <5s.
-
-### P2 — platform coverage
-
-9. **Mobile/touch**: `do/viewport` + `emulate` give layout, but no swipe/
-   tap-hold/pinch verbs; edge pages have no touch cases yet.
-10. **Geolocation/timezone**: #242 ships `geo`/`device` (device presets
-    bundle timezone+locale), but geolocation is *blocked on a permission
-    grant* — see P1 #3's finding. Timezone has no `set` subcommand in
-    agent-browser at all (documented gap in #242).
-11. **WebSocket/SSE**: the network layer is request/response only —
-    `ws://` frames aren't captured; a `network` ofKind would need daemon
-    support first.
-
-### P3 — ecosystem polish
-
-12. **`run-report` in CI** — the HTML report exists (#224) but no workflow
-    uploads it as an artifact yet.
-13. **Skill docs for edge sweeps** — the qaplayground skill covers the
-    Playground flow but not the edge-pages-lib pattern a new-site sweep
-    follows.
+7. **`domshot` in the workbench selftest goldens** — the workbench's own
+   UI is shot-covered only; ARIA goldens would catch structural drift
+   that pixel diffs can't (e.g. tree reorder with identical pixels).
+8. **heal-chronic → issue handoff** — the self-heal debt board is
+   terminal-only; nothing auto-files or comments on chronic healers.
 
 ## Recently closed (for orientation)
 
+- Touch verbs: `hold`+`swipe` (#259), `pinch` (#262), `rotate` (#267);
+  `rightclick` (#266) + live-pane capture (#268)
+- Geo/tz/locale emulation via own pooled CDP client — grant +
+  `Emulation.setGeolocationOverride` on the active target (#277), +
+  `setTimezoneOverride`/`setLocaleOverride` (#279)
+- WS/SSE frames in `network` claims (#278)
+- `wait locator` — poll DOM state before continuing (#282)
+- `domshot` claim + `domshot-accept` (#283) + workbench diff
+  card/re-mint/insert-check/accept-all (#284)
+- Trusted-mouse `drag` + demoqa widgets goldens (#281)
+- Crawl telemetry pruning + `crawl` golden (#272); `fixed-sleep` +
+  `brittle-locator` lint (#273/#271)
+- todomvc + expandtesting + httpbin sweeps (#269/#275/#274)
+- `run-report.html` artifacts in qa-gate (#260); qaplayground skill
+  edge-sweep docs (#261); `timing` golden (#276)
 - Dialog tolerance on dialog-opening clicks (#246)
 - Auto-claims on flush: `--auto-network`/`--auto-errors` (#252)
 - Cookie/storage goldens + `do/state` seeding (#253)
-- Live-drive findings from the sauce sweep (#253): agent-browser's real
-  input click doesn't trigger React state on saucedemo's add-to-cart
-  (recorded `click` replays fine via native DOM click — live/recording
-  divergence, not a replay bug); covered-element refusals on still-
-  animating drawer links need a settle wait or `el.click()`. If live
-  clicks keep missing delegated handlers, the record path may silently
-  drop user actions worth capturing — watch for it.
 - `pageError` + `console` + `a11y` claim subjects (#248/#167/#240)
 - Network claims fired/status/json (#143), postDataContains (#205),
   `wait url` (#166)
