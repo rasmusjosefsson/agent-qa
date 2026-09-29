@@ -287,6 +287,19 @@
         },
         {
           "type": "object",
+          "required": ["domshot"],
+          "additionalProperties": false,
+          "properties": {
+            "domshot": { "type": "string", "minLength": 1 },
+            "skip": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            }
+          },
+          "$comment": "domshot subject — structural text diff: compares <run>/snapshots/<stepId>.txt (the per-step ARIA sidecar) against <scenario>/baselines/<stepId>.snap.txt. Only predicate is 'matches'; pass when both are identical after normalization (@eN refs collapse to @e; lines matching a 'skip' regex are dropped from both sides). Unified diffs write to <run>/domshots-diff/. Mint baselines with domshot-accept."
+        },
+        {
+          "type": "object",
           "required": ["kind", "name"],
           "additionalProperties": false,
           "properties": {

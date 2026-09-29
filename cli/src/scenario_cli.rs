@@ -1479,9 +1479,14 @@ fn list_lint_rules(json_out: bool) -> Result<u8> {
             description: "A {shot: <stepId>} claim has no baselines/<stepId>.png beside scenario.json; replay will fail with a missing-baseline hint. Skipped for stdin input.",
         },
         Rule {
+            code: "domshot-without-baseline",
+            severity: "warning",
+            description: "A {domshot: <stepId>} claim has no baselines/<stepId>.snap.txt beside scenario.json; replay will fail with a missing-baseline hint. Skipped for stdin input.",
+        },
+        Rule {
             code: "orphan-baseline",
             severity: "warning",
-            description: "baselines/<stepId>.png exists but no shot claim references <stepId> — a stale golden left by a deleted or renamed step. Skipped for stdin input.",
+            description: "baselines/<stepId>.png or .snap.txt exists but no shot/domshot claim references <stepId> — a stale golden left by a deleted or renamed step. Skipped for stdin input.",
         },
         Rule {
             code: "brittle-locator",
@@ -2031,38 +2036,46 @@ pub(crate) fn lint(
         }
     }
 
-    // 13) a {"shot": <stepId>} claim needs a committed baseline —
-    // replay fails on the missing file anyway; flag it while the author
-    // still has the terminal in hand. Skipped on stdin ('-'): the tempfile
-    // has no scenario dir to resolve baselines/ against. Nested shot claims
-    // (inside group/loop params.steps) count too — same JSON walk the
-    // runner uses to find them.
+    // 13) a {"shot": <stepId>} / {"domshot": <stepId>} claim needs a
+    // committed baseline — replay fails on the missing file anyway; flag
+    // it while the author still has the terminal in hand. Skipped on
+    // stdin ('-'): the tempfile has no scenario dir to resolve baselines/
+    // against. Nested claims (inside group/loop params.steps) count too —
+    // same JSON walk the runner uses to find them.
     let from_stdin = matches!(&_guard, crate::io::StdinOrPath::Stdin { .. });
     if !from_stdin {
         if let Some(scenario_dir) = path.parent() {
             let mut shot_ids: Vec<String> = Vec::new();
-            fn collect_shots(v: &serde_json::Value, out: &mut Vec<String>) {
+            let mut domshot_ids: Vec<String> = Vec::new();
+            fn collect_shots(
+                v: &serde_json::Value,
+                shots: &mut Vec<String>,
+                domshots: &mut Vec<String>,
+            ) {
                 match v {
                     serde_json::Value::Object(map) => {
                         if let Some(subject) = map.get("claim").and_then(|c| c.get("subject")) {
                             if let Some(sid) = subject.get("shot").and_then(|s| s.as_str()) {
-                                out.push(sid.to_string());
+                                shots.push(sid.to_string());
+                            }
+                            if let Some(sid) = subject.get("domshot").and_then(|s| s.as_str()) {
+                                domshots.push(sid.to_string());
                             }
                         }
                         for v in map.values() {
-                            collect_shots(v, out);
+                            collect_shots(v, shots, domshots);
                         }
                     }
                     serde_json::Value::Array(arr) => {
                         for v in arr {
-                            collect_shots(v, out);
+                            collect_shots(v, shots, domshots);
                         }
                     }
                     _ => {}
                 }
             }
             if let Some(steps) = raw.get("steps") {
-                collect_shots(steps, &mut shot_ids);
+                collect_shots(steps, &mut shot_ids, &mut domshot_ids);
             }
             let baselines = scenario_dir.join("baselines");
             for sid in &shot_ids {
@@ -2072,6 +2085,17 @@ pub(crate) fn lint(
                         code: "shot-without-baseline",
                         message: format!(
                             "check claims shot {sid:?} but baselines/{sid}.png is missing — run `agent-qa shot-accept` after a replay"
+                        ),
+                    });
+                }
+            }
+            for sid in &domshot_ids {
+                if !baselines.join(format!("{sid}.snap.txt")).is_file() {
+                    findings.push(Finding {
+                        severity: "warning",
+                        code: "domshot-without-baseline",
+                        message: format!(
+                            "check claims domshot {sid:?} but baselines/{sid}.snap.txt is missing — run `agent-qa domshot-accept` after a replay"
                         ),
                     });
                 }
@@ -2094,6 +2118,27 @@ pub(crate) fn lint(
                             code: "orphan-baseline",
                             message: format!(
                                 "baselines/{name} — no shot claim references step {stem:?}; delete it or the claim was renamed"
+                            ),
+                        });
+                    }
+                }
+            }
+            // Same inverse check for domshot text baselines (.snap.txt).
+            if let Ok(rd) = fs::read_dir(&baselines) {
+                let claimed: std::collections::BTreeSet<&str> =
+                    domshot_ids.iter().map(String::as_str).collect();
+                for ent in rd.flatten() {
+                    let name = ent.file_name();
+                    let name = name.to_string_lossy();
+                    let Some(stem) = name.strip_suffix(".snap.txt") else {
+                        continue;
+                    };
+                    if !claimed.contains(stem) {
+                        findings.push(Finding {
+                            severity: "warning",
+                            code: "orphan-baseline",
+                            message: format!(
+                                "baselines/{name} — no domshot claim references step {stem:?}; delete it or the claim was renamed"
                             ),
                         });
                     }
