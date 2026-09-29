@@ -877,6 +877,7 @@ fn state_apply(
         "clearCookies",
         "clearLocalStorage",
         "clearSessionStorage",
+        "indexeddb",
     ];
     for k in obj.keys() {
         if !KEYS.contains(&k.as_str()) {
@@ -965,7 +966,102 @@ fn state_apply(
             body.push_str(&format!("document.cookie = {};", json_str(&assignment)));
         }
     }
-    let expr = format!("(() => {{ {body} }})()");
+
+    // `indexeddb` — async seeding; the eval layer awaits the promise.
+    // Each spec is `{"db","store","keyPath"?,"clear"?,"put":[…]}`: with
+    // `keyPath` the put entries are full records; without it they are
+    // `{key,value}` pairs stored under out-of-line keys.
+    let mut idb_body = String::new();
+    if let Some(specs) = obj.get("indexeddb") {
+        let list = specs
+            .as_array()
+            .ok_or_else(|| anyhow!("params.indexeddb must be an array"))?;
+        if !list.is_empty() {
+            idb_body.push_str(
+                "const __aqOpenDb = (name) => new Promise((res, rej) => { \
+                   const r = indexedDB.open(name); \
+                   r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); \
+                 const __aqEnsureStore = (db, name, store, keyPath) => { \
+                   if (db.objectStoreNames.contains(store)) return Promise.resolve(db); \
+                   const v = db.version + 1; db.close(); \
+                   return new Promise((res, rej) => { \
+                     const r = indexedDB.open(name, v); \
+                     r.onupgradeneeded = (e) => { \
+                       const ndb = e.target.result; \
+                       if (!ndb.objectStoreNames.contains(store)) \
+                         ndb.createObjectStore(store, keyPath == null ? undefined : { keyPath }); \
+                     }; \
+                     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }; \
+                 const __aqTx = (db, store, fn) => new Promise((res, rej) => { \
+                   const t = db.transaction(store, 'readwrite'); \
+                   const os = t.objectStore(store); fn(os); \
+                   t.oncomplete = () => res(); \
+                   t.onerror = () => rej(t.error); t.onabort = () => rej(t.error); });",
+            );
+        }
+        for spec in list {
+            let db_name = spec
+                .get("db")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("params.indexeddb[].db is required"))?;
+            let store_name = spec
+                .get("store")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("params.indexeddb[].store is required"))?;
+            let db_name = crate::value::substitute_scenario_vars(db_name, scope);
+            let store_name = crate::value::substitute_scenario_vars(store_name, scope);
+            let key_path = spec
+                .get("keyPath")
+                .and_then(|v| v.as_str())
+                .map(|s| crate::value::substitute_scenario_vars(s, scope));
+            let key_path_js = match &key_path {
+                Some(k) => json_str(k),
+                None => "null".into(),
+            };
+            let mut ops = String::new();
+            if spec.get("clear").and_then(|v| v.as_bool()).unwrap_or(false) {
+                ops.push_str("os.clear();");
+            }
+            if let Some(puts) = spec.get("put") {
+                let puts = puts
+                    .as_array()
+                    .ok_or_else(|| anyhow!("params.indexeddb[{db_name:?}].put must be an array"))?;
+                for p in puts {
+                    if key_path.is_some() {
+                        let value = serde_json::to_string(p)?;
+                        let value = crate::value::substitute_scenario_vars(&value, scope);
+                        ops.push_str(&format!("os.put({value});"));
+                    } else {
+                        let k = p.get("key").ok_or_else(|| {
+                            anyhow!(
+                                "params.indexeddb[{db_name:?}].put[].key is required without keyPath"
+                            )
+                        })?;
+                        let v = p.get("value").ok_or_else(|| {
+                            anyhow!("params.indexeddb[{db_name:?}].put[].value is required")
+                        })?;
+                        let k = serde_json::to_string(k)?;
+                        let v = serde_json::to_string(v)?;
+                        let v = crate::value::substitute_scenario_vars(&v, scope);
+                        ops.push_str(&format!("os.put({v}, {k});"));
+                    }
+                }
+            }
+            let db_js = json_str(&db_name);
+            let store_js = json_str(&store_name);
+            idb_body.push_str(&format!(
+                "{{ let db = await __aqOpenDb({db_js}); \
+                   db = await __aqEnsureStore(db, {db_js}, {store_js}, {key_path_js}); \
+                   await __aqTx(db, {store_js}, (os) => {{ {ops} }}); db.close(); }}",
+            ));
+        }
+    }
+
+    let expr = if idb_body.is_empty() {
+        format!("(() => {{ {body} }})()")
+    } else {
+        format!("(async () => {{ {body} {idb_body} }})()")
+    };
     browser::eval_expression(session, &expr)?;
     Ok(())
 }
@@ -3144,5 +3240,59 @@ mod tests {
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         clear_fake();
         assert!(err.contains("i18n.json"), "got: {err}");
+    }
+
+    #[test]
+    fn state_indexeddb_emits_async_open_ensure_and_put() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake_eval_true(tmp.path(), &log);
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "state",
+            "params": {"indexeddb": [
+                {"db": "d", "store": "kv", "keyPath": "k", "put": [{"k": "a", "v": 1}]},
+                {"db": "d2", "store": "out", "put": [{"key": "f", "value": true}]}
+            ]}
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        assert!(out.contains("(async () =>"), "got: {out}");
+        assert!(out.contains("__aqEnsureStore"), "got: {out}");
+        assert!(out.contains("os.put({\"k\":\"a\",\"v\":1})"), "got: {out}");
+        assert!(out.contains("os.put(true, \"f\")"), "got: {out}");
+    }
+
+    #[test]
+    fn state_indexeddb_requires_array_and_required_fields() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "state",
+            "params": {"indexeddb": {"db": "d"}}
+        }));
+        let tmp = TempDir::new().unwrap();
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
+        assert!(err.contains("must be an array"), "got: {err}");
+
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "state",
+            "params": {"indexeddb": [{"store": "kv", "put": []}]}
+        }));
+        let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
+        assert!(err.contains("db is required"), "got: {err}");
     }
 }
