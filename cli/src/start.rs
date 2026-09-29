@@ -195,18 +195,14 @@ fn start(opts: &Opts) -> Result<StartSummary> {
     if let Err(e) = browser::network_har_start(&opts.session_name) {
         eprintln!("[v2-record] har start skipped: {e}");
     }
-<<<<<<< HEAD
     // A reused warm session never saw the init script — install the stub
     // into the live document so its in-page calls are covered too.
     if let Err(e) = crate::mock::reapply_if_any(&opts.session_name) {
         eprintln!("[v2-record] mock apply skipped: {e}");
     }
-||||||| 92861e6
-=======
     // Arm the click-effect probe for the landing page; `record-step`
     // re-arms after each step so post-navigation pages are covered too.
     crate::record_step::arm_click_probe(&opts.session_name);
->>>>>>> origin/main
     Ok(summary)
 }
 

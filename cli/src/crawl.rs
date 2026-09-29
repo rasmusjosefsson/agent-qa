@@ -480,7 +480,6 @@ fn network_claim_steps(reqs: &[crate::browser::CapturedRequest], idx: &mut usize
             })
             .unwrap_or(false);
         if !is_live || is_telemetry_url(&r.url) || !seen.insert((r.method.clone(), r.url.clone())) {
-
             continue;
         }
         if out.len() >= CAP {
