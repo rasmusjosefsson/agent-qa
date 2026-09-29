@@ -15,6 +15,15 @@ use crate::scenario::Scenario;
 use crate::schema;
 
 pub fn run(args: &[String]) -> Result<u8> {
+    // `-h|--help` anywhere wins over positional parsing — otherwise a
+    // file-taking subverb (`scenario lint --help`) reads "--help" as a path.
+    if args
+        .iter()
+        .any(|a| matches!(a.as_str(), "-h" | "--help" | "help"))
+    {
+        help();
+        return Ok(0);
+    }
     match args.first().map(String::as_str) {
         Some("validate") => {
             let file = args.get(1).ok_or_else(|| {
@@ -37,7 +46,7 @@ pub fn run(args: &[String]) -> Result<u8> {
                     format = parse_lint_format(v)?;
                 }
             }
-            validate(Path::new(file), format)
+            validate(&scenario_file_arg(file), format)
         }
         Some("validate-all") => {
             let mut format = if args.iter().any(|a| a == "--json") {
@@ -187,25 +196,25 @@ pub fn run(args: &[String]) -> Result<u8> {
             let file = args
                 .get(1)
                 .ok_or_else(|| anyhow!("usage: scenario hash <file>"))?;
-            hash(Path::new(file))
+            hash(&scenario_file_arg(file))
         }
         Some("id") => {
             let file = args
                 .get(1)
                 .ok_or_else(|| anyhow!("usage: scenario id <file>"))?;
-            id(Path::new(file))
+            id(&scenario_file_arg(file))
         }
         Some("intent") => {
             let file = args
                 .get(1)
                 .ok_or_else(|| anyhow!("usage: scenario intent <file>"))?;
-            intent(Path::new(file))
+            intent(&scenario_file_arg(file))
         }
         Some("step-ids") => {
             let file = args
                 .get(1)
                 .ok_or_else(|| anyhow!("usage: scenario step-ids <file>"))?;
-            step_ids(Path::new(file))
+            step_ids(&scenario_file_arg(file))
         }
         Some("field") => {
             let file = args
@@ -214,14 +223,14 @@ pub fn run(args: &[String]) -> Result<u8> {
             let name = args
                 .get(2)
                 .ok_or_else(|| anyhow!("usage: scenario field <file> <name>"))?;
-            field(Path::new(file), name)
+            field(&scenario_file_arg(file), name)
         }
         Some("coverage") => {
             let file = args
                 .get(1)
-                .ok_or_else(|| anyhow!("usage: scenario coverage <file> [--json]"))?;
+                .ok_or_else(|| anyhow!("usage: scenario coverage <file|sid> [--json]"))?;
             let json_out = args.iter().any(|a| a == "--json");
-            coverage(Path::new(file), json_out)
+            coverage(&scenario_file_arg(file), json_out)
         }
         Some("coverage-all") => {
             let mut filter: Option<String> = None;
@@ -274,7 +283,7 @@ pub fn run(args: &[String]) -> Result<u8> {
                     format = parse_lint_format(v)?;
                 }
             }
-            check(Path::new(file), strict, format)
+            check(&scenario_file_arg(file), strict, format)
         }
         Some("check-all") => {
             let strict = args.iter().any(|a| a == "--strict");
@@ -372,7 +381,7 @@ pub fn run(args: &[String]) -> Result<u8> {
                 Some(exclude_rules)
             };
             lint(
-                Path::new(file),
+                &scenario_file_arg(file),
                 format,
                 strict,
                 rules.as_deref(),
@@ -650,14 +659,14 @@ pub fn run(args: &[String]) -> Result<u8> {
                     other => bail!("unknown flag {other:?}"),
                 }
             }
-            summary(Path::new(file), filter.as_deref(), json_out)
+            summary(&scenario_file_arg(file), filter.as_deref(), json_out)
         }
         Some("inputs") => {
             let file = args
                 .get(1)
                 .ok_or_else(|| anyhow!("usage: scenario inputs <file> [--json]"))?;
             let json_out = args.iter().any(|a| a == "--json");
-            inputs(Path::new(file), json_out)
+            inputs(&scenario_file_arg(file), json_out)
         }
         Some("insert") => {
             let mut file: Option<&str> = None;
@@ -715,7 +724,7 @@ pub fn run(args: &[String]) -> Result<u8> {
                     "usage: scenario insert <file> <do|check> <draft-json> [--after <stepId> | --at <index>]"
                 ),
             };
-            insert(Path::new(file), kind, draft, after.as_deref(), at)
+            insert(&scenario_file_arg(file), kind, draft, after.as_deref(), at)
         }
         Some("new") => {
             let mut file: Option<&str> = None;
@@ -1733,13 +1742,19 @@ fn brittle_locator_reason(kind: &str, value: &str) -> Option<&'static str> {
     None
 }
 
-pub(crate) fn lint(
-    path: &Path,
-    format: LintFormat,
-    strict: bool,
-    only_rules: Option<&[String]>,
-    exclude_rules: Option<&[String]>,
-) -> Result<u8> {
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct Finding {
+    severity: &'static str,
+    code: &'static str,
+    message: String,
+}
+
+/// Runs every lint rule against one scenario file and returns the raw
+/// findings, unfiltered by --rule/--exclude-rule. Shared by `lint`
+/// (renders) and `lint_collect` (counts for `scenario check`) so a new
+/// rule cannot drift between the two paths.
+fn lint_findings(path: &Path) -> Result<(Vec<Finding>, Scenario)> {
     // For stdin ('-'), buffer once via io::stdin_or_path; the guard
     // keeps the tempfile alive for the rest of this function.
     let _guard = crate::io::stdin_or_path(path)?;
@@ -1752,15 +1767,7 @@ pub(crate) fn lint(
         serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
     let j = load_scenario(path)?;
 
-    #[derive(serde::Serialize, Clone)]
-    #[serde(rename_all = "camelCase")]
-    struct Finding {
-        severity: &'static str,
-        code: &'static str,
-        message: String,
-    }
     let mut findings: Vec<Finding> = Vec::new();
-
     use crate::scenario::Step;
     use std::collections::{HashMap, HashSet};
 
@@ -1916,6 +1923,32 @@ pub(crate) fn lint(
                     message: format!(
                         "step {sid:?} waits {ms}ms with no condition — prefer params.until/url/idle/locator so the step gates on the outcome, not the clock",
                         ms = get("ms").and_then(|m| m.as_u64()).unwrap_or(0)
+                    ),
+                });
+            }
+        }
+    }
+
+    // 3f) claim value carrying a do-step `{"from": ...}` spec — claim values
+    // are plain JSON; an object spec serializes verbatim and never matches,
+    // so the check fails with a confusing "expected to contain {from:…}".
+    if let Some(steps) = raw.get("steps").and_then(|s| s.as_array()) {
+        for step in steps {
+            if step.get("kind").and_then(|k| k.as_str()) != Some("check") {
+                continue;
+            }
+            let looks_like_spec = step
+                .get("claim")
+                .and_then(|c| c.get("value"))
+                .and_then(|v| v.as_object())
+                .is_some_and(|o| o.contains_key("from"));
+            if looks_like_spec {
+                let sid = step.get("id").and_then(|i| i.as_str()).unwrap_or("?");
+                findings.push(Finding {
+                    severity: "error",
+                    code: "claim-value-spec",
+                    message: format!(
+                        "step {sid:?} claim value is a do-step {{\"from\":…}} spec — claims take plain JSON (e.g. \"value\": \"example.com\")"
                     ),
                 });
             }
@@ -2201,6 +2234,18 @@ pub(crate) fn lint(
         }
     }
 
+    Ok((findings, j))
+}
+
+pub(crate) fn lint(
+    path: &Path,
+    format: LintFormat,
+    strict: bool,
+    only_rules: Option<&[String]>,
+    exclude_rules: Option<&[String]>,
+) -> Result<u8> {
+    let (mut findings, j) = lint_findings(path)?;
+
     if let Some(only) = only_rules {
         let set: std::collections::HashSet<&str> = only.iter().map(String::as_str).collect();
         findings.retain(|f| set.contains(f.code));
@@ -2371,6 +2416,23 @@ fn coverage_counts(steps: &[crate::scenario::Step]) -> CoverageCounts {
         c.bare_do += 1;
     }
     c
+}
+
+/// A `<file>` arg that also accepts a scenario sid: when the arg is not
+/// an existing file (and isn't '-' for stdin), resolve it as
+/// <scenarios_root>/<arg>/scenario.json. Existing paths always win.
+fn scenario_file_arg(arg: &str) -> PathBuf {
+    let p = Path::new(arg);
+    if arg == "-" || p.is_file() {
+        return p.to_path_buf();
+    }
+    if let Ok(dir) = crate::paths::scenario_dir(arg) {
+        let f = dir.join("scenario.json");
+        if f.is_file() {
+            return f;
+        }
+    }
+    p.to_path_buf()
 }
 
 fn coverage(path: &Path, json_out: bool) -> Result<u8> {
@@ -2802,8 +2864,6 @@ fn lint_collect(
     only_rules: Option<&[String]>,
     exclude_rules: Option<&[String]>,
 ) -> Result<(usize, usize)> {
-    use crate::scenario::Step;
-    use std::collections::{HashMap, HashSet};
     let exclude: std::collections::HashSet<String> = exclude_rules
         .map(|r| r.iter().cloned().collect())
         .unwrap_or_default();
@@ -2818,171 +2878,15 @@ fn lint_collect(
             Box::new(move |c: &str| set.contains(c) && !ex.contains(c))
         }
     };
-    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    let raw: serde_json::Value =
-        serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
-    let j = load_scenario(path)?;
-
-    let mut errors = 0usize;
-    let mut warnings = 0usize;
-
-    let mut id_counts: HashMap<&str, usize> = HashMap::new();
-    for step in &j.steps {
-        *id_counts.entry(step.id()).or_insert(0) += 1;
-    }
-    for n in id_counts.values() {
-        if *n > 1 && active("duplicate-step-id") {
-            errors += 1;
-        }
-    }
-    for step in &j.steps {
-        if step.intent().trim().is_empty() && active("empty-intent") {
-            warnings += 1;
-        }
-    }
-    let mut prev_was_do = false;
-    for step in &j.steps {
-        match step {
-            Step::Do { .. } => {
-                if prev_was_do && active("bare-do") {
-                    warnings += 1;
-                }
-                prev_was_do = true;
-            }
-            Step::Check { .. } => {
-                prev_was_do = false;
-            }
-        }
-    }
-    if prev_was_do && active("bare-do") {
-        warnings += 1;
-    }
-    let declared: HashSet<String> = j
-        .inputs
-        .as_ref()
-        .map(|m| m.keys().cloned().collect())
-        .unwrap_or_default();
-    let mut referenced: HashSet<String> = HashSet::new();
-    collect_input_refs(&raw, &mut referenced);
-    for input in &referenced {
-        if !declared.contains(input) && active("undeclared-input") {
-            errors += 1;
-        }
-    }
-    for input in &declared {
-        if !referenced.contains(input) && active("unused-input") {
-            warnings += 1;
-        }
-    }
-    let step_ids: HashSet<String> = j.steps.iter().map(|s| s.id().to_string()).collect();
-    let mut step_refs: HashSet<String> = HashSet::new();
-    collect_step_refs(&raw, &mut step_refs);
-    for r in &step_refs {
-        if !step_ids.contains(r) && active("undeclared-step-ref") {
-            errors += 1;
-        }
-    }
-    // goto-without-url
-    for step in &j.steps {
-        if let Step::Do {
-            verb: crate::scenario::Verb::Goto,
-            value,
-            ..
-        } = step
-        {
-            if value.is_none() && active("goto-without-url") {
-                errors += 1;
-            }
-        }
-    }
-    // missing-locator
-    for step in &j.steps {
-        if let Step::Do { verb, on, .. } = step {
-            let needs_locator = matches!(
-                verb,
-                crate::scenario::Verb::Click
-                    | crate::scenario::Verb::Type
-                    | crate::scenario::Verb::Clear
-                    | crate::scenario::Verb::Hover
-                    | crate::scenario::Verb::Focus
-                    | crate::scenario::Verb::Blur
-                    | crate::scenario::Verb::Check
-                    | crate::scenario::Verb::Uncheck
-            );
-            if needs_locator && on.is_none() && active("missing-locator") {
-                errors += 1;
-            }
-        }
-    }
-    // params-on-noop
-    for step in &j.steps {
-        if let Step::Do { verb, params, .. } = step {
-            let is_noop = matches!(
-                verb,
-                crate::scenario::Verb::Reload
-                    | crate::scenario::Verb::Back
-                    | crate::scenario::Verb::Forward
-            );
-            if is_noop
-                && params.as_ref().map(|p| !p.is_empty()).unwrap_or(false)
-                && active("params-on-noop")
-            {
-                warnings += 1;
-            }
-        }
-    }
-    // no-env-open
-    let open_count = j
-        .env
-        .as_ref()
-        .and_then(|e| e.open.as_ref())
-        .map(|v| v.len())
-        .unwrap_or(0);
-    if open_count == 0 && active("no-env-open") {
-        warnings += 1;
-    }
-    // no-checks
-    let check_count = j
-        .steps
+    let (findings, _j) = lint_findings(path)?;
+    let errors = findings
         .iter()
-        .filter(|s| matches!(s, Step::Check { .. }))
+        .filter(|f| f.severity == "error" && active(f.code))
         .count();
-    if !j.steps.is_empty() && check_count == 0 && active("no-checks") {
-        warnings += 1;
-    }
-    // no-navigation
-    if !j.steps.is_empty() && !scenario_navigates(&j) && active("no-navigation") {
-        warnings += 1;
-    }
-    // empty-steps
-    if j.steps.is_empty() && active("empty-steps") {
-        warnings += 1;
-    }
-    // wait-without-condition
-    for step in &j.steps {
-        if let Step::Do {
-            verb: crate::scenario::Verb::Wait,
-            params,
-            ..
-        } = step
-        {
-            let has_condition = params
-                .as_ref()
-                .map(|p| {
-                    p.get("ms").is_some()
-                        || p.get("until").is_some()
-                        || p.get("url").is_some()
-                        || p.get("timeoutMs").is_some()
-                        || p.get("locator").is_some()
-                        || p.get("idle").is_some()
-                        || p.get("idleMs").is_some()
-                })
-                .unwrap_or(false);
-            if !has_condition && active("wait-without-condition") {
-                warnings += 1;
-            }
-        }
-    }
+    let warnings = findings
+        .iter()
+        .filter(|f| f.severity == "warning" && active(f.code))
+        .count();
     Ok((errors, warnings))
 }
 
@@ -3888,6 +3792,33 @@ mod tests {
     }
 
     #[test]
+    fn scenario_file_arg_accepts_sid_and_keeps_paths() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        let dir = tmp.path().join("hello");
+        std::fs::create_dir_all(&dir).unwrap();
+        let sc = dir.join("scenario.json");
+        fs::write(&sc, "{}").unwrap();
+        // sid resolves to its scenario.json
+        assert_eq!(scenario_file_arg("hello"), sc);
+        // existing file paths pass through untouched
+        let loose = tmp.path().join("loose.json");
+        fs::write(&loose, "{}").unwrap();
+        assert_eq!(scenario_file_arg(loose.to_str().unwrap()), loose);
+        // unknown args fall back to the literal path (read error surfaces later)
+        assert_eq!(
+            scenario_file_arg("no-such-sid"),
+            Path::new("no-such-sid").to_path_buf()
+        );
+        match prev {
+            Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    #[test]
     fn coverage_counts_shared_heuristic() {
         // Direct unit coverage of the shared counter: do,do,check → 1 bare.
         let tmp = TempDir::new().unwrap();
@@ -4091,6 +4022,42 @@ mod tests {
         assert_eq!(lint_one(serde_json::json!({ "ms": 500, "idle": true })), 0);
         assert_eq!(lint_one(serde_json::json!({ "url": "*/api/*" })), 0);
         assert_eq!(lint_one(serde_json::json!({ "idle": true })), 0);
+    }
+
+    #[test]
+    fn lint_claim_value_spec_flags_from_objects() {
+        let tmp = TempDir::new().unwrap();
+        let lint_one = |value: serde_json::Value| {
+            let p = write(
+                tmp.path(),
+                &format!(
+                    r#"{{
+                      "schema": "scenario/2", "id": "j", "intent": "x",
+                      "steps": [
+                        {{ "id": "s0", "intent": "go", "kind": "do", "verb": "goto",
+                          "value": {{ "from": "literal", "literal": "http://x/" }} }},
+                        {{ "id": "s1", "intent": "url", "kind": "check",
+                          "claim": {{ "subject": {{ "url": true }}, "predicate": "contains",
+                            "value": {value} }} }}
+                      ]
+                    }}"#
+                ),
+            );
+            lint(
+                &p,
+                LintFormat::Text,
+                true,
+                Some(&["claim-value-spec".to_string()]),
+                None,
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            lint_one(serde_json::json!({ "from": "literal", "literal": "x" })),
+            1
+        );
+        assert_eq!(lint_one(serde_json::json!("x")), 0);
+        assert_eq!(lint_one(serde_json::json!(42)), 0);
     }
 
     #[test]
@@ -5640,6 +5607,22 @@ mod tests {
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    /// `--help` after a subverb must print usage, not be swallowed as the
+    /// `<file>` positional (`scenario lint --help` used to try reading a
+    /// file literally named --help).
+    #[test]
+    fn help_flag_wins_over_file_positionals() {
+        for args in [
+            vec!["lint".to_string(), "--help".to_string()],
+            vec!["validate".to_string(), "--help".to_string()],
+            vec!["check".to_string(), "-h".to_string()],
+            vec!["new".to_string(), "--help".to_string()],
+            vec!["--help".to_string()],
+        ] {
+            assert_eq!(run(&args).unwrap(), 0, "args {args:?}");
         }
     }
 }

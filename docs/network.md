@@ -27,9 +27,11 @@ Matcher fields AND together:
 
 - `urlMatches` — a **regex** on the request URL (escape literal `?`/`&`/`.`
   as `\\?` etc.)
-- `method` — HTTP verb, exact match
+- `method` — HTTP verb, exact match (`"WS"` selects captured sockets)
 - `operationName` — substring match on the URL, GraphQL-style
   (`?operationName=ListUsers` or a `/ListUsers` path segment)
+- `wsPayloadContains` — substring match on any WebSocket frame payload;
+  narrows to `cdpws-*` socket entries
 
 `ofKind` picks what the predicate evaluates:
 
@@ -38,6 +40,32 @@ Matcher fields AND together:
 | `fired` (default) | `exists`, `notExists` (+ `isVisible`/`isHidden` aliases) | at least one matching request / none at all |
 | `status` | `equals`/`contains`/`matches`/string preds on `"200"`; `gt`/`gte`/`lt`/`lte` numerically | the **latest** matching request's HTTP status |
 | `responseJsonPath` | any predicate + `value` | fetches the latest match's response body (`network request <id>`) and evaluates `claim.path` as a JSON path into it |
+
+### WebSocket + SSE traffic
+
+Fetch/XHR hooks can't see sockets — so alongside the daemon's request log,
+replay also listens on the page's CDP session for `Network.*` events and
+folds them into the same captured list as `cdpws-*` entries:
+
+- WebSockets appear as `method: "WS"`, `status: 101`,
+  `resourceType: "WebSocket"`, with every sent/received frame in
+  `wsFrames` (`{dir, opcode, payload}`) — `wsPayloadContains` asserts on
+  frame content, and `network request cdpws-<n>` returns the joined
+  received payloads as `responseBody`.
+- `EventSource`/SSE streams appear as ordinary GETs with
+  `resourceType: "EventSource"` — `fired`/`status` work on them as-is.
+
+```json
+{ "subject": {
+    "network": { "urlMatches": "^ws://", "wsPayloadContains": "pong:hello" },
+    "ofKind": "fired"
+  },
+  "predicate": "exists" }
+```
+
+Capture arms at run start on the active page's flat session, so it
+survives navigations. Proven end-to-end by `golden:ws:tc01` (in-process
+ws echo + SSE fixture, 8/8).
 
 All forms **poll until the step's timeout** — a request that lands after the
 check starts still counts. On timeout the error carries the last observed
@@ -151,3 +179,39 @@ persisted, logout cleared the session cookie:
 `storage` takes `"key"` (localStorage) or `{ "key": "…", "scope":
 "local"|"session" }`; `path` walks a JSON-encoded value. `cookie` reads
 `document.cookie` — `httpOnly` cookies are invisible there.
+
+## `do/state` — `indexeddb` seeding
+
+`params.indexeddb` seeds IndexedDB stores — each entry is
+`{"db","store","keyPath"?,"clear"?,"put":[…]}`. With `keyPath` the `put`
+entries are full records; without it they are `{"key","value"}` pairs
+stored under out-of-line keys. `clear: true` empties the store first.
+Missing stores are created (a version bump on the open db):
+
+```json
+{ "id": "s2", "kind": "do", "verb": "state",
+  "params": { "indexeddb": [
+    { "db": "cart", "store": "items", "keyPath": "sku",
+      "put": [ { "sku": "sku-1", "qty": 2 } ] },
+    { "db": "flags", "store": "out",
+      "put": [ { "key": "onboarded", "value": { "done": true } } ] }
+  ] } }
+```
+
+## `{"indexeddb"}` claim subject
+
+Assert an IndexedDB record — `{"db","store","key"?}`. Without `key` the
+subject is the object store itself (exists/notExists); with it, record
+predicates apply and `path` walks a JSON-structured value:
+
+```json
+{ "claim": {
+    "subject": { "indexeddb": { "db": "cart", "store": "items", "key": "sku-1" },
+                 "path": "$.qty" },
+    "predicate": "gte", "value": 1 } }
+{ "claim": { "subject": { "indexeddb": { "db": "flags", "store": "out" } },
+             "predicate": "exists" } }
+```
+
+The probe lists `indexedDB.databases()` before opening so `notExists`
+checks never create the db they're probing.

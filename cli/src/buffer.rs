@@ -8,7 +8,11 @@ use crate::recorder_state::RecorderState;
 use crate::scenario::{Scenario, Step, StepContext, Value};
 
 pub fn run(args: &[String]) -> Result<u8> {
-    if args.is_empty() || matches!(args[0].as_str(), "-h" | "--help" | "help") {
+    if args.is_empty()
+        || args
+            .iter()
+            .any(|a| matches!(a.as_str(), "-h" | "--help" | "help"))
+    {
         print_help();
         return Ok(0);
     }
@@ -613,5 +617,18 @@ mod tests {
             "url now"
         );
         std::env::remove_var(crate::paths::RECORD_DIR_ENV);
+    }
+
+    /// `--help` after a subverb prints usage instead of being parsed as a
+    /// flag of that subverb (`buffer load --help` used to fail
+    /// "unknown flag").
+    #[test]
+    fn help_flag_wins_after_a_subverb() {
+        for args in [
+            vec!["load".to_string(), "--help".to_string()],
+            vec!["edit".to_string(), "-h".to_string()],
+        ] {
+            assert_eq!(run(&args).unwrap(), 0, "args {args:?}");
+        }
     }
 }

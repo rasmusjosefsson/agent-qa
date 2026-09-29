@@ -774,6 +774,10 @@ pub struct CapturedRequest {
     /// POST body when the capture pipeline surfaces it on the list entry.
     #[serde(default)]
     pub post_data: Option<String>,
+    /// WebSocket frames (`{dir,opcode,payload}`) on `cdpws-*` entries —
+    /// absent on plain HTTP entries. Lets claims match frame payloads.
+    #[serde(default)]
+    pub ws_frames: Vec<serde_json::Value>,
 }
 
 fn json_data(verb: &str, stdout: &str) -> Result<serde_json::Value, AgentBrowserError> {
@@ -812,6 +816,15 @@ pub fn network_requests(session: &str) -> Result<Vec<CapturedRequest>, AgentBrow
             stderr: format!("unparseable requests array: {e}"),
             hint: String::new(),
         })?;
+    // WebSockets are invisible to the daemon's fetch/XHR capture — merge
+    // the entries our own CDP listener saw (`cdpws-*`).
+    if let Ok(ws_entries) = crate::cdp::ws_entries(session) {
+        for e in ws_entries {
+            if let Ok(req) = serde_json::from_value::<CapturedRequest>(e) {
+                reqs.push(req);
+            }
+        }
+    }
     reqs.extend(mocked_requests(session));
     Ok(reqs)
 }
@@ -849,6 +862,7 @@ fn mocked_requests(session: &str) -> Vec<CapturedRequest> {
                 .get("postData")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
+            ws_frames: vec![],
         })
         .collect()
 }
@@ -864,6 +878,10 @@ pub fn network_clear(session: &str) -> Result<(), AgentBrowserError> {
         ["network", "requests", "--clear"],
         RunOpts::new().capture(),
     )?;
+    // Same for the ws capture — fresh per run. Then (re)arm Network.enable
+    // on the page session so sockets opened during this run are seen.
+    crate::cdp::clear_capture(session);
+    let _ = crate::cdp::enable_network_capture(session);
     let _ = eval_expression(
         session,
         "window.__aqMockLog = []; window.__aqMockSeq = 0; 1",
@@ -881,12 +899,35 @@ fn decode_eval_string(raw: &str) -> String {
 }
 
 /// `agent-browser --json network request <id>` — full record for one
-/// exchange, including `responseBody`. `mock-*` ids come from the in-page
-/// stub's `__aqMockLog` instead — the request never hit the wire.
+/// exchange, including `responseBody`. `cdpws-*` ids are answered from
+/// our own capture (the daemon never saw the socket); `mock-*` ids come
+/// from the in-page stub's `__aqMockLog` instead — the request never hit
+/// the wire.
 pub fn network_request(
     session: &str,
     request_id: &str,
 ) -> Result<serde_json::Value, AgentBrowserError> {
+    if request_id.starts_with("cdpws-") {
+        match crate::cdp::ws_detail(session, request_id) {
+            Ok(Some(detail)) => return Ok(detail),
+            Ok(None) => {
+                return Err(AgentBrowserError::NonZero {
+                    verb: "network request".to_string(),
+                    exit_code: 1,
+                    stderr: format!("no websocket entry {request_id}"),
+                    hint: String::new(),
+                })
+            }
+            Err(e) => {
+                return Err(AgentBrowserError::NonZero {
+                    verb: "network request".to_string(),
+                    exit_code: 1,
+                    stderr: format!("cdp ws detail: {e}"),
+                    hint: String::new(),
+                })
+            }
+        }
+    }
     if request_id.starts_with("mock-") {
         if let Ok(raw) = eval_expression(
             session,
@@ -1213,7 +1254,7 @@ pub enum RoleAct {
 }
 
 impl RoleAct {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             RoleAct::Click => "click",
             RoleAct::Hover => "hover",
