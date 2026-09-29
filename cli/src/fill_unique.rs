@@ -76,10 +76,11 @@ pub fn run(args: &[String]) -> Result<u8> {
     Ok(0)
 }
 
+const HELP: &str = "agent-qa fill-unique — fill a labelled field with a unique token\n\nUsage:\n  agent-qa fill-unique <Label> --template '<literal-with-{{vars._unique}}>'\n                              [--save-as <name>] [--no-record]\n                              [--session <name>]\n\nAt record time, this command mints a fresh 8-hex value and fills the field.\nIt records a replay-native do/type draft with the original template, so\nreplay mints a fresh value.\n\n--save-as <name> registers a vars.<name> binding so a later record-step\ncheck referencing {{vars.<name>}} sees the same token at replay.";
+
 fn print_help() {
-    println!(
-        "agent-qa fill-unique — fill a labelled field with a unique token\n\nUsage:\n  agent-qa fill-unique <Label> --template '<literal-with-{{vars._unique}}>'\n                              [--save-as <name>] [--no-record]\n                              [--session <name>]\n\nAt record time, this command mints a fresh 8-hex value and fills the field.\nIt records a replay-native do/type draft with the original template, so\nreplay mints a fresh value.\n\n--save-as <name> registers a vars.<name> binding so a later record-step\ncheck referencing {{vars.<name>}} sees the same token at replay."
-    );
+    // Not a format string: the help text documents {{vars.*}} literally.
+    println!("{HELP}");
 }
 
 #[derive(Debug, Clone)]
@@ -201,5 +202,14 @@ mod tests {
         std::env::remove_var(paths::RECORD_DIR_ENV);
         std::env::remove_var(browser::BIN_ENV);
         browser::_reset_bin_cache_for_tests();
+    }
+
+    #[test]
+    fn help_documents_the_double_brace_template_syntax() {
+        // The usage line must print the same `{{vars._unique}}` spelling the
+        // --template validator requires — when HELP was println!'d as a format
+        // string, `{{` folded to `{` and the doc told users the wrong syntax.
+        assert!(HELP.contains("{{vars._unique}}"));
+        assert!(HELP.contains("{{vars.<name>}}"));
     }
 }

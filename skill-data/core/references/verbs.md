@@ -25,6 +25,7 @@
 | `record-step check '<draft-json>'` | Appends a `scenario/2` check draft without `id` or `kind`. |
 | `smart-click "<accessible-name>"` | Clicks a target and appends a direct do draft. |
 | `fill-unique <label> --template <template>` | Fills a unique value and appends a direct type draft. |
+| `smart-fill "<accessible-name>" <value>` | Types a literal value into a field by accessible name and appends a direct `do/type` draft. |
 | `verify [--fix]` | Checks the active recording buffer (dense ids + sidecar pairing); `--fix` renumbers ids and moves sidecars in place. |
 
 Only `do` and `check` drafts are accepted.
@@ -51,7 +52,7 @@ without a `heal-promote` step.
 | `scenario insert <sid> --step '<json>' [--after <stepId> \| --at <index>]` | Splice a validated step into a saved scenario. |
 | `scenario extract <sid> [--run <id>] [--through <stepId>] [--to <new>]` | Clone a scenario truncated at the run's first failing step — the repro unit. |
 | `scenario coverage <file>` / `scenario coverage-all` | Per-scenario and whole-suite do→check coverage rolls. |
-| `scenario lint <file> [--strict]` / `scenario lint-all` | Common lints (duplicate ids, bare do, …); `--format github` emits CI annotations. |
+| `scenario lint <file> [--strict]` / `scenario lint-all [--root <dir>]` | Common lints (duplicate ids, bare do, …); `--format github` emits CI annotations. |
 | `audit health` | Suite rollup: flaky + slow + heal-chronic step ids per scenario. |
 | `audit flaky <sid> [--min-runs N]` / `audit slow <sid>` | Steps whose pass/fail interleaves; steps whose duration regressed. |
 | `audit show <sid> <runId\|latest>` / `audit list <sid>` | One run's audit.json; every recorded run. |
