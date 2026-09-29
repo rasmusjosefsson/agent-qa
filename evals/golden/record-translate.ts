@@ -171,6 +171,24 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
             params: y >= 99999 ? { to: "bottom" } : { y },
           });
         }
+        case "enterFrame":
+          return doStep(intent, {
+            verb: "frame",
+            params: { selector: args[0] },
+          });
+        case "exitFrame":
+          return doStep(intent, {
+            verb: "frame",
+            params: { main: true },
+          });
+        case "scrollTop": {
+          // args[0] is the pixel offset — a huge sentinel means "bottom".
+          const y = typeof args[0] === "number" ? args[0] : 0;
+          return doStep(intent, {
+            verb: "scrollTo",
+            params: y >= 99999 ? { to: "bottom" } : { y },
+          });
+        }
         case "dragBySelector":
           // args[0] = source css, args[1] = target css — drives do/drag.
           return doStep(intent, {
@@ -316,6 +334,13 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
             { element: css(args[0]), attribute: args[1] },
             args[2] ?? "equals",
             args[3],
+          );
+        case "elementCount":
+          return checkStep(
+            intent,
+            { element: css(args[0]), ofKind: "count" },
+            "equals",
+            args[1],
           );
         case "elementCount":
           // args: [selector, predicate, count] — numeric predicates compare
