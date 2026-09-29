@@ -338,6 +338,25 @@
         },
         {
           "type": "object",
+          "required": ["indexeddb"],
+          "additionalProperties": false,
+          "properties": {
+            "indexeddb": {
+              "type": "object",
+              "required": ["db", "store"],
+              "additionalProperties": false,
+              "properties": {
+                "db": { "type": "string", "minLength": 1 },
+                "store": { "type": "string", "minLength": 1 },
+                "key": { "type": "string" }
+              }
+            },
+            "path": { "type": "string" }
+          },
+          "$comment": "indexeddb claim subject — assert on an IndexedDB record. exists/notExists for record presence (store presence when key is omitted); string predicates compare the stored value; 'path' walks a JSON-structured value."
+        },
+        {
+          "type": "object",
           "required": ["console"],
           "additionalProperties": false,
           "properties": {

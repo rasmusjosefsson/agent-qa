@@ -64,10 +64,15 @@ before a `goto`/`reload`:
 
 Recognized `params` keys: `localStorage`, `sessionStorage`, `cookies`
 (each entry `{"name","value","path"?,"domain"?,"maxAge"?,"secure"?,"sameSite"?}`),
-`clearCookies`, `clearLocalStorage`, `clearSessionStorage`. Cookies go through
-`document.cookie`, so `httpOnly` values cannot be seeded — auth plugins cover
-that. Assert the result with `{"storage": "key"}` / `{"storage": {"key": "k",
-"scope": "session"}, "path": "$.json.path"}` or `{"cookie": "name"}` claims.
+`clearCookies`, `clearLocalStorage`, `clearSessionStorage`, and `indexeddb`
+(an array of `{"db","store","keyPath"?,"clear"?,"put":[…]}` — with `keyPath`
+the `put` entries are full records, without it `{"key","value"}` pairs stored
+under out-of-line keys; missing stores are created via a db version bump).
+Cookies go through `document.cookie`, so `httpOnly` values cannot be seeded —
+auth plugins cover that. Assert the result with `{"storage": "key"}` /
+`{"storage": {"key": "k", "scope": "session"}, "path": "$.json.path"}`,
+`{"cookie": "name"}`, or `{"indexeddb": {"db","store","key"?}, "path"?}`
+claims (without `key` the subject is the object store itself).
 
 ### Iframes
 
