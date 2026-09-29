@@ -414,25 +414,38 @@
       "properties": {
         "subject": { "$ref": "#/$defs/ClaimSubject" },
         "predicate": {
-          "enum": [
-            "isVisible",
-            "isHidden",
-            "isEnabled",
-            "isDisabled",
-            "isChecked",
-            "isUnchecked",
-            "exists",
-            "notExists",
-            "equals",
-            "contains",
-            "matches",
-            "startsWith",
-            "endsWith",
-            "gt",
-            "gte",
-            "lt",
-            "lte",
-            "countEquals"
+          "oneOf": [
+            {
+              "enum": [
+                "isVisible",
+                "isHidden",
+                "isEnabled",
+                "isDisabled",
+                "isChecked",
+                "isUnchecked",
+                "exists",
+                "notExists",
+                "equals",
+                "contains",
+                "matches",
+                "startsWith",
+                "endsWith",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "countEquals"
+              ]
+            },
+            {
+              "type": "object",
+              "minProperties": 1,
+              "maxProperties": 1,
+              "propertyNames": {
+                "enum": ["equals", "contains", "matches", "startsWith", "endsWith", "gt", "gte", "lt", "lte", "countEquals"]
+              },
+              "$comment": "Sugar: {\"predicate\": {\"contains\": \"x\"}} lowers to predicate:\"contains\" + value:\"x\"."
+            }
           ]
         },
         "value": {},
