@@ -240,6 +240,14 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                 (Some(ms), _, _, _, _) => browser::wait_ms(ctx.session, ms)?,
                 (_, Some(state), _, _, _) => browser::wait_for_load(ctx.session, state)?,
                 (_, _, Some(url), _, _) => browser::wait_for_resource(ctx.session, url, timeout_ms)
+            match (ms, until, url, wants_idle) {
+                (Some(ms), _, _, _) => {
+                    // Pure wall-clock sleep — no browser round-trip, so a
+                    // pending native dialog can't wedge it.
+                    std::thread::sleep(std::time::Duration::from_millis(ms));
+                }
+                (_, Some(state), _, _) => browser::wait_for_load(ctx.session, state)?,
+                (_, _, Some(url), _) => browser::wait_for_resource(ctx.session, url, timeout_ms)
                     .map_err(|e| anyhow!("step '{id}' wait url {url}: {e}"))?,
                 (_, _, _, Some(loc), _) => wait_for_element_state(
                     ctx,
@@ -283,7 +291,7 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
             Ok(Some(response))
         }
         Verb::ScrollTo => {
-            scroll_to(ctx.session, on, scope)?;
+            scroll_to(ctx.session, on, params, scope)?;
             Ok(None)
         }
         Verb::Read => {
@@ -824,15 +832,32 @@ fn read_text(session: &str, loc: &Locator, scope: &mut ValueScope) -> anyhow::Re
 
 /// Scroll to a given target.
 ///
-/// - No `on` → `window.scrollTo(0, 0)` (top of page).
+/// - No `on` → `params.to:"bottom"` scrolls to the document end,
+///   `params.y:<px>` scrolls to that offset, otherwise `window.scrollTo(0, 0)`
+///   (top of page).
 /// - `on` Raw css → `document.querySelector(…).scrollIntoView({block: "center"})`.
 /// - `on` Raw xpath → same, via the centred variant.
 /// - `on` Raw testId → synthesised `[data-testid=…]` CSS.
 /// - `on` Role → not yet supported (needs ARIA-aware DOM traversal).
-fn scroll_to(session: &str, on: Option<&Locator>, scope: &mut ValueScope) -> anyhow::Result<()> {
+fn scroll_to(
+    session: &str,
+    on: Option<&Locator>,
+    params: Option<&std::collections::BTreeMap<String, Json>>,
+    scope: &mut ValueScope,
+) -> anyhow::Result<()> {
     use anyhow::bail;
     let expr = match on {
-        None => "(() => { window.scrollTo(0, 0); })()".to_string(),
+        None => {
+            let to = params.and_then(|p| p.get("to")).and_then(|v| v.as_str());
+            let y = params.and_then(|p| p.get("y")).and_then(|v| v.as_f64());
+            match (to, y) {
+                (Some("bottom"), _) => {
+                    "(() => { window.scrollTo(0, document.body.scrollHeight); })()".to_string()
+                }
+                (_, Some(y)) => format!("(() => {{ window.scrollTo(0, {y}); }})()"),
+                _ => "(() => { window.scrollTo(0, 0); })()".to_string(),
+            }
+        }
         Some(Locator::Raw(raw)) => {
             let v = crate::value::substitute_scenario_vars(&raw.raw.value, scope);
             match raw.raw.kind {
@@ -2348,8 +2373,23 @@ mod tests {
             "id": "s1", "intent": "x", "kind": "do", "verb": "wait",
             "params": { "ms": 250 }
         }));
-        let out = run_one(&s);
-        assert!(out.contains("--session sess wait 250"), "got: {out}");
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake(tmp.path(), &log);
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        let start = std::time::Instant::now();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+        clear_fake();
+        assert!(start.elapsed() >= std::time::Duration::from_millis(250));
+        // a timed wait never touches the browser — a pending dialog can't wedge it
+        assert!(!log.exists());
     }
 
     #[test]
@@ -2689,6 +2729,26 @@ mod tests {
         let out = run_one(&s);
         assert!(out.contains("--session sess eval"), "got: {out}");
         assert!(out.contains("window.scrollTo(0, 0)"), "got: {out}");
+    }
+
+    #[test]
+    fn scrollto_to_bottom_scrolls_document_height() {
+        let s = parse(json!({
+            "id": "s1", "intent": "bottom", "kind": "do", "verb": "scrollTo",
+            "params": { "to": "bottom" }
+        }));
+        let out = run_one(&s);
+        assert!(out.contains("document.body.scrollHeight"), "got: {out}");
+    }
+
+    #[test]
+    fn scrollto_y_scrolls_to_pixel_offset() {
+        let s = parse(json!({
+            "id": "s1", "intent": "down 200", "kind": "do", "verb": "scrollTo",
+            "params": { "y": 200 }
+        }));
+        let out = run_one(&s);
+        assert!(out.contains("window.scrollTo(0, 200)"), "got: {out}");
     }
 
     #[test]

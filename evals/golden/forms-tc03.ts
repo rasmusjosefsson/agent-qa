@@ -109,6 +109,7 @@ async function main(): Promise<void> {
     await waitTextFor("Enter a valid email address.", "email validation error is visible");
     await run("verify", [agentQa, "verify"]);
     await run("flush", [agentQa, "flush"]);
+    await run("check", [agentQa, "scenario", "check", resolve(scenariosRoot, sid, "scenario.json")]);
     await run("replay", [agentQa, "replay", sid, "--session", `${session}-replay`]);
     pass = true;
   } catch (err) {
