@@ -51,8 +51,38 @@ fn parse_env_op(raw: &Json) -> Result<EnvOp> {
         "env": { "open": [raw] },
         "steps": [],
     }))
-    .context("setup operation failed scenario schema validation")?;
+    .with_context(|| {
+        format!(
+            "setup operation failed scenario schema validation — {}",
+            kind_hint(raw)
+        )
+    })?;
     serde_json::from_value(raw.clone()).context("parse setup operation")
+}
+
+/// The oneOf schema error can't name the failing arm; restate the op's own
+/// kind plus its required fields so a malformed op is self-explanatory.
+fn kind_hint(raw: &Json) -> String {
+    let kind = raw
+        .get("kind")
+        .and_then(Json::as_str)
+        .unwrap_or("<missing>");
+    match kind {
+        "fresh" => "fresh takes no other fields".to_string(),
+        "useProfile" => "useProfile requires \"name\"".to_string(),
+        "nav" => "nav requires \"url\" (a URI)".to_string(),
+        "cookie" => "cookie requires \"name\" + \"value\"".to_string(),
+        "localStorage" => "localStorage requires \"key\" + \"value\"".to_string(),
+        "gql" => "gql requires \"url\" + \"query\"; \"forEach\" is a Value \
+             ({\"from\":\"literal\",\"literal\":...} or from-step), \
+             \"saveAs\" a bare name"
+            .to_string(),
+        "flag" => "flag requires \"name\" + \"enabled\"".to_string(),
+        other => format!(
+            "kind {other:?} is unknown — valid kinds: fresh, useProfile, nav, cookie, \
+             localStorage, gql, flag"
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -94,5 +124,12 @@ mod tests {
         let raw: Json = serde_json::json!({ "kind": "flag", "name": "x" });
         let err = parse_env_op(&raw).unwrap_err().to_string();
         assert!(err.contains("schema"));
+        assert!(err.contains("flag requires \"name\" + \"enabled\""));
+    }
+
+    #[test]
+    fn kind_hint_names_unknown_kinds() {
+        let raw: Json = serde_json::json!({ "kind": "bogus" });
+        assert!(kind_hint(&raw).contains("valid kinds"));
     }
 }
