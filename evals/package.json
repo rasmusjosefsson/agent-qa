@@ -241,7 +241,11 @@
     "golden:reactadmin:tc01": "bun golden/reactadmin-tc01.ts",
     "golden:reactadmin:tc02": "bun golden/reactadmin-tc02.ts",
     "golden:reactadmin:tc03": "bun golden/reactadmin-tc03.ts",
-    "golden:reactadmin:tc04": "bun golden/reactadmin-tc04.ts"
+    "golden:reactadmin:tc04": "bun golden/reactadmin-tc04.ts",
+    "golden:ac:tc01": "bun golden/ac-tc01.ts",
+    "golden:ac:tc02": "bun golden/ac-tc02.ts",
+    "golden:ac:tc03": "bun golden/ac-tc03.ts",
+    "golden:ac:tc04": "bun golden/ac-tc04.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"

@@ -137,6 +137,16 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
             params: y >= 99999 ? { to: "bottom" } : { y },
           });
         }
+        case "enterFrame":
+          return doStep(intent, {
+            verb: "frame",
+            params: { selector: args[0] },
+          });
+        case "exitFrame":
+          return doStep(intent, {
+            verb: "frame",
+            params: { main: true },
+          });
         case "dragBySelector":
           // args[0] = source css, args[1] = target css — drives do/drag.
           return doStep(intent, {
