@@ -567,7 +567,7 @@ fn select_option(
     let option_lit = json_str(value);
     let body = |selector_lit: String| -> String {
         format!(
-            "(() => new Promise((resolve, reject) => {{ const el = document.querySelector({sel}); if (!el) return reject(new Error('selector not found: ' + {sel})); if (el.tagName === 'SELECT') {{ const raw = String({val}); const values = raw.includes(',') ? raw.split(',').map((item) => item.trim()).filter(Boolean) : [raw]; for (const option of el.options) option.selected = values.includes(option.value) || values.includes(option.text); el.dispatchEvent(new Event('input', {{ bubbles: true }})); el.dispatchEvent(new Event('change', {{ bubbles: true }})); return resolve(true); }} el.focus(); el.dispatchEvent(new KeyboardEvent('keydown', {{ key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }})); el.dispatchEvent(new KeyboardEvent('keyup', {{ key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }})); setTimeout(() => {{ try {{ const want = {opt}; const options = Array.from(document.querySelectorAll('[role=\"option\"]')); const hit = options.find((node) => (node.textContent || '').trim() === want && node.getClientRects().length > 0); if (!hit) throw new Error('option not found: ' + want); hit.dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true, cancelable: true, view: window }})); hit.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true, cancelable: true, view: window }})); hit.click(); resolve(true); }} catch (err) {{ reject(err); }} }}, 50); }}))()",
+            "(() => new Promise((resolve, reject) => {{ const els = Array.from(document.querySelectorAll({sel})); const el = els.find((n) => n.getClientRects().length > 0) || els[0]; if (!el) return reject(new Error('selector not found: ' + {sel})); if (el.tagName === 'SELECT') {{ const raw = String({val}); const values = raw.includes(',') ? raw.split(',').map((item) => item.trim()).filter(Boolean) : [raw]; for (const option of el.options) option.selected = values.includes(option.value) || values.includes(option.text); el.dispatchEvent(new Event('input', {{ bubbles: true }})); el.dispatchEvent(new Event('change', {{ bubbles: true }})); return resolve(true); }} el.focus(); el.dispatchEvent(new KeyboardEvent('keydown', {{ key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }})); el.dispatchEvent(new KeyboardEvent('keyup', {{ key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }})); setTimeout(() => {{ try {{ const want = {opt}; const options = Array.from(document.querySelectorAll('[role=\"option\"]')); const hit = options.find((node) => (node.textContent || '').trim() === want && node.getClientRects().length > 0); if (!hit) throw new Error('option not found: ' + want); hit.dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true, cancelable: true, view: window }})); hit.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true, cancelable: true, view: window }})); hit.click(); resolve(true); }} catch (err) {{ reject(err); }} }}, 50); }}))()",
             sel = selector_lit,
             val = value_lit,
             opt = option_lit,
@@ -1262,7 +1262,8 @@ fn try_text_native_click(session: &str, text: &str) -> anyhow::Result<bool> {
 fn try_selector_native_click(session: &str, selector: &str) -> anyhow::Result<bool> {
     let expr = format!(
         r#"(() => {{
-  const el = document.querySelector({selector_lit});
+  const els = Array.from(document.querySelectorAll({selector_lit}));
+  const el = els.find((n) => n.getClientRects().length > 0) || els[0];
   if (!el) return false;
   const tag = el.tagName;
   const type = (el.getAttribute('type') || '').toLowerCase();
@@ -1277,12 +1278,16 @@ fn try_selector_native_click(session: &str, selector: &str) -> anyhow::Result<bo
   // alert/confirm/prompt blocks the page's JS thread, which stops the daemon
   // from delivering the eval result at all (~30s internal timeout). A ~150ms
   // timer lets the response land first — the dialog then surfaces as pending
-  // for the next `dialog` step.
+  // for the next `dialog` step. The node is re-resolved at fire time: themes
+  // that re-render a control during hydration detach the handle we captured
+  // above, which would silently drop the dispatch.
   setTimeout(() => {{
     try {{
-      el.dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true, cancelable: true, view: window }}));
-      el.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true, cancelable: true, view: window }}));
-      el.click();
+      const els2 = Array.from(document.querySelectorAll({selector_lit}));
+      const el2 = els2.find((n) => n.getClientRects().length > 0) || els2[0] || el;
+      el2.dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true, cancelable: true, view: window }}));
+      el2.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true, cancelable: true, view: window }}));
+      el2.click();
     }} catch (e) {{}}
   }}, 150);
   return true;
@@ -1312,7 +1317,8 @@ fn fill_or_act_via_selector(
     // after the fill, so a single synchronous check is racy.
     let expr = format!(
         r#"(() => new Promise((resolve) => {{
-  const el = document.querySelector({selector_lit});
+  const els = Array.from(document.querySelectorAll({selector_lit}));
+  const el = els.find((n) => n.getClientRects().length > 0) || els[0];
   if (!el) return resolve('missing');
   const want = {value_lit};
   const apply = () => {{
