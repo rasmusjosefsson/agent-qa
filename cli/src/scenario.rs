@@ -146,6 +146,13 @@ pub enum Verb {
     /// `on` = the triggering element (css/testId), `value` = destination path
     /// (absolute, or relative resolved against the scenario dir).
     Download,
+    /// Remove elements that block interaction — consent walls, overlays,
+    /// sticky banners. `on` = the blocking element (css/testId/xpath).
+    /// Beyond removing matching nodes at dispatch, the selector is kept on
+    /// a per-run dismissal list re-applied before every interactive step,
+    /// so an overlay that mounts later (delayed CMP dialogs) still can't
+    /// intercept the hit-test. Absent matches are a no-op, not a failure.
+    Dismiss,
     /// Double-click an element (css/testId locator via `on`).
     #[serde(rename = "dblclick")]
     DblClick,

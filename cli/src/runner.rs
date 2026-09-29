@@ -654,6 +654,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             summary.total
         );
     } else {
+        crate::verbs::clear_dismissed();
         let do_ctx = DoContext {
             session: &opts.session_name,
             scenario_dir: &scenario_dir,

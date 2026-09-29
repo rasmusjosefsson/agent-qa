@@ -58,6 +58,7 @@ export interface EdgeGolden extends GoldenContext {
   assertFileExists(scenarioRelPath: string, intent: string): Promise<void>;
   assertFileName(scenarioRelPath: string, expectedName: string, intent: string): Promise<void>;
   assertFileContent(scenarioRelPath: string, needle: string, intent: string): Promise<void>;
+  dismissBySelector(selector: string, intent: string): Promise<void>;
   dialogAccept(intent: string, text?: string): Promise<void>;
   dialogDismiss(intent: string): Promise<void>;
   assertDialogText(text: string, intent: string): Promise<void>;
@@ -209,6 +210,10 @@ export async function runEdgeGolden(
     async scrollToSelector(selector, stepIntent) {
       await run(ctx, `scroll ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "scrollintoview", selector]);
       await record(ctx, "action", { method: "scrollToBySelector", args: [selector], intent: stepIntent });
+    },
+    async dismissBySelector(selector, stepIntent) {
+      await run(ctx, `dismiss ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "eval", `(function(){document.querySelectorAll(${JSON.stringify(selector)}).forEach(function(e){e.remove()});return 1})()`]);
+      await record(ctx, "action", { method: "dismissBySelector", args: [selector], intent: stepIntent });
     },
     async scrollBottom(stepIntent) {
       await run(ctx, "scroll to bottom", [ctx.agentBrowser, "--session", ctx.session, "eval", "(() => { window.scrollTo(0, document.body.scrollHeight); })()"]);

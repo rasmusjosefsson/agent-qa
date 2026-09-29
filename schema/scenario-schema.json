@@ -499,6 +499,7 @@
             "dialog",
             "download",
             "dblclick",
+            "dismiss",
             "rightclick",
             "tab",
             "viewport",

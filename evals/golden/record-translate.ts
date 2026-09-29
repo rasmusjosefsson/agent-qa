@@ -200,6 +200,13 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
         case "seedState":
           // do/state seeding: args[0] = params ({cookies:[...], localStorage:{...}, ...})
           return doStep(intent, { verb: "state", params: args[0] });
+        case "dismissBySelector":
+          // args[0] = css selector of an overlay/banner to remove now AND
+          // keep removing before every later interactive step.
+          return doStep(intent, {
+            verb: "dismiss",
+            on: css(args[0]),
+          });
         case "clickNthOption":
           // args[0] = scoped listbox css, args[1] = 1-based option index
           return doStep(intent, {
