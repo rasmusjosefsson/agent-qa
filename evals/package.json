@@ -227,7 +227,11 @@
     "golden:demoblaze:tc01": "bun golden/demoblaze-tc01.ts",
     "golden:demoblaze:tc02": "bun golden/demoblaze-tc02.ts",
     "golden:demoblaze:tc03": "bun golden/demoblaze-tc03.ts",
-    "golden:demoblaze:tc04": "bun golden/demoblaze-tc04.ts"
+    "golden:demoblaze:tc04": "bun golden/demoblaze-tc04.ts",
+    "golden:orangehrm:tc01": "bun golden/orangehrm-tc01.ts",
+    "golden:orangehrm:tc02": "bun golden/orangehrm-tc02.ts",
+    "golden:orangehrm:tc03": "bun golden/orangehrm-tc03.ts",
+    "golden:orangehrm:tc04": "bun golden/orangehrm-tc04.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"
