@@ -56,6 +56,14 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           return doStep(intent, { verb: "click", on: textLoc(args[0]) });
         case "clickRole":
           return doStep(intent, { verb: "click", on: roleLoc(args[0], args[1]) });
+        case "typeByRole":
+          // args = [role, name, value] — role locators resolve through the
+          // a11y snapshot, so this reaches into open shadow roots.
+          return doStep(intent, {
+            verb: "type",
+            on: roleLoc(args[0], args[1]),
+            value: literal(args[2]),
+          });
         case "clickScopedRole":
           // Scoped locator: the role+name search runs strictly inside the
           // container the scope chain resolves to. `name` may be a string or
@@ -125,6 +133,32 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           });
         case "dblclickBySelector":
           return doStep(intent, { verb: "dblclick", on: css(args[0]) });
+        case "holdBySelector":
+          // args[0] = css, args[1] = optional hold ms (default 500).
+          return doStep(intent, {
+            verb: "hold",
+            on: css(args[0]),
+            ...(args[1] != null ? { params: { ms: args[1] } } : {}),
+          });
+        case "swipeBySelector":
+          // args[0] = css, args[1] = direction, args[2] = optional distance px.
+          return doStep(intent, {
+            verb: "swipe",
+            on: css(args[0]),
+            params: {
+              direction: args[1],
+              ...(args[2] != null ? { distance: args[2] } : {}),
+            },
+          });
+        case "swipePage":
+          // args[0] = direction, args[1] = optional distance px — no `on`.
+          return doStep(intent, {
+            verb: "swipe",
+            params: {
+              direction: args[0],
+              ...(args[1] != null ? { distance: args[1] } : {}),
+            },
+          });
         case "rightClickBySelector":
           return doStep(intent, { verb: "rightclick", on: css(args[0]) });
         case "scrollToBySelector":
@@ -213,13 +247,6 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           return doStep(intent, {
             verb: "click",
             on: css(`${args[0]} [role="option"]:nth-child(${args[1]})`),
-          });
-        case "setViewport":
-          // args[0] = width px, args[1] = height px — do/viewport resizes the
-          // live browser so breakpoint-gated content can be asserted.
-          return doStep(intent, {
-            verb: "viewport",
-            params: { width: args[0], height: args[1] },
           });
         default:
           throw new Error(`record-step translate: unknown action method ${String(p.method)}`);
@@ -416,6 +443,18 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
             args[1] ?? "notExists",
             args[2],
           );
+        case "roleAttribute":
+          // args = [role, name, attribute, expected] — element attribute
+          // claim on a role locator (read via the a11y snapshot).
+          return checkStep(
+            intent,
+            {
+              element: roleLoc(args[0], args[1]),
+              attribute: args[2],
+            },
+            "equals",
+            args[3],
+          );
         case "cookiePresent":
           // args[0] = cookie name; args[1] === false flips to expecting it
           // absent (e.g. after logout).
@@ -431,36 +470,6 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
             intent,
             { storage: args[0] },
             args[1] === false ? "notExists" : "exists",
-          );
-        case "consoleMessage":
-          // args[0] = matcher: true | {type?, text?} — defaults to all
-          // messages; args[1] = predicate ("exists" default, "notExists",
-          // numeric/text predicates); args[2] = optional value.
-          return checkStep(
-            intent,
-            { console: args[0] ?? true },
-            args[1] ?? "exists",
-            args[2],
-          );
-        case "pageError":
-          // args[0] = matcher: true | {text?, url?} — uncaught exceptions
-          // (the `errors` channel), NOT console.* calls. args[1] predicate
-          // ("exists" default / "notExists" / numeric / text), args[2] value.
-          return checkStep(
-            intent,
-            { pageError: args[0] ?? true },
-            args[1] ?? "exists",
-            args[2],
-          );
-        case "a11yViolations":
-          // args[0] = matcher: true | {impact?, rule?, within?, incomplete?};
-          // args[1] = predicate — "notExists" (no violations) is the usual
-          // default; numeric predicates compare the finding count.
-          return checkStep(
-            intent,
-            { a11y: args[0] ?? true },
-            args[1] ?? "notExists",
-            args[2],
           );
         default:
           throw new Error(`record-step translate: unknown assert kind ${String(p.kind)}`);
