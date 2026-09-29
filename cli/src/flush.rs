@@ -347,7 +347,7 @@ fn insert_auto_network_claims(
             claim: crate::scenario::Claim {
                 subject: crate::scenario::ClaimSubject::Network {
                     network: crate::scenario::NetworkMatcher {
-                        url_matches: Some(path.to_string()),
+                        url_matches: Some(path),
                         method,
                         ..Default::default()
                     },
@@ -727,6 +727,54 @@ mod tests {
             json2["claim"]["subject"]["network"]["urlMatches"],
             "https://x/api/me"
         );
+    }
+
+    #[test]
+    fn flush_auto_network_rewrites_entity_id_segments() {
+        use crate::browser::CapturedRequest;
+        let req = |method: &str, url: &str, rt: &str| CapturedRequest {
+            request_id: String::new(),
+            url: url.to_string(),
+            method: method.to_string(),
+            status: Some(200),
+            resource_type: Some(rt.to_string()),
+            mime_type: None,
+            post_data: None,
+            ws_frames: vec![],
+        };
+        let mut steps = vec![];
+        insert_auto_network_claims(
+            &mut steps,
+            &[
+                req(
+                    "GET",
+                    "https://x/api/contacts/6abbfc58b45a2a0015047afa",
+                    "XHR",
+                ),
+                // a second entity id collapses onto the same pattern claim
+                req(
+                    "GET",
+                    "https://x/api/contacts/00112233445566778899aabb",
+                    "XHR",
+                ),
+                req("GET", "https://x/api/items/1234567", "XHR"),
+                req("GET", "https://x/api/v2/users", "XHR"),
+            ],
+        );
+        assert_eq!(steps.len(), 3);
+        let urls: Vec<String> = steps
+            .iter()
+            .map(|s| {
+                serde_json::to_value(s).unwrap()["claim"]["subject"]["network"]["urlMatches"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(urls[0], "https://x/api/contacts/[0-9a-fA-F-]{8,}");
+        assert_eq!(urls[1], "https://x/api/items/\\d+");
+        // short segments and api versions stay literal
+        assert_eq!(urls[2], "https://x/api/v2/users");
     }
 
     #[test]
