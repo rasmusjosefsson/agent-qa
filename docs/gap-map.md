@@ -120,10 +120,12 @@ the picture shifts materially.
     roots via the a11y tree; closed roots hide everything by design.
     Worth documenting as a hard limit rather than a gap to fix.
 18. **`set` toggles without a clear state** — #349 resets `offline` +
-    `headers` at run start, but `viewport`/`device`/`geo`/`credentials`/
-    `media` still leak across replays on a reused session with no
-    `set`-level off. Needs either upstream clear verbs or a tracked
-    reset baseline in the runner.
+    `headers` at run start. `viewport`/`device`/`geo`/`credentials`/
+    `media` have no `set`-level off and — verified live — can't be
+    cleared from a second CDP session either (the override is owned by
+    the daemon's session). #355 adds `replay --fresh-browser` as the
+    escape hatch (closes the session's browser → cold relaunch). A real
+    `set … off` surface is upstream work in agent-browser.
 
 ## Entry-point dogfood pass (`init → start → record-step → buffer → flush → replay → audit`)
 
