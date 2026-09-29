@@ -31,9 +31,11 @@ const TELEMETRY_HOSTS: &[&str] = &[
     "adservice.google.com",
 ];
 
-/// Same-origin beacon paths a host blocklist can't see — e.g. Cloudflare
-/// RUM posts to `/cdn-cgi/rum` on the page's own domain.
-const TELEMETRY_PATHS: &[&str] = &["/cdn-cgi/rum"];
+/// Same-origin beacon paths a host blocklist can't see. `/cdn-cgi/` is
+/// Cloudflare's reserved namespace (rum, challenge-platform, zaraz,
+/// scripts) — every path under it is infrastructure, never app traffic,
+/// and the URLs carry per-visitor nonces that cannot refire on replay.
+const TELEMETRY_PATHS: &[&str] = &["/cdn-cgi/"];
 
 pub(crate) fn is_telemetry_url(url: &str) -> bool {
     let after_scheme = url.split("://").nth(1).unwrap_or("");
@@ -69,8 +71,11 @@ mod tests {
         assert!(is_telemetry_url("https://cdn.segment.io/x"));
         assert!(is_telemetry_url("https://sub.sentry.io/api/1/envelope/"));
         assert!(is_telemetry_url("https://example.com/cdn-cgi/rum"));
+        assert!(is_telemetry_url(
+            "https://example.com/cdn-cgi/challenge-platform/h/b/jsd/oneshot/abc"
+        ));
         assert!(!is_telemetry_url("https://api.optimizelyx.com/v1"));
         assert!(!is_telemetry_url("https://example.com/api/customers"));
-        assert!(!is_telemetry_url("https://example.com/cdn-cgi/challenge"));
+        assert!(!is_telemetry_url("https://example.com/cdn-cgix/proxy"));
     }
 }
