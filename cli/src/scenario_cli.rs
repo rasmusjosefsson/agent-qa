@@ -11,10 +11,19 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use crate::scenario::Scenario;
+use crate::scenario::{InputDecl, InputType, Locator, Scenario, Step, Value};
 use crate::schema;
 
 pub fn run(args: &[String]) -> Result<u8> {
+    // `-h|--help` anywhere wins over positional parsing — otherwise a
+    // file-taking subverb (`scenario lint --help`) reads "--help" as a path.
+    if args
+        .iter()
+        .any(|a| matches!(a.as_str(), "-h" | "--help" | "help"))
+    {
+        help();
+        return Ok(0);
+    }
     match args.first().map(String::as_str) {
         Some("validate") => {
             let file = args.get(1).ok_or_else(|| {
@@ -37,7 +46,7 @@ pub fn run(args: &[String]) -> Result<u8> {
                     format = parse_lint_format(v)?;
                 }
             }
-            validate(Path::new(file), format)
+            validate(&scenario_file_arg(file), format)
         }
         Some("validate-all") => {
             let mut format = if args.iter().any(|a| a == "--json") {
@@ -187,25 +196,25 @@ pub fn run(args: &[String]) -> Result<u8> {
             let file = args
                 .get(1)
                 .ok_or_else(|| anyhow!("usage: scenario hash <file>"))?;
-            hash(Path::new(file))
+            hash(&scenario_file_arg(file))
         }
         Some("id") => {
             let file = args
                 .get(1)
                 .ok_or_else(|| anyhow!("usage: scenario id <file>"))?;
-            id(Path::new(file))
+            id(&scenario_file_arg(file))
         }
         Some("intent") => {
             let file = args
                 .get(1)
                 .ok_or_else(|| anyhow!("usage: scenario intent <file>"))?;
-            intent(Path::new(file))
+            intent(&scenario_file_arg(file))
         }
         Some("step-ids") => {
             let file = args
                 .get(1)
                 .ok_or_else(|| anyhow!("usage: scenario step-ids <file>"))?;
-            step_ids(Path::new(file))
+            step_ids(&scenario_file_arg(file))
         }
         Some("field") => {
             let file = args
@@ -214,14 +223,14 @@ pub fn run(args: &[String]) -> Result<u8> {
             let name = args
                 .get(2)
                 .ok_or_else(|| anyhow!("usage: scenario field <file> <name>"))?;
-            field(Path::new(file), name)
+            field(&scenario_file_arg(file), name)
         }
         Some("coverage") => {
             let file = args
                 .get(1)
-                .ok_or_else(|| anyhow!("usage: scenario coverage <file> [--json]"))?;
+                .ok_or_else(|| anyhow!("usage: scenario coverage <file|sid> [--json]"))?;
             let json_out = args.iter().any(|a| a == "--json");
-            coverage(Path::new(file), json_out)
+            coverage(&scenario_file_arg(file), json_out)
         }
         Some("coverage-all") => {
             let mut filter: Option<String> = None;
@@ -274,7 +283,7 @@ pub fn run(args: &[String]) -> Result<u8> {
                     format = parse_lint_format(v)?;
                 }
             }
-            check(Path::new(file), strict, format)
+            check(&scenario_file_arg(file), strict, format)
         }
         Some("check-all") => {
             let strict = args.iter().any(|a| a == "--strict");
@@ -372,7 +381,7 @@ pub fn run(args: &[String]) -> Result<u8> {
                 Some(exclude_rules)
             };
             lint(
-                Path::new(file),
+                &scenario_file_arg(file),
                 format,
                 strict,
                 rules.as_deref(),
@@ -650,14 +659,90 @@ pub fn run(args: &[String]) -> Result<u8> {
                     other => bail!("unknown flag {other:?}"),
                 }
             }
-            summary(Path::new(file), filter.as_deref(), json_out)
+            summary(&scenario_file_arg(file), filter.as_deref(), json_out)
         }
         Some("inputs") => {
             let file = args
                 .get(1)
                 .ok_or_else(|| anyhow!("usage: scenario inputs <file> [--json]"))?;
             let json_out = args.iter().any(|a| a == "--json");
-            inputs(Path::new(file), json_out)
+            inputs(&scenario_file_arg(file), json_out)
+        }
+        Some("redact") => {
+            let mut file: Option<&str> = None;
+            let mut name: Option<String> = None;
+            let mut value: Option<String> = None;
+            let mut selector: Option<String> = None;
+            let mut step: Option<String> = None;
+            let mut dry_run = false;
+            let mut it = args[1..].iter();
+            while let Some(a) = it.next() {
+                match a.as_str() {
+                    "--dry-run" => dry_run = true,
+                    "--name" => {
+                        name = Some(
+                            it.next()
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--name requires an identifier"))?,
+                        )
+                    }
+                    s if s.starts_with("--name=") => {
+                        name = Some(s["--name=".len()..].to_string())
+                    }
+                    "--value" => {
+                        value = Some(
+                            it.next()
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--value requires the literal to redact"))?,
+                        )
+                    }
+                    s if s.starts_with("--value=") => {
+                        value = Some(s["--value=".len()..].to_string())
+                    }
+                    "--selector" => {
+                        selector = Some(
+                            it.next()
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--selector requires a css selector"))?,
+                        )
+                    }
+                    s if s.starts_with("--selector=") => {
+                        selector = Some(s["--selector=".len()..].to_string())
+                    }
+                    "--step" => {
+                        step = Some(
+                            it.next()
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--step requires a step id"))?,
+                        )
+                    }
+                    s if s.starts_with("--step=") => {
+                        step = Some(s["--step=".len()..].to_string())
+                    }
+                    other if other.starts_with("--") => bail!("unknown flag {other:?}"),
+                    other => {
+                        if file.is_none() {
+                            file = Some(other);
+                        } else {
+                            bail!("unexpected positional {other:?}");
+                        }
+                    }
+                }
+            }
+            let file = file.ok_or_else(|| {
+                anyhow!(
+                    "usage: scenario redact <file> --name <VAR> (--value <literal> | --selector <css> | --step <stepId>) [--dry-run]"
+                )
+            })?;
+            let name = name.ok_or_else(|| anyhow!("--name is required"))?;
+            redact(
+                Path::new(file),
+                &name,
+                value.as_deref(),
+                selector.as_deref(),
+                step.as_deref(),
+                dry_run,
+            )
         }
         Some("insert") => {
             let mut file: Option<&str> = None;
@@ -715,7 +800,7 @@ pub fn run(args: &[String]) -> Result<u8> {
                     "usage: scenario insert <file> <do|check> <draft-json> [--after <stepId> | --at <index>]"
                 ),
             };
-            insert(Path::new(file), kind, draft, after.as_deref(), at)
+            insert(&scenario_file_arg(file), kind, draft, after.as_deref(), at)
         }
         Some("new") => {
             let mut file: Option<&str> = None;
@@ -769,6 +854,18 @@ fn help() {
                                             Splice a validated step into a saved scenario.
                                             Draft shape matches record-step (id/kind
                                             omitted); position defaults to the end.
+  agent-qa scenario redact <file> --name <VAR> (--value <literal> | --selector <css> | --step <stepId>) [--dry-run]
+                                            Replace a recorded literal (password, token) with a
+                                            sensitive inputs.<VAR> reference so the file is safe to
+                                            commit. --value sweeps every step's strings; --selector /
+                                            --step rewrite a do-step's value without the secret on
+                                            the command line.
+  agent-qa scenario redact <file> --name <VAR> (--value <literal> | --selector <css> | --step <stepId>) [--dry-run]
+                                            Replace a recorded literal (password, token) with a
+                                            sensitive inputs.<VAR> reference so the file is safe to
+                                            commit. --value sweeps every step's strings; --selector /
+                                            --step rewrite a do-step's value without the secret on
+                                            the command line.
   agent-qa scenario diff <a> <b>             Unified diff between two scenario.json files\n                                            (canonicalised JSON; exit 1 on difference)\n  agent-qa scenario hash <file>              SHA-256 of scenario.json bytes (same algorithm\n                                            replay + heal-promote use for the rebase guard)\n  agent-qa scenario id <file>                Print the scenario's id field (one line)\n  agent-qa scenario intent <file>            Print the scenario's intent field (one line)\n  agent-qa scenario step-ids <file>          Print every step id, one per line\n  agent-qa scenario field <file> <name>      Print any top-level scenario field (id, intent,\n                                            schema, etc.); object/array → compact JSON.\n  agent-qa scenario coverage <file> [--json] Per-step check coverage: how many do steps are\n                                            followed by a check claim, and how many are bare.\n  agent-qa scenario coverage-all [--filter <substr>] [--root <dir>] [--json]\n                                            The same ratio rolled up across every scenario under\n                                            the root (--root overrides it) — per-scenario rows sorted worst-first plus\n                                            an OVERALL rollup.\n  agent-qa scenario lint <file> [--json] [--strict] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run common lints (use '-' for stdin)\n                                            (duplicate ids, empty intent, bare do,\n                                            undeclared/unused inputs). Exit 1 iff\n                                            any errors are reported (--strict treats\n                                            warnings as errors). --rule narrows to specific\n                                            codes; --exclude-rule subtracts (both repeatable).\n                                            --format github emits GitHub Actions annotations.\n  agent-qa scenario lint --list-rules [--json]\n                                            Enumerate the lint rules + their severities.\n  agent-qa scenario lint-all [--json] [--strict] [--root <dir>] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run lints against every scenario under the\n                                            scenarios root (--root overrides it);\n                                            exit 1 iff any errors are reported\n                                            (--strict treats warnings as errors). --rule\n                                            narrows to specific codes; --exclude-rule\n                                            subtracts (both repeatable).\n  agent-qa scenario rename <sid> <new-sid>   Rename a scenario: patches scenario.json's id\n                                            field, then moves the directory under the\n                                            scenarios root. (refuses to overwrite).\n  agent-qa scenario copy <sid> <new-sid>     Copy a scenario (scenario.json with id patched +\n                                            baselines/ carried; replays NOT copied). Refuses to overwrite.\n  agent-qa scenario delete <sid> [--yes/-y]  Remove a scenario directory + all its replays.\n                                            Dry-run by default; --yes confirms.\n  agent-qa scenario prune-replays <sid> --keep N [--yes] [--keep-failed]\n                                            Keep the N most recent replays under\n                                            <sid>/replays/; dry-run by default.\n                                            --keep-failed preserves all non-zero-exit\n                                            runs regardless of N.\n  agent-qa scenario prune-all --keep N [--yes] [--keep-failed] [--root <dir>]\n                                            Like prune-replays but across every scenario\n                                            under the scenarios root (--root overrides it). --keep-failed\n                                            preserves failed runs per scenario."
     );
 }
@@ -877,6 +974,191 @@ fn insert(
     println!(
         "inserted {kind_arg} step at {pos} (id={step_id}); {} step(s)",
         sc.steps.len()
+    );
+    Ok(0)
+}
+
+/// Recursively rewrite occurrences of `needle` inside every string in `v` to
+/// `token` (`{{vars.NAME}}`). Returns the number of strings touched.
+fn replace_in_json(v: &mut serde_json::Value, needle: &str, token: &str) -> usize {
+    match v {
+        serde_json::Value::String(s) => {
+            if s.contains(needle) {
+                *s = s.replace(needle, token);
+                1
+            } else {
+                0
+            }
+        }
+        serde_json::Value::Array(items) => items
+            .iter_mut()
+            .map(|i| replace_in_json(i, needle, token))
+            .sum(),
+        serde_json::Value::Object(map) => map
+            .values_mut()
+            .map(|i| replace_in_json(i, needle, token))
+            .sum(),
+        _ => 0,
+    }
+}
+
+/// `scenario redact` — pull a recorded literal (a typed password, a token)
+/// out of the committed scenario.json and replace it with a declared
+/// `inputs.<name>` (sensitive) reference, so the file is safe to commit.
+///
+/// Three ways to find the secret carrier:
+///   --value <literal>   sweep every step for strings containing the
+///                       literal; whole `value.literal` matches upgrade to
+///                       `{from: "input"}` refs, substring occurrences get a
+///                       `{{vars.NAME}}` token (also covers claim values,
+///                       params, templates).
+///   --selector <css>    rewrite the `value` of every do-step whose raw css
+///                       locator matches — no secret on the command line.
+///   --step <stepId>     same, addressed by step id.
+///
+/// Both reference channels resolve at replay: `{"from": "input"}` reads
+/// `inputs.<name>` and `{{vars.NAME}}` substitutes it too.
+fn redact(
+    path: &Path,
+    name: &str,
+    value: Option<&str>,
+    selector: Option<&str>,
+    step_id: Option<&str>,
+    dry_run: bool,
+) -> Result<u8> {
+    if [value.is_some(), selector.is_some(), step_id.is_some()]
+        .iter()
+        .filter(|b| **b)
+        .count()
+        != 1
+    {
+        bail!("pass exactly one of --value / --selector / --step");
+    }
+    let mut chars = name.chars();
+    let valid = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !valid {
+        bail!("--name {name:?} must be an identifier ([A-Za-z_][A-Za-z0-9_]*)");
+    }
+    if let Some(v) = value {
+        if v.is_empty() {
+            bail!("--value must not be empty");
+        }
+    }
+    let token = format!("{{{{vars.{name}}}}}");
+    let mut sc = load_scenario(path)?;
+    let mut upgraded = 0usize;
+    let mut swept = 0usize;
+    for step in sc.steps.iter_mut() {
+        match step {
+            Step::Do {
+                id,
+                on,
+                value: step_value,
+                ..
+            } => {
+                let targeted = if let Some(want) = step_id {
+                    id == want
+                } else if let Some(want) = selector {
+                    matches!(
+                        on,
+                        Some(Locator::Raw(raw)) if raw.raw.value == want
+                    )
+                } else {
+                    false
+                };
+                if targeted {
+                    match step_value {
+                        Some(Value::Literal { literal }) if literal.is_string() => {
+                            *step_value = Some(Value::Input {
+                                input: name.to_string(),
+                            });
+                            upgraded += 1;
+                        }
+                        Some(Value::Literal { .. }) => {
+                            bail!("step {id}: value literal is not a string — edit it by hand")
+                        }
+                        _ => bail!("step {id}: no literal value to redact"),
+                    }
+                    continue;
+                }
+                if let Some(secret) = value {
+                    // Whole-literal match upgrades to the typed input channel…
+                    if let Some(Value::Literal {
+                        literal: serde_json::Value::String(s),
+                    }) = step_value
+                    {
+                        if *s == secret {
+                            *step_value = Some(Value::Input {
+                                input: name.to_string(),
+                            });
+                            upgraded += 1;
+                            continue;
+                        }
+                    }
+                    // …otherwise substring-sweep the whole step (params too).
+                    let mut j = serde_json::to_value(&*step)?;
+                    let n = replace_in_json(&mut j, secret, &token);
+                    if n > 0 {
+                        *step = serde_json::from_value(j)
+                            .context("step failed to re-parse after redaction")?;
+                        swept += n;
+                    }
+                }
+            }
+            Step::Check { .. } => {
+                if let Some(secret) = value {
+                    let mut j = serde_json::to_value(&*step)?;
+                    let n = replace_in_json(&mut j, secret, &token);
+                    if n > 0 {
+                        *step = serde_json::from_value(j)
+                            .context("step failed to re-parse after redaction")?;
+                        swept += n;
+                    }
+                }
+            }
+        }
+    }
+    if upgraded + swept == 0 {
+        bail!("nothing matched — no step carries that value/selector/step id");
+    }
+    let inputs = sc
+        .inputs
+        .get_or_insert_with(std::collections::BTreeMap::new);
+    match inputs.get(name) {
+        Some(existing) if existing.sensitive == Some(true) => {}
+        Some(_) => bail!("inputs.{name} is already declared non-sensitive — pick another name"),
+        None => {
+            inputs.insert(
+                name.to_string(),
+                InputDecl {
+                    ty: InputType::String,
+                    default: None,
+                    sensitive: Some(true),
+                    items: None,
+                    properties: None,
+                    description: None,
+                },
+            );
+        }
+    }
+    let body = serde_json::to_value(&sc)?;
+    schema::validate_value(&body).context("redacted scenario failed schema validation")?;
+    if dry_run {
+        println!(
+            "dry-run: would rewrite {upgraded} step value(s) to {{from: \"input\", input: \"{name}\"}} \
+             and sweep {swept} string(s) to {token}; adds inputs.{name} (sensitive)"
+        );
+        return Ok(0);
+    }
+    let mut bytes = serde_json::to_string_pretty(&body)?.into_bytes();
+    bytes.push(b'\n');
+    fs::write(path, &bytes).with_context(|| format!("write {}", path.display()))?;
+    println!(
+        "redacted {upgraded} step value(s) → input:{name} + {swept} embedded occurrence(s) → {token}; \
+         declared inputs.{name} (sensitive). Supply it at replay: replay --input {name}=…"
     );
     Ok(0)
 }
@@ -1588,6 +1870,11 @@ fn list_lint_rules(json_out: bool) -> Result<u8> {
             description: "A raw css/xpath locator is positional or generated-looking (xpath [N]/last()/position(), css :nth-* chains, #id with a digit/hash tail). Self-heal can't rescue these — prefer role+name, text, or a stable css/testid.",
         },
         Rule {
+            code: "hardcoded-secret",
+            severity: "warning",
+            description: "A do/type step targets a password-shaped field (any locator string containing 'password') while carrying a plain {from: literal} value — the secret sits verbatim in scenario.json. Run 'scenario redact' to move it into a sensitive input.",
+        },
+        Rule {
             code: "fixed-sleep",
             severity: "warning",
             description: "A do/wait step whose only condition is params.ms — a fixed delay flakes when the app is slow and idles when it is fast. Gate on the outcome instead: params.until/url/idle/locator.",
@@ -1733,13 +2020,19 @@ fn brittle_locator_reason(kind: &str, value: &str) -> Option<&'static str> {
     None
 }
 
-pub(crate) fn lint(
-    path: &Path,
-    format: LintFormat,
-    strict: bool,
-    only_rules: Option<&[String]>,
-    exclude_rules: Option<&[String]>,
-) -> Result<u8> {
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct Finding {
+    severity: &'static str,
+    code: &'static str,
+    message: String,
+}
+
+/// Runs every lint rule against one scenario file and returns the raw
+/// findings, unfiltered by --rule/--exclude-rule. Shared by `lint`
+/// (renders) and `lint_collect` (counts for `scenario check`) so a new
+/// rule cannot drift between the two paths.
+fn lint_findings(path: &Path) -> Result<(Vec<Finding>, Scenario)> {
     // For stdin ('-'), buffer once via io::stdin_or_path; the guard
     // keeps the tempfile alive for the rest of this function.
     let _guard = crate::io::stdin_or_path(path)?;
@@ -1752,15 +2045,7 @@ pub(crate) fn lint(
         serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
     let j = load_scenario(path)?;
 
-    #[derive(serde::Serialize, Clone)]
-    #[serde(rename_all = "camelCase")]
-    struct Finding {
-        severity: &'static str,
-        code: &'static str,
-        message: String,
-    }
     let mut findings: Vec<Finding> = Vec::new();
-
     use crate::scenario::Step;
     use std::collections::{HashMap, HashSet};
 
@@ -1916,6 +2201,132 @@ pub(crate) fn lint(
                     message: format!(
                         "step {sid:?} waits {ms}ms with no condition — prefer params.until/url/idle/locator so the step gates on the outcome, not the clock",
                         ms = get("ms").and_then(|m| m.as_u64()).unwrap_or(0)
+                    ),
+                });
+            }
+        }
+    }
+
+    // 3f) hardcoded secrets — a type step on a password-shaped field whose
+    // value is a plain {from: literal} puts the secret verbatim in a file
+    // that gets committed. `scenario redact` rewrites it as a sensitive
+    // inputs ref.
+    if let Some(steps) = raw.get("steps").and_then(|s| s.as_array()) {
+        for step in steps {
+            let is_type = step
+                .get("verb")
+                .and_then(|v| v.as_str())
+                .is_some_and(|v| v == "type");
+            if !is_type {
+                continue;
+            }
+            let literal = step
+                .get("value")
+                .and_then(|v| v.get("literal"))
+                .and_then(|l| l.as_str());
+            if !literal.is_some_and(|l| !l.is_empty()) {
+                continue;
+            }
+            let Some(on) = step.get("on") else { continue };
+            // Any locator string mentioning "password" counts — css
+            // `input[type=password]`, a role name like "Password", or a
+            // testid. Conservative: no hint, no finding.
+            let mut hints_password = false;
+            let mut stack = vec![on];
+            while let Some(v) = stack.pop() {
+                match v {
+                    serde_json::Value::String(s) if s.to_lowercase().contains("password") => {
+                        hints_password = true;
+                        break;
+                    }
+                    serde_json::Value::Object(m) => stack.extend(m.values()),
+                    serde_json::Value::Array(a) => stack.extend(a.iter()),
+                    _ => {}
+                }
+            }
+            if hints_password {
+                let sid = step.get("id").and_then(|i| i.as_str()).unwrap_or("?");
+                findings.push(Finding {
+                    severity: "warning",
+                    code: "hardcoded-secret",
+                    message: format!(
+                        "step {sid:?} types a literal into a password-shaped field — the secret sits verbatim in scenario.json; run 'agent-qa scenario redact <file> --name <VAR> --step {sid}' to move it into a sensitive input"
+                    ),
+                });
+            }
+        }
+    }
+
+    // 3f) hardcoded secrets — a type step on a password-shaped field whose
+    // value is a plain {from: literal} puts the secret verbatim in a file
+    // that gets committed. `scenario redact` rewrites it as a sensitive
+    // inputs ref.
+    if let Some(steps) = raw.get("steps").and_then(|s| s.as_array()) {
+        for step in steps {
+            let is_type = step
+                .get("verb")
+                .and_then(|v| v.as_str())
+                .is_some_and(|v| v == "type");
+            if !is_type {
+                continue;
+            }
+            let literal = step
+                .get("value")
+                .and_then(|v| v.get("literal"))
+                .and_then(|l| l.as_str());
+            if !literal.is_some_and(|l| !l.is_empty()) {
+                continue;
+            }
+            let Some(on) = step.get("on") else { continue };
+            // Any locator string mentioning "password" counts — css
+            // `input[type=password]`, a role name like "Password", or a
+            // testid. Conservative: no hint, no finding.
+            let mut hints_password = false;
+            let mut stack = vec![on];
+            while let Some(v) = stack.pop() {
+                match v {
+                    serde_json::Value::String(s) if s.to_lowercase().contains("password") => {
+                        hints_password = true;
+                        break;
+                    }
+                    serde_json::Value::Object(m) => stack.extend(m.values()),
+                    serde_json::Value::Array(a) => stack.extend(a.iter()),
+                    _ => {}
+                }
+            }
+            if hints_password {
+                let sid = step.get("id").and_then(|i| i.as_str()).unwrap_or("?");
+                findings.push(Finding {
+                    severity: "warning",
+                    code: "hardcoded-secret",
+                    message: format!(
+                        "step {sid:?} types a literal into a password-shaped field — the secret sits verbatim in scenario.json; run 'agent-qa scenario redact <file> --name <VAR> --step {sid}' to move it into a sensitive input"
+                    ),
+                });
+            }
+        }
+    }
+
+    // 3f) claim value carrying a do-step `{"from": ...}` spec — claim values
+    // are plain JSON; an object spec serializes verbatim and never matches,
+    // so the check fails with a confusing "expected to contain {from:…}".
+    if let Some(steps) = raw.get("steps").and_then(|s| s.as_array()) {
+        for step in steps {
+            if step.get("kind").and_then(|k| k.as_str()) != Some("check") {
+                continue;
+            }
+            let looks_like_spec = step
+                .get("claim")
+                .and_then(|c| c.get("value"))
+                .and_then(|v| v.as_object())
+                .is_some_and(|o| o.contains_key("from"));
+            if looks_like_spec {
+                let sid = step.get("id").and_then(|i| i.as_str()).unwrap_or("?");
+                findings.push(Finding {
+                    severity: "error",
+                    code: "claim-value-spec",
+                    message: format!(
+                        "step {sid:?} claim value is a do-step {{\"from\":…}} spec — claims take plain JSON (e.g. \"value\": \"example.com\")"
                     ),
                 });
             }
@@ -2201,6 +2612,18 @@ pub(crate) fn lint(
         }
     }
 
+    Ok((findings, j))
+}
+
+pub(crate) fn lint(
+    path: &Path,
+    format: LintFormat,
+    strict: bool,
+    only_rules: Option<&[String]>,
+    exclude_rules: Option<&[String]>,
+) -> Result<u8> {
+    let (mut findings, j) = lint_findings(path)?;
+
     if let Some(only) = only_rules {
         let set: std::collections::HashSet<&str> = only.iter().map(String::as_str).collect();
         findings.retain(|f| set.contains(f.code));
@@ -2371,6 +2794,23 @@ fn coverage_counts(steps: &[crate::scenario::Step]) -> CoverageCounts {
         c.bare_do += 1;
     }
     c
+}
+
+/// A `<file>` arg that also accepts a scenario sid: when the arg is not
+/// an existing file (and isn't '-' for stdin), resolve it as
+/// <scenarios_root>/<arg>/scenario.json. Existing paths always win.
+fn scenario_file_arg(arg: &str) -> PathBuf {
+    let p = Path::new(arg);
+    if arg == "-" || p.is_file() {
+        return p.to_path_buf();
+    }
+    if let Ok(dir) = crate::paths::scenario_dir(arg) {
+        let f = dir.join("scenario.json");
+        if f.is_file() {
+            return f;
+        }
+    }
+    p.to_path_buf()
 }
 
 fn coverage(path: &Path, json_out: bool) -> Result<u8> {
@@ -2802,8 +3242,6 @@ fn lint_collect(
     only_rules: Option<&[String]>,
     exclude_rules: Option<&[String]>,
 ) -> Result<(usize, usize)> {
-    use crate::scenario::Step;
-    use std::collections::{HashMap, HashSet};
     let exclude: std::collections::HashSet<String> = exclude_rules
         .map(|r| r.iter().cloned().collect())
         .unwrap_or_default();
@@ -2818,171 +3256,15 @@ fn lint_collect(
             Box::new(move |c: &str| set.contains(c) && !ex.contains(c))
         }
     };
-    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    let raw: serde_json::Value =
-        serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
-    let j = load_scenario(path)?;
-
-    let mut errors = 0usize;
-    let mut warnings = 0usize;
-
-    let mut id_counts: HashMap<&str, usize> = HashMap::new();
-    for step in &j.steps {
-        *id_counts.entry(step.id()).or_insert(0) += 1;
-    }
-    for n in id_counts.values() {
-        if *n > 1 && active("duplicate-step-id") {
-            errors += 1;
-        }
-    }
-    for step in &j.steps {
-        if step.intent().trim().is_empty() && active("empty-intent") {
-            warnings += 1;
-        }
-    }
-    let mut prev_was_do = false;
-    for step in &j.steps {
-        match step {
-            Step::Do { .. } => {
-                if prev_was_do && active("bare-do") {
-                    warnings += 1;
-                }
-                prev_was_do = true;
-            }
-            Step::Check { .. } => {
-                prev_was_do = false;
-            }
-        }
-    }
-    if prev_was_do && active("bare-do") {
-        warnings += 1;
-    }
-    let declared: HashSet<String> = j
-        .inputs
-        .as_ref()
-        .map(|m| m.keys().cloned().collect())
-        .unwrap_or_default();
-    let mut referenced: HashSet<String> = HashSet::new();
-    collect_input_refs(&raw, &mut referenced);
-    for input in &referenced {
-        if !declared.contains(input) && active("undeclared-input") {
-            errors += 1;
-        }
-    }
-    for input in &declared {
-        if !referenced.contains(input) && active("unused-input") {
-            warnings += 1;
-        }
-    }
-    let step_ids: HashSet<String> = j.steps.iter().map(|s| s.id().to_string()).collect();
-    let mut step_refs: HashSet<String> = HashSet::new();
-    collect_step_refs(&raw, &mut step_refs);
-    for r in &step_refs {
-        if !step_ids.contains(r) && active("undeclared-step-ref") {
-            errors += 1;
-        }
-    }
-    // goto-without-url
-    for step in &j.steps {
-        if let Step::Do {
-            verb: crate::scenario::Verb::Goto,
-            value,
-            ..
-        } = step
-        {
-            if value.is_none() && active("goto-without-url") {
-                errors += 1;
-            }
-        }
-    }
-    // missing-locator
-    for step in &j.steps {
-        if let Step::Do { verb, on, .. } = step {
-            let needs_locator = matches!(
-                verb,
-                crate::scenario::Verb::Click
-                    | crate::scenario::Verb::Type
-                    | crate::scenario::Verb::Clear
-                    | crate::scenario::Verb::Hover
-                    | crate::scenario::Verb::Focus
-                    | crate::scenario::Verb::Blur
-                    | crate::scenario::Verb::Check
-                    | crate::scenario::Verb::Uncheck
-            );
-            if needs_locator && on.is_none() && active("missing-locator") {
-                errors += 1;
-            }
-        }
-    }
-    // params-on-noop
-    for step in &j.steps {
-        if let Step::Do { verb, params, .. } = step {
-            let is_noop = matches!(
-                verb,
-                crate::scenario::Verb::Reload
-                    | crate::scenario::Verb::Back
-                    | crate::scenario::Verb::Forward
-            );
-            if is_noop
-                && params.as_ref().map(|p| !p.is_empty()).unwrap_or(false)
-                && active("params-on-noop")
-            {
-                warnings += 1;
-            }
-        }
-    }
-    // no-env-open
-    let open_count = j
-        .env
-        .as_ref()
-        .and_then(|e| e.open.as_ref())
-        .map(|v| v.len())
-        .unwrap_or(0);
-    if open_count == 0 && active("no-env-open") {
-        warnings += 1;
-    }
-    // no-checks
-    let check_count = j
-        .steps
+    let (findings, _j) = lint_findings(path)?;
+    let errors = findings
         .iter()
-        .filter(|s| matches!(s, Step::Check { .. }))
+        .filter(|f| f.severity == "error" && active(f.code))
         .count();
-    if !j.steps.is_empty() && check_count == 0 && active("no-checks") {
-        warnings += 1;
-    }
-    // no-navigation
-    if !j.steps.is_empty() && !scenario_navigates(&j) && active("no-navigation") {
-        warnings += 1;
-    }
-    // empty-steps
-    if j.steps.is_empty() && active("empty-steps") {
-        warnings += 1;
-    }
-    // wait-without-condition
-    for step in &j.steps {
-        if let Step::Do {
-            verb: crate::scenario::Verb::Wait,
-            params,
-            ..
-        } = step
-        {
-            let has_condition = params
-                .as_ref()
-                .map(|p| {
-                    p.get("ms").is_some()
-                        || p.get("until").is_some()
-                        || p.get("url").is_some()
-                        || p.get("timeoutMs").is_some()
-                        || p.get("locator").is_some()
-                        || p.get("idle").is_some()
-                        || p.get("idleMs").is_some()
-                })
-                .unwrap_or(false);
-            if !has_condition && active("wait-without-condition") {
-                warnings += 1;
-            }
-        }
-    }
+    let warnings = findings
+        .iter()
+        .filter(|f| f.severity == "warning" && active(f.code))
+        .count();
     Ok((errors, warnings))
 }
 
@@ -3609,6 +3891,85 @@ mod tests {
     }
 
     #[test]
+    fn redact_rewrites_literal_to_input_and_declares_sensitive() {
+        let tmp = TempDir::new().unwrap();
+        let p = write(
+            tmp.path(),
+            r##"{
+              "schema": "scenario/2", "id": "demo", "intent": "login",
+              "steps": [
+                { "id": "s0", "intent": "go", "kind": "do", "verb": "reload" },
+                { "id": "s1", "intent": "type password", "kind": "do", "verb": "type",
+                  "on": { "raw": { "kind": "css", "value": "input[name=pw]" }, "reason": "test" },
+                  "value": { "from": "literal", "literal": "hunter2" } },
+                { "id": "s2", "intent": "note hunter2 was used", "kind": "do", "verb": "wait",
+                  "params": { "label": "typed hunter2" } },
+                { "id": "s3", "intent": "pw visible", "kind": "check",
+                  "claim": { "subject": { "element": { "raw": { "kind": "css", "value": ".echo" }, "reason": "test" } },
+                             "predicate": "contains", "value": "hunter2" } }
+              ]
+            }"##,
+        );
+        // --value: s1's whole literal upgrades to an input ref; s2's params
+        // and s3's claim value get {{vars.…}} tokens.
+        redact(&p, "PASS", Some("hunter2"), None, None, false).unwrap();
+        let sc = load_scenario(&p).unwrap();
+        let inputs = sc.inputs.clone().unwrap();
+        assert_eq!(inputs["PASS"].sensitive, Some(true));
+        match &sc.steps[1] {
+            Step::Do { value, .. } => {
+                assert!(matches!(value, Some(Value::Input { input }) if input == "PASS"))
+            }
+            _ => panic!(),
+        }
+        let body = serde_json::to_value(&sc).unwrap();
+        let text = body.to_string();
+        assert!(!text.contains("hunter2"), "secret must not survive: {text}");
+        assert!(text.contains("{{vars.PASS}}"));
+    }
+
+    #[test]
+    fn redact_by_selector_without_the_secret_on_cmdline() {
+        let tmp = TempDir::new().unwrap();
+        let p = write(
+            tmp.path(),
+            r#"{
+              "schema": "scenario/2", "id": "demo", "intent": "login",
+              "steps": [
+                { "id": "s0", "intent": "type pw", "kind": "do", "verb": "type",
+                  "on": { "raw": { "kind": "css", "value": "input[type=password]" }, "reason": "test" },
+                  "value": { "from": "literal", "literal": "whatever" } },
+                { "id": "s1", "intent": "unrelated", "kind": "do", "verb": "reload" }
+              ]
+            }"#,
+        );
+        // dry-run reports the match but does not write
+        let before = fs::read_to_string(&p).unwrap();
+        redact(&p, "PASS", None, Some("input[type=password]"), None, true).unwrap();
+        assert_eq!(fs::read_to_string(&p).unwrap(), before);
+        redact(&p, "PASS", None, Some("input[type=password]"), None, false).unwrap();
+        let sc = load_scenario(&p).unwrap();
+        match &sc.steps[0] {
+            Step::Do { value, .. } => {
+                assert!(matches!(value, Some(Value::Input { input }) if input == "PASS"))
+            }
+            _ => panic!(),
+        }
+        // unmatched steps untouched
+        assert!(matches!(&sc.steps[1], Step::Do { value: None, .. }));
+        // --step addresses the same way
+        assert!(redact(&p, "X", None, None, Some("nope"), false).is_err());
+        // nothing-to-do is an error, not a silent write
+        assert!(redact(&p, "X", Some("absent"), None, None, false).is_err());
+        // exactly one selector mode
+        assert!(redact(&p, "X", Some("a"), Some("b"), None, false).is_err());
+        // identifier validation
+        assert!(redact(&p, "1bad", Some("whatever"), None, None, true).is_err());
+        // an already-Input step can't be re-redacted
+        assert!(redact(&p, "Z", None, Some("input[type=password]"), None, false).is_err());
+    }
+
+    #[test]
     fn inputs_prints_table() {
         let tmp = TempDir::new().unwrap();
         let p = write(
@@ -3888,6 +4249,33 @@ mod tests {
     }
 
     #[test]
+    fn scenario_file_arg_accepts_sid_and_keeps_paths() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        let dir = tmp.path().join("hello");
+        std::fs::create_dir_all(&dir).unwrap();
+        let sc = dir.join("scenario.json");
+        fs::write(&sc, "{}").unwrap();
+        // sid resolves to its scenario.json
+        assert_eq!(scenario_file_arg("hello"), sc);
+        // existing file paths pass through untouched
+        let loose = tmp.path().join("loose.json");
+        fs::write(&loose, "{}").unwrap();
+        assert_eq!(scenario_file_arg(loose.to_str().unwrap()), loose);
+        // unknown args fall back to the literal path (read error surfaces later)
+        assert_eq!(
+            scenario_file_arg("no-such-sid"),
+            Path::new("no-such-sid").to_path_buf()
+        );
+        match prev {
+            Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    #[test]
     fn coverage_counts_shared_heuristic() {
         // Direct unit coverage of the shared counter: do,do,check → 1 bare.
         let tmp = TempDir::new().unwrap();
@@ -4091,6 +4479,94 @@ mod tests {
         assert_eq!(lint_one(serde_json::json!({ "ms": 500, "idle": true })), 0);
         assert_eq!(lint_one(serde_json::json!({ "url": "*/api/*" })), 0);
         assert_eq!(lint_one(serde_json::json!({ "idle": true })), 0);
+    }
+
+    #[test]
+    fn lint_hardcoded_secret_flags_password_literals_only() {
+        let tmp = TempDir::new().unwrap();
+        let lint_one = |on: serde_json::Value, value: serde_json::Value| {
+            let p = write(
+                tmp.path(),
+                &format!(
+                    r#"{{
+                      "schema": "scenario/2", "id": "x", "intent": "y",
+                      "steps": [
+                        {{ "id": "s0", "intent": "go", "kind": "do", "verb": "goto",
+                          "value": {{ "from": "literal", "literal": "http://x/" }} }},
+                        {{ "id": "s1", "intent": "type", "kind": "do", "verb": "type",
+                          "on": {on}, "value": {value} }}
+                      ]
+                    }}"#
+                ),
+            );
+            lint(
+                &p,
+                LintFormat::Text,
+                true,
+                Some(&["hardcoded-secret".to_string()]),
+                None,
+            )
+            .unwrap()
+        };
+        let lit = |s: &str| serde_json::json!({ "from": "literal", "literal": s });
+        let css =
+            |s: &str| serde_json::json!({ "raw": { "kind": "css", "value": s }, "reason": "t" });
+        // password-shaped locators flag
+        assert_eq!(lint_one(css("input[type=password]"), lit("hunter2")), 1);
+        assert_eq!(
+            lint_one(
+                serde_json::json!({ "role": "textbox", "name": "Password" }),
+                lit("hunter2")
+            ),
+            1
+        );
+        // already-redacted steps are clean
+        assert_eq!(
+            lint_one(
+                css("input[type=password]"),
+                serde_json::json!({ "from": "input", "input": "PASS" })
+            ),
+            0
+        );
+        // non-password fields and empty literals are clean
+        assert_eq!(lint_one(css("input[name=email]"), lit("hunter2")), 0);
+        assert_eq!(lint_one(css("input[type=password]"), lit("")), 0);
+    }
+
+    #[test]
+    fn lint_claim_value_spec_flags_from_objects() {
+        let tmp = TempDir::new().unwrap();
+        let lint_one = |value: serde_json::Value| {
+            let p = write(
+                tmp.path(),
+                &format!(
+                    r#"{{
+                      "schema": "scenario/2", "id": "j", "intent": "x",
+                      "steps": [
+                        {{ "id": "s0", "intent": "go", "kind": "do", "verb": "goto",
+                          "value": {{ "from": "literal", "literal": "http://x/" }} }},
+                        {{ "id": "s1", "intent": "url", "kind": "check",
+                          "claim": {{ "subject": {{ "url": true }}, "predicate": "contains",
+                            "value": {value} }} }}
+                      ]
+                    }}"#
+                ),
+            );
+            lint(
+                &p,
+                LintFormat::Text,
+                true,
+                Some(&["claim-value-spec".to_string()]),
+                None,
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            lint_one(serde_json::json!({ "from": "literal", "literal": "x" })),
+            1
+        );
+        assert_eq!(lint_one(serde_json::json!("x")), 0);
+        assert_eq!(lint_one(serde_json::json!(42)), 0);
     }
 
     #[test]
@@ -5640,6 +6116,22 @@ mod tests {
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    /// `--help` after a subverb must print usage, not be swallowed as the
+    /// `<file>` positional (`scenario lint --help` used to try reading a
+    /// file literally named --help).
+    #[test]
+    fn help_flag_wins_over_file_positionals() {
+        for args in [
+            vec!["lint".to_string(), "--help".to_string()],
+            vec!["validate".to_string(), "--help".to_string()],
+            vec!["check".to_string(), "-h".to_string()],
+            vec!["new".to_string(), "--help".to_string()],
+            vec!["--help".to_string()],
+        ] {
+            assert_eq!(run(&args).unwrap(), 0, "args {args:?}");
         }
     }
 }

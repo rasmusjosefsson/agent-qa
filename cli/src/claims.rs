@@ -34,8 +34,8 @@ use serde_json::Value as Json;
 
 use crate::browser::{self, CapturedRequest, RoleAct};
 use crate::scenario::{
-    Claim, ClaimSubject, HttpMethod, Locator, NetworkClaimKind, NetworkMatcher, Predicate,
-    RawLocatorKind,
+    Claim, ClaimSubject, ElementClaimKind, HttpMethod, Locator, NetworkClaimKind, NetworkMatcher,
+    Predicate, RawLocatorKind,
 };
 use crate::value::{select_json_path, substitute_scenario_vars, value_to_string, ValueScope};
 
@@ -68,11 +68,8 @@ pub fn dispatch_check(
             element,
             attribute,
             of_kind,
-        } => {
-            if of_kind.is_some() {
-                bail!("element claim with ofKind is not yet supported");
-            }
-            check_element(
+        } => match of_kind {
+            None => check_element(
                 element,
                 attribute.as_deref(),
                 &claim.predicate,
@@ -80,8 +77,53 @@ pub fn dispatch_check(
                 ctx,
                 scope,
                 timeout,
-            )
-        }
+            ),
+            Some(ElementClaimKind::Count) => check_element_count(
+                element,
+                &claim.predicate,
+                claim.value.as_ref(),
+                ctx,
+                scope,
+                timeout,
+            ),
+            // text/value/attribute are friendly spellings for the property/
+            // attribute reads the plain element claim already supports —
+            // `ofKind:"text"` ≡ `attribute:"text"` (textContent),
+            // `ofKind:"value"` ≡ `attribute:"value"` (live IDL property),
+            // `ofKind:"attribute"` just makes the `attribute:` field required.
+            Some(ElementClaimKind::Text) => check_element(
+                element,
+                Some("text"),
+                &claim.predicate,
+                claim.value.as_ref(),
+                ctx,
+                scope,
+                timeout,
+            ),
+            Some(ElementClaimKind::Value) => check_element(
+                element,
+                Some("value"),
+                &claim.predicate,
+                claim.value.as_ref(),
+                ctx,
+                scope,
+                timeout,
+            ),
+            Some(ElementClaimKind::Attribute) => {
+                let attr = attribute.as_deref().ok_or_else(|| {
+                    anyhow!("element claim ofKind 'attribute' requires the 'attribute' field")
+                })?;
+                check_element(
+                    element,
+                    Some(attr),
+                    &claim.predicate,
+                    claim.value.as_ref(),
+                    ctx,
+                    scope,
+                    timeout,
+                )
+            }
+        },
         ClaimSubject::Url { url: _ } => {
             check_url(&claim.predicate, claim.value.as_ref(), ctx, scope, timeout)
         }
@@ -164,6 +206,14 @@ pub fn dispatch_check(
         ClaimSubject::Cookie { cookie } => {
             check_cookie(cookie, &claim.predicate, claim.value.as_ref(), ctx, scope)
         }
+        ClaimSubject::IndexedDb { indexeddb, path } => check_indexeddb(
+            indexeddb,
+            path.as_deref(),
+            &claim.predicate,
+            claim.value.as_ref(),
+            ctx,
+            scope,
+        ),
         ClaimSubject::Timing { timing } => {
             check_timing(timing, &claim.predicate, claim.value.as_ref(), ctx, scope)
         }
@@ -722,20 +772,89 @@ fn check_cookie(
     scope: &mut ValueScope,
 ) -> Result<()> {
     let name = substitute_scenario_vars(cookie, scope);
+    // `agent-browser cookies` reads the CDP cookie jar — `document.cookie`
+    // would miss HttpOnly cookies like session/auth tokens.
+    let jar = browser::cookies(ctx.session)?;
+    let actual: Json = jar
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .find(|(n, _)| n.trim() == name)
+        .map(|(_, v)| Json::String(v.trim().to_string()))
+        .unwrap_or(Json::Null);
+    check_value(&actual, predicate, expected, scope).map_err(|e| anyhow!("cookie {name:?}: {e:#}"))
+}
+
+/// `{"indexeddb": {"db","store","key"?}}` — read an IndexedDB record in the
+/// live page. The db is probed via `indexedDB.databases()` first: opening a
+/// name that doesn't exist would create it, which would turn `notExists`
+/// into a false pass (and leave junk behind).
+fn check_indexeddb(
+    matcher: &crate::scenario::IndexedDbMatcher,
+    path: Option<&str>,
+    predicate: &Predicate,
+    expected: Option<&Json>,
+    ctx: &CheckContext,
+    scope: &mut ValueScope,
+) -> Result<()> {
+    let db = substitute_scenario_vars(&matcher.db, scope);
+    let store = substitute_scenario_vars(&matcher.store, scope);
+    let key = matcher
+        .key
+        .as_ref()
+        .map(|k| substitute_scenario_vars(k, scope));
+    let key_js = match &key {
+        Some(k) => serde_json::to_string(k)?,
+        None => "null".into(),
+    };
     let expr = format!(
-        "(() => {{ const n = {}; for (const c of document.cookie.split(';')) {{ \
-         const i = c.indexOf('='); if (i > 0 && c.slice(0, i).trim() === n) \
-         return decodeURIComponent(c.slice(i + 1).trim()); }} return null; }})()",
-        serde_json::to_string(&name)?,
+        "(async () => {{ \
+           const DB = {db}, STORE = {store}, KEY = {key}; \
+           if (!indexedDB.databases) return '__aq_idb_unsupported__'; \
+           const names = (await indexedDB.databases()).map(d => d.name); \
+           if (!names.includes(DB)) return null; \
+           const db = await new Promise((res, rej) => {{ \
+             const r = indexedDB.open(DB); \
+             r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); \
+           }}); \
+           try {{ \
+             if (!db.objectStoreNames.contains(STORE)) return null; \
+             if (KEY === null) return '__aq_idb_store__'; \
+             const v = await new Promise((res, rej) => {{ \
+               const rq = db.transaction(STORE).objectStore(STORE).get(KEY); \
+               rq.onsuccess = () => res(rq.result === undefined ? null : rq.result); \
+               rq.onerror = () => rej(rq.error); \
+             }}); \
+             return v; \
+           }} finally {{ db.close(); }} \
+         }})()",
+        db = serde_json::to_string(&db)?,
+        store = serde_json::to_string(&store)?,
+        key = key_js,
     );
     let raw = browser::eval_expression(ctx.session, &expr)?;
     let raw = raw.trim();
+    if raw == "\"__aq_idb_unsupported__\"" {
+        bail!("indexeddb claim requires IndexedDB.databases() support in the page");
+    }
     let actual: Json = if raw.is_empty() || raw == "null" {
         Json::Null
     } else {
-        Json::String(serde_json::from_str(raw).unwrap_or_else(|_| raw.to_string()))
+        let decoded: String = serde_json::from_str(raw).unwrap_or_else(|_| raw.to_string());
+        if decoded == "__aq_idb_store__" {
+            Json::Bool(true)
+        } else {
+            serde_json::from_str(&decoded).unwrap_or(Json::String(decoded))
+        }
     };
-    check_value(&actual, predicate, expected, scope).map_err(|e| anyhow!("cookie {name:?}: {e:#}"))
+    let actual = match path {
+        Some(p) if !actual.is_null() => select_json_path(&actual, p)?,
+        _ => actual,
+    };
+    let label = match &key {
+        Some(k) => format!("indexeddb {db}.{store}[{k:?}]"),
+        None => format!("indexeddb {db}.{store}"),
+    };
+    check_value(&actual, predicate, expected, scope).map_err(|e| anyhow!("{label}: {e:#}"))
 }
 
 // ---------- timing ----------
@@ -1142,21 +1261,28 @@ fn check_network(
         .post_data_contains
         .as_deref()
         .map(|s| substitute_scenario_vars(s, scope));
+    let ws_filter = matcher
+        .ws_payload_contains
+        .as_deref()
+        .map(|s| substitute_scenario_vars(s, scope));
 
     let deadline = Instant::now() + timeout;
     let mut pending: String;
     loop {
         match browser::network_requests(ctx.session) {
             Ok(reqs) => {
-                let matches = filter_by_post(
-                    matching_requests(
-                        url_re.as_ref(),
-                        op_name.as_deref(),
-                        matcher.method.as_ref(),
-                        &reqs,
+                let matches = filter_by_ws_payload(
+                    filter_by_post(
+                        matching_requests(
+                            url_re.as_ref(),
+                            op_name.as_deref(),
+                            matcher.method.as_ref(),
+                            &reqs,
+                        ),
+                        post_filter.as_deref(),
+                        ctx.session,
                     ),
-                    post_filter.as_deref(),
-                    ctx.session,
+                    ws_filter.as_deref(),
                 );
                 match evaluate_network(
                     &kind,
@@ -1206,6 +1332,29 @@ fn filter_by_post<'r>(
                 })
                 .map(|pd| pd.contains(needle))
                 .unwrap_or(false)
+        })
+        .collect()
+}
+
+/// Keep candidates carrying a WebSocket frame whose payload contains the
+/// needle — only `cdpws-*` entries have `ws_frames`, so this narrows to
+/// sockets.
+fn filter_by_ws_payload<'r>(
+    matches: Vec<&'r CapturedRequest>,
+    needle: Option<&str>,
+) -> Vec<&'r CapturedRequest> {
+    let Some(needle) = needle else {
+        return matches;
+    };
+    matches
+        .into_iter()
+        .filter(|r| {
+            r.ws_frames.iter().any(|f| {
+                f.get("payload")
+                    .and_then(|p| p.as_str())
+                    .map(|p| p.contains(needle))
+                    .unwrap_or(false)
+            })
         })
         .collect()
 }
@@ -1385,6 +1534,88 @@ fn check_element(
             bail!("expected {predicate:?}, but element still present");
         }
         other => bail!("element subject does not yet support predicate '{other:?}'"),
+    }
+}
+
+/// `{"element": <locator>, "ofKind": "count"}` — how many nodes the locator
+/// resolves to right now. Numeric predicates compare the match count to
+/// `value`; the count is polled (lists may render incrementally). Raw
+/// css/testId locators only — the count is a `querySelectorAll`.
+fn check_element_count(
+    loc: &Locator,
+    predicate: &Predicate,
+    expected: Option<&Json>,
+    ctx: &CheckContext,
+    scope: &mut ValueScope,
+    timeout: Duration,
+) -> Result<()> {
+    let need = expected.and_then(|v| v.as_u64()).ok_or_else(|| {
+        anyhow!("element count claim with predicate '{predicate:?}' requires a numeric 'value'")
+    })?;
+    match predicate {
+        Predicate::Equals
+        | Predicate::CountEquals
+        | Predicate::Gt
+        | Predicate::Gte
+        | Predicate::Lt
+        | Predicate::Lte => {}
+        other => bail!("element count claim does not support predicate '{other:?}'"),
+    }
+    let deadline = Instant::now() + timeout;
+    let mut last: Option<u64> = None;
+    let mut last_err: Option<anyhow::Error> = None;
+    while Instant::now() < deadline {
+        match count_elements(ctx.session, loc, scope) {
+            Ok(n) => {
+                last = Some(n);
+                let ok = match predicate {
+                    Predicate::Equals | Predicate::CountEquals => n == need,
+                    Predicate::Gt => n > need,
+                    Predicate::Gte => n >= need,
+                    Predicate::Lt => n < need,
+                    Predicate::Lte => n <= need,
+                    _ => unreachable!(),
+                };
+                if ok {
+                    return Ok(());
+                }
+            }
+            Err(e) => last_err = Some(e),
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+    match (last, last_err) {
+        (Some(n), _) => {
+            bail!("element count {n} failed predicate {predicate:?} {need}")
+        }
+        (None, Some(e)) => bail!("element count claim timed out; count never readable: {e}"),
+        (None, None) => bail!("element count claim timed out"),
+    }
+}
+
+fn count_elements(session: &str, loc: &Locator, scope: &mut ValueScope) -> Result<u64> {
+    match loc {
+        Locator::Raw(raw) => {
+            let v = substitute_scenario_vars(&raw.raw.value, scope);
+            let selector = match &raw.raw.kind {
+                RawLocatorKind::Css => v,
+                RawLocatorKind::TestId => {
+                    format!("[data-testid=\"{}\"]", v.replace('"', "\\\""))
+                }
+                other => {
+                    bail!("element count claims do not support raw locator kind {other:?}")
+                }
+            };
+            let expr = format!(
+                "(() => document.querySelectorAll({q}).length)()",
+                q = serde_json::to_string(&selector).expect("string serializes")
+            );
+            let raw = browser::eval_expression(session, &expr)?;
+            raw.trim()
+                .parse::<u64>()
+                .map_err(|e| anyhow!("element count eval returned unexpected value {raw:?}: {e}"))
+        }
+        _ => bail!("element count claims currently require a raw css or testId locator"),
     }
 }
 
@@ -2564,10 +2795,24 @@ mod tests {
         }
 
         #[test]
-        fn cookie_subject_exists_reads_document_cookie() {
+        fn cookie_subject_reads_the_cdp_cookie_jar() {
             let _g = lock_env();
             let tmp = TempDir::new().unwrap();
-            install_fake_eval(tmp.path(), "\"abc\"");
+            // Fake `agent-browser cookies` — the CDP jar dump carries
+            // HttpOnly cookies that document.cookie would hide.
+            let resp_path = tmp.path().join("cookies.txt");
+            fs::write(&resp_path, "other=x\nsession=abc\n").unwrap();
+            let body = format!(
+                "#!/bin/sh\nif [ \"$3\" = cookies ]; then cat '{}'; exit 0; fi\nexit 0\n",
+                resp_path.display()
+            );
+            let bin = tmp.path().join("agent-browser");
+            fs::write(&bin, body).unwrap();
+            let mut perm = fs::metadata(&bin).unwrap().permissions();
+            perm.set_mode(0o755);
+            fs::set_permissions(&bin, perm).unwrap();
+            std::env::set_var(ab::BIN_ENV, &bin);
+            ab::_reset_bin_cache_for_tests();
             let claim: Claim = serde_json::from_value(json!({
                 "subject": { "cookie": "session" },
                 "predicate": "equals",
@@ -2582,6 +2827,159 @@ mod tests {
             };
             dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
             clear();
+        }
+
+        #[test]
+        fn cookie_subject_not_exists_when_absent_from_jar() {
+            let _g = lock_env();
+            let tmp = TempDir::new().unwrap();
+            let resp_path = tmp.path().join("cookies.txt");
+            fs::write(&resp_path, "other=x\n").unwrap();
+            let body = format!(
+                "#!/bin/sh\nif [ \"$3\" = cookies ]; then cat '{}'; exit 0; fi\nexit 0\n",
+                resp_path.display()
+            );
+            let bin = tmp.path().join("agent-browser");
+            fs::write(&bin, body).unwrap();
+            let mut perm = fs::metadata(&bin).unwrap().permissions();
+            perm.set_mode(0o755);
+            fs::set_permissions(&bin, perm).unwrap();
+            std::env::set_var(ab::BIN_ENV, &bin);
+            ab::_reset_bin_cache_for_tests();
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "cookie": "session" },
+                "predicate": "notExists"
+            }))
+            .unwrap();
+            let mut scope = ValueScope::default();
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: Path::new("."),
+                run_dir: None,
+            };
+            dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+            clear();
+        }
+
+        #[test]
+        fn indexeddb_subject_parses_matcher_forms() {
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "indexeddb": { "db": "cart", "store": "items" } },
+                "predicate": "exists"
+            }))
+            .unwrap();
+            match claim.subject {
+                ClaimSubject::IndexedDb { indexeddb, path } => {
+                    assert_eq!(indexeddb.db, "cart");
+                    assert_eq!(indexeddb.store, "items");
+                    assert!(indexeddb.key.is_none());
+                    assert!(path.is_none());
+                }
+                _ => panic!("expected indexeddb subject"),
+            }
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": {
+                    "indexeddb": { "db": "cart", "store": "items", "key": "sku-1" },
+                    "path": "$.qty"
+                },
+                "predicate": "gte",
+                "value": 1
+            }))
+            .unwrap();
+            match claim.subject {
+                ClaimSubject::IndexedDb { indexeddb, path } => {
+                    assert_eq!(indexeddb.key.as_deref(), Some("sku-1"));
+                    assert_eq!(path.as_deref(), Some("$.qty"));
+                }
+                _ => panic!("expected indexeddb subject"),
+            }
+        }
+
+        #[test]
+        fn indexeddb_record_walks_json_by_path() {
+            let _g = lock_env();
+            let tmp = TempDir::new().unwrap();
+            install_fake_eval(tmp.path(), r#"{"qty":2}"#);
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": {
+                    "indexeddb": { "db": "cart", "store": "items", "key": "sku-1" },
+                    "path": "$.qty"
+                },
+                "predicate": "equals",
+                "value": 2
+            }))
+            .unwrap();
+            let mut scope = ValueScope::default();
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: Path::new("."),
+                run_dir: None,
+            };
+            dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+            clear();
+        }
+
+        #[test]
+        fn indexeddb_absent_record_passes_not_exists() {
+            let _g = lock_env();
+            let tmp = TempDir::new().unwrap();
+            install_fake_eval(tmp.path(), "null");
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "indexeddb": { "db": "cart", "store": "items", "key": "gone" } },
+                "predicate": "notExists"
+            }))
+            .unwrap();
+            let mut scope = ValueScope::default();
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: Path::new("."),
+                run_dir: None,
+            };
+            dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+            clear();
+        }
+
+        #[test]
+        fn indexeddb_store_probe_passes_exists() {
+            let _g = lock_env();
+            let tmp = TempDir::new().unwrap();
+            install_fake_eval(tmp.path(), "\"__aq_idb_store__\"");
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "indexeddb": { "db": "cart", "store": "items" } },
+                "predicate": "exists"
+            }))
+            .unwrap();
+            let mut scope = ValueScope::default();
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: Path::new("."),
+                run_dir: None,
+            };
+            dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+            clear();
+        }
+
+        #[test]
+        fn indexeddb_unsupported_browser_bails() {
+            let _g = lock_env();
+            let tmp = TempDir::new().unwrap();
+            install_fake_eval(tmp.path(), "\"__aq_idb_unsupported__\"");
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "indexeddb": { "db": "cart", "store": "items" } },
+                "predicate": "exists"
+            }))
+            .unwrap();
+            let mut scope = ValueScope::default();
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: Path::new("."),
+                run_dir: None,
+            };
+            let err = dispatch_check(&claim, &ctx, &mut scope, None)
+                .unwrap_err()
+                .to_string();
+            clear();
+            assert!(err.contains("databases()"), "got: {err}");
         }
 
         #[test]
@@ -2985,6 +3383,7 @@ mod tests {
             resource_type: None,
             mime_type: None,
             post_data: None,
+            ws_frames: vec![],
         }
     }
 
@@ -3160,6 +3559,27 @@ mod tests {
             err.to_string().contains("does not support predicate"),
             "got: {err}"
         );
+        // wsPayloadContains narrows to sockets carrying a matching frame
+        {
+            use super::*;
+            let entries = [CapturedRequest {
+                request_id: "cdpws-0".into(),
+                url: "wss://echo.example/socket".into(),
+                method: "WS".into(),
+                status: Some(101),
+                resource_type: Some("WebSocket".into()),
+                mime_type: None,
+                post_data: None,
+                ws_frames: vec![
+                    serde_json::json!({"dir": "received", "opcode": 1, "payload": "pong:hello"}),
+                ],
+            }];
+            let got = filter_by_ws_payload(entries.iter().collect(), Some("pong:hello"));
+            assert_eq!(got.len(), 1);
+            let got = filter_by_ws_payload(entries.iter().collect(), Some("nope"));
+            assert!(got.is_empty());
+        }
+
         // bad urlMatches regex → immediate bail
         let claim = net_claim(json!({
             "subject": {"network": {"urlMatches": "([bad"}},
@@ -3167,5 +3587,57 @@ mod tests {
         }));
         let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
         assert!(err.to_string().contains("not a valid regex"), "got: {err}");
+    }
+
+    #[test]
+    fn element_count_claim_hard_validation() {
+        let sid_dir = Path::new("/tmp");
+        let mut scope = ValueScope::default();
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: sid_dir,
+            run_dir: None,
+        };
+        let el_claim = |subject: serde_json::Value, rest: serde_json::Value| -> Claim {
+            let mut m = serde_json::Map::new();
+            m.insert("subject".into(), subject);
+            if let serde_json::Value::Object(rest) = rest {
+                m.extend(rest);
+            }
+            serde_json::from_value(serde_json::Value::Object(m)).unwrap()
+        };
+        let subject = || json!({"element": {"raw": {"kind": "css", "value": ".item"}, "reason": "test"}, "ofKind": "count"});
+        // missing/blank value → bail before any browser call
+        let claim = el_claim(subject(), json!({"predicate": "equals"}));
+        let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
+        assert!(err.to_string().contains("numeric 'value'"), "got: {err}");
+        // string predicate → unsupported
+        let claim = el_claim(subject(), json!({"predicate": "contains", "value": 3}));
+        let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
+        assert!(
+            err.to_string().contains("does not support predicate"),
+            "got: {err}"
+        );
+        // ofKind:"attribute" without the attribute field → bail before any
+        // browser call
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": {"element": {"raw": {"kind": "css", "value": ".item"}, "reason": "test"}, "ofKind": "attribute"},
+            "predicate": "equals", "value": "x"
+        }))
+        .unwrap();
+        let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
+        assert!(
+            err.to_string().contains("requires the 'attribute' field"),
+            "got: {err}"
+        );
+        // ofKind:"text"/"value" route into the attribute-read path: they
+        // bail on a missing `value` for value predicates, not on the ofKind
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": {"element": {"raw": {"kind": "css", "value": ".item"}, "reason": "test"}, "ofKind": "text"},
+            "predicate": "equals"
+        }))
+        .unwrap();
+        let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
+        assert!(err.to_string().contains("requires 'value'"), "got: {err}");
     }
 }
