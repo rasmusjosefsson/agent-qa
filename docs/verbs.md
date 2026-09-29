@@ -81,7 +81,7 @@ Plans/cases/sets are the workbench's run-scope records under `<root>/_plans`, `_
 | `heal-promote <sid>` | Apply replay-side patches into `scenario.json` (rebase-guarded) |
 | `heal-apply <sid>` | Mark a heal-response as consumed |
 | `heal-list <sid>` | List heal-responses. Flags: `--run <runId>`, `--mode value-correction\|reject`, `--applied`, `--unapplied`, `--json` |
-| `heal-chronic <sid>` | Flag steps that auto-healed in ≥ `--min-runs` distinct runs (default 2) — silent locator debt. Prints the `heal-promote` command per step. Flags: `--min-runs N`, `--json` |
+| `heal-chronic <sid>` | Flag steps that auto-healed in ≥ `--min-runs` distinct runs (default 2) — silent locator debt. Prints the `heal-promote` command per step. Flags: `--min-runs N`, `--json`, `--issue` (paste-ready markdown issue body for the handoff) |
 | `shot-accept <sid>` | Mint screenshot baselines for `{"shot"}` claims: copies the run's per-step PNGs into `<sid>/baselines/`. Flags: `--run <runId>` (default `latest.txt`), `--steps <csv>` (default every captured shot), `--json` |
 
 ### `{"shot"}` claims — visual diff vs a baseline
