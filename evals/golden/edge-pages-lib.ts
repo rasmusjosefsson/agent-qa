@@ -386,6 +386,7 @@ export async function runEdgeGolden(
     await steps(golden);
     await run(ctx, "verify", [ctx.agentQa, "verify"]);
     await run(ctx, "flush", [ctx.agentQa, "flush"]);
+    await run(ctx, "check", [ctx.agentQa, "scenario", "check", resolve(ctx.scenariosRoot, sid, "scenario.json")]);
     await run(ctx, "replay", [ctx.agentQa, "replay", sid, "--session", `${ctx.session}-replay`]);
     pass = true;
   } catch (err) {

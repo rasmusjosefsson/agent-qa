@@ -75,6 +75,8 @@ jobs:
         run: |
           npm install --no-audit --no-fund agent-qa agent-browser
           ./node_modules/.bin/agent-browser install
+      - name: lint scenarios
+        run: ./node_modules/.bin/agent-qa scenario check-all
       - name: replay suite
         id: gate
         working-directory: .
