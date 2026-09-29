@@ -21,23 +21,24 @@ the picture shifts materially.
 
 ### P1 — the golden loop is asymmetric for domshot
 
-1. **`/qa accept` only re-mints `shot` baselines** — the workflow runs
-   `agent-qa shot-accept`; a domshot diff on a UI PR can't be accepted by
-   comment, it needs a local `domshot-accept`. `accept.ts` should call
-   both (or a unified `goldens-accept`).
-2. **Coverage metric counts shots, not domshots** — the `shot%` rollup
-   ignores structural baselines, so a scenario covered only by domshots
-   reports 0% visual coverage.
-3. **WS/SSE capture (#278) has no golden** — none of the practice sites
-   open a socket; needs a small fixture page (echo server + page) so the
-   `network` claim's ws/sse frames are exercised end to end.
+1. ~~**`/qa accept` only re-mints `shot` baselines**~~ — #286 re-mints
+   domshots too; `accept.ts` covers both golden kinds.
+2. ~~**Coverage metric counts shots, not domshots**~~ — #287 adds
+   `golden%` counting domshot baselines alongside shots (scenario +
+   coverage-all + Cases badge).
+3. ~~**WS/SSE capture (#278) has no golden**~~ — #278 itself shipped
+   `evals/fixtures/ws.html` + `evals/golden/ws-tc01.ts`: a Bun.serve echo
+   socket + SSE endpoint asserting `wsPayloadContains` and SSE-as-200.
 
 ### P2 — record path still trails replay
 
-4. **Touch/gesture capture** — `hold`/`swipe`/`pinch`/`rotate`/`rightclick`
-   replay fine, but the recorder never emits them (rightclick capture
-   landed in #268; the rest produce nothing). Real-device recording would
-   need CDP touch-event bridging.
+4. ~~**Touch/gesture capture**~~ — #291 adds a Gesture click-mode to the
+   live pane: press+drag classifies into hold/swipe/pinch/rotate around
+   the hovered element's box (heading change + orbit radius separate
+   rotate from through-center swipes), dispatches via `run-step`, and
+   records a validated do-draft. Remaining gap: real-device multi-touch
+   recording would need CDP touch-event bridging — desktop-classified
+   gestures cover the synthetic case.
 5. **Hermetic capture** — `--mock-from`/`--offline` are replay-only; there
    is no `record` path that stubs the backend while recording, so the
    httpbin-style hermetic scenario has to be authored by hand.
@@ -46,26 +47,36 @@ the picture shifts materially.
    recorded `click` replays fine via native DOM click. If live clicks
    keep missing delegated handlers, the record path may silently drop
    user actions worth capturing — watch for it.
+7. **Untouched-recordable surfaces** — the recorder still can't emit
+   `dialog` (native alerts during record would stall the page like
+   replay did before #246), `download` (browser download events),
+   `frame` (pick is top-frame only), or `viewport` (window resize).
+   Structural verbs (`loop`/`group`/`useTemplate`) stay authored by
+   design.
 
 ### P3 — polish
 
-7. **`domshot` in the workbench selftest goldens** — the workbench's own
-   UI is shot-covered only; ARIA goldens would catch structural drift
-   that pixel diffs can't (e.g. tree reorder with identical pixels).
-8. **heal-chronic → issue handoff** — the self-heal debt board is
-   terminal-only; nothing auto-files or comments on chronic healers.
+8. ~~**`domshot` in the workbench selftest goldens**~~ — #288 adds a
+   domshot claim to selftest-settings, the first structural golden.
+9. ~~**heal-chronic → issue handoff**~~ — #290 adds `--issue`: a
+   paste-ready markdown handoff (table + promote block). Auto-filing
+   stays out on purpose — the debt list is small enough to paste.
 
 ## Recently closed (for orientation)
 
 - Touch verbs: `hold`+`swipe` (#259), `pinch` (#262), `rotate` (#267);
-  `rightclick` (#266) + live-pane capture (#268)
+  `rightclick` (#266) + live-pane capture (#268); record-side gesture
+  classification (#291)
 - Geo/tz/locale emulation via own pooled CDP client — grant +
   `Emulation.setGeolocationOverride` on the active target (#277), +
   `setTimezoneOverride`/`setLocaleOverride` (#279)
 - WS/SSE frames in `network` claims (#278)
 - `wait locator` — poll DOM state before continuing (#282)
 - `domshot` claim + `domshot-accept` (#283) + workbench diff
-  card/re-mint/insert-check/accept-all (#284)
+  card/re-mint/insert-check/accept-all (#284); `/qa accept` covers
+  domshots (#286); `golden%` counts them (#287); selftest domshot
+  golden (#288); `heal-chronic --issue` handoff (#290);
+  `AGENT_BROWSER_BIN` bare-name PATH resolution (#289)
 - Trusted-mouse `drag` + demoqa widgets goldens (#281)
 - Crawl telemetry pruning + `crawl` golden (#272); `fixed-sleep` +
   `brittle-locator` lint (#273/#271)
