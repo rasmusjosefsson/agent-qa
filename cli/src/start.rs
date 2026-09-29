@@ -132,7 +132,7 @@ fn start(opts: &Opts) -> Result<StartSummary> {
         .with_context(|| format!("mkdir -p {}", scenario_dir.display()))?;
     fs::create_dir_all(paths::record_root())
         .with_context(|| format!("mkdir -p {}", paths::record_root().display()))?;
-    let state = RecorderState::new(
+    let mut state = RecorderState::new(
         sid.clone(),
         opts.intent.clone(),
         opts.session_name.clone(),
@@ -140,6 +140,15 @@ fn start(opts: &Opts) -> Result<StartSummary> {
         opts.source_ref.clone(),
         connection,
     );
+    // `--open <url>` navigates the recording browser; seal the same nav as an
+    // env.open op so replay reaches the entry page on a cold session too.
+    if let Some(url) = &opts.open_url {
+        state.env_open.push(crate::scenario::EnvOp::Nav {
+            intent: Some(format!("open {url}")),
+            url: Some(url.clone()),
+            policy: None,
+        });
+    }
     state.save()?;
     fs::write(paths::record_last_sid_file(), format!("{sid}\n"))
         .with_context(|| format!("write {}", paths::record_last_sid_file().display()))?;
@@ -224,6 +233,39 @@ mod tests {
         })
         .unwrap();
         assert_eq!(RecorderState::load_active().unwrap().sid, summary.sid);
+        std::env::remove_var(paths::SCENARIOS_DIR_ENV);
+        std::env::remove_var(paths::RECORD_DIR_ENV);
+        std::env::remove_var(browser::BIN_ENV);
+        browser::_reset_bin_cache_for_tests();
+    }
+
+    #[test]
+    fn start_open_seals_the_nav_into_env_open() {
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var(paths::SCENARIOS_DIR_ENV, tmp.path());
+        std::env::set_var(paths::RECORD_DIR_ENV, tmp.path().join("record"));
+        install_fake_browser(tmp.path(), &tmp.path().join("browser.log"));
+        let summary = start(&Opts {
+            intent: "open home".into(),
+            session_name: "default".into(),
+            open_url: Some("https://example.com".into()),
+            profile: None,
+            keep_session: false,
+            headed: false,
+            source_ref: None,
+        })
+        .unwrap();
+        let state = RecorderState::load_active().unwrap();
+        assert_eq!(state.sid, summary.sid);
+        // fresh baseline + the entry nav — replay reaches the URL cold.
+        assert_eq!(state.env_open.len(), 2);
+        match &state.env_open[1] {
+            crate::scenario::EnvOp::Nav { url, .. } => {
+                assert_eq!(url.as_deref(), Some("https://example.com"))
+            }
+            other => panic!("expected Nav op, got {other:?}"),
+        }
         std::env::remove_var(paths::SCENARIOS_DIR_ENV);
         std::env::remove_var(paths::RECORD_DIR_ENV);
         std::env::remove_var(browser::BIN_ENV);
