@@ -206,6 +206,51 @@ pub fn run(args: &[String]) -> Result<u8> {
         covered += 1;
     }
 
+    // --mint-baselines runs before the scenario write so routes that
+    // cannot be opened at all (auth gates, dead links) are pruned from
+    // the draft — a step that cannot replay is worse than no step.
+    let mut minted = 0usize;
+    if mint_baselines {
+        let baselines = dir.join("baselines");
+        fs::create_dir_all(&baselines).ok();
+        let mut failed: std::collections::BTreeSet<String> = Default::default();
+        for (link, shot_id) in &shot_targets {
+            if browser::open(&session, link).is_err() {
+                eprintln!("crawl: mint {shot_id} skipped — {link} failed to open");
+                failed.insert(shot_id.clone());
+                continue;
+            }
+            browser::wait_for_load_capped(&session, "networkidle", 5000).ok();
+            let dest = baselines.join(format!("{shot_id}.png"));
+            match browser::screenshot(&session, &dest, true, Some(10_000)) {
+                Ok(true) => minted += 1,
+                _ => eprintln!("crawl: mint {shot_id} skipped — screenshot failed"),
+            }
+        }
+        if !failed.is_empty() {
+            let mut kept: Vec<Value> = Vec::with_capacity(steps.len());
+            let mut skip_unit = false;
+            for st in steps {
+                if st.get("verb").and_then(|v| v.as_str()) == Some("goto") {
+                    skip_unit = st
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|id| failed.contains(id))
+                        .unwrap_or(false);
+                }
+                if !skip_unit {
+                    kept.push(st);
+                }
+            }
+            eprintln!(
+                "crawl: pruned {} unroutable link(s) from the draft",
+                failed.len()
+            );
+            steps = kept;
+        }
+        println!("crawl: minted {minted}/{} baseline(s)", shot_targets.len());
+    }
+
     let title = page.get("title").and_then(|v| v.as_str()).unwrap_or(&host);
     let doc = json!({
         "schema": "scenario/2",
@@ -232,25 +277,6 @@ pub fn run(args: &[String]) -> Result<u8> {
         }))?,
     )
     .with_context(|| format!("crawl: write {}", report_path.display()))?;
-
-    if mint_baselines {
-        let baselines = dir.join("baselines");
-        fs::create_dir_all(&baselines).ok();
-        let mut minted = 0usize;
-        for (link, shot_id) in &shot_targets {
-            if browser::open(&session, link).is_err() {
-                eprintln!("crawl: mint {shot_id} skipped — {link} failed to open");
-                continue;
-            }
-            browser::wait_for_load_capped(&session, "networkidle", 5000).ok();
-            let dest = baselines.join(format!("{shot_id}.png"));
-            match browser::screenshot(&session, &dest, true, Some(10_000)) {
-                Ok(true) => minted += 1,
-                _ => eprintln!("crawl: mint {shot_id} skipped — screenshot failed"),
-            }
-        }
-        println!("crawl: minted {minted}/{} baseline(s)", shot_targets.len());
-    }
 
     println!(
         "crawl: {sid} — {covered} route(s) + entry, {} shot claim(s){}{}",
@@ -341,9 +367,99 @@ fn page_links(page: &Value, seen: &mut std::collections::BTreeSet<String>) -> Ve
         .unwrap_or_default()
 }
 
+/// Analytics/telemetry collectors — fire-and-forget beacons the page is
+/// not guaranteed to resend on replay (and whose URLs carry per-visitor
+/// nonces). Claiming them produces drafts that flake on the second run.
+const TELEMETRY_HOSTS: &[&str] = &[
+    "optimizely.com",
+    "google-analytics.com",
+    "googletagmanager.com",
+    "analytics.google.com",
+    "segment.io",
+    "segment.com",
+    "mixpanel.com",
+    "amplitude.com",
+    "hotjar.com",
+    "datadoghq.com",
+    "sentry.io",
+    "newrelic.com",
+    "nr-data.net",
+    "fullstory.com",
+    "logrocket.com",
+    "pendo.io",
+    "heapanalytics.com",
+    "doubleclick.net",
+    "clarity.ms",
+    "bugsnag.com",
+    "intercom.io",
+    "plausible.io",
+    "mouseflow.com",
+    "crazyegg.com",
+    "luckyorange.com",
+    "criteo.com",
+    "adservice.google.com",
+];
+
+fn is_telemetry_url(url: &str) -> bool {
+    let host = url
+        .split("://")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("");
+    TELEMETRY_HOSTS
+        .iter()
+        .any(|d| host == *d || host.ends_with(&format!(".{d}")))
+}
+
+/// A query value that will differ every page load — epoch timestamps and
+/// nonce/hash strings — so baking it into `urlMatches` guarantees the
+/// claim times out on the next replay.
+fn volatile_query_value(v: &str) -> bool {
+    if v.len() >= 10 && v.chars().all(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    v.len() >= 16 && v.chars().filter(|c| c.is_ascii_digit()).count() >= 6
+}
+
+fn regex_escape(s: &str) -> String {
+    s.chars()
+        .flat_map(|c| {
+            if "\\.^$+?()[]{}|*".contains(c) {
+                vec!['\\', c]
+            } else {
+                vec![c]
+            }
+        })
+        .collect()
+}
+
+/// origin+path stay literal; query values that look volatile become
+/// `[^&]*` so the claim still asserts the call fired without baking in
+/// a nonce.
+fn claim_url_pattern(url: &str) -> String {
+    let (head, query) = match url.split_once('?') {
+        Some((h, q)) => (h, q),
+        None => return regex_escape(url),
+    };
+    let parts: Vec<String> = query
+        .split('&')
+        .map(|kv| match kv.split_once('=') {
+            Some((k, v)) if volatile_query_value(v) => {
+                format!("{}=[^&]*", regex_escape(k))
+            }
+            _ => regex_escape(kv),
+        })
+        .collect();
+    format!("{}\\?{}", regex_escape(head), parts.join("&"))
+}
+
 /// One `fired` claim per distinct XHR/fetch the entry page made (deduped
 /// by method+URL, capped so a chatty page doesn't drown the draft).
-/// `urlMatches` is a regex — the literal URL is escaped.
+/// `urlMatches` is a regex — the literal URL is escaped, with volatile
+/// query values wildcarded.
 fn network_claim_steps(reqs: &[crate::browser::CapturedRequest], idx: &mut usize) -> Vec<Value> {
     use std::collections::BTreeSet;
     const CAP: usize = 10;
@@ -355,24 +471,14 @@ fn network_claim_steps(reqs: &[crate::browser::CapturedRequest], idx: &mut usize
             .as_deref()
             .map(|t| matches!(t.to_ascii_lowercase().as_str(), "xhr" | "fetch"))
             .unwrap_or(false);
-        if !is_api || !seen.insert((r.method.clone(), r.url.clone())) {
+        if !is_api || is_telemetry_url(&r.url) || !seen.insert((r.method.clone(), r.url.clone())) {
             continue;
         }
         if out.len() >= CAP {
             break;
         }
         *idx += 1;
-        let escaped: String = r
-            .url
-            .chars()
-            .flat_map(|c| {
-                if "\\.^$+?()[]{}|*".contains(c) {
-                    vec!['\\', c]
-                } else {
-                    vec![c]
-                }
-            })
-            .collect();
+        let escaped = claim_url_pattern(&r.url);
         out.push(json!({"id":format!("s{}",*idx),"intent":format!("{} {} fired",r.method,r.url),"kind":"check","claim":{"subject":{"network":{"urlMatches":escaped,"method":r.method}},"predicate":"exists"}}));
     }
     out
@@ -485,5 +591,49 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("POST https://x/api/save"));
+    }
+
+    #[test]
+    fn network_claim_steps_skips_telemetry_and_wildcards_nonces() {
+        let reqs = vec![
+            // analytics beacon — never claimable, its URL is per-visitor
+            req(
+                "https://298279967.log.optimizely.com/event?a=298279967&u=oeu1790627587045r0.6147464024099908&t=1790627587048",
+                "GET",
+                Some("xhr"),
+            ),
+            // real API call whose token is a nonce — the call is asserted,
+            // the nonce is wildcarded
+            req(
+                "https://api.example.com/items?token=ab12cd34ef56gh78ij90&type=new",
+                "GET",
+                Some("fetch"),
+            ),
+            // a stable query param stays literal
+            req("https://api.example.com/items?page=2", "GET", Some("xhr")),
+        ];
+        let mut idx = 0;
+        let steps = network_claim_steps(&reqs, &mut idx);
+        assert_eq!(steps.len(), 2, "telemetry beacon must be skipped");
+        let m0 = &steps[0]["claim"]["subject"]["network"];
+        assert_eq!(
+            m0["urlMatches"].as_str().unwrap(),
+            "https://api\\.example\\.com/items\\?token=[^&]*&type=new"
+        );
+        let m1 = &steps[1]["claim"]["subject"]["network"];
+        assert_eq!(
+            m1["urlMatches"].as_str().unwrap(),
+            "https://api\\.example\\.com/items\\?page=2"
+        );
+    }
+
+    #[test]
+    fn telemetry_hosts_match_domain_suffixes_only() {
+        assert!(is_telemetry_url("https://log.optimizely.com/e"));
+        assert!(is_telemetry_url("https://sentry.io/api/1/store/"));
+        assert!(is_telemetry_url("https://www.google-analytics.com/collect"));
+        assert!(!is_telemetry_url("https://api.optimizelyx.com/v1"));
+        assert!(!is_telemetry_url("https://my-sentry.internal/health"));
+        assert!(!is_telemetry_url("https://api.example.com/analytics"));
     }
 }

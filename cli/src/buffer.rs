@@ -47,7 +47,8 @@ Insert appends a validated draft at <index> (use <len> to append), then
 edit replaces the step at <index> with a re-validated draft (same shape as
 `record-step`, minus id/kind — the step keeps its id and position; its kind
 may not change). Insert, delete, and move reassign dense s0, s1, ... ids; step
-references (from=step stepId, opensFromStepId) are rewired to match. Load
+references (from=step stepId, opensFromStepId) are rewired to match.
+Everywhere <index> appears, the step id s<N> names the same step. Load
 pulls a saved scenario's steps into the buffer for editing (`flush` writes
 them back to the same sid, preserving fields the buffer doesn't model —
 inputs, templates, env.close). Check runs the `scenario check` verifier
@@ -56,10 +57,14 @@ Discard removes the active recording."
     );
 }
 
+/// Positional index or step id: step ids are `s<index>` (normalize_ids keeps
+/// them dense), so `s3` names the same step as `3` — the form scenario.json,
+/// audits, and shot claims use.
 fn parse_index(value: &str, label: &str) -> Result<usize> {
-    value
-        .parse()
-        .map_err(|_| anyhow!("{label} must be a non-negative integer; got {value:?}"))
+    let digits = value.strip_prefix('s').unwrap_or(value);
+    digits.parse().map_err(|_| {
+        anyhow!("{label} must be a non-negative integer or an s<N> step id; got {value:?}")
+    })
 }
 
 pub(crate) fn normalize_ids(steps: &mut [Step]) -> HashMap<String, String> {
@@ -548,6 +553,14 @@ mod tests {
         assert!(cmd_insert(&["0".into(), "nope".into(), "{}".into()]).is_err());
         assert_eq!(RecorderState::load_active().unwrap().steps.len(), 3);
         std::env::remove_var(crate::paths::RECORD_DIR_ENV);
+    }
+
+    #[test]
+    fn parse_index_accepts_step_id_spelling() {
+        assert_eq!(parse_index("2", "index").unwrap(), 2);
+        assert_eq!(parse_index("s2", "index").unwrap(), 2);
+        assert!(parse_index("sx", "index").is_err());
+        assert!(parse_index("nope", "index").is_err());
     }
 
     #[test]
