@@ -86,7 +86,43 @@ pub fn dispatch_check(
                 scope,
                 timeout,
             ),
-            Some(kind) => bail!("element claim ofKind {kind:?} is not yet supported"),
+            // text/value/attribute are friendly spellings for the property/
+            // attribute reads the plain element claim already supports —
+            // `ofKind:"text"` ≡ `attribute:"text"` (textContent),
+            // `ofKind:"value"` ≡ `attribute:"value"` (live IDL property),
+            // `ofKind:"attribute"` just makes the `attribute:` field required.
+            Some(ElementClaimKind::Text) => check_element(
+                element,
+                Some("text"),
+                &claim.predicate,
+                claim.value.as_ref(),
+                ctx,
+                scope,
+                timeout,
+            ),
+            Some(ElementClaimKind::Value) => check_element(
+                element,
+                Some("value"),
+                &claim.predicate,
+                claim.value.as_ref(),
+                ctx,
+                scope,
+                timeout,
+            ),
+            Some(ElementClaimKind::Attribute) => {
+                let attr = attribute.as_deref().ok_or_else(|| {
+                    anyhow!("element claim ofKind 'attribute' requires the 'attribute' field")
+                })?;
+                check_element(
+                    element,
+                    Some(attr),
+                    &claim.predicate,
+                    claim.value.as_ref(),
+                    ctx,
+                    scope,
+                    timeout,
+                )
+            }
         },
         ClaimSubject::Url { url: _ } => {
             check_url(&claim.predicate, claim.value.as_ref(), ctx, scope, timeout)
@@ -3286,13 +3322,26 @@ mod tests {
             err.to_string().contains("does not support predicate"),
             "got: {err}"
         );
-        // a non-count ofKind still fails loudly, not silently
+        // ofKind:"attribute" without the attribute field → bail before any
+        // browser call
         let claim: Claim = serde_json::from_value(json!({
-            "subject": {"element": {"raw": {"kind": "css", "value": ".item"}, "reason": "test"}, "ofKind": "text"},
-            "predicate": "isVisible"
+            "subject": {"element": {"raw": {"kind": "css", "value": ".item"}, "reason": "test"}, "ofKind": "attribute"},
+            "predicate": "equals", "value": "x"
         }))
         .unwrap();
         let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
-        assert!(err.to_string().contains("not yet supported"), "got: {err}");
+        assert!(
+            err.to_string().contains("requires the 'attribute' field"),
+            "got: {err}"
+        );
+        // ofKind:"text"/"value" route into the attribute-read path: they
+        // bail on a missing `value` for value predicates, not on the ofKind
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": {"element": {"raw": {"kind": "css", "value": ".item"}, "reason": "test"}, "ofKind": "text"},
+            "predicate": "equals"
+        }))
+        .unwrap();
+        let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
+        assert!(err.to_string().contains("requires 'value'"), "got: {err}");
     }
 }
