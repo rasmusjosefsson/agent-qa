@@ -1,4 +1,5 @@
 import { toRecordDraft } from "./record-translate";
+import { clickTrustedOrVisible, clickVisibleEval } from "./visible";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -175,7 +176,7 @@ export async function runEdgeGolden(
       await record(ctx, "wait", { condition: { kind: "selector", selector: readySelector }, intent: "page rendered" });
     },
     async clickSelector(selector, stepIntent) {
-      await run(ctx, `click ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "click", selector]);
+      await clickTrustedOrVisible(ctx, (n, c) => run(ctx, n, c), selector);
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
     async fillSelector(selector, value, stepIntent) {
@@ -271,7 +272,7 @@ export async function runEdgeGolden(
       // a native DOM click, so this keeps record/replay identical while
       // dodging agent-browser's live covered-element refusal (e.g. a link
       // whose click point sits under a still-animating drawer header).
-      await run(ctx, `jsclick ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "eval", `document.querySelector(${JSON.stringify(selector)}).click()`]);
+      await run(ctx, `jsclick ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "eval", clickVisibleEval(selector)]);
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
     async waitMs(ms, stepIntent) {
