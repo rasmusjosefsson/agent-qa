@@ -697,3 +697,163 @@ test('input drag without record dispatches the DOM gesture on the endpoint nodes
     'no a11y lookup when not recording',
   );
 });
+
+// --- gesture mode: press+drag classifies into hold/swipe/pinch/rotate ---
+
+function makeGestureBridge(recorded, ran) {
+  FakeWS.instances = [];
+  return createLiveBridge({
+    getCdpUrl: async () => 'ws://127.0.0.1:1/devtools/browser/x',
+    WebSocketImpl: FakeWS,
+    fetchImpl: fakeFetch,
+    captureMs: 100000,
+    onRecord: async (k, p) => recorded.push({ kind: k, payload: p }),
+    runStep: async (draft) => ran.push(draft),
+  });
+}
+
+async function connectGestured(bridge) {
+  const sock = await connect(bridge, { write() {}, end() {} });
+  const metId = sock.sent.find((m) => m.method === 'Page.getLayoutMetrics').id;
+  sock.recv({ id: metId, result: { cssLayoutViewport: { clientWidth: 800, clientHeight: 600 } } });
+  return sock;
+}
+
+// Answer the pick() round-trips a gesture's press point triggers. `box` is the
+// element's border quad in CSS px ([x0,y0, x1,y0, x1,y1, x0,y1]); pass null for
+// "nothing at that point".
+async function feedGesturePick(sock, { name = 'Zone', role = 'button', box = [320, 240, 480, 240, 480, 360, 320, 360] } = {}) {
+  await flush();
+  const loc = sock.sent.filter((m) => m.method === 'DOM.getNodeForLocation').at(-1);
+  assert.ok(loc, 'gesture hit-tests the press point');
+  sock.recv({ id: loc.id, result: box === null ? {} : { backendNodeId: 41 } });
+  if (box === null) return;
+  await flush();
+  const ax = sock.sent.filter((m) => m.method === 'Accessibility.getPartialAXTree').at(-1);
+  if (ax) sock.recv({ id: ax.id, result: { nodes: [{ role: { value: role }, name: { value: name } }] } });
+  await flush();
+  const bx = sock.sent.filter((m) => m.method === 'DOM.getBoxModel').at(-1);
+  if (bx) sock.recv({ id: bx.id, result: { model: { content: box } } });
+  await flush();
+}
+
+test('gesture: a stationary long press records hold with the measured duration', async () => {
+  const recorded = [];
+  const ran = [];
+  const bridge = makeGestureBridge(recorded, ran);
+  const sock = await connectGestured(bridge);
+  assert.equal(
+    bridge.input({ type: 'gesture', nx0: 0.5, ny0: 0.5, nx1: 0.5, ny1: 0.5, durationMs: 600, trail: [{ nx: 0.5, ny: 0.502 }], record: true }),
+    true,
+  );
+  await feedGesturePick(sock);
+  await flush();
+  assert.equal(recorded.length, 1, 'hold recorded');
+  const p = recorded[0].payload;
+  assert.equal(p.verb, 'hold');
+  assert.equal(p.params.ms, 600);
+  assert.deepEqual(p.on, { role: 'button', name: 'Zone' });
+  assert.equal(ran.length, 1, 'the hold also dispatched on the live page');
+  assert.equal(ran[0].verb, 'hold');
+});
+
+test('gesture: a straight drag with no anchor element records a swipe', async () => {
+  const recorded = [];
+  const bridge = makeGestureBridge(recorded, []);
+  const sock = await connectGestured(bridge);
+  bridge.input({ type: 'gesture', nx0: 0.2, ny0: 0.5, nx1: 0.6, ny1: 0.5, durationMs: 180, record: true });
+  await feedGesturePick(sock, { box: null });
+  await flush();
+  // no element -> cssAtPoint eval answers null -> swipe with no `on`
+  const evalMsg = sock.sent.filter((m) => m.method === 'Runtime.evaluate').at(-1);
+  if (evalMsg) sock.recv({ id: evalMsg.id, result: { result: { value: null } } });
+  await flush();
+  assert.equal(recorded.length, 1);
+  const p = recorded[0].payload;
+  assert.equal(p.verb, 'swipe');
+  assert.equal(p.params.direction, 'right');
+  assert.equal(p.params.distance, 320);
+  assert.equal(p.on, undefined);
+});
+
+test('gesture: a radial drag away from an element records pinch out', async () => {
+  const recorded = [];
+  const bridge = makeGestureBridge(recorded, []);
+  const sock = await connectGestured(bridge);
+  // box center (400,300); press at (400,330) r=30 -> drag to (400,420) r=120.
+  bridge.input({ type: 'gesture', nx0: 0.5, ny0: 0.55, nx1: 0.5, ny1: 0.7, durationMs: 250, record: true });
+  await feedGesturePick(sock);
+  await flush();
+  assert.equal(recorded.length, 1);
+  const p = recorded[0].payload;
+  assert.equal(p.verb, 'pinch');
+  assert.equal(p.params.direction, 'out');
+  assert.equal(p.params.distance, 90);
+  assert.deepEqual(p.on, { role: 'button', name: 'Zone' });
+});
+
+test('gesture: an arc around the anchor records rotate with swept degrees', async () => {
+  const recorded = [];
+  const bridge = makeGestureBridge(recorded, []);
+  const sock = await connectGestured(bridge);
+  // quarter-circle around center (400,300): start (480,300) -> end (400,420).
+  bridge.input({
+    type: 'gesture',
+    nx0: 0.6,
+    ny0: 0.5,
+    nx1: 0.5,
+    ny1: 0.7,
+    durationMs: 300,
+    trail: [
+      { nx: 0.585, ny: 0.585 },
+      { nx: 0.57, ny: 0.65 },
+      { nx: 0.55, ny: 0.685 },
+    ],
+    record: true,
+  });
+  await feedGesturePick(sock);
+  await flush();
+  assert.equal(recorded.length, 1);
+  const p = recorded[0].payload;
+  assert.equal(p.verb, 'rotate');
+  assert.ok(Math.abs(p.params.degrees - 90) <= 8, `expected ~90deg, got ${p.params.degrees}`);
+  assert.ok(p.params.radius >= 80 && p.params.radius <= 120);
+});
+
+test('gesture: a straight drag across a big element stays a swipe (not rotate)', async () => {
+  const recorded = [];
+  const bridge = makeGestureBridge(recorded, []);
+  const sock = await connectGestured(bridge);
+  // full-bleed element, drag straight through its center: rMin ~ 0.
+  bridge.input({ type: 'gesture', nx0: 0.1, ny0: 0.5, nx1: 0.9, ny1: 0.5, durationMs: 200, record: true });
+  await feedGesturePick(sock, { box: [0, 0, 800, 0, 800, 600, 0, 600] });
+  await flush();
+  assert.equal(recorded.length, 1);
+  const p = recorded[0].payload;
+  assert.equal(p.verb, 'swipe');
+  assert.equal(p.params.direction, 'right');
+});
+
+test('gesture: a radial drag toward the anchor records pinch in', async () => {
+  const recorded = [];
+  const bridge = makeGestureBridge(recorded, []);
+  const sock = await connectGestured(bridge);
+  // press near the element edge (400,430; r=130) -> drag toward center (400,330; r=30).
+  bridge.input({ type: 'gesture', nx0: 0.5, ny0: 0.717, nx1: 0.5, ny1: 0.55, durationMs: 250, record: true });
+  await feedGesturePick(sock);
+  await flush();
+  assert.equal(recorded.length, 1);
+  const p = recorded[0].payload;
+  assert.equal(p.verb, 'pinch');
+  assert.equal(p.params.direction, 'in');
+});
+
+test('gesture: a tap-sized input records nothing', async () => {
+  const recorded = [];
+  const bridge = makeGestureBridge(recorded, []);
+  const sock = await connectGestured(bridge);
+  bridge.input({ type: 'gesture', nx0: 0.5, ny0: 0.5, nx1: 0.505, ny1: 0.505, durationMs: 120, record: true });
+  await feedGesturePick(sock);
+  await flush();
+  assert.equal(recorded.length, 0);
+});

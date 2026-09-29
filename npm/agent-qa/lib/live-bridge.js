@@ -116,6 +116,9 @@ function charCodes(ch) {
 function createLiveBridge({
   getCdpUrl,
   onRecord = null,
+  // Optional: dispatch a do-draft against the live session (the host's
+  // `run-step` route) so a recorded gesture actually plays on the page.
+  runStep = null,
   WebSocketImpl = globalThis.WebSocket,
   fetchImpl = globalThis.fetch,
   captureMs = 300,
@@ -654,6 +657,156 @@ function createLiveBridge({
     lastFill = null; // new context after a click
   }
 
+  // Gesture capture (the pane's "Gesture" mode): a press+drag trail is
+  // classified into hold / swipe / pinch / rotate around the element under
+  // the press point, replayed live via runStep, and recorded as a do-draft.
+  // Desktop pointer input can't express multi-touch — the shape of the drag
+  // around the anchor's center carries the intent: staying still = hold,
+  // an arc = rotate, a radial line = pinch, anything else directional = swipe.
+  async function recordGesture(evt) {
+    const px = (nx, ny) => ({
+      x: Math.round((Number(nx) || 0) * css.width),
+      y: Math.round((Number(ny) || 0) * css.height),
+    });
+    const a = px(evt.nx0, evt.ny0);
+    const b = px(evt.nx1, evt.ny1);
+    const dt = Math.max(0, Number(evt.durationMs) || 0);
+    const pts = [a];
+    for (const p of Array.isArray(evt.trail) ? evt.trail : []) {
+      const t = px(p.nx, p.ny);
+      const last = pts[pts.length - 1];
+      if (Math.hypot(t.x - last.x, t.y - last.y) >= 3) pts.push(t);
+    }
+    if (Math.hypot(b.x - pts[pts.length - 1].x, b.y - pts[pts.length - 1].y) >= 1) pts.push(b);
+
+    const maxDev = Math.max(...pts.map((p) => Math.hypot(p.x - a.x, p.y - a.y)));
+    const movedPx = Math.hypot(b.x - a.x, b.y - a.y);
+    let pathLen = 0;
+    for (let i = 1; i < pts.length; i++) pathLen += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+
+    let el = null;
+    try {
+      el = await pick(evt.nx0, evt.ny0);
+    } catch {
+      /* nothing pickable — pinch/rotate then have no anchor */
+    }
+    const hasAnchor = !!(el && el.box);
+    const cx = hasAnchor ? Math.round((el.box.nx + el.box.nw / 2) * css.width) : a.x;
+    const cy = hasAnchor ? Math.round((el.box.ny + el.box.nh / 2) * css.height) : a.y;
+    const r0 = Math.hypot(a.x - cx, a.y - cy);
+    const r1 = Math.hypot(b.x - cx, b.y - cy);
+    const radialPx = r1 - r0;
+    const rMin = Math.min(...pts.map((p) => Math.hypot(p.x - cx, p.y - cy)));
+    const rMax = Math.max(r0, r1);
+    // Total swept angle about the anchor, accumulated per trail segment so a
+    // curved path registers even when start/end happen to align.
+    let angDeg = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const va = Math.atan2(pts[i - 1].y - cy, pts[i - 1].x - cx);
+      const vb = Math.atan2(pts[i].y - cy, pts[i].x - cx);
+      let d = vb - va;
+      while (d > Math.PI) d -= 2 * Math.PI;
+      while (d < -Math.PI) d += 2 * Math.PI;
+      angDeg += (d * 180) / Math.PI;
+    }
+    // Total heading change along the trail — curvature, not endpoint angle.
+    // A straight line through the anchor's center sweeps a degenerate 180°
+    // without curving; only a real orbit turns the travel direction.
+    let turnDeg = 0;
+    for (let i = 2; i < pts.length; i++) {
+      const h0 = Math.atan2(pts[i - 1].y - pts[i - 2].y, pts[i - 1].x - pts[i - 2].x);
+      const h1 = Math.atan2(pts[i].y - pts[i - 1].y, pts[i].x - pts[i - 1].x);
+      let d = h1 - h0;
+      while (d > Math.PI) d -= 2 * Math.PI;
+      while (d < -Math.PI) d += 2 * Math.PI;
+      turnDeg += Math.abs((d * 180) / Math.PI);
+    }
+
+    const labelOf = (el && el.name) || null;
+    const draft = await classifyGesture({
+      el, hasAnchor, a, b, x0: a.x, y0: a.y, dt, maxDev, movedPx, pathLen,
+      radialPx, angDeg, turnDeg, rMin, rMax, rAvg: (r0 + r1) / 2, labelOf,
+    });
+    if (!draft) return; // tap-sized — not a gesture
+    if (runStep) {
+      try {
+        await runStep(draft);
+      } catch (e) {
+        logger(`gesture dispatch failed (still recording): ${e && e.message ? e.message : e}`);
+      }
+    }
+    emitRecord('do', draft);
+  }
+
+  async function classifyGesture(g) {
+    const onLoc = await gestureOnLocator(g.el, g.a.x, g.a.y);
+    const label = (onLoc && onLoc.label) || (g.labelOf ? g.labelOf : 'page');
+    const on = onLoc ? { on: onLoc.on } : {};
+    if (g.dt >= 450 && g.maxDev < 12) {
+      if (!onLoc) {
+        broadcastEvent('record-skip', { reason: 'hold target has no usable locator' });
+        return null;
+      }
+      const ms = Math.max(100, Math.round(g.dt / 50) * 50);
+      return { intent: `hold ${label} for ${ms}ms`, verb: 'hold', on: onLoc.on, params: { ms } };
+    }
+    // Orbit test: real rotation keeps its distance from the anchor and turns
+    // the travel direction. A swipe clipping the center collapses r toward 0
+    // or runs straight — either disqualifies it.
+    if (g.hasAnchor && Math.abs(g.angDeg) >= 25 && g.turnDeg >= 25 && g.rMin >= Math.max(10, g.rMax * 0.3)) {
+      const degrees = Math.round(g.angDeg);
+      return {
+        intent: `rotate ${degrees}° on ${label}`,
+        verb: 'rotate',
+        params: { degrees, radius: Math.max(10, Math.round(g.rAvg)) },
+        ...on,
+      };
+    }
+    if (g.hasAnchor && Math.abs(g.radialPx) >= 24 && g.turnDeg < 25) {
+      const direction = g.radialPx > 0 ? 'out' : 'in';
+      return {
+        intent: `pinch ${direction} on ${label}`,
+        verb: 'pinch',
+        params: { direction, distance: Math.round(Math.abs(g.radialPx)) },
+        ...on,
+      };
+    }
+    if (g.movedPx >= 24) {
+      const direction = Math.abs(g.b.x - g.a.x) >= Math.abs(g.b.y - g.a.y)
+        ? g.b.x > g.a.x ? 'right' : 'left'
+        : g.b.y > g.a.y ? 'down' : 'up';
+      return {
+        intent: `swipe ${direction} ${Math.round(g.movedPx)}px${onLoc ? ` on ${label}` : ''}`,
+        verb: 'swipe',
+        params: { direction, distance: Math.round(g.movedPx) },
+        ...on,
+      };
+    }
+    return null;
+  }
+
+  // Pick a locator for the gesture's press element: accessible role+name
+  // first, a css selector chain (same shape the injected listener builds)
+  // when the target has no name.
+  async function gestureOnLocator(el, x, y) {
+    if (el && el.name && el.role) return { label: el.name, on: { role: el.role, name: el.name } };
+    const sel = await cssAtPoint(x, y);
+    if (sel) return { label: sel, on: { raw: { kind: 'css', value: sel }, reason: 'gesture target' } };
+    return null;
+  }
+
+  async function cssAtPoint(x, y) {
+    try {
+      const r = await call('Runtime.evaluate', {
+        expression: `(()=>{const t=document.elementFromPoint(${x},${y}); if(!(t instanceof HTMLElement)) return null; if(t.id) return '#'+CSS.escape(t.id); const parts=[]; for(let n=t;n&&n!==document.body&&parts.length<4;n=n.parentElement){if(n.id){parts.unshift('#'+CSS.escape(n.id));break;}const cls=Array.from(n.classList||[]).slice(0,2).map(c=>'.'+CSS.escape(c)).join('');parts.unshift(n.tagName.toLowerCase()+cls);}return parts.join(' ')||null;})()`,
+        returnByValue: true,
+      });
+      return (r && r.result && r.result.value) || null;
+    } catch {
+      return null;
+    }
+  }
+
   function dispatchClick(x, y) {
     send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, buttons: 0 });
     send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 });
@@ -821,6 +974,11 @@ function createLiveBridge({
         if (!url) return false;
         send('Page.navigate', { url });
         if (evt.record) emitRecord('do', { intent: `open ${url}`, verb: 'goto', value: { from: 'literal', literal: url } });
+        return true;
+      }
+      case 'gesture': {
+        if (!css.width) return false; // no viewport yet — refuse rather than misclassify
+        recordGesture(evt).catch((e) => logger(`gesture record failed: ${e && e.message ? e.message : e}`));
         return true;
       }
       case 'reload': {
