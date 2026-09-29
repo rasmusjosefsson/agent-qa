@@ -158,6 +158,19 @@ async function record(ctx: GoldenContext, kind: string, payload: unknown): Promi
   await run(ctx, `record ${kind}`, [ctx.agentQa, "record-step", draftKind, JSON.stringify(draft)]);
 }
 
+// A synthetic click on an element whose centre isn't hit-testable (below
+// the fold, zero-size, or covered) dispatches to nothing while the driver
+// still reports success — the recorded scenario then replays a click that
+// never landed. Scroll it into view first so the scenario stays faithful;
+// the scroll is recorded as its own step.
+async function ensureHittable(ctx: GoldenContext, selector: string, stepIntent: string): Promise<void> {
+  const expr = `(()=>{const el=document.querySelector(${JSON.stringify(selector)});if(!el)return'missing';const r=el.getBoundingClientRect();if(r.width===0||r.height===0)return'empty';const x=r.x+r.width/2,y=r.y+r.height/2;if(x<0||y<0||x>window.innerWidth||y>window.innerHeight)return'offscreen';const t=document.elementFromPoint(x,y);if(!t)return'uncovered';return t===el||el.contains(t)||t.contains(el)?'ok':'blocked'})()`;
+  const hit = (await run(ctx, `hit-test ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "eval", expr])).replace(/"/g, "").trim();
+  if (hit === "ok") return;
+  await run(ctx, `scroll ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "scrollintoview", selector]);
+  await record(ctx, "action", { method: "scrollToBySelector", args: [selector], intent: `bring ${stepIntent} into view` });
+}
+
 // Role+name → snapshot ref. The a11y snapshot's refs map pierces open
 // shadow roots; agent-browser's `fill`/`click` accept `@<ref>` targets.
 async function resolveSnapshotRef(ctx: GoldenContext, role: string, name: string): Promise<string> {
@@ -208,6 +221,7 @@ export async function runEdgeGolden(
       await record(ctx, "wait", { condition: { kind: "selector", selector: readySelector }, intent: "page rendered" });
     },
     async clickSelector(selector, stepIntent) {
+      await ensureHittable(ctx, selector, stepIntent);
       await run(ctx, `click ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "click", selector]);
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
@@ -220,6 +234,7 @@ export async function runEdgeGolden(
       await record(ctx, "action", { method: "selectBySelector", args: [selector, value], intent: stepIntent });
     },
     async checkSelector(selector, stepIntent) {
+      await ensureHittable(ctx, selector, stepIntent);
       await run(ctx, `check ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "check", selector]);
       await record(ctx, "action", { method: "checkBySelector", args: [selector], intent: stepIntent });
     },
