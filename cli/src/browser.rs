@@ -180,6 +180,13 @@ fn resolve_bin_uncached() -> Result<PathBuf, AgentBrowserError> {
             if path.is_file() {
                 return Ok(path);
             }
+            // A bare command name (e.g. AGENT_BROWSER_BIN=agent-browser) isn't a
+            // file — resolve it through $PATH instead of erroring.
+            if !p.contains('/') && !p.contains('\\') {
+                if let Ok(found) = which(&p) {
+                    return Ok(found);
+                }
+            }
             return Err(AgentBrowserError::BinaryNotFound { env_value: p });
         }
     }
@@ -1091,6 +1098,14 @@ pub fn eval_expression(session: &str, expression: &str) -> Result<String, AgentB
     Ok(r.stdout)
 }
 
+/// Dump the context's cookie jar via `agent-browser cookies` — CDP-level, so
+/// HttpOnly cookies (session/auth) are included where `document.cookie` is
+/// blind. Returns stdout in `name=value` line form; values may contain `=`.
+pub fn cookies(session: &str) -> Result<String, AgentBrowserError> {
+    let r = run(session, ["cookies"], RunOpts::new().capture())?;
+    Ok(r.stdout)
+}
+
 /// Poll the Resource Timing API until an entry URL matches `pattern`
 /// (substring, `*` = wildcard) — i.e. the request has completed — or
 /// `timeout_ms` elapses (error). For "request fired but still in flight"
@@ -1913,6 +1928,20 @@ mod tests {
         _reset_bin_cache_for_tests();
         let err = resolve_bin().unwrap_err();
         assert!(matches!(err, AgentBrowserError::BinaryNotFound { .. }));
+        clear_bin();
+    }
+
+    #[test]
+    fn bin_env_var_bare_name_resolves_via_path() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        fake_browser(tmp.path(), "#!/bin/sh\nexit 0\n");
+        let orig_path = env::var("PATH").unwrap_or_default();
+        env::set_var("PATH", format!("{}:{}", tmp.path().display(), orig_path));
+        env::set_var(BIN_ENV, "agent-browser");
+        _reset_bin_cache_for_tests();
+        assert_eq!(resolve_bin().unwrap(), tmp.path().join("agent-browser"));
+        env::set_var("PATH", orig_path);
         clear_bin();
     }
 
