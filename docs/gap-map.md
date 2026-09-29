@@ -524,3 +524,28 @@ surfaces exactly this signal on replay).
 `edge-pages-lib` gained `frameInto`/`frameMain`/`fillInFrame` +
 `record-translate`'s `frame` method — iframe scenarios are now
 recordable from the runner DSL, not just authored JSON.
+
+## Dogfood pass XI — letcode.in sweep II: the dismissal problem (#365)
+
+Four more letcode pages (`/dropdowns` multi-selects, `/button`
+style+disabled claims, `/window` `window.open` + tab round-trip,
+`/file` upload+download claims). The wall surfaced here is a general
+flake class: Google **fundingchoices** mounts a reward-ad wall
+(`.fc-monetization-dialog` + `.fc-dialog-overlay`) asynchronously —
+seconds after load, stochastic — and it's NOT dismissible (only a
+"View a short ad" button). It intercepts every click-family hit-test;
+a recorded scenario that passed at record time can fail at replay when
+the wall mounts between steps.
+
+**Shipped as a verb, not a workaround**: `do/dismiss` takes a raw
+css/testId/xpath locator, removes matching nodes at dispatch, and keeps
+the selector on a per-run dismissal list re-applied before every later
+interactive step — a late-mounting overlay can never intercept anything
+downstream. Role/text locators bail (can't lower to a re-runnable
+selector); the list persists across navigations (CMP banners re-mount
+per page until accepted) and absent matches are a no-op. This doubles
+as the GDPR/cookie-banner tool for any real site.
+
+Recorded side is identical: `dismissBySelector` in `edge-pages-lib`
++ a `record-translate` arm. tc04's download claim — the one the wall
+broke — now passes 10/10 behind the dismiss step.
