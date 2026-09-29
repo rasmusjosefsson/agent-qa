@@ -15,7 +15,7 @@
 | `record continue <sid> [--session <n>] [--skip-replay]` | Extend an existing scenario: replays it to its end state, seeds the buffer with its steps; `flush` writes the extension back to the same sid. |
 | `record pause \| resume \| status` | Freeze/resume capture while you set up page state; append paths drop steps while paused. |
 | `buffer list \| edit \| move \| delete \| insert \| load \| check` | Inspect and edit the in-flight buffer; `load <sid>` pulls a saved scenario in, `check` validates as flush would. |
-| `flush [--auto-shots]` | Validates and writes `scenario.json`; `--auto-shots` appends a `{"shot"}` visual claim after every do-step. |
+| `flush [--auto-shots] [--no-auto-secrets]` | Validates and writes `scenario.json`; `--auto-shots` appends a `{"shot"}` visual claim after every do-step. Password literals are lifted into sensitive `inputs` by default — the real value lands in a gitignored `inputs.local.json` replay resolves from. |
 | `shot-accept <sid> [--run <id>] [--steps s3,s5]` | Mint/re-mint shot baselines from a run's screenshots — see `visual.md`. |
 | `browser <args...>` | Passthrough exec of the pinned `agent-browser` binary. Use for gestures (`open`, `click`, `type`, `snapshot`, ...) instead of a bare `agent-browser` shell command — see `gotchas.md`. |
 | `aria-snapshot [--session <name>] [--interactive]` | agent-qa's own read-only ARIA dump verb. Not a `browser` sub-verb — run it as `agent-qa aria-snapshot`, not `agent-qa browser aria-snapshot` (that's `Unknown command`). |

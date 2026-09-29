@@ -503,6 +503,32 @@ fn endpoint_finder_js() -> String {
         .to_string()
 }
 
+/// Resolve one endpoint and report where it stands in the DOM: `"detached"`
+/// when nothing resolves, `"visible"`, or `"hidden"` (in the DOM but with no
+/// layout box or `display:none`/`visibility:hidden`). The `wait` verb polls
+/// this to implement `params.locator` + `params.state`.
+/// `__aqWaitState` marker for test doubles.
+pub fn build_element_state_js(ep: &DragEndpoint) -> String {
+    format!(
+        r#"(() => {{ const __aqWaitState = true;
+{prelude}
+{find}
+{finder}
+  const el = __aqDragFind({ep});
+  if (!el) return "detached";
+  try {{
+    const cs = getComputedStyle(el);
+    if (cs.display === "none" || cs.visibility === "hidden" || cs.visibility === "collapse") return "hidden";
+  }} catch (e) {{}}
+  return __aqVisible(el) ? "visible" : "hidden";
+}})()"#,
+        prelude = activation_prelude(),
+        find = scoped_find_helper_js(),
+        finder = endpoint_finder_js(),
+        ep = drag_endpoint_json(ep),
+    )
+}
+
 /// JS resolving one endpoint and dispatching a secondary-button click on it:
 /// `pointerdown{button:2} → mousedown{button:2} → pointerup{button:2} →
 /// mouseup{button:2} → contextmenu{button:2}` — no `click` (a real right
@@ -1140,6 +1166,18 @@ mod tests {
         assert!(js.contains("\"kind\":\"xpath\""), "{js}");
         assert!(js.contains("\"kind\":\"text\""), "{js}");
         assert!(js.contains("//li[1]") && js.contains("Archive"), "{js}");
+    }
+
+    #[test]
+    fn element_state_js_reports_detached_hidden_visible() {
+        let js = build_element_state_js(&DragEndpoint::Css("#probe".into()));
+        assert!(js.contains("\"#probe\""), "{js}");
+        assert!(js.contains("__aqWaitState"), "{js}");
+        assert!(
+            js.contains("\"detached\"") && js.contains("\"hidden\"") && js.contains("\"visible\""),
+            "{js}"
+        );
+        assert!(js.contains("getComputedStyle"), "{js}");
     }
 
     #[test]
