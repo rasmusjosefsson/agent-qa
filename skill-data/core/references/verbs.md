@@ -25,6 +25,7 @@
 | `record-step check '<draft-json>'` | Appends a `scenario/2` check draft without `id` or `kind`. |
 | `smart-click "<accessible-name>"` | Clicks a target and appends a direct do draft. |
 | `fill-unique <label> --template <template>` | Fills a unique value and appends a direct type draft. |
+| `smart-fill "<accessible-name>" <value>` | Types a literal value into a field by accessible name and appends a direct `do/type` draft. |
 | `verify [--fix]` | Checks the active recording buffer (dense ids + sidecar pairing); `--fix` renumbers ids and moves sidecars in place. |
 
 Only `do` and `check` drafts are accepted.
