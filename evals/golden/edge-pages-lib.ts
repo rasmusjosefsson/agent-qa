@@ -1,5 +1,5 @@
 import { toRecordDraft } from "./record-translate";
-import { clickTrustedOrVisible, clickVisibleEval } from "./visible";
+import { checkVisibleEval, clickTrustedOrVisible, clickVisibleEval, fillVisibleEval, hoverVisibleEval, selectVisibleEval, trustedOrVisible } from "./visible";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -180,19 +180,19 @@ export async function runEdgeGolden(
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
     async fillSelector(selector, value, stepIntent) {
-      await run(ctx, `fill ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, value]);
+      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `fill ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, value], fillVisibleEval(selector, value));
       await record(ctx, "action", { method: "fillBySelector", args: [selector, value], intent: stepIntent });
     },
     async selectOption(selector, value, stepIntent) {
-      await run(ctx, `select ${value}`, [ctx.agentBrowser, "--session", ctx.session, "select", selector, value]);
+      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `select ${value}`, [ctx.agentBrowser, "--session", ctx.session, "select", selector, value], selectVisibleEval(selector, Array.isArray(value) ? value : [value]));
       await record(ctx, "action", { method: "selectBySelector", args: [selector, value], intent: stepIntent });
     },
     async checkSelector(selector, stepIntent) {
-      await run(ctx, `check ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "check", selector]);
+      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `check ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "check", selector], checkVisibleEval(selector));
       await record(ctx, "action", { method: "checkBySelector", args: [selector], intent: stepIntent });
     },
     async hoverSelector(selector, stepIntent) {
-      await run(ctx, `hover ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "hover", selector]);
+      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `hover ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "hover", selector], hoverVisibleEval(selector));
       await record(ctx, "action", { method: "hoverBySelector", args: [selector], intent: stepIntent });
     },
     async pressKey(key, stepIntent) {

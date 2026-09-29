@@ -1,5 +1,5 @@
 import { toRecordDraft } from "./record-translate";
-import { clickTrustedOrVisible } from "./visible";
+import { checkVisibleEval, clickTrustedOrVisible, selectVisibleEval, trustedOrVisible } from "./visible";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -132,11 +132,11 @@ export async function runFormsGolden(
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
     async checkSelector(selector, stepIntent) {
-      await run(ctx, `check ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "check", selector]);
+      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `check ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "check", selector], checkVisibleEval(selector));
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
     async selectOption(selector, value, stepIntent) {
-      await run(ctx, `select ${value}`, [ctx.agentBrowser, "--session", ctx.session, "select", selector, value]);
+      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `select ${value}`, [ctx.agentBrowser, "--session", ctx.session, "select", selector, value], selectVisibleEval(selector, [value]));
       await record(ctx, "action", { method: "selectBySelector", args: [selector, value], intent: stepIntent });
     },
     async waitSelectorText(selector, text, stepIntent) {
