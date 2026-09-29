@@ -186,6 +186,18 @@ pub enum Verb {
     /// clears. Values go through scenario-var substitution. Apply before
     /// `goto` (or before `reload`) for the app to observe the state.
     State,
+    /// Press-and-hold an element: dispatches pointerdown/mousedown (and
+    /// touchstart where the constructor exists) at the element's center,
+    /// sleeps `params.ms` (default 500), then releases with
+    /// pointerup/mouseup/touchend — deliberately no click. For long-press
+    /// menus and press-to-confirm buttons that arm on down events.
+    Hold,
+    /// Swipe gesture: `params.direction` (up/down/left/right — the
+    /// direction the finger travels), `params.distance` px (default 300).
+    /// `on` picks the origin element; absent `on` swipes from the viewport
+    /// center. Dispatches the touch event chain plus pointer/mouse events
+    /// so both touch- and pointer-driven handlers fire.
+    Swipe,
     /// Switch the session's frame context: `params.selector` = a CSS
     /// selector for the iframe to enter, or `params.main = true` to return
     /// to the top document. Locators on later steps resolve inside the
@@ -193,11 +205,14 @@ pub enum Verb {
     Frame,
     /// Browser emulation — maps onto `agent-browser set …`. `params` may
     /// carry any of: `device` (preset name, e.g. "iPhone 12"), `geo`
-    /// `{lat,lng}`, `offline` (bool), `colorScheme` ("dark"|"light"),
-    /// `reducedMotion` (bool), `headers` ({name:value}), `credentials`
-    /// `{user,pass}` (HTTP auth). Applied in a fixed order (device first,
-    /// since it resets viewport+UA). String values go through
-    /// scenario-var substitution.
+    /// `{lat,lng}` (also grants the geolocation permission — the override
+    /// alone leaves `navigator.geolocation` hanging), `offline` (bool),
+    /// `colorScheme` ("dark"|"light"), `reducedMotion` (bool),
+    /// `permissions` (array of CDP permission names, e.g.
+    /// `["geolocation","clipboardRead"]`), `headers` ({name:value}),
+    /// `credentials` `{user,pass}` (HTTP auth). Applied in a fixed order
+    /// (device first, since it resets viewport+UA). String values go
+    /// through scenario-var substitution.
     Emulate,
     #[serde(rename = "loop")]
     Loop,
@@ -258,11 +273,63 @@ pub struct LocatorRaw {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum Locator {
     Role(LocatorRole),
     Raw(LocatorRaw),
+}
+
+// `on` also accepts a one-string shorthand — "css:sel", "xpath:expr",
+// "testId:key", "text:txt" — which lowers to the named raw locator with a
+// canned reason. Hand-authored steps (record-step, scenario insert, PR
+// review) shouldn't have to spell the full {"raw":{kind,value},reason}
+// shape for a plain selector.
+impl<'de> Deserialize<'de> for Locator {
+    fn deserialize<D>(de: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let v = Json::deserialize(de)?;
+        if let Some(short) = v.as_str() {
+            let (prefix, value) = short.split_once(':').ok_or_else(|| {
+                serde::de::Error::custom(
+                    "locator shorthand needs a kind prefix — \
+                         \"css:sel\", \"xpath:expr\", \"testId:key\", or \"text:txt\"",
+                )
+            })?;
+            let kind = match prefix {
+                "css" => RawLocatorKind::Css,
+                "xpath" => RawLocatorKind::Xpath,
+                "testId" => RawLocatorKind::TestId,
+                "text" => RawLocatorKind::Text,
+                other => {
+                    return Err(serde::de::Error::custom(format!(
+                        "unknown locator prefix \"{other}:\" — \
+                         use css:, xpath:, testId:, or text:"
+                    )))
+                }
+            };
+            if value.is_empty() {
+                return Err(serde::de::Error::custom(
+                    "locator shorthand has an empty selector",
+                ));
+            }
+            return Ok(Locator::Raw(LocatorRaw {
+                raw: LocatorRawSpec {
+                    kind,
+                    value: value.to_string(),
+                },
+                reason: "locator shorthand".to_string(),
+            }));
+        }
+        if let Ok(role) = serde_json::from_value::<LocatorRole>(v.clone()) {
+            return Ok(Locator::Role(role));
+        }
+        serde_json::from_value::<LocatorRaw>(v)
+            .map(Locator::Raw)
+            .map_err(|e| serde::de::Error::custom(format!("invalid locator: {e}")))
+    }
 }
 
 // ---------- Value ----------
@@ -548,7 +615,7 @@ pub enum ClaimSubject {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Claim {
     pub subject: ClaimSubject,
     pub predicate: Predicate,
@@ -556,6 +623,83 @@ pub struct Claim {
     pub value: Option<Json>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tolerance: Option<BTreeMap<String, Json>>,
+}
+
+/// Predicates that take an argument (the claim's `value` field). The rest
+/// are unary — an object-form predicate for one of them is an error.
+const PREDICATES_WITH_ARG: &[&str] = &[
+    "equals",
+    "contains",
+    "matches",
+    "startsWith",
+    "endsWith",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "countEquals",
+];
+
+impl<'de> Deserialize<'de> for Claim {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error;
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Raw {
+            subject: ClaimSubject,
+            predicate: Json,
+            #[serde(default)]
+            value: Option<Json>,
+            #[serde(default)]
+            tolerance: Option<BTreeMap<String, Json>>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        let (predicate, inline_value) =
+            match &raw.predicate {
+                Json::String(name) => (
+                    serde_json::from_value::<Predicate>(raw.predicate.clone())
+                        .map_err(|_| D::Error::custom(format!("unknown predicate {name:?}")))?,
+                    None,
+                ),
+                // Sugar: {"predicate": {"contains": "x"}} lowers to
+                // predicate:"contains" + value:"x" — the arg moves off the
+                // predicate key onto the claim's `value` field.
+                Json::Object(map) if map.len() == 1 => {
+                    let (name, arg) = map.iter().next().unwrap();
+                    if !PREDICATES_WITH_ARG.contains(&name.as_str()) {
+                        return Err(D::Error::custom(format!(
+                            "predicate {name:?} takes no argument — write it as a string"
+                        )));
+                    }
+                    (
+                        serde_json::from_value::<Predicate>(Json::String(name.clone()))
+                            .map_err(|_| D::Error::custom(format!("unknown predicate {name:?}")))?,
+                        Some(arg.clone()),
+                    )
+                }
+                _ => return Err(D::Error::custom(
+                    "predicate must be a name string or a single-key object {\"contains\": <arg>}",
+                )),
+            };
+        let value = match (raw.value, inline_value) {
+            (Some(_), Some(_)) => {
+                return Err(D::Error::custom(
+                    "claim carries the argument twice: predicate object AND value",
+                ))
+            }
+            (Some(v), None) | (None, Some(v)) => Some(v),
+            (None, None) => None,
+        };
+        Ok(Claim {
+            subject: raw.subject,
+            predicate,
+            value,
+            tolerance: raw.tolerance,
+        })
+    }
 }
 
 // ---------- Step ----------
@@ -920,6 +1064,70 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn locator_shorthand_lowers_to_named_raw() {
+        let loc: Locator = serde_json::from_value(json!("css:p > a")).unwrap();
+        assert!(matches!(
+            loc,
+            Locator::Raw(LocatorRaw {
+                raw: LocatorRawSpec {
+                    kind: RawLocatorKind::Css,
+                    ..
+                },
+                ..
+            })
+        ));
+        if let Locator::Raw(r) = loc {
+            assert_eq!(r.raw.value, "p > a");
+            assert_eq!(r.reason, "locator shorthand");
+        }
+        // every prefix
+        for (short, want) in [
+            ("xpath://a", RawLocatorKind::Xpath),
+            ("testId:save-btn", RawLocatorKind::TestId),
+            ("text:Sign in", RawLocatorKind::Text),
+        ] {
+            let loc: Locator = serde_json::from_value(json!(short)).unwrap();
+            assert!(matches!(
+                loc,
+                Locator::Raw(LocatorRaw {
+                    raw: LocatorRawSpec { kind, .. },
+                    ..
+                }) if kind == want
+            ));
+        }
+        // missing / unknown prefixes fail with a hint
+        assert!(serde_json::from_value::<Locator>(json!("p > a"))
+            .unwrap_err()
+            .to_string()
+            .contains("kind prefix"));
+        assert!(serde_json::from_value::<Locator>(json!("id:#x"))
+            .unwrap_err()
+            .to_string()
+            .contains("unknown locator prefix"));
+        // colons inside the selector survive (split at the FIRST colon only)
+        let loc: Locator = serde_json::from_value(json!("css:a:not(.x)")).unwrap();
+        assert!(matches!(
+            loc,
+            Locator::Raw(LocatorRaw {
+                raw: LocatorRawSpec { value, .. },
+                ..
+            }) if value == "a:not(.x)"
+        ));
+        // object forms unchanged
+        assert!(matches!(
+            serde_json::from_value::<Locator>(json!({"role": "link", "name": "x"})).unwrap(),
+            Locator::Role(_)
+        ));
+        assert!(matches!(
+            serde_json::from_value::<Locator>(
+                json!({"raw": {"kind": "css", "value": "#y"}, "reason": "r"})
+            )
+            .unwrap(),
+            Locator::Raw(_)
+        ));
+    }
+
+    #[test]
     fn retarget_origin_rewrites_navs_and_gotos() {
         let mut s: Scenario = serde_json::from_value(json!({
             "schema": "scenario/2", "id": "t", "intent": "x",
@@ -1126,5 +1334,60 @@ mod tests {
             EnvOp::Nav { url, .. } => assert_eq!(url.as_deref(), Some("https://app.example.com/")),
             _ => panic!("expected Nav variant"),
         }
+    }
+
+    #[test]
+    fn claim_predicate_object_sugar_lowers_to_value() {
+        // {"predicate": {"contains": "x"}} → predicate:Contains + value:"x"
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "url": true },
+            "predicate": { "contains": "iana" }
+        }))
+        .unwrap();
+        assert_eq!(claim.predicate, Predicate::Contains);
+        assert_eq!(claim.value, Some(json!("iana")));
+        // round-trips to the canonical string form
+        let ser = serde_json::to_value(&claim).unwrap();
+        assert_eq!(ser["predicate"], json!("contains"));
+
+        // canonical string still works
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "url": true },
+            "predicate": "exists"
+        }))
+        .unwrap();
+        assert_eq!(claim.predicate, Predicate::Exists);
+        assert_eq!(claim.value, None);
+
+        // arg carried twice → error
+        let err = serde_json::from_value::<Claim>(json!({
+            "subject": { "url": true },
+            "predicate": { "contains": "x" },
+            "value": "y"
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("twice"), "{err}");
+
+        // unary predicate in object form → error pointing at the string form
+        let err = serde_json::from_value::<Claim>(json!({
+            "subject": { "url": true },
+            "predicate": { "exists": "x" }
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("takes no argument"), "{err}");
+
+        // multi-key or non-string/object predicates → error
+        assert!(serde_json::from_value::<Claim>(json!({
+            "subject": { "url": true },
+            "predicate": { "contains": "x", "equals": "y" }
+        }))
+        .is_err());
+        assert!(serde_json::from_value::<Claim>(json!({
+            "subject": { "url": true },
+            "predicate": 42
+        }))
+        .is_err());
     }
 }

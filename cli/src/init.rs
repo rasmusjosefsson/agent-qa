@@ -102,6 +102,15 @@ jobs:
 "#;
 
 pub fn cli(args: &[String]) -> Result<u8> {
+    if args
+        .iter()
+        .any(|a| matches!(a.as_str(), "-h" | "--help" | "help"))
+    {
+        println!(
+            "agent-qa init — bootstrap an agent-qa scenario directory\n\nUsage:\n  agent-qa init [dir] [--force] [--ci]\n\n  dir      Target directory (default: cwd)\n  --force  Overwrite existing files (scenario.json, agent-qa.toml)\n  --ci     Also write .github/workflows/agent-qa.yml — a replay-on-PR gate"
+        );
+        return Ok(0);
+    }
     let mut root: Option<PathBuf> = None;
     let mut force = false;
     let mut ci = false;
@@ -248,5 +257,13 @@ mod tests {
         fs::write(&wf, "custom").unwrap();
         init_at(tmp.path(), false, true, &mut |_| {}).unwrap();
         assert_eq!(fs::read_to_string(&wf).unwrap(), "custom");
+    }
+
+    /// `init --help` prints usage (it used to fail "unknown flag").
+    #[test]
+    fn help_flag_prints_usage() {
+        for args in [vec!["--help".to_string()], vec!["-h".to_string()]] {
+            assert_eq!(cli(&args).unwrap(), 0, "args {args:?}");
+        }
     }
 }
