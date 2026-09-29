@@ -99,6 +99,23 @@ impl CdpConnection {
             return Ok(v.get("result").cloned().unwrap_or(Json::Null));
         }
     }
+
+    /// Read one frame and return its parsed JSON — for dedicated event
+    /// sockets (see `cdp_net`) that only consume events after setup.
+    /// Command responses (`{"id": …}`) are returned too; callers filter.
+    pub fn next_event(&mut self) -> Result<Json> {
+        loop {
+            let frame = self
+                .ws
+                .read()
+                .map_err(|e| anyhow!("[transport] cdp read: {e}"))?;
+            match frame {
+                Message::Text(t) => return serde_json::from_str(&t).context("cdp event json"),
+                Message::Close(_) => bail!("[transport] cdp socket closed"),
+                _ => continue,
+            }
+        }
+    }
 }
 
 static CONNECTIONS: OnceLock<Mutex<HashMap<String, CdpConnection>>> = OnceLock::new();
@@ -110,7 +127,7 @@ fn connections() -> &'static Mutex<HashMap<String, CdpConnection>> {
 /// Whether `e` means "no CDP endpoint reachable" — the fake browsers used
 /// in unit tests and a not-yet-launched session both land here. CDP
 /// helpers degrade to their daemon fallbacks on it rather than failing.
-fn is_unavailable(e: &anyhow::Error) -> bool {
+pub(crate) fn is_unavailable(e: &anyhow::Error) -> bool {
     let s = format!("{e:#}");
     s.contains("[unavailable]")
 }
@@ -147,7 +164,7 @@ pub fn with_connection<T>(
 /// The active page target — last non-chrome page the browser reports
 /// (`chrome://newtab`-style leftovers sort first in practice and must not
 /// win).
-fn active_page(conn: &mut CdpConnection) -> Result<Option<(String, String)>> {
+pub(crate) fn active_page(conn: &mut CdpConnection) -> Result<Option<(String, String)>> {
     let targets = conn.call("Target.getTargets", json!({}))?;
     Ok(targets
         .get("targetInfos")

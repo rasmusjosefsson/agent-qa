@@ -422,26 +422,10 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         if let Err(e) = crate::browser::network_clear(&opts.session_name) {
             eprintln!("[v2-replay] network log clear skipped: {e}");
         }
-    }
-
-    // The browser's request capture is per-session: a replayed session
-    // still holds the previous run's traffic. Clear it so this run's
-    // network.json (and {"network"} claims) sees only its own requests.
-    // Best-effort — a session that doesn't exist yet just warns.
-    if !opts.dry_run {
-        if let Err(e) = crate::browser::network_clear(&opts.session_name) {
-            eprintln!("[v2-replay] network log clear skipped: {e}");
-        }
-    }
-
-    // The browser's request capture is per-session: a replayed session
-    // still holds the previous run's traffic. Clear it so this run's
-    // network.json (and {"network"} claims) sees only its own requests.
-    // Best-effort — a session that doesn't exist yet just warns.
-    if !opts.dry_run {
-        if let Err(e) = crate::browser::network_clear(&opts.session_name) {
-            eprintln!("[v2-replay] network log clear skipped: {e}");
-        }
+        // Own Network.* event capture — redirect-hop statuses and
+        // in-flight tracking the daemon's netlog doesn't expose. A fresh
+        // store per run; silently skipped without a CDP endpoint.
+        crate::cdp_net::start(&opts.session_name);
     }
 
     // 1. Load + validate.
