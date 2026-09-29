@@ -56,6 +56,14 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           return doStep(intent, { verb: "click", on: textLoc(args[0]) });
         case "clickRole":
           return doStep(intent, { verb: "click", on: roleLoc(args[0], args[1]) });
+        case "typeByRole":
+          // args = [role, name, value] — role locators resolve through the
+          // a11y snapshot, so this reaches into open shadow roots.
+          return doStep(intent, {
+            verb: "type",
+            on: roleLoc(args[0], args[1]),
+            value: literal(args[2]),
+          });
         case "clickScopedRole":
           // Scoped locator: the role+name search runs strictly inside the
           // container the scope chain resolves to. `name` may be a string or
@@ -412,6 +420,18 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
             { a11y: args[0] ?? true },
             args[1] ?? "notExists",
             args[2],
+          );
+        case "roleAttribute":
+          // args = [role, name, attribute, expected] — element attribute
+          // claim on a role locator (read via the a11y snapshot).
+          return checkStep(
+            intent,
+            {
+              element: roleLoc(args[0], args[1]),
+              attribute: args[2],
+            },
+            "equals",
+            args[3],
           );
         case "cookiePresent":
           // args[0] = cookie name; args[1] === false flips to expecting it

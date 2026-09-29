@@ -222,7 +222,8 @@
             "element": { "$ref": "#/$defs/Locator" },
             "attribute": { "type": "string" },
             "ofKind": { "enum": ["text", "value", "count", "attribute"] }
-          }
+          },
+          "$comment": "attribute reads: raw css/testId locators hit the DOM (text/value/checked/focused/style:<prop>/getAttribute); role locators read the a11y snapshot's state tokens (checked/disabled/required/expanded/pressed/selected/readonly/current/level/orientation/valuemin/valuemax/valuenow, value tail, text = accessible name)."
         },
         {
           "type": "object",

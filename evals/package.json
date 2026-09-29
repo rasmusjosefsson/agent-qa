@@ -208,6 +208,7 @@
     "golden:edge:tc32": "bun golden/edge-tc32.ts",
     "golden:edge:tc33": "bun golden/edge-tc33.ts",
     "golden:edge:tc34": "bun golden/edge-tc34.ts",
+    "golden:shub:tc01": "bun golden/shadow-dom-tc01.ts",
     "golden:sauce:s01": "bun golden/sauce-tc01.ts",
     "golden:sauce:s02": "bun golden/sauce-tc02.ts",
     "golden:sauce:s03": "bun golden/sauce-tc03.ts",
