@@ -255,7 +255,8 @@
     "golden:wiki:tc01": "bun golden/wiki-tc01.ts",
     "golden:wiki:tc02": "bun golden/wiki-tc02.ts",
     "golden:wiki:tc03": "bun golden/wiki-tc03.ts",
-    "golden:wiki:tc04": "bun golden/wiki-tc04.ts"
+    "golden:wiki:tc04": "bun golden/wiki-tc04.ts",
+    "golden:wait-state:tc01": "bun golden/wait-state-tc01.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"
