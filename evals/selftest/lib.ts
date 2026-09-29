@@ -12,7 +12,7 @@
  * replays/ output under them is gitignored.
  */
 
-import { existsSync, mkdirSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 
@@ -120,9 +120,21 @@ export async function lint(sid: string, e: Record<string, string>): Promise<stri
   }
 }
 
-/** Re-mint every shot baseline for a scenario from its latest run. */
+/** Re-mint every golden baseline (shot + domshot) for a scenario from its latest run. */
 export async function accept(sid: string, e: Record<string, string>): Promise<void> {
   await sh([agentQa, "shot-accept", sid, "--json"], e, `shot-accept ${sid}`);
+  // domshot-accept fails with "no domshot claims" when the scenario has none —
+  // read the doc and skip rather than papering over real failures with a catch.
+  const doc = JSON.parse(
+    readFileSync(resolve(scenariosRoot, sid, "scenario.json"), "utf8"),
+  );
+  const hasDomshot = (doc.steps ?? []).some(
+    (s: { claim?: { subject?: { domshot?: string } } }) =>
+      s?.claim?.subject?.domshot,
+  );
+  if (hasDomshot) {
+    await sh([agentQa, "domshot-accept", sid, "--json"], e, `domshot-accept ${sid}`);
+  }
 }
 
 export function scenarioIds(): string[] {

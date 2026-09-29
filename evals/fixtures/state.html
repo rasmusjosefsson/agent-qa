@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>State fixture</title>
+  </head>
+  <body>
+    <!-- Renders localStorage/sessionStorage/cookie values on load so a
+         scenario can seed state via do/state, reload, and assert the
+         page observed it. -->
+    <h1>State fixture</h1>
+    <div id="out" data-testid="out"></div>
+    <script>
+      const cookie = (name) => {
+        const m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]*)"));
+        return m ? decodeURIComponent(m[1]) : "";
+      };
+      const out = document.getElementById("out");
+      out.textContent =
+        "theme:" + (localStorage.getItem("theme") || "-") +
+        " draft:" + (sessionStorage.getItem("draft") || "-") +
+        " role:" + (cookie("role") || "-");
+    </script>
+  </body>
+</html>

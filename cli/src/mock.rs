@@ -129,12 +129,15 @@ pub(crate) fn rule_from_params(params: &BTreeMap<String, Json>) -> Result<MockRu
 fn install_js(rules: &[MockRule], strict: bool) -> String {
     let rules_json = serde_json::to_string(rules).unwrap_or_else(|_| "[]".to_string());
     let fetch_miss = if strict {
-        "return new Promise((_, rej) => setTimeout(() => rej(new TypeError('Failed to fetch (offline)')), 0));"
+        // Strict misses never reach the wire — log them as aborted so the
+        // request log records what the app *tried* to do.
+        "logCall(m, u, null, pd, null, true); return new Promise((_, rej) => setTimeout(() => rej(new TypeError('Failed to fetch (offline)')), 0));"
     } else {
+        // Passthrough requests are captured by CDP — no log entry needed.
         "return of.call(window, res, init);"
     };
     let xhr_miss = if strict {
-        "{ setTimeout(() => { this.dispatchEvent(new Event('error')); this.dispatchEvent(new Event('loadend')); }, 0); return; }"
+        "{ logCall(this.__qaMethod || 'GET', this.__qaUrl, null, (a && a[0]) || null, null, true); setTimeout(() => { this.dispatchEvent(new Event('error')); this.dispatchEvent(new Event('loadend')); }, 0); return; }"
     } else {
         "return S.apply(this, a);"
     };
@@ -148,27 +151,44 @@ fn install_js(rules: &[MockRule], strict: bool) -> String {
   const abs = (u) => {{ try {{ return new URL(u, location.href).href; }} catch {{ return u; }} }};
   const match = (u) => (window.__qaMocks || []).find(r => toRe(r.url).test(u) || toRe(r.url).test(abs(u)));
   const respond = (r) => new Response(r.body, {{ status: r.status, headers: {{ 'content-type': 'application/json' }} }});
+  // In-page stubs never reach the wire, so CDP capture can't see them.
+  // Mirror every intercepted call into `__aqMockLog` — network claims and
+  // the run's network.json merge it so mocked traffic stays assertable.
+  window.__aqMockLog = window.__aqMockLog || [];
+  window.__aqMockSeq = window.__aqMockSeq || 0;
+  const logCall = (method, u, status, postData, responseBody, aborted) => {{
+    window.__aqMockLog.push({{
+      id: 'mock-' + (++window.__aqMockSeq), url: abs(u), method,
+      status, postData: postData || null, responseBody: responseBody ?? null,
+      mocked: true, aborted: !!aborted, t: Date.now(),
+    }});
+  }};
   const of = window.fetch;
   window.fetch = (res, init) => {{
     const u = typeof res === 'string' ? res : ((res && res.url) || '');
     const r = match(u);
-    if (!r) {fetch_miss}
-    if (r.abort) return new Promise((_, rej) => setTimeout(() => rej(new TypeError('Failed to fetch')), r.delayMs || r.delay_ms || 0));
+    const m = ((init && init.method) || (res && res.method) || 'GET').toUpperCase();
+    const pd = (init && typeof init.body === 'string') ? init.body : ((res && typeof res.body === 'string') ? res.body : null);
+    if (!r) {{ {fetch_miss} }}
+    if (r.abort) {{ logCall(m, u, 0, pd, null, true); return new Promise((_, rej) => setTimeout(() => rej(new TypeError('Failed to fetch')), r.delayMs || r.delay_ms || 0)); }}
+    logCall(m, u, r.status, pd, r.body, false);
     return new Promise(done => setTimeout(() => done(respond(r)), r.delayMs || r.delay_ms || 0));
   }};
   const O = XMLHttpRequest.prototype.open, S = XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.open = function(m, u, ...rest) {{ this.__qaUrl = u; return O.call(this, m, u, ...rest); }};
+  XMLHttpRequest.prototype.open = function(m, u, ...rest) {{ this.__qaUrl = u; this.__qaMethod = m; return O.call(this, m, u, ...rest); }};
   XMLHttpRequest.prototype.send = function(...a) {{
     const r = this.__qaUrl && match(this.__qaUrl);
     if (!r) {xhr_miss}
     const self = this;
     if (r.abort) {{
+      logCall(self.__qaMethod || 'GET', self.__qaUrl, 0, (a && typeof a[0] === 'string' ? a[0] : null), null, true);
       setTimeout(() => {{
         self.dispatchEvent(new Event('error'));
         self.dispatchEvent(new Event('loadend'));
       }}, r.delayMs || r.delay_ms || 0);
       return;
     }}
+    logCall(self.__qaMethod || 'GET', self.__qaUrl, r.status, (a && typeof a[0] === 'string' ? a[0] : null), r.body, false);
     setTimeout(() => {{
       Object.defineProperty(self, 'status', {{ value: r.status }});
       Object.defineProperty(self, 'statusText', {{ value: String(r.status) }});
