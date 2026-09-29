@@ -83,6 +83,9 @@ export interface EdgeGolden extends GoldenContext {
   assertStorage(keyOrMatcher: string | { key: string; scope?: string }, expectPresent: boolean, intent: string): Promise<void>;
   assertStyle(selector: string, cssProperty: string, expected: string, intent: string): Promise<void>;
   a11yAudit(matcher: true | Record<string, unknown>, predicate: string, value: number | undefined, intent: string): Promise<void>;
+  frameInto(selector: string, intent: string): Promise<void>;
+  frameMain(intent: string): Promise<void>;
+  fillInFrame(frameSelector: string, selector: string, value: string, intent: string): Promise<void>;
 }
 
 function createContext(tc: string, intent: string, keepDialogs: boolean, label = "edge"): GoldenContext {
@@ -377,6 +380,21 @@ export async function runEdgeGolden(
     },
     async assertUrlContains(fragment, stepIntent) {
       await record(ctx, "assert", { kind: "url", args: [fragment], intent: stepIntent });
+    },
+    async frameInto(selector, stepIntent) {
+      await run(ctx, `frame ready ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "wait", selector]);
+      await record(ctx, "action", { method: "frame", args: [selector], intent: stepIntent });
+    },
+    async frameMain(stepIntent) {
+      await record(ctx, "action", { method: "frame", args: [], intent: stepIntent });
+    },
+    async fillInFrame(frameSelector, selector, value, stepIntent) {
+      const expr = `(function(){var f=document.querySelector(${JSON.stringify(frameSelector)});if(!f||!f.contentDocument)return 'no frame';var el=f.contentDocument.querySelector(${JSON.stringify(selector)});if(!el)return 'no input';el.value=${JSON.stringify(value)};el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));return 'ok'})()`;
+      const out = await run(ctx, `fill ${selector} in frame`, [ctx.agentBrowser, "--session", ctx.session, "eval", expr]);
+      if (!out.includes("ok")) {
+        throw new Error(`frame fill failed: ${out}`);
+      }
+      await record(ctx, "action", { method: "fillBySelector", args: [selector, value], intent: stepIntent });
     },
   };
 

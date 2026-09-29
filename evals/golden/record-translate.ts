@@ -186,6 +186,13 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           });
         case "reloadPage":
           return doStep(intent, { verb: "reload" });
+        case "frame":
+          // args[0] = css selector of the iframe to enter; no args returns to
+          // the top document.
+          return doStep(intent, {
+            verb: "frame",
+            params: args[0] === undefined ? { main: true } : { selector: args[0] },
+          });
         case "tabCommand":
           // args[0] is the full `tab` subcommand tail: "new <url>", "list",
           // "close <ref>", or "<ref>" to switch.
