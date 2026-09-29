@@ -113,6 +113,7 @@
     "golden:input-fields:tc10": "bun golden/input-fields-tc10.ts",
     "golden:input-fields:tc11": "bun golden/input-fields-tc11.ts",
     "golden:input-fields:tc12": "bun golden/input-fields-tc12.ts",
+    "golden:pst:tc01": "bun golden/pst-tc01.ts",
     "golden:radio-checkbox:tc01": "bun golden/radio-checkbox-tc01.ts",
     "golden:radio-checkbox:tc02": "bun golden/radio-checkbox-tc02.ts",
     "golden:radio-checkbox:tc03": "bun golden/radio-checkbox-tc03.ts",
