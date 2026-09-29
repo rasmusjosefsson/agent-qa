@@ -58,6 +58,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 
 | `audit cluster` | Group step failures across every scenario's runs by normalized error signature (quoted literals + digit runs stripped) — one root cause across N runs reads as one cluster with its member list. `--min-size N` (default 2) hides lone failures; `--json` for the structured list. |
 | `audit verdict <sid> <runId \| latest>` | One-word triage for the run: `PASS` (exit 0) green and clean, `FIX` (exit 2) green but self-corrected (auto-heals or value-rejections — review heal.jsonl + promote), `BLOCK` (exit 1) failed. `--json` for the structured verdict incl. the offending stepIds. |
+| `audit explain <sid> [runId \| latest]` | One-block failure digest for a run: verdict + failing steps (error + screenshot pointer) + heal trail + console errors + failed/pending requests, plus a `next:` list of the follow-up commands that fit the evidence. Exit code mirrors `audit verdict` (0/1/2). `--json` prints the same digest structurally — the single read an agent needs to repair a broken run. |
 
 
 
