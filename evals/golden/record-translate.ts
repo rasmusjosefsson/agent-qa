@@ -199,13 +199,6 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
             verb: "click",
             on: css(`${args[0]} [role="option"]:nth-child(${args[1]})`),
           });
-        case "setViewport":
-          // args[0] = width px, args[1] = height px — do/viewport resizes the
-          // live browser so breakpoint-gated content can be asserted.
-          return doStep(intent, {
-            verb: "viewport",
-            params: { width: args[0], height: args[1] },
-          });
         default:
           throw new Error(`record-step translate: unknown action method ${String(p.method)}`);
       }
@@ -402,36 +395,6 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
             intent,
             { storage: args[0] },
             args[1] === false ? "notExists" : "exists",
-          );
-        case "consoleMessage":
-          // args[0] = matcher: true | {type?, text?} — defaults to all
-          // messages; args[1] = predicate ("exists" default, "notExists",
-          // numeric/text predicates); args[2] = optional value.
-          return checkStep(
-            intent,
-            { console: args[0] ?? true },
-            args[1] ?? "exists",
-            args[2],
-          );
-        case "pageError":
-          // args[0] = matcher: true | {text?, url?} — uncaught exceptions
-          // (the `errors` channel), NOT console.* calls. args[1] predicate
-          // ("exists" default / "notExists" / numeric / text), args[2] value.
-          return checkStep(
-            intent,
-            { pageError: args[0] ?? true },
-            args[1] ?? "exists",
-            args[2],
-          );
-        case "a11yViolations":
-          // args[0] = matcher: true | {impact?, rule?, within?, incomplete?};
-          // args[1] = predicate — "notExists" (no violations) is the usual
-          // default; numeric predicates compare the finding count.
-          return checkStep(
-            intent,
-            { a11y: args[0] ?? true },
-            args[1] ?? "notExists",
-            args[2],
           );
         default:
           throw new Error(`record-step translate: unknown assert kind ${String(p.kind)}`);
