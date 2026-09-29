@@ -15,6 +15,15 @@ use crate::scenario::Scenario;
 use crate::schema;
 
 pub fn run(args: &[String]) -> Result<u8> {
+    // `-h|--help` anywhere wins over positional parsing — otherwise a
+    // file-taking subverb (`scenario lint --help`) reads "--help" as a path.
+    if args
+        .iter()
+        .any(|a| matches!(a.as_str(), "-h" | "--help" | "help"))
+    {
+        help();
+        return Ok(0);
+    }
     match args.first().map(String::as_str) {
         Some("validate") => {
             let file = args.get(1).ok_or_else(|| {
@@ -5684,6 +5693,22 @@ mod tests {
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    /// `--help` after a subverb must print usage, not be swallowed as the
+    /// `<file>` positional (`scenario lint --help` used to try reading a
+    /// file literally named --help).
+    #[test]
+    fn help_flag_wins_over_file_positionals() {
+        for args in [
+            vec!["lint".to_string(), "--help".to_string()],
+            vec!["validate".to_string(), "--help".to_string()],
+            vec!["check".to_string(), "-h".to_string()],
+            vec!["new".to_string(), "--help".to_string()],
+            vec!["--help".to_string()],
+        ] {
+            assert_eq!(run(&args).unwrap(), 0, "args {args:?}");
         }
     }
 }
