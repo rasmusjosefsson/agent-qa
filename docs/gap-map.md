@@ -15,7 +15,7 @@ the picture shifts materially.
 | Audit | `flaky`, `slow`, `heal-chronic` (+`--all`), `verdict` (+`--all`), `cluster`, `trend` (+`--all`), `health`, run-vs-run compare (CLI + workbench) |
 | Lint | `no-visual-check`, `shot-without-baseline`, `domshot-without-baseline`, `orphan-baseline`, `brittle-locator`, `fixed-sleep`, `check-all` in smoke |
 | CI | `qa-gate` (fixture goldens + sticky verdict + run-report artifacts), `ui-goldens` (visual gate w/ embedded before/after/diff images), `qa-crawl` (draft coverage on UI PRs), `qa-adopt` + `/qa accept` commands, composite `action.yml` (+npm install mode, +app-under-test boot), `evals-nightly`, changelog-driven releases |
-| Golden suites | ~30 QA Playground pages, ~34 the-internet edge cases (six sweeps), saucedemo suite (login/sort, full 21-step purchase, negative auth, logout, cookie+storage lifecycle), expandtesting (login round-trip, dynamic table, infinite scroll), todomvc (stateful SPA), demoqa widgets, httpbin hermetic-mock loop, workbench selftest goldens, quotes.toscrape.com (pagination, HttpOnly cookie claims, scroll offsets), parabank (registration with `{{vars._unique}}`, login/logout, profile update — volatile-URL claims normalized), demoblaze (category filters, add-to-cart alert claims, cart session persistence across reload, full purchase flow), automation-exercise (signup+cart lifecycle), wikipedia (search nav, TOC, history, REST API claims), formy (full form, bootstrap modal, jQuery datepicker, JS dropdown), testpages (ajax cascade, form POST echo, native dialogs, onblur validation), coffee-cart (cart badge, promo modal, checkout form, quantity steppers), globalsqa XYZ Bank (AngularJS login, deposit/withdraw, transactions ledger, manager console), hackernews (live HN API claims), selectorshub (shadow-DOM fills + snapshot attribute reads), practicesoftwaretesting (search, cart, login + QUERY-method API claims), lambdatest OpenCart (GET-form search with percent-encoded routes, hidden sticky-bar twins, delegated jQuery cart POST, cart page quantity rows), bonigarcia selenium-webdriver-java (GET form submit, open shadow DOM text, jQuery UI mouse drag, native dialogs + Bootstrap modal, web storage seeding) |
+| Golden suites | ~30 QA Playground pages, ~34 the-internet edge cases (six sweeps), saucedemo suite (login/sort, full 21-step purchase, negative auth, logout, cookie+storage lifecycle), expandtesting (login round-trip, dynamic table, infinite scroll), todomvc (stateful SPA), demoqa widgets, httpbin hermetic-mock loop, workbench selftest goldens, quotes.toscrape.com (pagination, HttpOnly cookie claims, scroll offsets), parabank (registration with `{{vars._unique}}`, login/logout, profile update — volatile-URL claims normalized), demoblaze (category filters, add-to-cart alert claims, cart session persistence across reload, full purchase flow), automation-exercise (signup+cart lifecycle), wikipedia (search nav, TOC, history, REST API claims), formy (full form, bootstrap modal, jQuery datepicker, JS dropdown), testpages (ajax cascade, form POST echo, native dialogs, onblur validation), coffee-cart (cart badge, promo modal, checkout form, quantity steppers), globalsqa XYZ Bank (AngularJS login, deposit/withdraw, transactions ledger, manager console), hackernews (live HN API claims), selectorshub (shadow-DOM fills + snapshot attribute reads), practicesoftwaretesting (search, cart, login + QUERY-method API claims), lambdatest OpenCart (GET-form search with percent-encoded routes, hidden sticky-bar twins, delegated jQuery cart POST, cart page quantity rows), bonigarcia selenium-webdriver-java (GET form submit, open shadow DOM text, jQuery UI mouse drag, native dialogs + Bootstrap modal, web storage seeding), petstore.octoperf.com JPetStore (Struts catalog browse, add-to-cart POST, sign-in round-trip, full order placement with `;jsessionid` matrix-param URLs) |
 
 ## Ranked gaps
 
@@ -314,8 +314,29 @@ first run once the right helpers existed:
   alert/confirm/prompt claims to page state on real pages for the
   first time.
 
+## Dogfood pass VI — JPetStore (petstore.octoperf.com)
+
+Struts app; every URL carries a `;jsessionid=<id>` matrix param and the
+signin POST 302-redirects into the account page. Two real findings:
+
+- **Volatile matrix params broke every auto-network claim** — flush's
+  `insert_auto_network_claims` and crawl's `network_claim_steps`
+  normalized URLs by splitting on `?`/`#` only, so `;jsessionid=` stayed
+  inside `urlMatches` and could never match a fresh session. Recorded
+  claims were unmatchable by construction; both emission sites now split
+  on `;` too (#352). Same class as the parabank volatile-URL fix —
+  worth grepping for other URL-normalization sites if it recurs.
+- **agent-browser's input channel dies after a POST→302** — after the
+  signin submit, `click`/`@ref`/`press` dispatch nothing (no events
+  reach any page target) until an `open` to a *different origin*
+  re-binds it; same-origin opens and `reload` do not. eval `.click()`
+  still works. Record-side live drive worked around it with
+  `clickSelectorForce`; replay's own trusted-input path is unaffected.
+  Upstream quirk — flag if it shows up elsewhere.
+
 ## Recently closed (for orientation)
 
+- JPetStore sweep incl. `;jsessionid` matcher normalization (#352)
 - bonigarcia sweep incl. recordable storage seeds + mouse-driven drag helper (#351)
 - OpenCart/lambdatest findings: prefer-visible css resolution + deferred
   click re-resolve (#348), persistent-emulation reset at run start +
