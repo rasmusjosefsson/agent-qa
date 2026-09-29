@@ -21,6 +21,7 @@
 
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value as Json;
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 use crate::browser::{self, RoleAct};
@@ -40,6 +41,76 @@ pub struct DoContext<'a> {
     /// keeps the page's JS thread (and the daemon's pending eval reply)
     /// blocked, so post-click settle waits must yield to the dialog.
     pub uses_dialog: bool,
+}
+
+thread_local! {
+    /// Locator-removal expressions registered by `dismiss` steps. Consent
+    /// walls and overlay dialogs mount asynchronously — sometimes seconds
+    /// after load — so each interactive step re-applies the removals
+    /// before dispatching. Persistent across navigations on purpose: CMP
+    /// banners commonly re-mount on every page until accepted.
+    static DISMISSED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Reset the dismissal list at run start.
+pub fn clear_dismissed() {
+    DISMISSED.with(|d| d.borrow_mut().clear());
+}
+
+/// Verbs that touch the page DOM — a covering overlay can intercept their
+/// hit-test, so dismissed selectors are re-removed before dispatch.
+fn interactive_verb(verb: &Verb) -> bool {
+    matches!(
+        verb,
+        Verb::Click
+            | Verb::DblClick
+            | Verb::RightClick
+            | Verb::Check
+            | Verb::Uncheck
+            | Verb::Type
+            | Verb::Clear
+            | Verb::Select
+            | Verb::Upload
+            | Verb::Download
+            | Verb::Drag
+            | Verb::Hover
+            | Verb::Focus
+            | Verb::Blur
+            | Verb::ScrollTo
+            | Verb::Frame
+    )
+}
+
+/// Lower a locator to a JS expression removing every matching node. The
+/// expression must be re-runnable: it tolerates absent matches and has no
+/// side effects beyond removal. Role locators can't lower to a re-appliable
+/// selector — dismiss requires a raw css/testId/xpath locator.
+fn dismiss_expr(loc: &Locator, scope: &mut ValueScope, _scenario_dir: &Path) -> Result<String> {
+    let raw = match loc {
+        Locator::Role(_) => bail!(
+            "dismiss needs a raw locator (css/testId/xpath) — role locators can't be re-applied"
+        ),
+        Locator::Raw(raw) => raw,
+    };
+    if raw.raw.kind == RawLocatorKind::Text {
+        bail!("dismiss needs a css/testId/xpath locator — text locators can't be re-applied");
+    }
+    let v = serde_json::to_string(&crate::value::substitute_scenario_vars(
+        &raw.raw.value,
+        scope,
+    ))?;
+    Ok(match raw.raw.kind {
+        RawLocatorKind::Css => format!(
+            "(function(){{document.querySelectorAll({v}).forEach(function(e){{e.remove()}});return 1}})()"
+        ),
+        RawLocatorKind::TestId => format!(
+            "(function(){{document.querySelectorAll('[data-testid='+{v}+'],[data-test-id='+{v}+'],[data-test='+{v}+']').forEach(function(e){{e.remove()}});return 1}})()"
+        ),
+        RawLocatorKind::Xpath => format!(
+            "(function(){{var r=document.evaluate({v},document,null,XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,null);var i,n=[];for(i=0;i<r.snapshotLength;i++)n.push(r.snapshotItem(i));n.forEach(function(e){{e.remove()}});return 1}})()"
+        ),
+        RawLocatorKind::Text => unreachable!("text locators bail above"),
+    })
 }
 
 /// Dispatch a single `do` step. Returns `Ok(Some(saved))` if the verb
@@ -63,6 +134,15 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
         ),
         Step::Check { id, .. } => bail!("dispatch_do: step '{id}' is a check, not a do"),
     };
+    // Re-remove dismissed overlays before anything that hit-tests the DOM.
+    // Best-effort: a mid-navigation document just skips.
+    if interactive_verb(verb) {
+        DISMISSED.with(|d| {
+            for expr in d.borrow().iter() {
+                let _ = browser::eval_expression(ctx.session, expr);
+            }
+        });
+    }
     match verb {
         Verb::Goto => {
             let url = resolve_literal_string(value, scope, "goto.value")?;
@@ -288,6 +368,12 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                 scope,
                 ctx.scenario_dir,
             )?;
+            Ok(None)
+        }
+        Verb::Dismiss => {
+            let expr = dismiss_expr(on.unwrap(), scope, ctx.scenario_dir)?;
+            let _ = browser::eval_expression(ctx.session, &expr);
+            DISMISSED.with(|d| d.borrow_mut().push(expr));
             Ok(None)
         }
         Verb::DblClick => {
@@ -2880,5 +2966,89 @@ mod tests {
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         clear_fake();
         assert!(err.contains("i18n.json"), "got: {err}");
+    }
+
+    #[test]
+    fn dismiss_expr_rejects_non_reappliable_locators() {
+        let mut scope = ValueScope::default();
+        let dir = Path::new("/tmp");
+        let role: Locator =
+            serde_json::from_value(json!({ "role": "button", "name": "x" })).unwrap();
+        let err = dismiss_expr(&role, &mut scope, dir)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("raw locator"), "got: {err}");
+        let text: Locator = serde_json::from_value(
+            json!({ "raw": { "kind": "text", "value": "OK" }, "reason": "r" }),
+        )
+        .unwrap();
+        let err = dismiss_expr(&text, &mut scope, dir)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("css/testId/xpath"), "got: {err}");
+    }
+
+    #[test]
+    fn dismiss_expr_lowers_raw_kinds_to_removals() {
+        let mut scope = ValueScope::default();
+        let dir = Path::new("/tmp");
+        let css: Locator = serde_json::from_value(
+            json!({ "raw": { "kind": "css", "value": ".wall" }, "reason": "r" }),
+        )
+        .unwrap();
+        let expr = dismiss_expr(&css, &mut scope, dir).unwrap();
+        assert!(expr.contains("querySelectorAll(\".wall\")"), "got: {expr}");
+        let xp: Locator = serde_json::from_value(
+            json!({ "raw": { "kind": "xpath", "value": "//div" }, "reason": "r" }),
+        )
+        .unwrap();
+        let expr = dismiss_expr(&xp, &mut scope, dir).unwrap();
+        assert!(expr.contains("document.evaluate"), "got: {expr}");
+    }
+
+    #[test]
+    fn dismissed_selectors_reapply_before_interactive_steps() {
+        let _g = lock_env();
+        clear_dismissed();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake(tmp.path(), &log);
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        let d = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "dismiss",
+            "on": { "raw": { "kind": "css", "value": ".wall" }, "reason": "r" }
+        }));
+        dispatch_do(&d, &ctx, &mut scope).unwrap();
+        let c = parse(json!({
+            "id": "s2", "intent": "x", "kind": "do", "verb": "click",
+            "on": { "raw": { "kind": "css", "value": "#btn" }, "reason": "r" }
+        }));
+        dispatch_do(&c, &ctx, &mut scope).unwrap();
+        let out = fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            out.matches("querySelectorAll(\".wall\")").count(),
+            2,
+            "got: {out}"
+        );
+        // non-interactive verbs don't re-apply the list
+        let w = parse(json!({
+            "id": "s3", "intent": "x", "kind": "do", "verb": "wait",
+            "params": { "ms": 1 }
+        }));
+        dispatch_do(&w, &ctx, &mut scope).unwrap();
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        assert_eq!(
+            out.matches("querySelectorAll(\".wall\")").count(),
+            2,
+            "got: {out}"
+        );
+        clear_dismissed();
     }
 }

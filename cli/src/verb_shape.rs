@@ -61,7 +61,7 @@ fn rule_for(verb: &Verb) -> VerbRule {
             required: &[DoField::On, DoField::Value],
             ..VerbRule::default()
         },
-        Verb::DblClick => VerbRule {
+        Verb::DblClick | Verb::Dismiss => VerbRule {
             required: &[DoField::On],
             forbidden: &[DoField::Value],
             ..VerbRule::default()
