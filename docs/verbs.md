@@ -16,10 +16,11 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `record continue <sid>` | Extend an existing scenario: replay it to its end state in `--session` (default `default`), seed the buffer with its steps, keep recording — `flush` writes the extended scenario back to the same sid. `--skip-replay` when hand-driving to the end state. |
 | `run-step <do|check> <draft-json>` | Dispatch ONE trigger payload against the live session for author-time feedback, without recording. Same direct draft shapes as `record-step`; prints a `{ok,…}` JSON line. `--session`. |
 | `aria-snapshot` | Dump the live page's accessibility tree as structured picker rows (a thin adapter over `agent-browser snapshot`). Flags: `--interactive`, `--session`. |
-| `cdp-url [--session] [--json]` | Print the live session's CDP WebSocket endpoint. Powers the editor's inline live-browser pane (screencast + drive-to-record: clicks, typing, select commits, checkbox/radio toggles, and named-key presses all land as steps). Read-only. |
+| `cdp-url [--session] [--json]` | Print the live session's CDP WebSocket endpoint. Powers the editor's inline live-browser pane (screencast + drive-to-record: clicks, typing, select commits, checkbox/radio toggles, and named-key presses, right-clicks, file uploads, dialogs, page state, iframe moves, viewport resizes, gestures, and downloads all land as steps). Read-only. |
 | `buffer list \| delete <i> \| move <from> <to> \| edit <i> <draft-json> \| load <sid> [--force] \| clear` | Inspect / reorder / rewrite / delete rows in the in-flight buffer; delete + move re-index `s0,s1,…` so `flush` stays clean. `edit` re-validates the draft and preserves the step's id/kind. `load` copies a saved scenario's steps into the buffer for editing — `flush` then writes back to the same `<sid>` and keeps fields the buffer doesn't model (`id`, `tags`, `inputs`, `templates`, `env.close`). `list --json` (includes `paused`, `editing`). |
 | `fill-unique` | Locator-uniqueness helper for `type`/`fill` style do steps |
 | `smart-click` | High-level click that resolves a label to a unique locator |
+| `smart-fill` | Type a literal value into a field by accessible name (default role `textbox`, `--role` to override) + auto-record a `do/type` step. `fill-unique` is the minted-per-run variant. |
 | `truncate` | Drop the trailing N steps from the in-flight scenario |
 | `flush` | Persist the recorder buffer to `scenario.json` |
 | `verify [--fix]` | Check the active recording — dense step ids + paired snapshot/screenshot sidecars. `--fix` renumbers to dense s0.. ids, rewiring `{"from":"step"}` refs and moving sidecar files to match. |
@@ -135,7 +136,7 @@ reload with `params.reload: true`.
 | `skills list \| get <name> \| path [name]` | Serve embedded agent runbooks. `list --json`. |
 | `plugins list \| doctor \| path <kind>` | Manage plugin discovery. `list --json`, `doctor --json`, `--plugin <path>` overrides. |
 | `scenario validate <file>` | Schema-validate one scenario. Flags: `--json`, `--format text\|json\|github`. |
-| `scenario validate-all` | Schema-validate every scenario under the root. Flags: `--json`, `--format text\|json\|github`. |
+| `scenario validate-all` | Schema-validate every scenario under the root. Flags: `--root <dir>` (overrides the configured root), `--json`, `--format text\|json\|github`. |
 | `scenario summary <file>` | Per-step summary. Flags: `--filter <substr>`, `--json`. |
 | `scenario inputs <file>` | List declared inputs. `--json`. |
 | `scenario new <file>` | Scaffold a minimal valid scenario. Flags: `--force`, `--url`, `--intent`. |
@@ -152,13 +153,13 @@ reload with `params.reload: true`.
 | `scenario tag <sid>` | List or mutate a scenario's `tags[]` — the field `replay --tags` selects on. Flags: `--add <a,b>`, `--remove <c,d>`, `--json` |
 | `scenario delete <sid>` | Remove a scenario directory. `--yes` / `-y` confirms; otherwise dry-run. |
 | `scenario prune-replays <sid> --keep N` | Keep most recent N replays. `--yes` / `-y` confirms. |
-| `scenario prune-all --keep N` | Same across every scenario. `--yes` / `-y` confirms. |
+| `scenario prune-all --keep N` | Same across every scenario. `--yes` / `-y` confirms; `--root <dir>` overrides the root. |
 | `scenario coverage <file>` | Per-step check coverage ratio. `--json`. |
-| `scenario coverage-all` | The same do→check ratio rolled up across every scenario in the root — rows sorted worst-first + OVERALL rollup. `--filter <substr>`, `--json`. |
+| `scenario coverage-all` | The same do→check ratio rolled up across every scenario in the root — rows sorted worst-first + OVERALL rollup. `--filter <substr>`, `--root <dir>`, `--json`. |
 | `scenario lint <file>` | Common-smell linter. Flags: `--json`, `--format text\|json\|github`, `--strict`, `--rule <code>` (repeatable), `--exclude-rule <code>` (repeatable), `--list-rules`. |
-| `scenario lint-all` | Same across every scenario under the root. Flags: `--json`, `--format`, `--strict`, `--rule`, `--exclude-rule`. |
+| `scenario lint-all` | Same across every scenario under the root. Flags: `--root <dir>` (overrides the configured root), `--json`, `--format`, `--strict`, `--rule`, `--exclude-rule`. |
 | `scenario check <file>` | Schema validate + lint in one pass. Flags: `--strict`, `--format`. |
-| `scenario check-all` | Same combo across every scenario under the root. Flags: `--strict`, `--format`. |
+| `scenario check-all` | Same combo across every scenario under the root. Flags: `--root <dir>` (overrides the configured root), `--strict`, `--format`. |
 
 ## Top-level flags
 

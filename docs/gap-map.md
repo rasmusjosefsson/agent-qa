@@ -66,9 +66,12 @@ the picture shifts materially.
     bundle timezone+locale), but geolocation is *blocked on a permission
     grant* — see P1 #3's finding. Timezone has no `set` subcommand in
     agent-browser at all (documented gap in #242).
-11. **WebSocket/SSE**: the network layer is request/response only —
-    `ws://` frames aren't captured; a `network` ofKind would need daemon
-    support first.
+11. ~~**WebSocket/SSE**~~ **done in #278** — sockets and event-streams
+    fold into the network claims surface as `cdpws-*` entries (method
+    `WS`, status 101, `wsFrames[]` per frame, `wsPayloadContains`
+    matcher; SSE arrives as `resourceType: "EventSource"` GETs). The
+    daemon is untouched — a pooled CDP flat session on the active page
+    target does the listening.
 
 ### P3 — ecosystem polish
 

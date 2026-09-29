@@ -3226,6 +3226,30 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
     });
     return sendCliResult(res, r);
   }
+  if (sub === 'recording/step-insert' && req.method === 'POST') {
+    if (!deps || typeof deps.runCli !== 'function') {
+      return sendJson(res, 503, { error: 'agent-qa CLI not resolved' });
+    }
+    const dir = entry.recordDir();
+    if (!dir) return badRequest(res, 'no recording for this chat');
+    const body = await readJsonBody(req);
+    const index = Number(body.index);
+    if (!Number.isInteger(index) || index < 0) {
+      return badRequest(res, 'index (non-negative integer) is required');
+    }
+    const kind = String(body.kind || '');
+    if (!EDIT_KINDS.includes(kind)) {
+      return badRequest(res, `kind must be one of ${EDIT_KINDS.join(', ')}`);
+    }
+    if (body.payload == null || typeof body.payload !== 'object' || Array.isArray(body.payload)) {
+      return badRequest(res, 'payload (object) is required');
+    }
+    const r = await deps.runCli(
+      ['buffer', 'insert', String(index), kind, JSON.stringify(body.payload)],
+      { AGENT_QA_RECORD_DIR: dir },
+    );
+    return sendCliResult(res, r);
+  }
 
   // Validate THIS chat's in-progress recording the way `flush` would write it
   // — schema + lint on the assembled scenario doc, without writing anything.

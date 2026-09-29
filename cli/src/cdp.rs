@@ -8,7 +8,15 @@
 //! it, so we attach our own without disturbing the daemon's session.
 //!
 //! The client is deliberately narrow: synchronous, one outstanding command
-//! at a time, events ignored. No TLS — the endpoint is loopback-only.
+//! at a time. Incoming frames that are *events* (carry `method`, no `id`)
+//! are buffered, not dropped — `enable_network_capture` turns on
+//! `Network.webSocket*` notifications on the page session, and
+//! `ws_entries` folds them into request-shaped entries that merge into
+//! `network_requests`, so WebSocket/SSE exchanges become claimable and
+//! land in `network.json` like HTTP ones (the daemon's own capture only
+//! sees fetch/XHR).
+//!
+//! No TLS — the endpoint is loopback-only.
 //!
 //! Connections are pooled per session name and kept open for the process
 //! lifetime — this is load-bearing, not an optimization: Chrome discards
@@ -24,9 +32,33 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use tungstenite::{stream::MaybeTlsStream, Message, WebSocket};
 
+/// State for `Network.*` event capture on the page's flat session:
+/// the flat `sessionId` plus each open WebSocket's entry, keyed by CDP
+/// requestId. Entries accumulate for the run's lifetime (cleared at run
+/// start like the daemon's own request log).
+#[derive(Default)]
+struct CaptureState {
+    _page_sid: String,
+    entries: Vec<CapEntry>,
+}
+
+/// A captured exchange the daemon's fetch/XHR hook can't see: WebSocket
+/// sockets (with their frames) and SSE/EventSource streams.
+#[derive(Debug)]
+struct CapEntry {
+    request_id: String,
+    url: String,
+    method: String,
+    status: Option<i64>,
+    kind: &'static str,
+    frames: Vec<Json>,
+}
+
 pub struct CdpConnection {
     ws: WebSocket<MaybeTlsStream<TcpStream>>,
     next_id: AtomicU64,
+    events: Vec<Json>,
+    capture: Option<CaptureState>,
 }
 
 impl CdpConnection {
@@ -42,11 +74,14 @@ impl CdpConnection {
         Ok(Self {
             ws,
             next_id: AtomicU64::new(1),
+            events: Vec::new(),
+            capture: None,
         })
     }
 
-    /// Send a command and wait for its response. Events and replies for
-    /// other ids are skipped — callers issue commands serially.
+    /// Send a command and wait for its response. Event frames and
+    /// replies for other ids are buffered/skipped — callers issue
+    /// commands serially.
     pub fn call(&mut self, method: &str, params: Json) -> Result<Json> {
         self.send_and_wait(method, params, None)
     }
@@ -87,6 +122,9 @@ impl CdpConnection {
             };
             let v: Json = serde_json::from_str(&text).context("cdp response json")?;
             if v.get("id").and_then(|i| i.as_u64()) != Some(id) {
+                if v.get("method").is_some() {
+                    self.events.push(v);
+                }
                 continue;
             }
             if let Some(err) = v.get("error") {
@@ -115,6 +153,50 @@ impl CdpConnection {
                 _ => continue,
             }
         }
+    }
+
+    fn tcp(&self) -> Option<&TcpStream> {
+        #[allow(unreachable_patterns)]
+        match self.ws.get_ref() {
+            MaybeTlsStream::Plain(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Pull whatever event frames are sitting in the socket buffer into
+    /// `self.events`, without blocking: a short read timeout turns
+    /// WouldBlock/TimedOut into "nothing buffered".
+    fn drain_events(&mut self) -> Result<()> {
+        let stream = self
+            .tcp()
+            .ok_or_else(|| anyhow!("[transport] cdp drain: not a tcp stream"))?;
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_millis(60)))
+            .map_err(|e| anyhow!("[transport] cdp drain set timeout: {e}"))?;
+        let result = loop {
+            match self.ws.read() {
+                Ok(Message::Text(t)) => {
+                    if let Ok(v) = serde_json::from_str::<Json>(&t) {
+                        if v.get("method").is_some() {
+                            self.events.push(v);
+                        }
+                    }
+                }
+                Ok(_) => {}
+                Err(tungstenite::Error::Io(e))
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    break Ok(())
+                }
+                Err(e) => break Err(anyhow!("[transport] cdp drain read: {e}")),
+            }
+        };
+        // Restore blocking reads for send_and_wait.
+        if let Some(s) = self.tcp() {
+            let _ = s.set_read_timeout(None);
+        }
+        result
     }
 }
 
@@ -281,6 +363,250 @@ fn set_geo_override_in(session: &str, lat: f64, lng: f64, accuracy: f64) -> Resu
         )?;
         Ok(true)
     })
+}
+
+/// Attach to the active page via flat session and switch on
+/// `Network.enable` there, so `webSocketCreated`/`webSocketFrame*`
+/// events start arriving on this connection. Idempotent per connection;
+/// returns false when no usable page target exists yet or the endpoint
+/// is unavailable (fake browser / pre-open session) — capture simply
+/// stays off rather than failing the run.
+pub fn enable_network_capture(session: &str) -> Result<bool> {
+    match enable_network_capture_in(session) {
+        Err(e) if is_unavailable(&e) => Ok(false),
+        out => out,
+    }
+}
+
+fn enable_network_capture_in(session: &str) -> Result<bool> {
+    with_connection(session, |conn| {
+        if conn.capture.is_some() {
+            return Ok(true);
+        }
+        // Any page target will do — the flat session survives navigations,
+        // so arming on a leftover newtab still captures the page it becomes.
+        let page = match active_page(conn)?.map(|(id, _)| id) {
+            Some(id) => Some(id),
+            None => conn
+                .call("Target.getTargets", json!({}))?
+                .get("targetInfos")
+                .and_then(|t| t.as_array())
+                .and_then(|infos| {
+                    infos
+                        .iter()
+                        .rfind(|t| t.get("type").and_then(|v| v.as_str()) == Some("page"))
+                })
+                .and_then(|t| t.get("targetId")?.as_str().map(str::to_string)),
+        };
+        let Some(target_id) = page else {
+            return Ok(false);
+        };
+        let attached = conn.call(
+            "Target.attachToTarget",
+            json!({ "targetId": target_id, "flatten": true }),
+        )?;
+        let sid = attached
+            .get("sessionId")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("Target.attachToTarget: no sessionId in {attached}"))?
+            .to_string();
+        conn.call_on("Network.enable", json!({}), &sid)?;
+        conn.capture = Some(CaptureState {
+            _page_sid: sid,
+            entries: Vec::new(),
+        });
+        Ok(true)
+    })
+}
+
+/// Drop the capture state — called when the daemon's own request log is
+/// cleared at run start, so ws entries cover this run only.
+pub fn clear_capture(session: &str) {
+    let Ok(mut map) = connections().lock() else {
+        return;
+    };
+    if let Some(conn) = map.get_mut(session) {
+        if let Some(cap) = conn.capture.as_mut() {
+            cap.entries.clear();
+        }
+        conn.events.clear();
+    }
+}
+
+/// Fold buffered `Network.webSocket*` events into socket entries, then
+/// return every socket the session has seen this run as a
+/// `CapturedRequest`-shaped Json: `requestId` = `cdpws-<n>`,
+/// `method` = "WS", `status` = 101, plus `wsFrames` payloads so claims
+/// can match on frame content. First call self-enables capture so
+/// opening a socket before any network step is still caught.
+pub fn ws_entries(session: &str) -> Result<Vec<Json>> {
+    match ws_entries_in(session) {
+        Err(e) if is_unavailable(&e) => Ok(vec![]),
+        out => out,
+    }
+}
+
+fn ws_entries_in(session: &str) -> Result<Vec<Json>> {
+    if let Err(e) = enable_network_capture_in(session) {
+        if is_unavailable(&e) {
+            return Ok(vec![]);
+        }
+        return Err(e);
+    }
+    with_connection(session, |conn| {
+        conn.drain_events()?;
+        let Some(cap) = conn.capture.as_mut() else {
+            return Ok(vec![]);
+        };
+        for ev in conn.events.drain(..) {
+            fold_event(cap, &ev);
+        }
+        Ok(cap
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let mut e = json!({
+                    "requestId": format!("cdpws-{i}"),
+                    "url": s.url,
+                    "method": s.method,
+                    "status": s.status.unwrap_or(101),
+                    "resourceType": s.kind,
+                });
+                if !s.frames.is_empty() {
+                    e.as_object_mut()
+                        .map(|o| o.insert("wsFrames".to_string(), Json::Array(s.frames.clone())));
+                }
+                e
+            })
+            .collect())
+    })
+}
+
+fn fold_event(cap: &mut CaptureState, ev: &Json) {
+    let Some(method) = ev.get("method").and_then(|m| m.as_str()) else {
+        return;
+    };
+    let params = ev.get("params").cloned().unwrap_or(Json::Null);
+    let rid = || {
+        params
+            .get("requestId")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    match method {
+        "Network.webSocketCreated" => {
+            let request_id = rid();
+            if request_id.is_empty() || cap.entries.iter().any(|s| s.request_id == request_id) {
+                return;
+            }
+            let url = params
+                .get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            cap.entries.push(CapEntry {
+                request_id,
+                url,
+                method: "WS".to_string(),
+                status: Some(101),
+                kind: "WebSocket",
+                frames: Vec::new(),
+            });
+        }
+        "Network.webSocketFrameSent" | "Network.webSocketFrameReceived" => {
+            let request_id = rid();
+            let Some(sock) = cap.entries.iter_mut().find(|s| s.request_id == request_id) else {
+                return;
+            };
+            let resp = params.get("response").cloned().unwrap_or(Json::Null);
+            sock.frames.push(json!({
+                "dir": if method.ends_with("Sent") { "sent" } else { "received" },
+                "opcode": resp.get("opcode").cloned().unwrap_or(Json::Null),
+                "payload": resp.get("payloadData").cloned().unwrap_or(Json::Null),
+            }));
+        }
+        // SSE: EventSource is a plain GET at the HTTP layer but invisible
+        // to the daemon's fetch/XHR hook — surface it as its own entry.
+        "Network.requestWillBeSent" => {
+            if params.get("type").and_then(|v| v.as_str()) != Some("EventSource") {
+                return;
+            }
+            let request_id = rid();
+            if request_id.is_empty() || cap.entries.iter().any(|s| s.request_id == request_id) {
+                return;
+            }
+            let url = params
+                .pointer("/request/url")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let method = params
+                .pointer("/request/method")
+                .and_then(|v| v.as_str())
+                .unwrap_or("GET")
+                .to_string();
+            cap.entries.push(CapEntry {
+                request_id,
+                url,
+                method,
+                status: None,
+                kind: "EventSource",
+                frames: Vec::new(),
+            });
+        }
+        "Network.responseReceived" => {
+            if params.get("type").and_then(|v| v.as_str()) != Some("EventSource") {
+                return;
+            }
+            let request_id = rid();
+            let Some(entry) = cap.entries.iter_mut().find(|s| s.request_id == request_id) else {
+                return;
+            };
+            entry.status = params.pointer("/response/status").and_then(|v| v.as_i64());
+        }
+        _ => {}
+    }
+}
+
+/// Detail for a `cdpws-<n>` entry — what `browser::network_request`
+/// serves instead of asking the daemon (which never saw the socket).
+/// `responseBody` is the joined received-frame payloads so
+/// responseJsonPath-style claims can walk it.
+pub fn ws_detail(session: &str, request_id: &str) -> Result<Option<Json>> {
+    match ws_detail_in(session, request_id) {
+        Err(e) if is_unavailable(&e) => Ok(None),
+        out => out,
+    }
+}
+
+fn ws_detail_in(session: &str, request_id: &str) -> Result<Option<Json>> {
+    let entries = ws_entries_in(session)?;
+    Ok(entries
+        .into_iter()
+        .find(|e| e.get("requestId").and_then(|v| v.as_str()) == Some(request_id))
+        .map(|mut e| {
+            let bodies: Vec<String> = e
+                .get("wsFrames")
+                .and_then(|f| f.as_array())
+                .map(|frames| {
+                    frames
+                        .iter()
+                        .filter(|f| f.get("dir").and_then(|d| d.as_str()) == Some("received"))
+                        .filter_map(|f| {
+                            f.get("payload")
+                                .and_then(|p| p.as_str())
+                                .map(str::to_string)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if let Some(o) = e.as_object_mut() {
+                o.insert("responseBody".to_string(), Json::String(bodies.join("\n")));
+            }
+            e
+        }))
 }
 
 #[cfg(test)]

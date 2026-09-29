@@ -22,13 +22,11 @@ use crate::paths;
 pub fn run(args: &[String]) -> Result<u8> {
     let opts = parse_args(args)?;
     let scenario_dir = paths::scenario_dir(&opts.sid)?;
-    let run_id = match &opts.run {
-        Some(r) => r.clone(),
-        None => fs::read_to_string(scenario_dir.join("replays").join("latest.txt"))
-            .context("no --run and replays/latest.txt is missing — replay first")?
-            .trim()
-            .to_string(),
-    };
+    // `latest` (or no flag) resolves like every audit subverb: replays/
+    // latest.txt first, else the highest lex-sorted run dir — so the
+    // report still works when latest.txt is absent.
+    let run_id =
+        crate::audit::resolve_run_id(&scenario_dir, opts.run.as_deref().unwrap_or("latest"))?;
     let run_dir = scenario_dir.join("replays").join(&run_id);
     if !run_dir.is_dir() {
         bail!("run {run_id:?} not found under {}", run_dir.display());
@@ -453,6 +451,19 @@ mod tests {
         assert!(fs::read_to_string(p)
             .unwrap()
             .contains("agent-qa run report"));
+        teardown();
+    }
+
+    #[test]
+    fn run_report_run_latest_resolves_without_latest_txt() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        setup(tmp.path());
+        make_run(tmp.path(), "j1", "rA");
+        make_run(tmp.path(), "j1", "rB");
+        // No replays/latest.txt — 'latest' falls back to the lex-max dir.
+        run(&["j1".into(), "--run".into(), "latest".into()]).unwrap();
+        assert!(tmp.path().join("j1/replays/rB/report.html").is_file());
         teardown();
     }
 

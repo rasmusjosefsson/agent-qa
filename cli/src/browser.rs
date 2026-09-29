@@ -774,6 +774,10 @@ pub struct CapturedRequest {
     /// POST body when the capture pipeline surfaces it on the list entry.
     #[serde(default)]
     pub post_data: Option<String>,
+    /// WebSocket frames (`{dir,opcode,payload}`) on `cdpws-*` entries —
+    /// absent on plain HTTP entries. Lets claims match frame payloads.
+    #[serde(default)]
+    pub ws_frames: Vec<serde_json::Value>,
 }
 
 fn json_data(verb: &str, stdout: &str) -> Result<serde_json::Value, AgentBrowserError> {
@@ -825,6 +829,17 @@ pub fn network_requests(session: &str) -> Result<Vec<CapturedRequest>, AgentBrow
     requests.extend(hops);
     requests.extend(mocked_requests(session));
     Ok(requests)
+    // WebSockets are invisible to the daemon's fetch/XHR capture — merge
+    // the entries our own CDP listener saw (`cdpws-*`).
+    if let Ok(ws_entries) = crate::cdp::ws_entries(session) {
+        for e in ws_entries {
+            if let Ok(req) = serde_json::from_value::<CapturedRequest>(e) {
+                reqs.push(req);
+            }
+        }
+    }
+    reqs.extend(mocked_requests(session));
+    Ok(reqs)
 }
 
 /// Requests the in-page mock intercepted (ids `mock-*`). Best-effort — a
@@ -860,6 +875,7 @@ fn mocked_requests(session: &str) -> Vec<CapturedRequest> {
                 .get("postData")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
+            ws_frames: vec![],
         })
         .collect()
 }
@@ -875,6 +891,10 @@ pub fn network_clear(session: &str) -> Result<(), AgentBrowserError> {
         ["network", "requests", "--clear"],
         RunOpts::new().capture(),
     )?;
+    // Same for the ws capture — fresh per run. Then (re)arm Network.enable
+    // on the page session so sockets opened during this run are seen.
+    crate::cdp::clear_capture(session);
+    let _ = crate::cdp::enable_network_capture(session);
     let _ = eval_expression(
         session,
         "window.__aqMockLog = []; window.__aqMockSeq = 0; 1",
@@ -892,12 +912,35 @@ fn decode_eval_string(raw: &str) -> String {
 }
 
 /// `agent-browser --json network request <id>` — full record for one
-/// exchange, including `responseBody`. `mock-*` ids come from the in-page
-/// stub's `__aqMockLog` instead — the request never hit the wire.
+/// exchange, including `responseBody`. `cdpws-*` ids are answered from
+/// our own capture (the daemon never saw the socket); `mock-*` ids come
+/// from the in-page stub's `__aqMockLog` instead — the request never hit
+/// the wire.
 pub fn network_request(
     session: &str,
     request_id: &str,
 ) -> Result<serde_json::Value, AgentBrowserError> {
+    if request_id.starts_with("cdpws-") {
+        match crate::cdp::ws_detail(session, request_id) {
+            Ok(Some(detail)) => return Ok(detail),
+            Ok(None) => {
+                return Err(AgentBrowserError::NonZero {
+                    verb: "network request".to_string(),
+                    exit_code: 1,
+                    stderr: format!("no websocket entry {request_id}"),
+                    hint: String::new(),
+                })
+            }
+            Err(e) => {
+                return Err(AgentBrowserError::NonZero {
+                    verb: "network request".to_string(),
+                    exit_code: 1,
+                    stderr: format!("cdp ws detail: {e}"),
+                    hint: String::new(),
+                })
+            }
+        }
+    }
     if request_id.starts_with("mock-") {
         if let Ok(raw) = eval_expression(
             session,
@@ -1225,15 +1268,20 @@ pub enum RoleAct {
     Hover,
     Focus,
     Fill,
+    /// Read act — returns the element's text. Used as a side-effect-free
+    /// presence probe; `find <sel> focus` is not a valid action on
+    /// agent-browser (focus only exists as a top-level selector verb).
+    Text,
 }
 
 impl RoleAct {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             RoleAct::Click => "click",
             RoleAct::Hover => "hover",
             RoleAct::Focus => "focus",
             RoleAct::Fill => "fill",
+            RoleAct::Text => "text",
         }
     }
 }
@@ -1310,6 +1358,7 @@ pub fn selector_act(
             RunOpts::new(),
         )
         .map(|_| ()),
+        RoleAct::Text => run(session, ["text", selector], RunOpts::new()).map(|_| ()),
     }
 }
 
@@ -1405,7 +1454,33 @@ pub fn click_ref(session: &str, snapshot_ref: &str) -> Result<(), AgentBrowserEr
 /// role+name appears twice we return the first — callers concerned
 /// about ambiguity should narrow the name first.
 pub fn find_ref_in_snapshot(snapshot: &str, role: &str, name: &str) -> Option<String> {
+    find_lines_in_snapshot(snapshot, role, name)
+        .into_iter()
+        .find_map(|line| {
+            // Find ref=eN within this line.
+            line.find("ref=").and_then(|idx| {
+                let rest = &line[idx + 4..];
+                let end = rest
+                    .find(|c: char| !c.is_ascii_alphanumeric())
+                    .unwrap_or(rest.len());
+                let r = &rest[..end];
+                if r.is_empty() {
+                    None
+                } else {
+                    Some(r.to_string())
+                }
+            })
+        })
+}
+
+/// Every snapshot line matching `<role> "<name>"` (word-boundary rule as
+/// `find_ref_in_snapshot`), trimmed. Callers that read per-node state
+/// (`[checked=true]`, `: value` tail, `[disabled]`) need the line, not
+/// just the ref. An empty vec means no a11y node matched; >1 means the
+/// role+name is ambiguous.
+pub fn find_lines_in_snapshot(snapshot: &str, role: &str, name: &str) -> Vec<String> {
     let needle = format!("{role} \"{name}\"");
+    let mut out = Vec::new();
     for line in snapshot.lines() {
         let trimmed = line.trim_start_matches([' ', '-', '\t']);
         if !trimmed.starts_with(&needle) {
@@ -1423,19 +1498,26 @@ pub fn find_ref_in_snapshot(snapshot: &str, role: &str, name: &str) -> Option<St
         {
             continue;
         }
-        // Find ref=eN within this line.
-        if let Some(idx) = line.find("ref=") {
-            let rest = &line[idx + 4..];
-            let end = rest
-                .find(|c: char| !c.is_ascii_alphanumeric())
-                .unwrap_or(rest.len());
-            let r = &rest[..end];
-            if !r.is_empty() {
-                return Some(r.to_string());
-            }
-        }
+        out.push(trimmed.to_string());
     }
-    None
+    out
+}
+
+/// `(accessible name, trimmed line)` for every snapshot line that opens
+/// with `<role> "<name>"`. `find_lines_in_snapshot` hardcodes an exact
+/// name match; callers that honor the locator's contains/regex modes
+/// (e.g. attribute reads) filter these pairs themselves.
+pub fn snapshot_named_lines(snapshot: &str, role: &str) -> Vec<(String, String)> {
+    let prefix = format!("{role} \"");
+    snapshot
+        .lines()
+        .filter_map(|line| {
+            let t = line.trim_start_matches([' ', '-', '\t']);
+            let rest = t.strip_prefix(&prefix)?;
+            let end = rest.find('"')?;
+            Some((rest[..end].to_string(), t.to_string()))
+        })
+        .collect()
 }
 
 /// Upload one or more files to a `<input type="file">`. Mirrors the
@@ -1768,6 +1850,22 @@ mod tests {
             find_ref_in_snapshot(snap, "button", "Save"),
             Some("e1".to_string())
         );
+    }
+
+    #[test]
+    fn named_lines_extract_name_and_line() {
+        let snap = r#"  - checkbox "Sunday" [checked=true, ref=e195]
+    - textbox "Enter Name" [required, ref=e57]: Devin Dogfood
+  - link "Home" [ref=e4]
+"#;
+        let pairs = snapshot_named_lines(snap, "checkbox");
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].0, "Sunday");
+        assert!(pairs[0].1.contains("[checked=true"));
+        assert!(snapshot_named_lines(snap, "textbox")[0]
+            .1
+            .ends_with(": Devin Dogfood"));
+        assert!(snapshot_named_lines(snap, "button").is_empty());
     }
 
     // Env mutation isn't thread-safe; serialize via the shared lock.
