@@ -39,20 +39,26 @@ the picture shifts materially.
    records a validated do-draft. Remaining gap: real-device multi-touch
    recording would need CDP touch-event bridging — desktop-classified
    gestures cover the synthetic case.
-5. **Hermetic capture** — `--mock-from`/`--offline` are replay-only; there
-   is no `record` path that stubs the backend while recording, so the
-   httpbin-style hermetic scenario has to be authored by hand.
+5. ~~**Hermetic capture**~~ — #292 adds `start --mock-from <har>` and
+   `start --offline`: the session's mock registry is seeded and the
+   stub+reject init script is registered via `AGENT_BROWSER_INIT_SCRIPTS`
+   before the browser opens, so every navigation of the recording is
+   hermetic, not just the first page.
 6. **Live-input divergence** (carried from #253): agent-browser's real
    input click doesn't trigger React state on saucedemo's add-to-cart;
    recorded `click` replays fine via native DOM click. If live clicks
    keep missing delegated handlers, the record path may silently drop
    user actions worth capturing — watch for it.
-7. **Untouched-recordable surfaces** — the recorder still can't emit
-   `dialog` (native alerts during record would stall the page like
-   replay did before #246), `download` (browser download events),
-   `frame` (pick is top-frame only), or `viewport` (window resize).
-   Structural verbs (`loop`/`group`/`useTemplate`) stay authored by
-   design.
+7. **Untouched-recordable surfaces** — `dialog` now records during
+   live capture (#293: the bridge answers the opening dialog — accept,
+   with the page's own `defaultPrompt` for prompts — then emits the
+   check `{"dialog": true}` + `do/dialog` pair in the order replay
+   expects). Still open: `download` (browser download events may never
+   reach the page session while the daemon owns download policy),
+   `frame` (pick is top-frame only), `viewport` (window resize), and a
+   `state`-seed affordance (replay seeds storage/cookies; recording has
+   no "capture current state" action). Structural verbs
+   (`loop`/`group`/`useTemplate`) stay authored by design.
 
 ### P3 — polish
 
@@ -83,7 +89,9 @@ the picture shifts materially.
 - todomvc + expandtesting + httpbin sweeps (#269/#275/#274)
 - `run-report.html` artifacts in qa-gate (#260); qaplayground skill
   edge-sweep docs (#261); `timing` golden (#276)
-- Dialog tolerance on dialog-opening clicks (#246)
+- Dialog tolerance on dialog-opening clicks (#246); record-side dialog
+  capture — answer + check/do pair (#293); `start --mock-from`/
+  `--offline` hermetic recording (#292)
 - Auto-claims on flush: `--auto-network`/`--auto-errors` (#252)
 - Cookie/storage goldens + `do/state` seeding (#253)
 - `pageError` + `console` + `a11y` claim subjects (#248/#167/#240)
