@@ -1,4 +1,5 @@
 import { toRecordDraft } from "./record-translate";
+import { checkVisibleEval, clickTrustedOrVisible, selectVisibleEval, trustedOrVisible } from "./visible";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -169,16 +170,16 @@ export async function runPracticeGolden(
       await record(ctx, "action", { method: "fillBySelector", args: [selector, text], intent: stepIntent });
     },
     async clickSelector(selector, stepIntent) {
-      await run(ctx, `click ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "click", selector]);
+      await clickTrustedOrVisible(ctx, (n, c) => run(ctx, n, c), selector);
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
     async checkSelector(selector, stepIntent) {
-      await run(ctx, `check ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "check", selector]);
+      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `check ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "check", selector], checkVisibleEval(selector));
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
     async selectOption(selector, value, stepIntent) {
       const values = Array.isArray(value) ? value : [value];
-      await run(ctx, `select ${values}`, [ctx.agentBrowser, "--session", ctx.session, "select", selector, ...values]);
+      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `select ${values}`, [ctx.agentBrowser, "--session", ctx.session, "select", selector, ...values], selectVisibleEval(selector, values));
       await record(ctx, "action", { method: "selectBySelector", args: [selector, value], intent: stepIntent });
     },
     async clearSelector(selector, stepIntent) {

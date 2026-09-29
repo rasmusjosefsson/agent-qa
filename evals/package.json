@@ -268,7 +268,12 @@
     "golden:hn:tc03": "bun golden/hn-tc03.ts",
     "golden:hn:tc04": "bun golden/hn-tc04.ts",
     "golden:hn:tc05": "bun golden/hn-tc05.ts",
-    "golden:hn:tc06": "bun golden/hn-tc06.ts"
+    "golden:hn:tc06": "bun golden/hn-tc06.ts",
+    "golden:petstore:tc01": "bun golden/petstore-tc01.ts",
+    "golden:petstore:tc02": "bun golden/petstore-tc02.ts",
+    "golden:petstore:tc03": "bun golden/petstore-tc03.ts",
+    "golden:petstore:tc04": "bun golden/petstore-tc04.ts",
+    "golden:wait-state:tc01": "bun golden/wait-state-tc01.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"

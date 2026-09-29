@@ -1,4 +1,5 @@
 import { toRecordDraft } from "./record-translate";
+import { checkVisibleEval, clickTrustedOrVisible, clickVisibleEval, fillVisibleEval, hoverVisibleEval, selectVisibleEval, trustedOrVisible } from "./visible";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -241,12 +242,13 @@ export async function runEdgeGolden(
       await record(ctx, "wait", { condition: { kind: "selector", selector: readySelector }, intent: "page rendered" });
     },
     async clickSelector(selector, stepIntent) {
+      await clickTrustedOrVisible(ctx, (n, c) => run(ctx, n, c), selector);
       await ensureHittable(ctx, selector, stepIntent);
       await run(ctx, `click ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "click", selector]);
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
     async fillSelector(selector, value, stepIntent) {
-      await run(ctx, `fill ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, value]);
+      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `fill ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, value], fillVisibleEval(selector, value));
       await record(ctx, "action", { method: "fillBySelector", args: [selector, value], intent: stepIntent });
     },
     async fillUnique(selector, template, stepIntent) {
@@ -258,16 +260,17 @@ export async function runEdgeGolden(
       await record(ctx, "action", { method: "fillBySelector", args: [selector, template], intent: stepIntent });
     },
     async selectOption(selector, value, stepIntent) {
-      await run(ctx, `select ${value}`, [ctx.agentBrowser, "--session", ctx.session, "select", selector, value]);
+      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `select ${value}`, [ctx.agentBrowser, "--session", ctx.session, "select", selector, value], selectVisibleEval(selector, Array.isArray(value) ? value : [value]));
       await record(ctx, "action", { method: "selectBySelector", args: [selector, value], intent: stepIntent });
     },
     async checkSelector(selector, stepIntent) {
+      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `check ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "check", selector], checkVisibleEval(selector));
       await ensureHittable(ctx, selector, stepIntent);
       await run(ctx, `check ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "check", selector]);
       await record(ctx, "action", { method: "checkBySelector", args: [selector], intent: stepIntent });
     },
     async hoverSelector(selector, stepIntent) {
-      await run(ctx, `hover ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "hover", selector]);
+      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `hover ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "hover", selector], hoverVisibleEval(selector));
       await record(ctx, "action", { method: "hoverBySelector", args: [selector], intent: stepIntent });
     },
     async dblclickSelector(selector, stepIntent) {
@@ -351,7 +354,7 @@ export async function runEdgeGolden(
       // a native DOM click, so this keeps record/replay identical while
       // dodging agent-browser's live covered-element refusal (e.g. a link
       // whose click point sits under a still-animating drawer header).
-      await run(ctx, `jsclick ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "eval", `document.querySelector(${JSON.stringify(selector)}).click()`]);
+      await run(ctx, `jsclick ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "eval", clickVisibleEval(selector)]);
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
     async waitMs(ms, stepIntent) {
