@@ -302,6 +302,7 @@ fn run_plan(root: &Path, plan: &PlanFile, opts: &RunOpts) -> Result<(Vec<RunRow>
             har: false,
             mock_from: None,
             offline: false,
+            fresh_browser: false,
         };
         match crate::runner::run(&run_opts) {
             Ok(summary) => {
