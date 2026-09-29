@@ -7,7 +7,7 @@
 //!   scenario insert <file> ...    Splice a validated step into a saved scenario.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 
@@ -15,6 +15,15 @@ use crate::scenario::Scenario;
 use crate::schema;
 
 pub fn run(args: &[String]) -> Result<u8> {
+    // `-h|--help` anywhere wins over positional parsing — otherwise a
+    // file-taking subverb (`scenario lint --help`) reads "--help" as a path.
+    if args
+        .iter()
+        .any(|a| matches!(a.as_str(), "-h" | "--help" | "help"))
+    {
+        help();
+        return Ok(0);
+    }
     match args.first().map(String::as_str) {
         Some("validate") => {
             let file = args.get(1).ok_or_else(|| {
@@ -37,7 +46,7 @@ pub fn run(args: &[String]) -> Result<u8> {
                     format = parse_lint_format(v)?;
                 }
             }
-            validate(Path::new(file), format)
+            validate(&scenario_file_arg(file), format)
         }
         Some("validate-all") => {
             let mut format = if args.iter().any(|a| a == "--json") {
@@ -45,23 +54,42 @@ pub fn run(args: &[String]) -> Result<u8> {
             } else {
                 LintFormat::Text
             };
-            let mut it = args.iter().peekable();
+            let mut root: Option<PathBuf> = None;
+            let mut it = args.iter().skip(1).peekable();
             while let Some(a) = it.next() {
-                if a == "--format" {
-                    let v = it
-                        .next()
-                        .cloned()
-                        .ok_or_else(|| anyhow!("--format requires a value"))?;
-                    format = parse_lint_format(&v)?;
-                } else if let Some(v) = a.strip_prefix("--format=") {
-                    format = parse_lint_format(v)?;
+                match a.as_str() {
+                    "--json" => {}
+                    "--root" => {
+                        let v = it
+                            .next()
+                            .cloned()
+                            .ok_or_else(|| anyhow!("--root requires a directory"))?;
+                        root = Some(PathBuf::from(v));
+                    }
+                    s if s.starts_with("--root=") => {
+                        root = Some(PathBuf::from(&s["--root=".len()..]));
+                    }
+                    "--format" => {
+                        let v = it
+                            .next()
+                            .cloned()
+                            .ok_or_else(|| anyhow!("--format requires a value"))?;
+                        format = parse_lint_format(&v)?;
+                    }
+                    s if s.starts_with("--format=") => {
+                        format = parse_lint_format(&s["--format=".len()..])?;
+                    }
+                    other => {
+                        bail!("validate-all: unknown argument {other:?} — usage: scenario validate-all [--root <dir>] [--json | --format text|json|github]")
+                    }
                 }
             }
-            validate_all(format)
+            validate_all(format, root.as_deref())
         }
         Some("ls") => {
             let mut filter: Option<String> = None;
             let mut json_out = false;
+            let mut root: Option<PathBuf> = None;
             let mut it = args.iter().skip(1).peekable();
             while let Some(a) = it.next() {
                 match a.as_str() {
@@ -76,13 +104,24 @@ pub fn run(args: &[String]) -> Result<u8> {
                     s if s.starts_with("--filter=") => {
                         filter = Some(s["--filter=".len()..].to_string())
                     }
+                    "--root" => {
+                        root = Some(PathBuf::from(
+                            it.next()
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--root requires a directory"))?,
+                        ));
+                    }
+                    s if s.starts_with("--root=") => {
+                        root = Some(PathBuf::from(&s["--root=".len()..]));
+                    }
                     other => bail!("unknown flag {other:?}"),
                 }
             }
-            ls(filter.as_deref(), json_out)
+            ls(filter.as_deref(), json_out, root.as_deref())
         }
         Some("latest") => {
             let mut filter: Option<String> = None;
+            let mut root: Option<PathBuf> = None;
             let mut it = args.iter().skip(1).peekable();
             while let Some(a) = it.next() {
                 match a.as_str() {
@@ -96,14 +135,25 @@ pub fn run(args: &[String]) -> Result<u8> {
                     s if s.starts_with("--filter=") => {
                         filter = Some(s["--filter=".len()..].to_string())
                     }
+                    "--root" => {
+                        root = Some(PathBuf::from(
+                            it.next()
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--root requires a directory"))?,
+                        ));
+                    }
+                    s if s.starts_with("--root=") => {
+                        root = Some(PathBuf::from(&s["--root=".len()..]));
+                    }
                     other => bail!("unknown flag {other:?}"),
                 }
             }
-            latest(filter.as_deref())
+            latest(filter.as_deref(), root.as_deref())
         }
         Some("count") => {
             let mut filter: Option<String> = None;
             let mut json_out = false;
+            let mut root: Option<PathBuf> = None;
             let mut it = args.iter().skip(1).peekable();
             while let Some(a) = it.next() {
                 match a.as_str() {
@@ -118,10 +168,20 @@ pub fn run(args: &[String]) -> Result<u8> {
                     s if s.starts_with("--filter=") => {
                         filter = Some(s["--filter=".len()..].to_string())
                     }
+                    "--root" => {
+                        root = Some(PathBuf::from(
+                            it.next()
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--root requires a directory"))?,
+                        ));
+                    }
+                    s if s.starts_with("--root=") => {
+                        root = Some(PathBuf::from(&s["--root=".len()..]));
+                    }
                     other => bail!("unknown flag {other:?}"),
                 }
             }
-            count(filter.as_deref(), json_out)
+            count(filter.as_deref(), json_out, root.as_deref())
         }
         Some("diff") => {
             let a = args
@@ -136,25 +196,25 @@ pub fn run(args: &[String]) -> Result<u8> {
             let file = args
                 .get(1)
                 .ok_or_else(|| anyhow!("usage: scenario hash <file>"))?;
-            hash(Path::new(file))
+            hash(&scenario_file_arg(file))
         }
         Some("id") => {
             let file = args
                 .get(1)
                 .ok_or_else(|| anyhow!("usage: scenario id <file>"))?;
-            id(Path::new(file))
+            id(&scenario_file_arg(file))
         }
         Some("intent") => {
             let file = args
                 .get(1)
                 .ok_or_else(|| anyhow!("usage: scenario intent <file>"))?;
-            intent(Path::new(file))
+            intent(&scenario_file_arg(file))
         }
         Some("step-ids") => {
             let file = args
                 .get(1)
                 .ok_or_else(|| anyhow!("usage: scenario step-ids <file>"))?;
-            step_ids(Path::new(file))
+            step_ids(&scenario_file_arg(file))
         }
         Some("field") => {
             let file = args
@@ -163,18 +223,19 @@ pub fn run(args: &[String]) -> Result<u8> {
             let name = args
                 .get(2)
                 .ok_or_else(|| anyhow!("usage: scenario field <file> <name>"))?;
-            field(Path::new(file), name)
+            field(&scenario_file_arg(file), name)
         }
         Some("coverage") => {
             let file = args
                 .get(1)
-                .ok_or_else(|| anyhow!("usage: scenario coverage <file> [--json]"))?;
+                .ok_or_else(|| anyhow!("usage: scenario coverage <file|sid> [--json]"))?;
             let json_out = args.iter().any(|a| a == "--json");
-            coverage(Path::new(file), json_out)
+            coverage(&scenario_file_arg(file), json_out)
         }
         Some("coverage-all") => {
             let mut filter: Option<String> = None;
             let mut json_out = false;
+            let mut root: Option<PathBuf> = None;
             let mut it = args.iter().skip(1).peekable();
             while let Some(a) = it.next() {
                 match a.as_str() {
@@ -189,10 +250,20 @@ pub fn run(args: &[String]) -> Result<u8> {
                     s if s.starts_with("--filter=") => {
                         filter = Some(s["--filter=".len()..].to_string())
                     }
+                    "--root" => {
+                        root = Some(PathBuf::from(
+                            it.next()
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--root requires a directory"))?,
+                        ));
+                    }
+                    s if s.starts_with("--root=") => {
+                        root = Some(PathBuf::from(&s["--root=".len()..]));
+                    }
                     other => bail!("unknown flag {other:?}"),
                 }
             }
-            coverage_all(filter.as_deref(), json_out)
+            coverage_all(filter.as_deref(), json_out, root.as_deref())
         }
         Some("check") => {
             let file = args.get(1).ok_or_else(|| {
@@ -212,24 +283,42 @@ pub fn run(args: &[String]) -> Result<u8> {
                     format = parse_lint_format(v)?;
                 }
             }
-            check(Path::new(file), strict, format)
+            check(&scenario_file_arg(file), strict, format)
         }
         Some("check-all") => {
             let strict = args.iter().any(|a| a == "--strict");
             let mut format = LintFormat::Text;
-            let mut it = args.iter().peekable();
+            let mut root: Option<PathBuf> = None;
+            let mut it = args.iter().skip(1).peekable();
             while let Some(a) = it.next() {
-                if a == "--format" {
-                    let v = it
-                        .next()
-                        .cloned()
-                        .ok_or_else(|| anyhow!("--format requires a value"))?;
-                    format = parse_lint_format(&v)?;
-                } else if let Some(v) = a.strip_prefix("--format=") {
-                    format = parse_lint_format(v)?;
+                match a.as_str() {
+                    "--strict" => {}
+                    "--root" => {
+                        let v = it
+                            .next()
+                            .cloned()
+                            .ok_or_else(|| anyhow!("--root requires a directory"))?;
+                        root = Some(PathBuf::from(v));
+                    }
+                    s if s.starts_with("--root=") => {
+                        root = Some(PathBuf::from(&s["--root=".len()..]));
+                    }
+                    "--format" => {
+                        let v = it
+                            .next()
+                            .cloned()
+                            .ok_or_else(|| anyhow!("--format requires a value"))?;
+                        format = parse_lint_format(&v)?;
+                    }
+                    s if s.starts_with("--format=") => {
+                        format = parse_lint_format(&s["--format=".len()..])?;
+                    }
+                    other => {
+                        bail!("check-all: unknown argument {other:?} — usage: scenario check-all [--strict] [--root <dir>] [--format text|json|github]")
+                    }
                 }
             }
-            check_all(strict, format)
+            check_all(strict, format, root.as_deref())
         }
         Some("lint") => {
             if args.iter().any(|a| a == "--list-rules") {
@@ -292,7 +381,7 @@ pub fn run(args: &[String]) -> Result<u8> {
                 Some(exclude_rules)
             };
             lint(
-                Path::new(file),
+                &scenario_file_arg(file),
                 format,
                 strict,
                 rules.as_deref(),
@@ -304,6 +393,7 @@ pub fn run(args: &[String]) -> Result<u8> {
             let strict = args.iter().any(|a| a == "--strict");
             let mut only_rules: Vec<String> = Vec::new();
             let mut exclude_rules: Vec<String> = Vec::new();
+            let mut lint_root: Option<PathBuf> = None;
             let mut format: LintFormat = if json_out {
                 LintFormat::Json
             } else {
@@ -312,6 +402,17 @@ pub fn run(args: &[String]) -> Result<u8> {
             let mut it = args.iter().skip(1).peekable();
             while let Some(a) = it.next() {
                 match a.as_str() {
+                    "--json" | "--strict" => {}
+                    "--root" => {
+                        let v = it
+                            .next()
+                            .cloned()
+                            .ok_or_else(|| anyhow!("--root requires a directory"))?;
+                        lint_root = Some(PathBuf::from(v));
+                    }
+                    s if s.starts_with("--root=") => {
+                        lint_root = Some(PathBuf::from(&s["--root=".len()..]));
+                    }
                     "--rule" => {
                         only_rules.push(
                             it.next()
@@ -340,7 +441,9 @@ pub fn run(args: &[String]) -> Result<u8> {
                     s if s.starts_with("--format=") => {
                         format = parse_lint_format(&s["--format=".len()..])?;
                     }
-                    _ => {}
+                    other => {
+                        bail!("lint-all: unknown argument {other:?} — usage: scenario lint-all [--strict] [--root <dir>] [--rule <code>] [--exclude-rule <code>] [--format text|json|github]")
+                    }
                 }
             }
             let rules = if only_rules.is_empty() {
@@ -353,7 +456,13 @@ pub fn run(args: &[String]) -> Result<u8> {
             } else {
                 Some(exclude_rules)
             };
-            lint_all(format, strict, rules.as_deref(), excl.as_deref())
+            lint_all(
+                format,
+                strict,
+                rules.as_deref(),
+                excl.as_deref(),
+                lint_root.as_deref(),
+            )
         }
         Some("rename") => {
             let from = args
@@ -491,7 +600,8 @@ pub fn run(args: &[String]) -> Result<u8> {
             let mut keep: Option<usize> = None;
             let mut confirmed = false;
             let mut keep_failed = false;
-            let mut it = args.iter().skip(1);
+            let mut root: Option<PathBuf> = None;
+            let mut it = args.iter().skip(1).peekable();
             while let Some(a) = it.next() {
                 match a.as_str() {
                     "--yes" | "-y" => confirmed = true,
@@ -510,11 +620,21 @@ pub fn run(args: &[String]) -> Result<u8> {
                             anyhow!("--keep expects a non-negative integer, got {v:?}")
                         })?);
                     }
+                    "--root" => {
+                        root = Some(PathBuf::from(
+                            it.next()
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--root requires a directory"))?,
+                        ));
+                    }
+                    s if s.starts_with("--root=") => {
+                        root = Some(PathBuf::from(&s["--root=".len()..]));
+                    }
                     other => bail!("unknown flag {other:?}"),
                 }
             }
             let keep = keep.ok_or_else(|| anyhow!("--keep <N> is required"))?;
-            prune_all(keep, confirmed, keep_failed)
+            prune_all(keep, confirmed, keep_failed, root.as_deref())
         }
         Some("summary") => {
             let file = args.get(1).ok_or_else(|| {
@@ -539,14 +659,14 @@ pub fn run(args: &[String]) -> Result<u8> {
                     other => bail!("unknown flag {other:?}"),
                 }
             }
-            summary(Path::new(file), filter.as_deref(), json_out)
+            summary(&scenario_file_arg(file), filter.as_deref(), json_out)
         }
         Some("inputs") => {
             let file = args
                 .get(1)
                 .ok_or_else(|| anyhow!("usage: scenario inputs <file> [--json]"))?;
             let json_out = args.iter().any(|a| a == "--json");
-            inputs(Path::new(file), json_out)
+            inputs(&scenario_file_arg(file), json_out)
         }
         Some("insert") => {
             let mut file: Option<&str> = None;
@@ -604,7 +724,7 @@ pub fn run(args: &[String]) -> Result<u8> {
                     "usage: scenario insert <file> <do|check> <draft-json> [--after <stepId> | --at <index>]"
                 ),
             };
-            insert(Path::new(file), kind, draft, after.as_deref(), at)
+            insert(&scenario_file_arg(file), kind, draft, after.as_deref(), at)
         }
         Some("new") => {
             let mut file: Option<&str> = None;
@@ -654,11 +774,11 @@ pub fn run(args: &[String]) -> Result<u8> {
 
 fn help() {
     println!(
-        "agent-qa scenario — operations on a scenario JSON\n\nUsage:\n  agent-qa scenario validate <file> [--json | --format text|json|github]\n                                            Schema-validate the scenario (use '-' for stdin)\n  agent-qa scenario check <file> [--strict]  Schema-validate AND lint in one pass\n                                            (combined exit code: 0 iff both pass).\n                                            (use '-' for stdin)\n  agent-qa scenario check-all [--strict]     Same combo across every scenario under the\n                                            scenarios root; exit 1 iff any fail.\n  agent-qa scenario validate-all [--json | --format text|json|github]\n                                            Schema-validate every scenario under the\n                                            scenarios root; exit 1 iff any fail\n  agent-qa scenario ls [--filter <substr>] [--json]\n                                            Print every sid under the scenarios root,\n                                            one per line (lex sort).\n  agent-qa scenario latest [--filter <substr>]\n                                            Print the sid whose scenario.json was most\n                                            recently modified.\n  agent-qa scenario count [--filter <substr>] [--json]\n                                            Print the number of scenarios under the root.\n                                            --filter narrows to sids containing <substr>.\n                                            --json wraps the count + filter in a JSON object.\n  agent-qa scenario summary  <file> [--filter <substr>] [--json]\n                                            Per-step summary (id, kind, verb/claim).\n                                            (use '-' for stdin)\n                                            --filter: case-insensitive substring\n                                            matched against id/intent/verb.\n  agent-qa scenario inputs   <file> [--json] List declared inputs (type/default/sensitive)\n  agent-qa scenario new      <file>          Scaffold a minimal valid scenario.json\n                                            (--force to overwrite, --url, --intent)\n  agent-qa scenario insert <file> <do|check> <draft-json> [--after <stepId> | --at <index>]
+        "agent-qa scenario — operations on a scenario JSON\n\nUsage:\n  agent-qa scenario validate <file> [--json | --format text|json|github]\n                                            Schema-validate the scenario (use '-' for stdin)\n  agent-qa scenario check <file> [--strict]  Schema-validate AND lint in one pass\n                                            (combined exit code: 0 iff both pass).\n                                            (use '-' for stdin)\n  agent-qa scenario check-all [--strict] [--root <dir>] [--format text|json|github]\n                                            Same combo across every scenario under the\n                                            scenarios root (--root overrides it);\n                                            exit 1 iff any fail.\n  agent-qa scenario validate-all [--root <dir>] [--json | --format text|json|github]\n                                            Schema-validate every scenario under the\n                                            scenarios root (--root overrides it);\n                                            exit 1 iff any fail\n  agent-qa scenario ls [--filter <substr>] [--root <dir>] [--json]\n                                            Print every sid under the scenarios root\n                                            (--root overrides it),\n                                            one per line (lex sort).\n  agent-qa scenario latest [--filter <substr>] [--root <dir>]\n                                            Print the sid whose scenario.json was most\n                                            recently modified (--root overrides the root).\n  agent-qa scenario count [--filter <substr>] [--root <dir>] [--json]\n                                            Print the number of scenarios under the root\n                                            (--root overrides it).\n                                            --filter narrows to sids containing <substr>.\n                                            --json wraps the count + filter in a JSON object.\n  agent-qa scenario summary  <file> [--filter <substr>] [--json]\n                                            Per-step summary (id, kind, verb/claim).\n                                            (use '-' for stdin)\n                                            --filter: case-insensitive substring\n                                            matched against id/intent/verb.\n  agent-qa scenario inputs   <file> [--json] List declared inputs (type/default/sensitive)\n  agent-qa scenario new      <file>          Scaffold a minimal valid scenario.json\n                                            (--force to overwrite, --url, --intent)\n  agent-qa scenario insert <file> <do|check> <draft-json> [--after <stepId> | --at <index>]
                                             Splice a validated step into a saved scenario.
                                             Draft shape matches record-step (id/kind
                                             omitted); position defaults to the end.
-  agent-qa scenario diff <a> <b>             Unified diff between two scenario.json files\n                                            (canonicalised JSON; exit 1 on difference)\n  agent-qa scenario hash <file>              SHA-256 of scenario.json bytes (same algorithm\n                                            replay + heal-promote use for the rebase guard)\n  agent-qa scenario id <file>                Print the scenario's id field (one line)\n  agent-qa scenario intent <file>            Print the scenario's intent field (one line)\n  agent-qa scenario step-ids <file>          Print every step id, one per line\n  agent-qa scenario field <file> <name>      Print any top-level scenario field (id, intent,\n                                            schema, etc.); object/array → compact JSON.\n  agent-qa scenario coverage <file> [--json] Per-step check coverage: how many do steps are\n                                            followed by a check claim, and how many are bare.\n  agent-qa scenario coverage-all [--filter <substr>] [--json]\n                                            The same ratio rolled up across every scenario under\n                                            the root — per-scenario rows sorted worst-first plus\n                                            an OVERALL rollup.\n  agent-qa scenario lint <file> [--json] [--strict] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run common lints (use '-' for stdin)\n                                            (duplicate ids, empty intent, bare do,\n                                            undeclared/unused inputs). Exit 1 iff\n                                            any errors are reported (--strict treats\n                                            warnings as errors). --rule narrows to specific\n                                            codes; --exclude-rule subtracts (both repeatable).\n                                            --format github emits GitHub Actions annotations.\n  agent-qa scenario lint --list-rules [--json]\n                                            Enumerate the lint rules + their severities.\n  agent-qa scenario lint-all [--json] [--strict] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run lints against every scenario under the\n                                            scenarios root; exit 1 iff any errors are reported\n                                            (--strict treats warnings as errors). --rule\n                                            narrows to specific codes; --exclude-rule\n                                            subtracts (both repeatable).\n  agent-qa scenario rename <sid> <new-sid>   Rename a scenario: patches scenario.json's id\n                                            field, then moves the directory under the\n                                            scenarios root. (refuses to overwrite).\n  agent-qa scenario copy <sid> <new-sid>     Copy a scenario (scenario.json with id patched +\n                                            baselines/ carried; replays NOT copied). Refuses to overwrite.\n  agent-qa scenario delete <sid> [--yes/-y]  Remove a scenario directory + all its replays.\n                                            Dry-run by default; --yes confirms.\n  agent-qa scenario prune-replays <sid> --keep N [--yes] [--keep-failed]\n                                            Keep the N most recent replays under\n                                            <sid>/replays/; dry-run by default.\n                                            --keep-failed preserves all non-zero-exit\n                                            runs regardless of N.\n  agent-qa scenario prune-all --keep N [--yes] [--keep-failed]\n                                            Like prune-replays but across every scenario\n                                            under the scenarios root. --keep-failed\n                                            preserves failed runs per scenario."
+  agent-qa scenario diff <a> <b>             Unified diff between two scenario.json files\n                                            (canonicalised JSON; exit 1 on difference)\n  agent-qa scenario hash <file>              SHA-256 of scenario.json bytes (same algorithm\n                                            replay + heal-promote use for the rebase guard)\n  agent-qa scenario id <file>                Print the scenario's id field (one line)\n  agent-qa scenario intent <file>            Print the scenario's intent field (one line)\n  agent-qa scenario step-ids <file>          Print every step id, one per line\n  agent-qa scenario field <file> <name>      Print any top-level scenario field (id, intent,\n                                            schema, etc.); object/array → compact JSON.\n  agent-qa scenario coverage <file> [--json] Per-step check coverage: how many do steps are\n                                            followed by a check claim, and how many are bare.\n  agent-qa scenario coverage-all [--filter <substr>] [--root <dir>] [--json]\n                                            The same ratio rolled up across every scenario under\n                                            the root (--root overrides it) — per-scenario rows sorted worst-first plus\n                                            an OVERALL rollup.\n  agent-qa scenario lint <file> [--json] [--strict] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run common lints (use '-' for stdin)\n                                            (duplicate ids, empty intent, bare do,\n                                            undeclared/unused inputs). Exit 1 iff\n                                            any errors are reported (--strict treats\n                                            warnings as errors). --rule narrows to specific\n                                            codes; --exclude-rule subtracts (both repeatable).\n                                            --format github emits GitHub Actions annotations.\n  agent-qa scenario lint --list-rules [--json]\n                                            Enumerate the lint rules + their severities.\n  agent-qa scenario lint-all [--json] [--strict] [--root <dir>] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run lints against every scenario under the\n                                            scenarios root (--root overrides it);\n                                            exit 1 iff any errors are reported\n                                            (--strict treats warnings as errors). --rule\n                                            narrows to specific codes; --exclude-rule\n                                            subtracts (both repeatable).\n  agent-qa scenario rename <sid> <new-sid>   Rename a scenario: patches scenario.json's id\n                                            field, then moves the directory under the\n                                            scenarios root. (refuses to overwrite).\n  agent-qa scenario copy <sid> <new-sid>     Copy a scenario (scenario.json with id patched +\n                                            baselines/ carried; replays NOT copied). Refuses to overwrite.\n  agent-qa scenario delete <sid> [--yes/-y]  Remove a scenario directory + all its replays.\n                                            Dry-run by default; --yes confirms.\n  agent-qa scenario prune-replays <sid> --keep N [--yes] [--keep-failed]\n                                            Keep the N most recent replays under\n                                            <sid>/replays/; dry-run by default.\n                                            --keep-failed preserves all non-zero-exit\n                                            runs regardless of N.\n  agent-qa scenario prune-all --keep N [--yes] [--keep-failed] [--root <dir>]\n                                            Like prune-replays but across every scenario\n                                            under the scenarios root (--root overrides it). --keep-failed\n                                            preserves failed runs per scenario."
     );
 }
 
@@ -1175,9 +1295,7 @@ fn delete(sid: &str, confirmed: bool) -> Result<u8> {
     if !dir.is_dir() {
         bail!("scenario delete: not found at {}", dir.display());
     }
-    let replays = std::fs::read_dir(dir.join("replays"))
-        .map(|it| it.flatten().filter(|e| e.path().is_dir()).count())
-        .unwrap_or(0);
+    let replays = crate::paths::run_dirs(&dir.join("replays")).len();
     if !confirmed {
         println!(
             "would delete: {}\n  ({} replay(s) under replays/)\nre-run with --yes / -y to confirm.",
@@ -1195,8 +1313,15 @@ fn delete(sid: &str, confirmed: bool) -> Result<u8> {
     Ok(0)
 }
 
-fn prune_all(keep: usize, confirmed: bool, keep_failed: bool) -> Result<u8> {
-    let root = crate::paths::scenarios_root();
+fn prune_all(
+    keep: usize,
+    confirmed: bool,
+    keep_failed: bool,
+    root_override: Option<&std::path::Path>,
+) -> Result<u8> {
+    let root = root_override
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(crate::paths::scenarios_root);
     let entries: Vec<std::path::PathBuf> = match std::fs::read_dir(&root) {
         Ok(it) => it
             .flatten()
@@ -1222,15 +1347,7 @@ fn prune_all(keep: usize, confirmed: bool, keep_failed: bool) -> Result<u8> {
         // also prints its own per-sid header line which would be very
         // noisy across N scenarios).
         let replays_dir = dir.join("replays");
-        let mut runs: Vec<std::path::PathBuf> = match std::fs::read_dir(&replays_dir) {
-            Ok(it) => it
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| p.is_dir())
-                .collect(),
-            Err(_) => Vec::new(),
-        };
-        runs.sort();
+        let runs = crate::paths::run_dirs(&replays_dir);
         if runs.len() <= keep {
             continue;
         }
@@ -1295,16 +1412,7 @@ fn prune_replays(sid: &str, keep: usize, confirmed: bool, keep_failed: bool) -> 
         bail!("scenario prune-replays: not found at {}", dir.display());
     }
     let replays_dir = dir.join("replays");
-    let mut entries: Vec<std::path::PathBuf> = match std::fs::read_dir(&replays_dir) {
-        Ok(it) => it
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.is_dir())
-            .collect(),
-        Err(_) => Vec::new(),
-    };
-    // run_id directories are timestamp-prefixed; lex sort → chronological.
-    entries.sort();
+    let entries = crate::paths::run_dirs(&replays_dir);
     let is_failed = |run_dir: &std::path::Path| -> bool {
         let audit_path = run_dir.join("audit.json");
         let bytes = match std::fs::read(&audit_path) {
@@ -1634,13 +1742,19 @@ fn brittle_locator_reason(kind: &str, value: &str) -> Option<&'static str> {
     None
 }
 
-pub(crate) fn lint(
-    path: &Path,
-    format: LintFormat,
-    strict: bool,
-    only_rules: Option<&[String]>,
-    exclude_rules: Option<&[String]>,
-) -> Result<u8> {
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct Finding {
+    severity: &'static str,
+    code: &'static str,
+    message: String,
+}
+
+/// Runs every lint rule against one scenario file and returns the raw
+/// findings, unfiltered by --rule/--exclude-rule. Shared by `lint`
+/// (renders) and `lint_collect` (counts for `scenario check`) so a new
+/// rule cannot drift between the two paths.
+fn lint_findings(path: &Path) -> Result<(Vec<Finding>, Scenario)> {
     // For stdin ('-'), buffer once via io::stdin_or_path; the guard
     // keeps the tempfile alive for the rest of this function.
     let _guard = crate::io::stdin_or_path(path)?;
@@ -1653,15 +1767,7 @@ pub(crate) fn lint(
         serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
     let j = load_scenario(path)?;
 
-    #[derive(serde::Serialize, Clone)]
-    #[serde(rename_all = "camelCase")]
-    struct Finding {
-        severity: &'static str,
-        code: &'static str,
-        message: String,
-    }
     let mut findings: Vec<Finding> = Vec::new();
-
     use crate::scenario::Step;
     use std::collections::{HashMap, HashSet};
 
@@ -1817,6 +1923,32 @@ pub(crate) fn lint(
                     message: format!(
                         "step {sid:?} waits {ms}ms with no condition — prefer params.until/url/idle/locator so the step gates on the outcome, not the clock",
                         ms = get("ms").and_then(|m| m.as_u64()).unwrap_or(0)
+                    ),
+                });
+            }
+        }
+    }
+
+    // 3f) claim value carrying a do-step `{"from": ...}` spec — claim values
+    // are plain JSON; an object spec serializes verbatim and never matches,
+    // so the check fails with a confusing "expected to contain {from:…}".
+    if let Some(steps) = raw.get("steps").and_then(|s| s.as_array()) {
+        for step in steps {
+            if step.get("kind").and_then(|k| k.as_str()) != Some("check") {
+                continue;
+            }
+            let looks_like_spec = step
+                .get("claim")
+                .and_then(|c| c.get("value"))
+                .and_then(|v| v.as_object())
+                .is_some_and(|o| o.contains_key("from"));
+            if looks_like_spec {
+                let sid = step.get("id").and_then(|i| i.as_str()).unwrap_or("?");
+                findings.push(Finding {
+                    severity: "error",
+                    code: "claim-value-spec",
+                    message: format!(
+                        "step {sid:?} claim value is a do-step {{\"from\":…}} spec — claims take plain JSON (e.g. \"value\": \"example.com\")"
                     ),
                 });
             }
@@ -2102,6 +2234,18 @@ pub(crate) fn lint(
         }
     }
 
+    Ok((findings, j))
+}
+
+pub(crate) fn lint(
+    path: &Path,
+    format: LintFormat,
+    strict: bool,
+    only_rules: Option<&[String]>,
+    exclude_rules: Option<&[String]>,
+) -> Result<u8> {
+    let (mut findings, j) = lint_findings(path)?;
+
     if let Some(only) = only_rules {
         let set: std::collections::HashSet<&str> = only.iter().map(String::as_str).collect();
         findings.retain(|f| set.contains(f.code));
@@ -2274,6 +2418,23 @@ fn coverage_counts(steps: &[crate::scenario::Step]) -> CoverageCounts {
     c
 }
 
+/// A `<file>` arg that also accepts a scenario sid: when the arg is not
+/// an existing file (and isn't '-' for stdin), resolve it as
+/// <scenarios_root>/<arg>/scenario.json. Existing paths always win.
+fn scenario_file_arg(arg: &str) -> PathBuf {
+    let p = Path::new(arg);
+    if arg == "-" || p.is_file() {
+        return p.to_path_buf();
+    }
+    if let Ok(dir) = crate::paths::scenario_dir(arg) {
+        let f = dir.join("scenario.json");
+        if f.is_file() {
+            return f;
+        }
+    }
+    p.to_path_buf()
+}
+
 fn coverage(path: &Path, json_out: bool) -> Result<u8> {
     let _guard = crate::io::stdin_or_path(path)?;
     let path = _guard.path();
@@ -2333,8 +2494,14 @@ fn coverage(path: &Path, json_out: bool) -> Result<u8> {
 /// scenario under the root. Per-file `coverage` answers "is this scenario
 /// thin?"; this answers "where does the suite leave do steps unchecked" —
 /// rows sort worst-first so gaps surface at the top.
-fn coverage_all(filter: Option<&str>, json_out: bool) -> Result<u8> {
-    let root = crate::paths::scenarios_root();
+fn coverage_all(
+    filter: Option<&str>,
+    json_out: bool,
+    root_override: Option<&std::path::Path>,
+) -> Result<u8> {
+    let root = root_override
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(crate::paths::scenarios_root);
     let needle = filter.map(|s| s.to_ascii_lowercase());
     let mut rows: Vec<(String, String, CoverageCounts)> = Vec::new(); // sid, intent, counts
     if let Ok(entries) = fs::read_dir(&root) {
@@ -2570,15 +2737,10 @@ fn canonicalize(body: &str, path: &Path) -> Result<String> {
     Ok(serde_json::to_string_pretty(&v)?)
 }
 
-fn lint_all(
-    format: LintFormat,
-    strict: bool,
-    only_rules: Option<&[String]>,
-    exclude_rules: Option<&[String]>,
-) -> Result<u8> {
-    let root = crate::paths::scenarios_root();
+/// `<root>/<sid>/scenario.json` entries under a scenarios root, sorted.
+fn root_scenario_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut targets: Vec<std::path::PathBuf> = Vec::new();
-    if let Ok(entries) = fs::read_dir(&root) {
+    if let Ok(entries) = fs::read_dir(root) {
         for entry in entries.flatten() {
             let p = entry.path().join("scenario.json");
             if p.is_file() {
@@ -2587,6 +2749,20 @@ fn lint_all(
         }
     }
     targets.sort();
+    targets
+}
+
+fn lint_all(
+    format: LintFormat,
+    strict: bool,
+    only_rules: Option<&[String]>,
+    exclude_rules: Option<&[String]>,
+    root_override: Option<&std::path::Path>,
+) -> Result<u8> {
+    let root = root_override
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(crate::paths::scenarios_root);
+    let targets = root_scenario_files(&root);
 
     #[derive(serde::Serialize)]
     #[serde(rename_all = "camelCase")]
@@ -2688,8 +2864,6 @@ fn lint_collect(
     only_rules: Option<&[String]>,
     exclude_rules: Option<&[String]>,
 ) -> Result<(usize, usize)> {
-    use crate::scenario::Step;
-    use std::collections::{HashMap, HashSet};
     let exclude: std::collections::HashSet<String> = exclude_rules
         .map(|r| r.iter().cloned().collect())
         .unwrap_or_default();
@@ -2704,176 +2878,26 @@ fn lint_collect(
             Box::new(move |c: &str| set.contains(c) && !ex.contains(c))
         }
     };
-    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    let raw: serde_json::Value =
-        serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
-    let j = load_scenario(path)?;
-
-    let mut errors = 0usize;
-    let mut warnings = 0usize;
-
-    let mut id_counts: HashMap<&str, usize> = HashMap::new();
-    for step in &j.steps {
-        *id_counts.entry(step.id()).or_insert(0) += 1;
-    }
-    for n in id_counts.values() {
-        if *n > 1 && active("duplicate-step-id") {
-            errors += 1;
-        }
-    }
-    for step in &j.steps {
-        if step.intent().trim().is_empty() && active("empty-intent") {
-            warnings += 1;
-        }
-    }
-    let mut prev_was_do = false;
-    for step in &j.steps {
-        match step {
-            Step::Do { .. } => {
-                if prev_was_do && active("bare-do") {
-                    warnings += 1;
-                }
-                prev_was_do = true;
-            }
-            Step::Check { .. } => {
-                prev_was_do = false;
-            }
-        }
-    }
-    if prev_was_do && active("bare-do") {
-        warnings += 1;
-    }
-    let declared: HashSet<String> = j
-        .inputs
-        .as_ref()
-        .map(|m| m.keys().cloned().collect())
-        .unwrap_or_default();
-    let mut referenced: HashSet<String> = HashSet::new();
-    collect_input_refs(&raw, &mut referenced);
-    for input in &referenced {
-        if !declared.contains(input) && active("undeclared-input") {
-            errors += 1;
-        }
-    }
-    for input in &declared {
-        if !referenced.contains(input) && active("unused-input") {
-            warnings += 1;
-        }
-    }
-    let step_ids: HashSet<String> = j.steps.iter().map(|s| s.id().to_string()).collect();
-    let mut step_refs: HashSet<String> = HashSet::new();
-    collect_step_refs(&raw, &mut step_refs);
-    for r in &step_refs {
-        if !step_ids.contains(r) && active("undeclared-step-ref") {
-            errors += 1;
-        }
-    }
-    // goto-without-url
-    for step in &j.steps {
-        if let Step::Do {
-            verb: crate::scenario::Verb::Goto,
-            value,
-            ..
-        } = step
-        {
-            if value.is_none() && active("goto-without-url") {
-                errors += 1;
-            }
-        }
-    }
-    // missing-locator
-    for step in &j.steps {
-        if let Step::Do { verb, on, .. } = step {
-            let needs_locator = matches!(
-                verb,
-                crate::scenario::Verb::Click
-                    | crate::scenario::Verb::Type
-                    | crate::scenario::Verb::Clear
-                    | crate::scenario::Verb::Hover
-                    | crate::scenario::Verb::Focus
-                    | crate::scenario::Verb::Blur
-                    | crate::scenario::Verb::Check
-                    | crate::scenario::Verb::Uncheck
-            );
-            if needs_locator && on.is_none() && active("missing-locator") {
-                errors += 1;
-            }
-        }
-    }
-    // params-on-noop
-    for step in &j.steps {
-        if let Step::Do { verb, params, .. } = step {
-            let is_noop = matches!(
-                verb,
-                crate::scenario::Verb::Reload
-                    | crate::scenario::Verb::Back
-                    | crate::scenario::Verb::Forward
-            );
-            if is_noop
-                && params.as_ref().map(|p| !p.is_empty()).unwrap_or(false)
-                && active("params-on-noop")
-            {
-                warnings += 1;
-            }
-        }
-    }
-    // no-env-open
-    let open_count = j
-        .env
-        .as_ref()
-        .and_then(|e| e.open.as_ref())
-        .map(|v| v.len())
-        .unwrap_or(0);
-    if open_count == 0 && active("no-env-open") {
-        warnings += 1;
-    }
-    // no-checks
-    let check_count = j
-        .steps
+    let (findings, _j) = lint_findings(path)?;
+    let errors = findings
         .iter()
-        .filter(|s| matches!(s, Step::Check { .. }))
+        .filter(|f| f.severity == "error" && active(f.code))
         .count();
-    if !j.steps.is_empty() && check_count == 0 && active("no-checks") {
-        warnings += 1;
-    }
-    // no-navigation
-    if !j.steps.is_empty() && !scenario_navigates(&j) && active("no-navigation") {
-        warnings += 1;
-    }
-    // empty-steps
-    if j.steps.is_empty() && active("empty-steps") {
-        warnings += 1;
-    }
-    // wait-without-condition
-    for step in &j.steps {
-        if let Step::Do {
-            verb: crate::scenario::Verb::Wait,
-            params,
-            ..
-        } = step
-        {
-            let has_condition = params
-                .as_ref()
-                .map(|p| {
-                    p.get("ms").is_some()
-                        || p.get("until").is_some()
-                        || p.get("url").is_some()
-                        || p.get("timeoutMs").is_some()
-                        || p.get("locator").is_some()
-                        || p.get("idle").is_some()
-                        || p.get("idleMs").is_some()
-                })
-                .unwrap_or(false);
-            if !has_condition && active("wait-without-condition") {
-                warnings += 1;
-            }
-        }
-    }
+    let warnings = findings
+        .iter()
+        .filter(|f| f.severity == "warning" && active(f.code))
+        .count();
     Ok((errors, warnings))
 }
 
-fn count(filter: Option<&str>, json_out: bool) -> Result<u8> {
-    let root = crate::paths::scenarios_root();
+fn count(
+    filter: Option<&str>,
+    json_out: bool,
+    root_override: Option<&std::path::Path>,
+) -> Result<u8> {
+    let root = root_override
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(crate::paths::scenarios_root);
     let mut n = 0u32;
     let needle = filter.map(|s| s.to_ascii_lowercase());
     if let Ok(entries) = fs::read_dir(&root) {
@@ -2903,8 +2927,10 @@ fn count(filter: Option<&str>, json_out: bool) -> Result<u8> {
     Ok(0)
 }
 
-fn latest(filter: Option<&str>) -> Result<u8> {
-    let root = crate::paths::scenarios_root();
+fn latest(filter: Option<&str>, root_override: Option<&std::path::Path>) -> Result<u8> {
+    let root = root_override
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(crate::paths::scenarios_root);
     let needle = filter.map(|s| s.to_ascii_lowercase());
     let mut best: Option<(std::time::SystemTime, String)> = None;
     if let Ok(entries) = fs::read_dir(&root) {
@@ -2976,8 +3002,10 @@ pub(crate) fn all_sids(root: &Path, filter: Option<&str>) -> Vec<String> {
     sids
 }
 
-fn ls(filter: Option<&str>, json_out: bool) -> Result<u8> {
-    let root = crate::paths::scenarios_root();
+fn ls(filter: Option<&str>, json_out: bool, root_override: Option<&std::path::Path>) -> Result<u8> {
+    let root = root_override
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(crate::paths::scenarios_root);
     let sids = all_sids(&root, filter);
     if json_out {
         let body = serde_json::json!({
@@ -2994,18 +3022,11 @@ fn ls(filter: Option<&str>, json_out: bool) -> Result<u8> {
     Ok(0)
 }
 
-fn validate_all(format: LintFormat) -> Result<u8> {
-    let root = crate::paths::scenarios_root();
-    let mut targets: Vec<std::path::PathBuf> = Vec::new();
-    if let Ok(entries) = fs::read_dir(&root) {
-        for entry in entries.flatten() {
-            let p = entry.path().join("scenario.json");
-            if p.is_file() {
-                targets.push(p);
-            }
-        }
-    }
-    targets.sort();
+fn validate_all(format: LintFormat, root_override: Option<&std::path::Path>) -> Result<u8> {
+    let root = root_override
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(crate::paths::scenarios_root);
+    let targets = root_scenario_files(&root);
 
     #[derive(serde::Serialize)]
     #[serde(rename_all = "camelCase")]
@@ -3088,27 +3109,24 @@ fn validate_all(format: LintFormat) -> Result<u8> {
     Ok(if failures == 0 { 0 } else { 1 })
 }
 
-fn check_all(strict: bool, format: LintFormat) -> Result<u8> {
-    let root = crate::paths::scenarios_root();
-    let mut targets: Vec<std::path::PathBuf> = Vec::new();
-    if let Ok(entries) = fs::read_dir(&root) {
-        for entry in entries.flatten() {
-            let p = entry.path().join("scenario.json");
-            if p.is_file() {
-                targets.push(p);
-            }
-        }
-    }
-    targets.sort();
+fn check_all(
+    strict: bool,
+    format: LintFormat,
+    root_override: Option<&std::path::Path>,
+) -> Result<u8> {
+    let root = root_override
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(crate::paths::scenarios_root);
+    let targets = root_scenario_files(&root);
     // github / json formats: defer to validate_all + lint_all so output
     // is uniform with the standalone verbs. Text mode keeps the
     // compact per-row OK/FAIL view.
     if format != LintFormat::Text {
-        let v = validate_all(format)?;
+        let v = validate_all(format, root_override)?;
         if v != 0 {
             return Ok(v);
         }
-        return lint_all(format, strict, None, None);
+        return lint_all(format, strict, None, None, root_override);
     }
     println!(
         "check-all: {} ({} scenario(s))",
@@ -3763,10 +3781,37 @@ mod tests {
             }"#,
         )
         .unwrap();
-        assert_eq!(coverage_all(None, false).unwrap(), 0);
-        assert_eq!(coverage_all(None, true).unwrap(), 0);
+        assert_eq!(coverage_all(None, false, None).unwrap(), 0);
+        assert_eq!(coverage_all(None, true, None).unwrap(), 0);
         // --filter narrows the rollup
-        assert_eq!(coverage_all(Some("full"), true).unwrap(), 0);
+        assert_eq!(coverage_all(Some("full"), true, None).unwrap(), 0);
+        match prev {
+            Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    #[test]
+    fn scenario_file_arg_accepts_sid_and_keeps_paths() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        let dir = tmp.path().join("hello");
+        std::fs::create_dir_all(&dir).unwrap();
+        let sc = dir.join("scenario.json");
+        fs::write(&sc, "{}").unwrap();
+        // sid resolves to its scenario.json
+        assert_eq!(scenario_file_arg("hello"), sc);
+        // existing file paths pass through untouched
+        let loose = tmp.path().join("loose.json");
+        fs::write(&loose, "{}").unwrap();
+        assert_eq!(scenario_file_arg(loose.to_str().unwrap()), loose);
+        // unknown args fall back to the literal path (read error surfaces later)
+        assert_eq!(
+            scenario_file_arg("no-such-sid"),
+            Path::new("no-such-sid").to_path_buf()
+        );
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
@@ -3977,6 +4022,42 @@ mod tests {
         assert_eq!(lint_one(serde_json::json!({ "ms": 500, "idle": true })), 0);
         assert_eq!(lint_one(serde_json::json!({ "url": "*/api/*" })), 0);
         assert_eq!(lint_one(serde_json::json!({ "idle": true })), 0);
+    }
+
+    #[test]
+    fn lint_claim_value_spec_flags_from_objects() {
+        let tmp = TempDir::new().unwrap();
+        let lint_one = |value: serde_json::Value| {
+            let p = write(
+                tmp.path(),
+                &format!(
+                    r#"{{
+                      "schema": "scenario/2", "id": "j", "intent": "x",
+                      "steps": [
+                        {{ "id": "s0", "intent": "go", "kind": "do", "verb": "goto",
+                          "value": {{ "from": "literal", "literal": "http://x/" }} }},
+                        {{ "id": "s1", "intent": "url", "kind": "check",
+                          "claim": {{ "subject": {{ "url": true }}, "predicate": "contains",
+                            "value": {value} }} }}
+                      ]
+                    }}"#
+                ),
+            );
+            lint(
+                &p,
+                LintFormat::Text,
+                true,
+                Some(&["claim-value-spec".to_string()]),
+                None,
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            lint_one(serde_json::json!({ "from": "literal", "literal": "x" })),
+            1
+        );
+        assert_eq!(lint_one(serde_json::json!("x")), 0);
+        assert_eq!(lint_one(serde_json::json!(42)), 0);
     }
 
     #[test]
@@ -4642,7 +4723,7 @@ mod tests {
             r#"{"schema":"scenario/2","id":"b","intent":"updated","steps":[]}"#,
         )
         .unwrap();
-        assert_eq!(latest(None).unwrap(), 0);
+        assert_eq!(latest(None, None).unwrap(), 0);
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
@@ -4667,7 +4748,7 @@ mod tests {
             .unwrap();
         }
         fs::create_dir_all(tmp.path().join("no-scenario")).unwrap();
-        assert_eq!(count(None, false).unwrap(), 0);
+        assert_eq!(count(None, false, None).unwrap(), 0);
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
@@ -4680,7 +4761,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
         std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path().join("empty"));
-        assert_eq!(count(None, false).unwrap(), 0);
+        assert_eq!(count(None, false, None).unwrap(), 0);
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
@@ -4693,7 +4774,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
         std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path().join("empty"));
-        let err = latest(None).unwrap_err().to_string();
+        let err = latest(None, None).unwrap_err().to_string();
         assert!(err.contains("no scenarios"));
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
@@ -4719,7 +4800,7 @@ mod tests {
             .unwrap();
         }
         fs::create_dir_all(tmp.path().join("no-scenario")).unwrap();
-        assert_eq!(ls(None, false).unwrap(), 0);
+        assert_eq!(ls(None, false, None).unwrap(), 0);
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
@@ -4741,7 +4822,7 @@ mod tests {
             )
             .unwrap();
         }
-        assert_eq!(check_all(false, LintFormat::Text).unwrap(), 0);
+        assert_eq!(check_all(false, LintFormat::Text, None).unwrap(), 0);
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
@@ -4761,7 +4842,31 @@ mod tests {
             r#"{"schema":"scenario/2","id":"a","intent":"x","steps":[{"id":"dup","intent":"a","kind":"do","verb":"reload"},{"id":"dup","intent":"b","kind":"do","verb":"reload"}]}"#,
         )
         .unwrap();
-        assert_eq!(check_all(false, LintFormat::Text).unwrap(), 1);
+        assert_eq!(check_all(false, LintFormat::Text, None).unwrap(), 1);
+        match prev {
+            Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    #[test]
+    fn check_all_root_override_beats_the_env_root() {
+        let _g = crate::test_util::lock_env();
+        let env_root = TempDir::new().unwrap();
+        let flag_root = TempDir::new().unwrap();
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", env_root.path());
+        let a = flag_root.path().join("a");
+        fs::create_dir_all(&a).unwrap();
+        fs::write(
+            a.join("scenario.json"),
+            r#"{"schema":"scenario/2","id":"a","intent":"x","steps":[{"id":"dup","intent":"a","kind":"do","verb":"reload"},{"id":"dup","intent":"b","kind":"do","verb":"reload"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            check_all(false, LintFormat::Text, Some(flag_root.path())).unwrap(),
+            1
+        );
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
@@ -4825,11 +4930,14 @@ mod tests {
             .unwrap();
         }
         assert_eq!(
-            validate_all(if false {
-                LintFormat::Json
-            } else {
-                LintFormat::Text
-            })
+            validate_all(
+                if false {
+                    LintFormat::Json
+                } else {
+                    LintFormat::Text
+                },
+                None,
+            )
             .unwrap(),
             0
         );
@@ -4856,11 +4964,14 @@ mod tests {
         .unwrap();
         fs::write(b.join("scenario.json"), "garbage not json").unwrap();
         assert_eq!(
-            validate_all(if true {
-                LintFormat::Json
-            } else {
-                LintFormat::Text
-            })
+            validate_all(
+                if true {
+                    LintFormat::Json
+                } else {
+                    LintFormat::Text
+                },
+                None,
+            )
             .unwrap(),
             1
         );
@@ -4932,11 +5043,14 @@ mod tests {
         let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
         std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path().join("empty"));
         assert_eq!(
-            validate_all(if false {
-                LintFormat::Json
-            } else {
-                LintFormat::Text
-            })
+            validate_all(
+                if false {
+                    LintFormat::Json
+                } else {
+                    LintFormat::Text
+                },
+                None,
+            )
             .unwrap(),
             0
         );
@@ -4971,6 +5085,7 @@ mod tests {
                     LintFormat::Text
                 },
                 false,
+                None,
                 None,
                 None
             )
@@ -5010,6 +5125,7 @@ mod tests {
                     LintFormat::Text
                 },
                 false,
+                None,
                 None,
                 None
             )
@@ -5254,7 +5370,9 @@ mod tests {
         std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
         let d = tmp.path().join("sid");
         for i in 0..5 {
-            fs::create_dir_all(d.join("replays").join(format!("2026-01-0{i}__hash{i}"))).unwrap();
+            let run = d.join("replays").join(format!("2026-01-0{i}__hash{i}"));
+            fs::create_dir_all(&run).unwrap();
+            fs::write(run.join("events.jsonl"), "").unwrap();
         }
         assert_eq!(prune_replays("sid", 2, true, false).unwrap(), 0);
         let mut kept: Vec<String> = std::fs::read_dir(d.join("replays"))
@@ -5283,7 +5401,9 @@ mod tests {
         let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
         std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
         let d = tmp.path().join("sid");
-        fs::create_dir_all(d.join("replays").join("r1")).unwrap();
+        let run = d.join("replays").join("r1");
+        fs::create_dir_all(&run).unwrap();
+        fs::write(run.join("events.jsonl"), "").unwrap();
         assert_eq!(prune_replays("sid", 5, true, false).unwrap(), 0);
         assert!(d.join("replays").join("r1").is_dir());
         match prev {
@@ -5340,16 +5460,16 @@ mod tests {
         for j in ["a", "b"] {
             let count = if j == "a" { 5 } else { 2 };
             for i in 0..count {
-                fs::create_dir_all(
-                    tmp.path()
-                        .join(j)
-                        .join("replays")
-                        .join(format!("2026-01-0{i}__hash{i}")),
-                )
-                .unwrap();
+                let run = tmp
+                    .path()
+                    .join(j)
+                    .join("replays")
+                    .join(format!("2026-01-0{i}__hash{i}"));
+                fs::create_dir_all(&run).unwrap();
+                fs::write(run.join("events.jsonl"), "").unwrap();
             }
         }
-        assert_eq!(prune_all(2, true, false).unwrap(), 0);
+        assert_eq!(prune_all(2, true, false, None).unwrap(), 0);
         let kept_a: Vec<_> = std::fs::read_dir(tmp.path().join("a").join("replays"))
             .unwrap()
             .flatten()
@@ -5372,7 +5492,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
         std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path().join("empty"));
-        assert_eq!(prune_all(3, true, false).unwrap(), 0);
+        assert_eq!(prune_all(3, true, false, None).unwrap(), 0);
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
@@ -5487,6 +5607,22 @@ mod tests {
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    /// `--help` after a subverb must print usage, not be swallowed as the
+    /// `<file>` positional (`scenario lint --help` used to try reading a
+    /// file literally named --help).
+    #[test]
+    fn help_flag_wins_over_file_positionals() {
+        for args in [
+            vec!["lint".to_string(), "--help".to_string()],
+            vec!["validate".to_string(), "--help".to_string()],
+            vec!["check".to_string(), "-h".to_string()],
+            vec!["new".to_string(), "--help".to_string()],
+            vec!["--help".to_string()],
+        ] {
+            assert_eq!(run(&args).unwrap(), 0, "args {args:?}");
         }
     }
 }
