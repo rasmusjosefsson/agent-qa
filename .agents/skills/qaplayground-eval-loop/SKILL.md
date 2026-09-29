@@ -129,6 +129,23 @@ Site quirks live in the case file, not the lib: credentialed URLs via
 `keepDialogs`, download asserts via `assertFile*`. New script entries go
 into `evals/package.json` as `"golden:<site>:<tc>"`.
 
+### Framework quirks worth reusing
+
+- **AngularJS (globalsqa banking demo)**: the `select` binds a digest late —
+  wait on the select itself before `selectOption`; the submit stays
+  `ng-hide` until the model sets (`waitSelector('button[type=submit]:not(.ng-hide)')`
+  + a ~400ms settle `waitMs`); use `clickSelectorForce` for form submits —
+  a synthetic click can land before `ng-submit` attaches.
+- **SPAs with in-memory state** (coffee-cart): never `open` the SPA again
+  mid-scenario — navigate via in-app link clicks or the state resets.
+  Watch for hidden duplicate controls (e.g. a `ul.cart-preview` shadowing
+  the real row buttons) — scope selectors to the visible container.
+- **`{{vars._unique}}`**: `fillSelector("...{{vars._unique}}")` records the
+  template; replay mints fresh uniqueness per run (registrations, emails).
+- **Below-fold clicks**: `clickSelector`/`checkSelector` auto-scroll +
+  record a scrollTo step via `ensureHittable` (#321) — a recorded scenario
+  never silently misses an offscreen target.
+
 ### Sweep skip list (probed, not goldenable)
 
 Don't re-probe these — verified unreachable, bot-gated, or broken:
