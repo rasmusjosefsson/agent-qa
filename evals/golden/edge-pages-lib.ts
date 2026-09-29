@@ -42,6 +42,7 @@ interface GoldenContext {
 export interface EdgeGolden extends GoldenContext {
   openPage(): Promise<void>;
   clickSelector(selector: string, intent: string): Promise<void>;
+  dblclickSelector(selector: string, intent: string): Promise<void>;
   fillSelector(selector: string, value: string, intent: string): Promise<void>;
   selectOption(selector: string, value: string, intent: string): Promise<void>;
   checkSelector(selector: string, intent: string): Promise<void>;
@@ -177,6 +178,10 @@ export async function runEdgeGolden(
     async clickSelector(selector, stepIntent) {
       await run(ctx, `click ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "click", selector]);
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
+    },
+    async dblclickSelector(selector, stepIntent) {
+      await run(ctx, `dblclick ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "dblclick", selector]);
+      await record(ctx, "action", { method: "dblclickBySelector", args: [selector], intent: stepIntent });
     },
     async fillSelector(selector, value, stepIntent) {
       await run(ctx, `fill ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, value]);
