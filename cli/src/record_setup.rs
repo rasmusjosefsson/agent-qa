@@ -27,11 +27,46 @@ pub fn run(args: &[String]) -> Result<u8> {
     let mut state = RecorderState::load_active()?;
     for (i, raw) in raws.iter().enumerate() {
         let op = parse_env_op(raw).with_context(|| format!("setup op {}", i + 1))?;
+        if let Some(warn) = opaque_origin_warning(&state.env_open, &op) {
+            eprintln!("{warn}");
+        }
         state.env_open.push(op);
     }
     state.save()?;
     println!("recorded {} setup operation(s)", raws.len());
     Ok(0)
+}
+
+/// cookie/localStorage ops run against the page's origin; on a session
+/// that never navigated (`about:blank`) they die at replay with
+/// `SecurityError: storage denied`. Warn unless a nav op precedes them.
+fn opaque_origin_warning(existing: &[EnvOp], new_op: &EnvOp) -> Option<String> {
+    let origin_bound = |op: &EnvOp| matches!(op, EnvOp::Cookie { .. } | EnvOp::LocalStorage { .. });
+    let is_nav = |op: &EnvOp| matches!(op, EnvOp::Nav { .. });
+    if origin_bound(new_op) && !existing.iter().any(is_nav) {
+        return Some(format!(
+            "warning: {} runs against the page origin, but env.open has no nav op — \
+             replay lands on about:blank and fails with a storage SecurityError. \
+             Add a nav op first (or record `start --open <url>`).",
+            op_kind(new_op)
+        ));
+    }
+    if is_nav(new_op) && existing.iter().any(origin_bound) {
+        return Some(
+            "warning: nav lands after origin-bound ops that already ran on about:blank — \
+             move it before the cookie/localStorage ops or they still fail at replay."
+                .to_string(),
+        );
+    }
+    None
+}
+
+fn op_kind(op: &EnvOp) -> &'static str {
+    match op {
+        EnvOp::Cookie { .. } => "cookie",
+        EnvOp::LocalStorage { .. } => "localStorage",
+        _ => "this op",
+    }
 }
 
 fn print_help() {
@@ -145,5 +180,57 @@ mod tests {
     fn kind_hint_names_unknown_kinds() {
         let raw: Json = serde_json::json!({ "kind": "bogus" });
         assert!(kind_hint(&raw).contains("valid kinds"));
+    }
+
+    fn nav() -> EnvOp {
+        EnvOp::Nav {
+            intent: None,
+            url: Some("https://app.example.com/".into()),
+            policy: None,
+        }
+    }
+
+    fn storage() -> EnvOp {
+        EnvOp::LocalStorage {
+            intent: None,
+            key: Some("k".into()),
+            value: Some("v".into()),
+            policy: None,
+        }
+    }
+
+    #[test]
+    fn storage_op_without_a_nav_warns() {
+        let warn = opaque_origin_warning(
+            &[EnvOp::Fresh {
+                intent: None,
+                policy: None,
+            }],
+            &storage(),
+        );
+        assert!(warn.unwrap().contains("no nav op"));
+    }
+
+    #[test]
+    fn storage_op_after_a_nav_is_silent() {
+        assert!(opaque_origin_warning(&[nav()], &storage()).is_none());
+    }
+
+    #[test]
+    fn nav_after_storage_warns_about_order() {
+        let warn = opaque_origin_warning(&[storage()], &nav());
+        assert!(warn.unwrap().contains("after origin-bound"));
+    }
+
+    #[test]
+    fn non_origin_bound_ops_never_warn() {
+        let flag = EnvOp::Flag {
+            intent: None,
+            name: "f".into(),
+            enabled: true,
+            policy: None,
+        };
+        assert!(opaque_origin_warning(&[], &flag).is_none());
+        assert!(opaque_origin_warning(&[], &nav()).is_none());
     }
 }

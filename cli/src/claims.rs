@@ -86,17 +86,6 @@ pub fn dispatch_check(
                 scope,
                 timeout,
             ),
-            Some(kind) => bail!("element claim ofKind {kind:?} is not yet supported"),
-        },
-            ),
-            Some(ElementClaimKind::Count) => check_element_count(
-                element,
-                &claim.predicate,
-                claim.value.as_ref(),
-                ctx,
-                scope,
-                timeout,
-            ),
             // text/value/attribute are friendly spellings for the property/
             // attribute reads the plain element claim already supports —
             // `ofKind:"text"` ≡ `attribute:"text"` (textContent),
@@ -783,19 +772,15 @@ fn check_cookie(
     scope: &mut ValueScope,
 ) -> Result<()> {
     let name = substitute_scenario_vars(cookie, scope);
-    let expr = format!(
-        "(() => {{ const n = {}; for (const c of document.cookie.split(';')) {{ \
-         const i = c.indexOf('='); if (i > 0 && c.slice(0, i).trim() === n) \
-         return decodeURIComponent(c.slice(i + 1).trim()); }} return null; }})()",
-        serde_json::to_string(&name)?,
-    );
-    let raw = browser::eval_expression(ctx.session, &expr)?;
-    let raw = raw.trim();
-    let actual: Json = if raw.is_empty() || raw == "null" {
-        Json::Null
-    } else {
-        Json::String(serde_json::from_str(raw).unwrap_or_else(|_| raw.to_string()))
-    };
+    // `agent-browser cookies` reads the CDP cookie jar — `document.cookie`
+    // would miss HttpOnly cookies like session/auth tokens.
+    let jar = browser::cookies(ctx.session)?;
+    let actual: Json = jar
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .find(|(n, _)| n.trim() == name)
+        .map(|(_, v)| Json::String(v.trim().to_string()))
+        .unwrap_or(Json::Null);
     check_value(&actual, predicate, expected, scope).map_err(|e| anyhow!("cookie {name:?}: {e:#}"))
 }
 
@@ -2810,14 +2795,60 @@ mod tests {
         }
 
         #[test]
-        fn cookie_subject_exists_reads_document_cookie() {
+        fn cookie_subject_reads_the_cdp_cookie_jar() {
             let _g = lock_env();
             let tmp = TempDir::new().unwrap();
-            install_fake_eval(tmp.path(), "\"abc\"");
+            // Fake `agent-browser cookies` — the CDP jar dump carries
+            // HttpOnly cookies that document.cookie would hide.
+            let resp_path = tmp.path().join("cookies.txt");
+            fs::write(&resp_path, "other=x\nsession=abc\n").unwrap();
+            let body = format!(
+                "#!/bin/sh\nif [ \"$3\" = cookies ]; then cat '{}'; exit 0; fi\nexit 0\n",
+                resp_path.display()
+            );
+            let bin = tmp.path().join("agent-browser");
+            fs::write(&bin, body).unwrap();
+            let mut perm = fs::metadata(&bin).unwrap().permissions();
+            perm.set_mode(0o755);
+            fs::set_permissions(&bin, perm).unwrap();
+            std::env::set_var(ab::BIN_ENV, &bin);
+            ab::_reset_bin_cache_for_tests();
             let claim: Claim = serde_json::from_value(json!({
                 "subject": { "cookie": "session" },
                 "predicate": "equals",
                 "value": "abc"
+            }))
+            .unwrap();
+            let mut scope = ValueScope::default();
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: Path::new("."),
+                run_dir: None,
+            };
+            dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+            clear();
+        }
+
+        #[test]
+        fn cookie_subject_not_exists_when_absent_from_jar() {
+            let _g = lock_env();
+            let tmp = TempDir::new().unwrap();
+            let resp_path = tmp.path().join("cookies.txt");
+            fs::write(&resp_path, "other=x\n").unwrap();
+            let body = format!(
+                "#!/bin/sh\nif [ \"$3\" = cookies ]; then cat '{}'; exit 0; fi\nexit 0\n",
+                resp_path.display()
+            );
+            let bin = tmp.path().join("agent-browser");
+            fs::write(&bin, body).unwrap();
+            let mut perm = fs::metadata(&bin).unwrap().permissions();
+            perm.set_mode(0o755);
+            fs::set_permissions(&bin, perm).unwrap();
+            std::env::set_var(ab::BIN_ENV, &bin);
+            ab::_reset_bin_cache_for_tests();
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "cookie": "session" },
+                "predicate": "notExists"
             }))
             .unwrap();
             let mut scope = ValueScope::default();
@@ -3556,45 +3587,6 @@ mod tests {
         }));
         let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
         assert!(err.to_string().contains("not a valid regex"), "got: {err}");
-    }
-
-    #[test]
-    fn element_count_claim_hard_validation() {
-        let sid_dir = Path::new("/tmp");
-        let mut scope = ValueScope::default();
-        let ctx = CheckContext {
-            session: "s",
-            scenario_dir: sid_dir,
-            run_dir: None,
-        };
-        let el_claim = |subject: serde_json::Value, rest: serde_json::Value| -> Claim {
-            let mut m = serde_json::Map::new();
-            m.insert("subject".into(), subject);
-            if let serde_json::Value::Object(rest) = rest {
-                m.extend(rest);
-            }
-            serde_json::from_value(serde_json::Value::Object(m)).unwrap()
-        };
-        let subject = || json!({"element": {"raw": {"kind": "css", "value": ".item"}, "reason": "test"}, "ofKind": "count"});
-        // missing/blank value → bail before any browser call
-        let claim = el_claim(subject(), json!({"predicate": "equals"}));
-        let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
-        assert!(err.to_string().contains("numeric 'value'"), "got: {err}");
-        // string predicate → unsupported
-        let claim = el_claim(subject(), json!({"predicate": "contains", "value": 3}));
-        let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
-        assert!(
-            err.to_string().contains("does not support predicate"),
-            "got: {err}"
-        );
-        // a non-count ofKind still fails loudly, not silently
-        let claim: Claim = serde_json::from_value(json!({
-            "subject": {"element": {"raw": {"kind": "css", "value": ".item"}, "reason": "test"}, "ofKind": "text"},
-            "predicate": "isVisible"
-        }))
-        .unwrap();
-        let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
-        assert!(err.to_string().contains("not yet supported"), "got: {err}");
     }
 
     #[test]

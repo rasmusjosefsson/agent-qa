@@ -454,6 +454,15 @@ function createLiveBridge({
       broadcastEvent('loaded', {});
       return;
     }
+    // Native dialogs freeze the page's JS thread — the pane's clicks can't
+    // reach an OK button, so the bridge answers them itself and records the
+    // pair replay authors write by hand: a {"dialog": true} check asserting
+    // the message, then do/dialog resolving it. The accept is unconditional
+    // (dismiss needs the buffer step edited after the fact).
+    if (msg.method === 'Page.javascriptDialogOpening' && msg.params) {
+      handleDialog(msg.params);
+      return;
+    }
     // Page-side record events (select / check / uncheck) raised by the
     // injected listener via the __aqRecord binding.
     if (msg.method === 'Runtime.bindingCalled' && msg.params && msg.params.name === '__aqRecord') {
@@ -781,6 +790,35 @@ function createLiveBridge({
       })
       .catch(() => {});
     return framedTail;
+  }
+
+  function handleDialog(p) {
+    const type = p.type || 'alert';
+    const handle = { accept: true };
+    if (type === 'prompt' && p.defaultPrompt != null) handle.promptText = p.defaultPrompt;
+    try {
+      send('Page.handleJavaScriptDialog', handle);
+    } catch (e) {
+      broadcastEvent('record-skip', { reason: `dialog auto-accept failed: ${(e && e.message) || e}` });
+      return;
+    }
+    if (type === 'beforeunload') return;
+    const message = typeof p.message === 'string' ? p.message : '';
+    const params = { action: 'accept' };
+    if (type === 'prompt' && p.defaultPrompt != null) params.text = p.defaultPrompt;
+    // Awaited in sequence — the check must reach the buffer before the
+    // resolve step, same order replay authors write by hand.
+    void (async () => {
+      await emitRecord('check', {
+        intent: `${type} dialog says "${message.slice(0, 80)}"`,
+        claim: { subject: { dialog: true }, predicate: 'contains', value: message },
+      });
+      await emitRecord('do', {
+        intent: `${type} dialog → accept`,
+        verb: 'dialog',
+        params,
+      });
+    })();
   }
 
   // Flush buffered typing into a single fillByLabel step (deduped).

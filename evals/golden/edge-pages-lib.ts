@@ -1,4 +1,5 @@
 import { toRecordDraft } from "./record-translate";
+import { checkVisibleEval, clickTrustedOrVisible, clickVisibleEval, fillVisibleEval, hoverVisibleEval, selectVisibleEval, trustedOrVisible } from "./visible";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -37,12 +38,20 @@ interface GoldenContext {
   agentBrowser: string;
   env: Record<string, string>;
   results: StepResult[];
+  // Per-session mint for fillUnique: mirrors replay's scenario-scoped
+  // {{vars._unique}} cache so two fields sharing one template (password +
+  // confirm) observe the same record-side value.
+  uniqueMint?: string;
 }
 
 export interface EdgeGolden extends GoldenContext {
   openPage(): Promise<void>;
   clickSelector(selector: string, intent: string): Promise<void>;
   fillSelector(selector: string, value: string, intent: string): Promise<void>;
+  // Fill a selector with a template containing `{{vars._unique}}`: mints a
+  // fresh value at record time for the live fill, and records the template
+  // verbatim so replay mints a different one (uniqueness-constrained fields).
+  fillUnique(selector: string, template: string, intent: string): Promise<void>;
   selectOption(selector: string, value: string, intent: string): Promise<void>;
   checkSelector(selector: string, intent: string): Promise<void>;
   dblclickSelector(selector: string, intent: string): Promise<void>;
@@ -71,6 +80,9 @@ export interface EdgeGolden extends GoldenContext {
   waitSelectorAbsent(selector: string, intent: string): Promise<void>;
   waitSelectorText(selector: string, text: string, intent: string): Promise<void>;
   waitLoad(state: string, intent: string): Promise<void>;
+  // `wait url` — poll resource timing until a matching request completed,
+  // live at record and in the replayed scenario (`params.timeoutMs` honored).
+  waitRequest(pattern: string, intent: string, timeoutMs?: number): Promise<void>;
   assertElementText(selector: string, expected: string, intent: string): Promise<void>;
   assertElementAttribute(selector: string, attribute: string, predicate: string, expected: string, intent: string): Promise<void>;
   assertElementCount(selector: string, predicate: string, count: number, intent: string): Promise<void>;
@@ -81,6 +93,8 @@ export interface EdgeGolden extends GoldenContext {
   assertPageError(matcher: true | { text?: string; url?: string }, predicate: string, value: string | undefined, intent: string): Promise<void>;
   assertNetworkStatus(matcher: Record<string, unknown>, predicate: string, value: string | undefined, intent: string): Promise<void>;
   assertNetworkFired(matcher: Record<string, unknown>, mustFire: boolean, intent: string): Promise<void>;
+  assertNetworkJson(matcher: Record<string, unknown>, path: string, predicate: string, value: unknown, intent: string): Promise<void>;
+  assertNetworkSilent(matcher: Record<string, unknown>, intent: string): Promise<void>;
   assertCookie(name: string, expectPresent: boolean, intent: string): Promise<void>;
   assertStorage(keyOrMatcher: string | { key: string; scope?: string }, expectPresent: boolean, intent: string): Promise<void>;
   assertStyle(selector: string, cssProperty: string, expected: string, intent: string): Promise<void>;
@@ -222,25 +236,35 @@ export async function runEdgeGolden(
       await record(ctx, "wait", { condition: { kind: "selector", selector: readySelector }, intent: "page rendered" });
     },
     async clickSelector(selector, stepIntent) {
+      await clickTrustedOrVisible(ctx, (n, c) => run(ctx, n, c), selector);
       await ensureHittable(ctx, selector, stepIntent);
       await run(ctx, `click ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "click", selector]);
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
     async fillSelector(selector, value, stepIntent) {
-      await run(ctx, `fill ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, value]);
+      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `fill ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, value], fillVisibleEval(selector, value));
       await record(ctx, "action", { method: "fillBySelector", args: [selector, value], intent: stepIntent });
     },
+    async fillUnique(selector, template, stepIntent) {
+      ctx.uniqueMint ??= Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) =>
+        b.toString(16).padStart(2, "0"),
+      ).join("");
+      const resolved = template.replaceAll("{{vars._unique}}", ctx.uniqueMint);
+      await run(ctx, `fill ${selector} (unique)`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, resolved]);
+      await record(ctx, "action", { method: "fillBySelector", args: [selector, template], intent: stepIntent });
+    },
     async selectOption(selector, value, stepIntent) {
-      await run(ctx, `select ${value}`, [ctx.agentBrowser, "--session", ctx.session, "select", selector, value]);
+      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `select ${value}`, [ctx.agentBrowser, "--session", ctx.session, "select", selector, value], selectVisibleEval(selector, Array.isArray(value) ? value : [value]));
       await record(ctx, "action", { method: "selectBySelector", args: [selector, value], intent: stepIntent });
     },
     async checkSelector(selector, stepIntent) {
+      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `check ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "check", selector], checkVisibleEval(selector));
       await ensureHittable(ctx, selector, stepIntent);
       await run(ctx, `check ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "check", selector]);
       await record(ctx, "action", { method: "checkBySelector", args: [selector], intent: stepIntent });
     },
     async hoverSelector(selector, stepIntent) {
-      await run(ctx, `hover ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "hover", selector]);
+      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `hover ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "hover", selector], hoverVisibleEval(selector));
       await record(ctx, "action", { method: "hoverBySelector", args: [selector], intent: stepIntent });
     },
     async dblclickSelector(selector, stepIntent) {
@@ -324,7 +348,7 @@ export async function runEdgeGolden(
       // a native DOM click, so this keeps record/replay identical while
       // dodging agent-browser's live covered-element refusal (e.g. a link
       // whose click point sits under a still-animating drawer header).
-      await run(ctx, `jsclick ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "eval", `document.querySelector(${JSON.stringify(selector)}).click()`]);
+      await run(ctx, `jsclick ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "eval", clickVisibleEval(selector)]);
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
     async waitMs(ms, stepIntent) {
@@ -343,6 +367,32 @@ export async function runEdgeGolden(
     },
     async waitLoad(state, stepIntent) {
       await record(ctx, "wait", { condition: { kind: "loadState", state }, intent: stepIntent });
+    },
+    async waitRequest(pattern, stepIntent, timeoutMs = 10_000) {
+      // Record-time: poll the page's resource timing until a matching entry
+      // completes, so steps that depend on the request's side effects (e.g.
+      // an alert fired on ajax success) can observe them live.
+      const deadline = Date.now() + timeoutMs;
+      const glob = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replaceAll("*", ".*");
+      const re = new RegExp(glob);
+      for (;;) {
+        const probe = await run(ctx, `poll ${pattern}`, [
+          ctx.agentBrowser, "--session", ctx.session, "--json", "eval",
+          `JSON.stringify(performance.getEntriesByType('resource').map(e=>e.name))`,
+        ]);
+        try {
+          const names = JSON.parse(JSON.parse(probe).data ?? "[]") as string[];
+          if (names.some((n) => re.test(n))) break;
+        } catch { /* fall through to deadline check */ }
+        if (Date.now() > deadline) {
+          throw new Error(`${stepIntent}: no request matched ${pattern} within ${timeoutMs}ms`);
+        }
+        await Bun.sleep(400);
+      }
+      await record(ctx, "wait", {
+        condition: { kind: "networkRequest", pattern, timeoutMs },
+        intent: stepIntent,
+      });
     },
     async assertElementText(selector, expected, stepIntent) {
       await record(ctx, "assert", { kind: "elementText", args: [selector, expected], intent: stepIntent });
@@ -421,6 +471,20 @@ export async function runEdgeGolden(
         intent: stepIntent,
       });
     },
+    async assertNetworkJson(matcher, path, predicate, value, stepIntent) {
+      await record(ctx, "assert", {
+        kind: "networkJson",
+        args: [matcher, path, predicate, value],
+        intent: stepIntent,
+      });
+    },
+    async assertNetworkSilent(matcher, stepIntent) {
+      await record(ctx, "assert", {
+        kind: "networkFired",
+        args: [matcher, false],
+        intent: stepIntent,
+      });
+    },
     async assertStyle(selector, cssProperty, expected, stepIntent) {
       await record(ctx, "assert", { kind: "elementAttribute", args: [selector, `style:${cssProperty}`, "equals", expected], intent: stepIntent });
     },
@@ -480,6 +544,7 @@ export async function runEdgeGolden(
     await steps(golden);
     await run(ctx, "verify", [ctx.agentQa, "verify"]);
     await run(ctx, "flush", [ctx.agentQa, "flush", ...(opts.flushArgs ?? [])]);
+    await run(ctx, "check", [ctx.agentQa, "scenario", "check", resolve(ctx.scenariosRoot, sid, "scenario.json")]);
     await run(ctx, "replay", [ctx.agentQa, "replay", sid, "--session", `${ctx.session}-replay`]);
     pass = true;
   } catch (err) {

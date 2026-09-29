@@ -937,6 +937,62 @@ test('a resize inside an iframe does not record viewport', async () => {
   assert.equal(recorded.length, 0);
 });
 
+test('a javascriptDialogOpening records check+accept and answers the dialog', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  sock.recv({
+    method: 'Page.javascriptDialogOpening',
+    params: { type: 'confirm', message: 'Delete this file?', url: 'https://x/' },
+  });
+  await flush();
+  const answered = sock.sent.find((m) => m.method === 'Page.handleJavaScriptDialog');
+  assert.ok(answered, 'the dialog is answered — the page unfreezes');
+  assert.equal(answered.params.accept, true);
+  await flush();
+  assert.equal(recorded.length, 2, 'check then resolve, in order');
+  const [check, resolve] = recorded;
+  assert.equal(check.kind, 'check');
+  assert.deepEqual(check.payload.claim, {
+    subject: { dialog: true },
+    predicate: 'contains',
+    value: 'Delete this file?',
+  });
+  assert.equal(resolve.kind, 'do');
+  assert.equal(resolve.payload.verb, 'dialog');
+  assert.deepEqual(resolve.payload.params, { action: 'accept' });
+});
+
+test('a prompt dialog records its default as the prompt text', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  sock.recv({
+    method: 'Page.javascriptDialogOpening',
+    params: { type: 'prompt', message: 'Your name?', defaultPrompt: 'ada', url: 'https://x/' },
+  });
+  await flush();
+  const answered = sock.sent.find((m) => m.method === 'Page.handleJavaScriptDialog');
+  assert.equal(answered.params.promptText, 'ada', 'prompt answered with the shown default');
+  await flush();
+  assert.equal(recorded.length, 2);
+  assert.deepEqual(recorded[1].payload.params, { action: 'accept', text: 'ada' });
+});
+
+test('beforeunload dialogs are answered but not recorded', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  sock.recv({
+    method: 'Page.javascriptDialogOpening',
+    params: { type: 'beforeunload', message: 'Leave?', url: 'https://x/' },
+  });
+  await flush();
+  assert.ok(sock.sent.some((m) => m.method === 'Page.handleJavaScriptDialog'));
+  await flush();
+  assert.equal(recorded.length, 0);
+});
+
 // -- download capture -------------------------------------------------------
 
 // Drives a recorded click's whole pick() chain so the click lands held in the

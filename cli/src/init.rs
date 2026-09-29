@@ -43,7 +43,7 @@ const HELLO: &str = r#"{
 }
 "#;
 
-const GITIGNORE_BLOCK: &str = "# agent-qa run artifacts (scenario.json + baselines/ stay tracked)\ntmp/agent-qa-scenarios/\ntmp/agent-qa-record/\nscenarios/*/replays/\nscenarios/*/shots-diff/\n";
+const GITIGNORE_BLOCK: &str = "# agent-qa run artifacts (scenario.json + baselines/ stay tracked)\ntmp/agent-qa-scenarios/\ntmp/agent-qa-record/\nscenarios/*/replays/\nscenarios/*/shots-diff/\nscenarios/*/inputs.local.json\n";
 
 /// A PR gate that replays the whole suite and comments the verdict. Uses the
 /// published package, so this repo only needs scenarios + baselines committed.
@@ -75,6 +75,8 @@ jobs:
         run: |
           npm install --no-audit --no-fund agent-qa agent-browser
           ./node_modules/.bin/agent-browser install
+      - name: lint scenarios
+        run: ./node_modules/.bin/agent-qa scenario check-all
       - name: replay suite
         id: gate
         working-directory: .

@@ -180,6 +180,13 @@ fn resolve_bin_uncached() -> Result<PathBuf, AgentBrowserError> {
             if path.is_file() {
                 return Ok(path);
             }
+            // A bare command name (e.g. AGENT_BROWSER_BIN=agent-browser) isn't a
+            // file — resolve it through $PATH instead of erroring.
+            if !p.contains('/') && !p.contains('\\') {
+                if let Ok(found) = which(&p) {
+                    return Ok(found);
+                }
+            }
             return Err(AgentBrowserError::BinaryNotFound { env_value: p });
         }
     }
@@ -827,19 +834,17 @@ pub fn network_requests(session: &str) -> Result<Vec<CapturedRequest>, AgentBrow
         });
     }
     requests.extend(hops);
-    requests.extend(mocked_requests(session));
-    Ok(requests)
     // WebSockets are invisible to the daemon's fetch/XHR capture — merge
     // the entries our own CDP listener saw (`cdpws-*`).
     if let Ok(ws_entries) = crate::cdp::ws_entries(session) {
         for e in ws_entries {
             if let Ok(req) = serde_json::from_value::<CapturedRequest>(e) {
-                reqs.push(req);
+                requests.push(req);
             }
         }
     }
-    reqs.extend(mocked_requests(session));
-    Ok(reqs)
+    requests.extend(mocked_requests(session));
+    Ok(requests)
 }
 
 /// Requests the in-page mock intercepted (ids `mock-*`). Best-effort — a
@@ -1088,6 +1093,14 @@ pub fn wait_for_load_capped(
 pub fn eval_expression(session: &str, expression: &str) -> Result<String, AgentBrowserError> {
     let wrapped = frame_wrap_eval(session, expression);
     let r = run(session, ["eval", &wrapped], RunOpts::new().capture())?;
+    Ok(r.stdout)
+}
+
+/// Dump the context's cookie jar via `agent-browser cookies` — CDP-level, so
+/// HttpOnly cookies (session/auth) are included where `document.cookie` is
+/// blind. Returns stdout in `name=value` line form; values may contain `=`.
+pub fn cookies(session: &str) -> Result<String, AgentBrowserError> {
+    let r = run(session, ["cookies"], RunOpts::new().capture())?;
     Ok(r.stdout)
 }
 
@@ -1913,6 +1926,20 @@ mod tests {
         _reset_bin_cache_for_tests();
         let err = resolve_bin().unwrap_err();
         assert!(matches!(err, AgentBrowserError::BinaryNotFound { .. }));
+        clear_bin();
+    }
+
+    #[test]
+    fn bin_env_var_bare_name_resolves_via_path() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        fake_browser(tmp.path(), "#!/bin/sh\nexit 0\n");
+        let orig_path = env::var("PATH").unwrap_or_default();
+        env::set_var("PATH", format!("{}:{}", tmp.path().display(), orig_path));
+        env::set_var(BIN_ENV, "agent-browser");
+        _reset_bin_cache_for_tests();
+        assert_eq!(resolve_bin().unwrap(), tmp.path().join("agent-browser"));
+        env::set_var("PATH", orig_path);
         clear_bin();
     }
 
