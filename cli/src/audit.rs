@@ -282,6 +282,7 @@ pub fn run(args: &[String]) -> Result<u8> {
         "trend" => trend(&positionals, json_out, limit, trend_all),
 
         "cluster" => cluster(json_out, cluster_min),
+        "explain" => explain(&positionals, json_out),
         "verdict" => {
             if trend_all {
                 verdict_all(json_out)
@@ -1005,6 +1006,202 @@ fn summary(positionals: &[String]) -> Result<u8> {
         .unwrap_or("(no summary recorded)");
     println!("{s}");
     Ok(0)
+}
+
+/// `audit explain <sid> [runId|latest] [--json]` — one-block failure
+/// digest: verdict + failing steps + heal trail + console errors +
+/// failed/pending requests, so an agent repairing a broken run reads a
+/// single artifact instead of joining audit.json, events.jsonl,
+/// heal.jsonl, console.json, and network.json by hand.
+/// Exit mirrors `audit verdict`: 0 PASS, 1 BLOCK, 2 FIX.
+fn explain(positionals: &[String], json_out: bool) -> Result<u8> {
+    let sid = positionals
+        .get(1)
+        .ok_or_else(|| anyhow!("usage: audit explain <sid> [runId|latest]"))?;
+    let run_ref = positionals.get(2).map(|s| s.as_str()).unwrap_or("latest");
+    let dir = paths::scenario_dir(sid)?;
+    let run_id = resolve_run_id(&dir, run_ref)?;
+    let run_dir = dir.join("replays").join(&run_id);
+
+    let (verdict, code, healed_steps, rejected_steps, summary_line, exit) = verdict_for(&run_dir)?;
+
+    let mut failed: Vec<Value> = Vec::new();
+    if let Ok(body) = fs::read_to_string(run_dir.join("events.jsonl")) {
+        for line in body.lines() {
+            let Ok(row) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            if row.get("status").and_then(|v| v.as_str()) != Some("fail") {
+                continue;
+            }
+            let mut f = serde_json::json!({
+                "stepId": row.get("id"),
+                "intent": row.get("intent"),
+                "kind": row.get("kind"),
+                "error": row.get("error"),
+            });
+            if let Some(ms) = row.get("ms") {
+                f["ms"] = ms.clone();
+            }
+            if let Some(shot) = row.get("screenshot").and_then(|v| v.as_str()) {
+                f["screenshot"] = Value::String(shot.to_string());
+            }
+            if let Some(snap) = row.get("snapshot").and_then(|v| v.as_str()) {
+                f["snapshot"] = Value::String(snap.to_string());
+            }
+            failed.push(f);
+        }
+    }
+
+    let mut heals: Vec<Value> = Vec::new();
+    if let Ok(body) = fs::read_to_string(run_dir.join("heal.jsonl")) {
+        for line in body.lines() {
+            let Ok(row) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            heals.push(row);
+        }
+    }
+
+    let mut console_errors: Vec<String> = Vec::new();
+    if let Ok(bytes) = fs::read(run_dir.join("console.json")) {
+        if let Ok(c) = serde_json::from_slice::<Value>(&bytes) {
+            if let Some(msgs) = c.get("messages").and_then(|m| m.as_array()) {
+                for m in msgs.iter() {
+                    if m.get("type").and_then(|v| v.as_str()) == Some("error") {
+                        if let Some(t) = m.get("text").and_then(|v| v.as_str()) {
+                            if console_errors.len() < 10 {
+                                console_errors.push(t.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut network_failures: Vec<Value> = Vec::new();
+    if let Ok(bytes) = fs::read(run_dir.join("network.json")) {
+        if let Ok(n) = serde_json::from_slice::<Value>(&bytes) {
+            if let Some(reqs) = n.get("requests").and_then(|r| r.as_array()) {
+                for r in reqs.iter() {
+                    let status = r.get("status").and_then(|v| v.as_i64());
+                    let bad = match status {
+                        Some(s) => s >= 400,
+                        // A request with no status never got a response —
+                        // dead backend, abort, or still pending at run end.
+                        None => true,
+                    };
+                    if bad && network_failures.len() < 10 {
+                        network_failures.push(serde_json::json!({
+                            "method": r.get("method"),
+                            "url": r.get("url"),
+                            "status": status,
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    let has_shot_diff = run_dir.join("shots-diff").is_dir()
+        || failed.iter().any(|f| {
+            f.get("error")
+                .and_then(|e| e.as_str())
+                .is_some_and(|e| e.contains("differs from baseline"))
+        });
+
+    if json_out {
+        let out = serde_json::json!({
+            "scenario": sid,
+            "runId": run_id,
+            "verdict": verdict,
+            "exitCode": exit,
+            "summary": summary_line,
+            "failed": failed,
+            "heals": heals,
+            "healedSteps": healed_steps,
+            "rejectedSteps": rejected_steps,
+            "consoleErrors": console_errors,
+            "networkFailures": network_failures,
+            "runDir": run_dir,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(code);
+    }
+
+    println!("{sid} @ {run_id} — {summary_line} (exit {exit})");
+    println!("verdict: {verdict}");
+    if !failed.is_empty() {
+        println!("\nfailed steps ({}):", failed.len());
+        for f in &failed {
+            println!(
+                "  {}  {}  {}",
+                f.get("stepId").and_then(|v| v.as_str()).unwrap_or("?"),
+                f.get("kind").and_then(|v| v.as_str()).unwrap_or("?"),
+                f.get("intent").and_then(|v| v.as_str()).unwrap_or(""),
+            );
+            if let Some(e) = f.get("error").and_then(|v| v.as_str()) {
+                println!("      {e}");
+            }
+            if let Some(s) = f.get("screenshot").and_then(|v| v.as_str()) {
+                println!("      screenshot: replays/{run_id}/{s}");
+            }
+        }
+    }
+    if !heals.is_empty() {
+        println!("\nheals ({}):", heals.len());
+        for h in &heals {
+            let step = h
+                .get("stepId")
+                .or_else(|| h.get("step_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let mode = h.get("mode").and_then(|v| v.as_str()).unwrap_or("?");
+            if mode == "value-rejection" {
+                let why = h.get("rationale").and_then(|v| v.as_str()).unwrap_or("");
+                println!("  {step}  {mode}  {why}");
+            } else {
+                let from = h.get("from").and_then(|v| v.as_str()).unwrap_or("?");
+                let to = h.get("to").and_then(|v| v.as_str()).unwrap_or("?");
+                let strat = h.get("strategy").and_then(|v| v.as_str()).unwrap_or("");
+                println!("  {step}  {mode}  {from} → {to} [{strat}]");
+            }
+        }
+    }
+    if !console_errors.is_empty() {
+        println!("\nconsole errors ({}):", console_errors.len());
+        for e in &console_errors {
+            println!("  {e}");
+        }
+    }
+    if !network_failures.is_empty() {
+        println!("\nnetwork failures ({}):", network_failures.len());
+        for r in &network_failures {
+            let status = r
+                .get("status")
+                .and_then(|v| v.as_i64())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "no response".into());
+            println!(
+                "  {} {} → {}",
+                r.get("method").and_then(|v| v.as_str()).unwrap_or("?"),
+                r.get("url").and_then(|v| v.as_str()).unwrap_or("?"),
+                status
+            );
+        }
+    }
+    println!("\nrun dir: {}", run_dir.display());
+    println!("\nnext:");
+    println!("  agent-qa audit verdict {sid} {run_id} --json");
+    println!("  agent-qa compare {sid}           # diff vs the previous run");
+    if !heals.is_empty() {
+        println!("  agent-qa heal-patch {sid} {run_id}   # review the heal diff");
+    }
+    if has_shot_diff {
+        println!("  agent-qa shot-accept {sid}         # if the visual change is intended");
+    }
+    Ok(code)
 }
 
 fn diff(positionals: &[String]) -> Result<u8> {
@@ -2073,7 +2270,7 @@ fn print_help() {
     println!(
                 "agent-qa audit \u{2014} inspect a replay's audit.json\n\nUsage:\n  agent-qa audit show <sid> [<runId | latest>] [--json | --format text|json|github]\n  agent-qa audit list <sid>                    Table view: every run's\n                                               summary / exit / profile / tag\n  agent-qa audit list <sid> --json             Structured rows on stdout\n  agent-qa audit list <sid> [--passed | --failed] [--tag <pat>] [--profile <pat>] [--limit N] [--slow <secs>] [--sort duration|runId-desc] [--since <iso-ts>] [--until <iso-ts>] [--format text|json|github]\n                                               Filters: case-insensitive substring\n                                               --passed/--failed are exit-code partitions\n  agent-qa audit stats <sid> [--since <iso-ts>] [--until <iso-ts>]\n                                               Pass/fail/tag rollup for one scenario\n  agent-qa audit stats <sid> --json            Structured rollup on stdout\n  agent-qa audit stats-all                     Per-scenario + overall pass/fail rollup\n  agent-qa audit stats-all --json              Structured rollup on stdout\n  agent-qa audit stats-all [--since <iso-ts>] [--until <iso-ts>]\n                                               Constrain to a date window\n  agent-qa audit diff <sid> <runIdA> <runIdB>  Unified diff between two replays'\n                                               audit.json (canonicalised JSON;\n                                               'latest' accepted for either side;\n                                               exit 1 on difference)\n  agent-qa audit summary <sid> [<runId | latest>]\n                                               Print just the summary line (one line out)\n  agent-qa audit exit-code <sid> [<runId | latest>]\n                                               Print just the run's exitCode (-1 if missing)\n  agent-qa audit field <sid> <runId | latest> <fieldName>\n                                               Print any top-level audit field. String/\n                                               number/bool print verbatim; null prints\n                                               empty; object/array prints compact JSON.\n  agent-qa audit count <sid>                   Print the number of runs under <sid>\n  agent-qa audit duration <sid> [<runId | latest>]\n                                               Print the run's duration in seconds\n                                               (finishedAt - startedAt, 3 decimals)\n  agent-qa audit flaky <sid> [--min-flips N] [--min-runs N] [--json]\n                                               Flag steps whose outcome interleaves\n                                               pass/fail across runs (outcome churn;\n                                               heal-chronic covers locator churn)\n  agent-qa audit slow <sid> [--pct N] [--min-ms N] [--recent N] [--min-runs N] [--json]\n                                               Flag steps whose recent pass median\n                                               regressed vs their earlier-run median\n                                               (default: last 2 runs >50% and >250ms\n                                               over baseline)\n  agent-qa audit health [--json]           Cross-scenario rollup of flaky + slow +
                                                heal-chronic — one row per scenario
-                                               that has silent degradation\n  agent-qa audit verdict <sid> [<runId | latest>] [--json]\n                                               One-word run triage: PASS (exit 0) clean\n                                               green, FIX (exit 2) green but self-\n                                               corrected, BLOCK (exit 1) failed\n  agent-qa audit verdict --all [--json]\n                                               Suite triage board: one verdict row per\n                                               scenario's latest run; exit 1 if any\n                                               BLOCK (FIX rows are warnings only)\n  agent-qa audit cluster [--min-size N] [--json]\n                                               Group step failures across every scenario\n                                               by normalized error signature — one root\n                                               cause across N runs reads as one item\n  agent-qa audit trend <sid> [--limit N] [--json]\n                                               Outcome + duration trend for the last N\n                                               runs (default all): pass%, median secs,\n                                               a ✓/✗ outcome line + a duration sparkline\n  agent-qa audit trend --all [--limit N] [--json]\n                                               Suite board: one trend row per scenario\n\n'latest' resolves to <sid>/replays/latest.txt if present, otherwise the\nhighest lex-sorted run directory (run_id is timestamp-prefixed)."
+                                               that has silent degradation\n  agent-qa audit verdict <sid> [<runId | latest>] [--json]\n                                               One-word run triage: PASS (exit 0) clean\n                                               green, FIX (exit 2) green but self-\n                                               corrected, BLOCK (exit 1) failed\n  agent-qa audit verdict --all [--json]\n                                               Suite triage board: one verdict row per\n                                               scenario's latest run; exit 1 if any\n                                               BLOCK (FIX rows are warnings only)\n  agent-qa audit cluster [--min-size N] [--json]\n                                               Group step failures across every scenario\n                                               by normalized error signature — one root\n                                               cause across N runs reads as one item\n  agent-qa audit explain <sid> [runId | latest] [--json]\n                                               One-block failure digest: verdict +\n                                               failing steps + heal trail + console\n                                               errors + failed requests, with the\n                                               follow-up commands that fit the\n                                               evidence (exit mirrors audit verdict)\n  agent-qa audit trend <sid> [--limit N] [--json]\n                                               Outcome + duration trend for the last N\n                                               runs (default all): pass%, median secs,\n                                               a ✓/✗ outcome line + a duration sparkline\n  agent-qa audit trend --all [--limit N] [--json]\n                                               Suite board: one trend row per scenario\n\n'latest' resolves to <sid>/replays/latest.txt if present, otherwise the\nhighest lex-sorted run directory (run_id is timestamp-prefixed)."
 
 
     );
@@ -2940,5 +3137,57 @@ mod tests {
         assert_eq!(rows[0].outcomes, "✓✗");
         assert_eq!(rows[1].scenario_id, "sid-b");
         assert_eq!(rows[1].median_secs, 9.0);
+    }
+
+    #[test]
+    fn explain_exits_with_the_verdict_code_and_tolerates_sparse_runs() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        let jdir = tmp.path().join("sid");
+
+        // BLOCK: a failed run → exit 1.
+        write_audit(&jdir, "r-block", "SUMMARY: 2/3 (FAIL)", 1);
+        write_events(&jdir, "r-block", &[("s1", "pass"), ("s2", "fail")]);
+        assert_eq!(
+            explain(&["explain".into(), "sid".into()], false).unwrap(),
+            1
+        );
+        // --json path prints the digest and still mirrors the verdict code.
+        assert_eq!(explain(&["explain".into(), "sid".into()], true).unwrap(), 1);
+
+        // PASS: a clean green run → exit 0 even with no events/heals/console/
+        // network artifacts at all.
+        write_audit(&jdir, "r-pass", "SUMMARY: 3/3 (PASS)", 0);
+        assert_eq!(
+            explain(&["explain".into(), "sid".into(), "r-pass".into()], false).unwrap(),
+            0
+        );
+
+        // FIX: green run with a heal row → exit 2 (verdict code).
+        let heal_dir = jdir.join("replays").join("r-fix");
+        std::fs::create_dir_all(&heal_dir).unwrap();
+        std::fs::write(
+            heal_dir.join("audit.json"),
+            r#"{"runId":"r-fix","summary":"SUMMARY: 3/3 (PASS)","exitCode":0}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            heal_dir.join("heal.jsonl"),
+            r#"{"stepId":"s1","mode":"locator-correction","strategy":"exact","from":"a","to":"b"}"#
+                .to_string()
+                + "\n",
+        )
+        .unwrap();
+        assert_eq!(
+            explain(&["explain".into(), "sid".into(), "r-fix".into()], false).unwrap(),
+            2
+        );
+
+        match prev {
+            Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
     }
 }
