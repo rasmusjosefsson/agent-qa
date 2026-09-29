@@ -1,4 +1,5 @@
 import { toRecordDraft } from "./record-translate";
+import { clickTrustedOrVisible } from "./visible";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -136,7 +137,7 @@ export async function runBankGolden(
       await record(ctx, "action", { method: "fillBySelector", args: [selector, value], intent: stepIntent });
     },
     async clickSelector(selector, stepIntent) {
-      await run(ctx, `click ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "click", selector]);
+      await clickTrustedOrVisible(ctx, (n, c) => run(ctx, n, c), selector);
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
     async pressKey(key, stepIntent) {
