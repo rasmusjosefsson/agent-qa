@@ -697,3 +697,63 @@ test('input drag without record dispatches the DOM gesture on the endpoint nodes
     'no a11y lookup when not recording',
   );
 });
+
+// --- state capture: dump page storage+cookies into a do/state step ---
+
+test('captureState emits a do/state step with storage and cookies', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  assert.equal(bridge.input({ type: 'captureState' }), true);
+  await flush();
+  const evalId = sock.sent.find((m) => m.method === 'Runtime.evaluate' && m.params.expression.includes('localStorage')).id;
+  sock.recv({
+    id: evalId,
+    result: {
+      result: {
+        value: {
+          localStorage: { token: 'abc', theme: 'dark' },
+          sessionStorage: { step: '2' },
+          cookies: [{ name: 'sid', value: 'x%3Dy' }],
+        },
+      },
+    },
+  });
+  await flush();
+  assert.equal(recorded.length, 1);
+  const step = recorded[0].payload;
+  assert.equal(recorded[0].kind, 'do');
+  assert.equal(step.verb, 'state');
+  assert.deepEqual(step.params.localStorage, { token: 'abc', theme: 'dark' });
+  assert.deepEqual(step.params.sessionStorage, { step: '2' });
+  assert.deepEqual(step.params.cookies, [{ name: 'sid', value: 'x%3Dy' }]);
+  assert.match(step.intent, /2 local, 1 session, 1 cookie/);
+});
+
+test('captureState skips empty stores and omits empty maps', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  bridge.input({ type: 'captureState' });
+  await flush();
+  const evalId = sock.sent.find((m) => m.method === 'Runtime.evaluate' && m.params.expression.includes('localStorage')).id;
+  sock.recv({
+    id: evalId,
+    result: { result: { value: { localStorage: { a: '1' }, sessionStorage: {}, cookies: [] } } },
+  });
+  await flush();
+  assert.equal(recorded.length, 1);
+  assert.deepEqual(recorded[0].payload.params, { localStorage: { a: '1' } }, 'empty stores are omitted');
+});
+
+test('captureState on a stateless page reports a record-skip, not an empty step', async () => {
+  const bridge = makeRecordingBridge(async () => {});
+  const events = [];
+  const sock = await connect(bridge, { write: (s) => events.push(s), end() {} });
+  bridge.input({ type: 'captureState' });
+  await flush();
+  const evalId = sock.sent.find((m) => m.method === 'Runtime.evaluate' && m.params.expression.includes('localStorage')).id;
+  sock.recv({ id: evalId, result: { result: { value: { localStorage: {}, sessionStorage: {}, cookies: [] } } } });
+  await flush();
+  assert.ok(events.some((e) => e.includes('event: record-skip') && e.includes('no storage or cookies')));
+});

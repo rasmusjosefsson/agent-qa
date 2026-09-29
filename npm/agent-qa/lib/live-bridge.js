@@ -543,6 +543,50 @@ function createLiveBridge({
     }
   }
 
+  // Snapshot the page's web storage + script-visible cookies into a
+  // `do/state` buffer step — the record-side author for replay's state
+  // verb. Reads exactly what the verb can write back (document.cookie
+  // never sees httpOnly cookies, so nothing is silently dropped).
+  async function capturePageState() {
+    let snap = null;
+    try {
+      const r = await call('Runtime.evaluate', {
+        expression: `(() => {
+          const dump = (s) => { const o = {}; for (let i = 0; i < s.length; i++) { const k = s.key(i); o[k] = s.getItem(k); } return o; };
+          const cookies = (document.cookie || '').split(';')
+            .map((c) => c.trim()).filter(Boolean)
+            .map((c) => { const i = c.indexOf('='); return i < 0 ? { name: c, value: '' } : { name: c.slice(0, i), value: c.slice(i + 1) }; });
+          return { localStorage: dump(localStorage), sessionStorage: dump(sessionStorage), cookies };
+        })()`,
+        returnByValue: true,
+      });
+      snap = r && r.result && r.result.value;
+    } catch (e) {
+      broadcastEvent('record-skip', { reason: `state capture failed: ${(e && e.message) || e}` });
+      return;
+    }
+    if (!snap || (typeof snap !== 'object')) {
+      broadcastEvent('record-skip', { reason: 'state capture returned no data' });
+      return;
+    }
+    const params = {};
+    const ls = Object.keys(snap.localStorage || {}).length;
+    const ss = Object.keys(snap.sessionStorage || {}).length;
+    const ck = (snap.cookies || []).length;
+    if (ls) params.localStorage = snap.localStorage;
+    if (ss) params.sessionStorage = snap.sessionStorage;
+    if (ck) params.cookies = snap.cookies;
+    if (!ls && !ss && !ck) {
+      broadcastEvent('record-skip', { reason: 'page has no storage or cookies to seed' });
+      return;
+    }
+    emitRecord('do', {
+      intent: `seed page state (${ls} local, ${ss} session, ${ck} cookie${ck === 1 ? '' : 's'})`,
+      verb: 'state',
+      params,
+    });
+  }
+
   // Flush buffered typing into a single fillByLabel step (deduped).
   async function finalizeFill() {
     if (typingTimer) {
@@ -825,6 +869,10 @@ function createLiveBridge({
       }
       case 'reload': {
         send('Page.reload');
+        return true;
+      }
+      case 'captureState': {
+        void capturePageState();
         return true;
       }
       case 'back': {
