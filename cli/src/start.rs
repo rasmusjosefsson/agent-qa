@@ -32,6 +32,8 @@ struct Opts {
     keep_session: bool,
     headed: bool,
     source_ref: Option<String>,
+    mock_from: Option<String>,
+    offline: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -49,6 +51,8 @@ fn parse_args(args: &[String]) -> Result<Opts> {
     let mut keep_session = false;
     let mut headed = false;
     let mut source_ref = None;
+    let mut mock_from = None;
+    let mut offline = false;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -75,6 +79,11 @@ fn parse_args(args: &[String]) -> Result<Opts> {
             value if value.starts_with("--source-ref=") => {
                 source_ref = Some(value["--source-ref=".len()..].to_string())
             }
+            "--mock-from" => mock_from = it.next().cloned(),
+            value if value.starts_with("--mock-from=") => {
+                mock_from = Some(value["--mock-from=".len()..].to_string())
+            }
+            "--offline" => offline = true,
             value if value.starts_with("--") => bail!("unknown flag {value:?}"),
             value => {
                 if intent.is_some() {
@@ -106,6 +115,8 @@ fn parse_args(args: &[String]) -> Result<Opts> {
         keep_session,
         headed,
         source_ref,
+        mock_from,
+        offline,
     })
 }
 
@@ -117,8 +128,15 @@ Usage:
   agent-qa start \"<intent>\" [--session <name>] [--open <url>]
                               [--profile <name> | --keep-session]
                               [--source-ref <opaque-reference>]
+                              [--mock-from <network.har>] [--offline]
 
-Writes one local recorder-state.json file. The sealed scenario never includes browser connection settings."
+Writes one local recorder-state.json file. The sealed scenario never includes browser connection settings.
+
+--mock-from stubs the session's fetch/XHR from a recorded HAR (any
+`network.har` a `replay --har` or a previous recording produced); the
+stub installs before every navigation, so even page-load calls are
+covered. --offline rejects every unmatched fetch/XHR — combine both to
+record hermetically against a dead backend."
     );
 }
 
@@ -143,6 +161,24 @@ fn start(opts: &Opts) -> Result<StartSummary> {
     state.save()?;
     fs::write(paths::record_last_sid_file(), format!("{sid}\n"))
         .with_context(|| format!("write {}", paths::record_last_sid_file().display()))?;
+    // Hermetic capture: seed stubs + write the page-init script BEFORE the
+    // session launches so agent-browser registers it ahead of the first
+    // navigation (mirrors replay's --mock-from wiring; the eval below covers
+    // a reused warm session, which ignores init scripts).
+    if opts.mock_from.is_some() || opts.offline {
+        if opts.offline {
+            crate::mock::set_strict(&opts.session_name, true);
+        }
+        if let Some(from) = &opts.mock_from {
+            let n = crate::mock::seed_from_har_path(&opts.session_name, std::path::Path::new(from))
+                .with_context(|| format!("--mock-from {from:?}"))?;
+            eprintln!("[v2-record] mock-from {from}: {n} stub(s) seeded");
+        }
+        let js_path = crate::mock::write_init_script(&opts.session_name, &scenario_dir)
+            .with_context(|| "mock seed: write init script")?;
+        std::env::set_var("AGENT_BROWSER_INIT_SCRIPTS", &js_path);
+        eprintln!("[v2-record] mock init script {}", js_path.display());
+    }
     let mut summary = StartSummary {
         sid,
         scenario_dir: Some(scenario_dir),
@@ -158,6 +194,11 @@ fn start(opts: &Opts) -> Result<StartSummary> {
     // replays the scenario hermetically from that recording.
     if let Err(e) = browser::network_har_start(&opts.session_name) {
         eprintln!("[v2-record] har start skipped: {e}");
+    }
+    // A reused warm session never saw the init script — install the stub
+    // into the live document so its in-page calls are covered too.
+    if let Err(e) = crate::mock::reapply_if_any(&opts.session_name) {
+        eprintln!("[v2-record] mock apply skipped: {e}");
     }
     Ok(summary)
 }
@@ -221,6 +262,8 @@ mod tests {
             keep_session: false,
             headed: false,
             source_ref: None,
+            mock_from: None,
+            offline: false,
         })
         .unwrap();
         assert_eq!(RecorderState::load_active().unwrap().sid, summary.sid);
@@ -228,5 +271,54 @@ mod tests {
         std::env::remove_var(paths::RECORD_DIR_ENV);
         std::env::remove_var(browser::BIN_ENV);
         browser::_reset_bin_cache_for_tests();
+    }
+
+    #[test]
+    fn mock_from_writes_an_init_script_into_the_scenario_dir() {
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var(paths::SCENARIOS_DIR_ENV, tmp.path());
+        std::env::set_var(paths::RECORD_DIR_ENV, tmp.path().join("record"));
+        install_fake_browser(tmp.path(), &tmp.path().join("browser.log"));
+        let har = tmp.path().join("network.har");
+        fs::write(
+            &har,
+            r#"{"log":{"entries":[
+              {"request":{"url":"https://x/api/u","method":"GET"},
+               "response":{"status":200,"content":{"text":"{\"u\":1}"}}}
+            ]}}"#,
+        )
+        .unwrap();
+        let summary = start(&Opts {
+            intent: "stubbed record".into(),
+            session_name: "default".into(),
+            open_url: None,
+            profile: None,
+            keep_session: false,
+            headed: false,
+            source_ref: None,
+            mock_from: Some(har.display().to_string()),
+            offline: true,
+        })
+        .unwrap();
+        let init = scenario_dir_of(&summary).join("mock-init.js");
+        assert!(init.is_file(), "init script at {}", init.display());
+        let body = fs::read_to_string(&init).unwrap();
+        assert!(body.contains("https://x/api/u"), "HAR URL seeded");
+        assert!(body.contains("Failed to fetch (offline)"), "strict mode on");
+        assert_eq!(
+            std::env::var("AGENT_BROWSER_INIT_SCRIPTS").unwrap(),
+            init.display().to_string(),
+            "the launch env registers the init script"
+        );
+        std::env::remove_var("AGENT_BROWSER_INIT_SCRIPTS");
+        std::env::remove_var(paths::SCENARIOS_DIR_ENV);
+        std::env::remove_var(paths::RECORD_DIR_ENV);
+        std::env::remove_var(browser::BIN_ENV);
+        browser::_reset_bin_cache_for_tests();
+    }
+
+    fn scenario_dir_of(summary: &StartSummary) -> PathBuf {
+        summary.scenario_dir.clone().unwrap()
     }
 }
