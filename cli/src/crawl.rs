@@ -592,8 +592,7 @@ mod tests {
         ];
         let mut idx = 0;
         let steps = network_claim_steps(&reqs, &mut idx);
-        assert_eq!(steps.len(), 3);
-        assert_eq!(steps.len(), 4);
+        assert_eq!(steps.len(), 5);
         let m = &steps[0]["claim"]["subject"]["network"];
         // regex-escaped: the literal '?' and parens can't regex-match wild
         assert_eq!(
@@ -614,10 +613,10 @@ mod tests {
             "https://x/app"
         );
         // sockets + streams claim their own fired presence
-        let ws = &steps[2]["claim"]["subject"]["network"];
+        let ws = &steps[3]["claim"]["subject"]["network"];
         assert_eq!(ws["urlMatches"].as_str().unwrap(), "wss://x/live");
         assert_eq!(ws["method"].as_str().unwrap(), "WS");
-        let sse = &steps[3]["claim"]["subject"]["network"];
+        let sse = &steps[4]["claim"]["subject"]["network"];
         assert_eq!(sse["urlMatches"].as_str().unwrap(), "https://x/events");
     }
 

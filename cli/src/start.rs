@@ -300,6 +300,8 @@ mod tests {
             keep_session: false,
             headed: false,
             source_ref: None,
+            mock_from: None,
+            offline: false,
         })
         .unwrap();
         let state = RecorderState::load_active().unwrap();
