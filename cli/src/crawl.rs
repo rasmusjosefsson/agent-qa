@@ -462,7 +462,6 @@ fn claim_url_pattern(url: &str) -> String {
 /// is escaped, with volatile query values wildcarded. `cdpws-*`
 /// socket/stream entries flow in through the same captured list, so
 /// crawls of real-time pages get socket coverage too.
-
 fn network_claim_steps(reqs: &[crate::browser::CapturedRequest], idx: &mut usize) -> Vec<Value> {
     use std::collections::BTreeSet;
     const CAP: usize = 10;
