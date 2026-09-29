@@ -6,7 +6,11 @@ use serde_json::json;
 use crate::recorder_state::RecorderState;
 
 pub fn run(args: &[String]) -> Result<u8> {
-    if args.is_empty() || matches!(args[0].as_str(), "-h" | "--help" | "help") {
+    if args.is_empty()
+        || args
+            .iter()
+            .any(|a| matches!(a.as_str(), "-h" | "--help" | "help"))
+    {
         print_help();
         return Ok(0);
     }
@@ -208,5 +212,17 @@ mod tests {
         assert!(state.steps.is_empty());
         drop(tmp);
         cleanup();
+    }
+
+    /// `record <subverb> --help` prints the record usage instead of the
+    /// subverb's flag parser rejecting --help.
+    #[test]
+    fn help_flag_wins_after_a_subverb() {
+        for args in [
+            vec!["pause".to_string(), "--help".to_string()],
+            vec!["continue".to_string(), "help".to_string()],
+        ] {
+            assert_eq!(run(&args).unwrap(), 0, "args {args:?}");
+        }
     }
 }

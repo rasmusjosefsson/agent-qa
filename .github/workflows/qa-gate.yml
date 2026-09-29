@@ -25,6 +25,10 @@ jobs:
       - name: build cli
         working-directory: cli
         run: cargo build --locked
+      - name: lint committed goldens
+        env:
+          AGENT_QA_SCENARIOS_DIR: ${{ github.workspace }}/evals/selftest/scenarios
+        run: ./cli/target/debug/agent-qa scenario check-all
       - uses: actions/setup-node@v7
         with:
           node-version: 24

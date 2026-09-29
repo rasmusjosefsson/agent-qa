@@ -275,7 +275,7 @@ pub fn build_scope_chain(scope: &[ScopeStep]) -> String {
     for (i, step) in scope.iter().enumerate() {
         let inner = match step {
             ScopeStep::Css(sel) => format!(
-                "return r.querySelector({});",
+                "const els = Array.from(r.querySelectorAll({})); return els.find(__aqVisible) || els[0] || null;",
                 json_str(sel)
             ),
             ScopeStep::Xpath(xp) => format!(
@@ -350,6 +350,9 @@ pub fn build_scoped_role_act(
             "el.scrollIntoView({{block:'center',inline:'nearest'}}); el.focus(); el.value = {}; el.dispatchEvent(new Event('input', {{ bubbles: true }})); el.dispatchEvent(new Event('change', {{ bubbles: true }})); return \"true\";",
             json_str(value.unwrap_or(""))
         ),
+        // Presence-probe act: touching textContent reads the element
+        // without mutating it.
+        browser::RoleAct::Text => "el.textContent; return \"true\";".to_string(),
     };
     format!(
         "(() => {{{prelude}\n{find}\n{chain}{act}\n}})()",
@@ -485,14 +488,14 @@ fn endpoint_finder_js() -> String {
     let root = document;
     for (const s of (d.scope || [])) {
       if (!root || !root.querySelectorAll) return null;
-      if (s.css != null) root = root.querySelector(s.css);
+      if (s.css != null) { const els = Array.from(root.querySelectorAll(s.css)); root = els.find(__aqVisible) || els[0] || null; }
       else if (s.xpath != null) { const r = document.evaluate(s.xpath, root, null, 9, null); root = r && r.singleNodeValue; }
       else if (s.role != null) root = __aqScopedFind(s.role, s.name || '', root);
       else if (s.text != null) { const want = __aqText(s.text); const hits = Array.from(root.querySelectorAll('*')).filter((n) => __aqVisible(n) && __aqName(n).some((c) => __aqText(c).includes(want))); const inter = hits.filter(__aqIsInteractive); root = inter[0] || hits.sort((a, b) => (a.textContent || '').length - (b.textContent || '').length)[0] || null; }
       if (!root) return null;
     }
     if (d.kind === 'role') return __aqScopedFind(d.role, d.name || '', root);
-    if (d.kind === 'css') return root.querySelector(d.value);
+    if (d.kind === 'css') { const els = Array.from(root.querySelectorAll(d.value)); return els.find(__aqVisible) || els[0] || null; }
     if (d.kind === 'xpath') { const r = document.evaluate(d.value, root, null, 9, null); return r && r.singleNodeValue; }
     if (d.kind === 'text') { const want = __aqText(d.value); const hits = Array.from(root.querySelectorAll('*')).filter((n) => __aqVisible(n) && __aqName(n).some((c) => __aqText(c).includes(want))); const inter = hits.filter(__aqIsInteractive); return inter[0] || hits.sort((a, b) => (a.textContent || '').length - (b.textContent || '').length)[0] || null; }
     return null;
@@ -1128,9 +1131,13 @@ mod tests {
             ScopeStep::Xpath("//div[@id='x']".into()),
         ]);
         assert!(
-            js.contains("querySelector(\"[data-testid=\\\"card-a\\\"]\")"),
+            js.contains("querySelectorAll(\"[data-testid=\\\"card-a\\\"]\")"),
             "{js}"
         );
+        // Css scope steps resolve to the first *visible* match — sites that
+        // render hidden duplicate controls (responsive twins, sticky bars)
+        // must not absorb interactions meant for the visible one.
+        assert!(js.contains("els.find(__aqVisible)"), "{js}");
         assert!(js.contains("scope-miss:0"), "{js}");
         assert!(js.contains("scope-miss:1"), "{js}");
         assert!(js.contains("scope-miss:2"), "{js}");
