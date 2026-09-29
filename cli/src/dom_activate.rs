@@ -477,6 +477,63 @@ pub fn build_drag_js(src: &DragEndpoint, dst: &DragEndpoint) -> String {
     )
 }
 
+/// JS resolving both drag endpoints to viewport center coordinates:
+/// `{"sx":…,"sy":…,"dx":…,"dy":…}` or `"src-miss"`/`"dst-miss"`. Pairs
+/// with the daemon's `mouse` commands for a trusted-input drag gesture
+/// (Input.dispatchMouseEvent) — native HTML5 dnd (react-dnd,
+/// sortable.js) ignores synthetic dispatchEvent chains entirely, while
+/// mouse-tracking widgets (jQuery UI, react-draggable) need a pointer
+/// that actually travels.
+/// `__aqDrag` marker for test doubles.
+pub fn build_drag_coords_js(src: &DragEndpoint, dst: &DragEndpoint) -> String {
+    format!(
+        r#"(() => {{ const __aqDrag = true;
+{prelude}
+{find}
+{finder}
+  const src = __aqDragFind({src});
+  if (!src) return "src-miss";
+  const dst = __aqDragFind({dst});
+  if (!dst) return "dst-miss";
+  try {{ src.scrollIntoView({{ block: 'center', inline: 'center', behavior: 'instant' }}); }} catch (e) {{}}
+  try {{ dst.scrollIntoView({{ block: 'center', inline: 'center', behavior: 'instant' }}); }} catch (e) {{}}
+  const ctr = (el) => {{ const r = el.getBoundingClientRect(); return {{ x: r.left + r.width / 2, y: r.top + r.height / 2 }}; }};
+  const s = ctr(src), dp = ctr(dst);
+  return {{ sx: s.x, sy: s.y, dx: dp.x, dy: dp.y }};
+}})()"#,
+        prelude = activation_prelude(),
+        find = scoped_find_helper_js(),
+        finder = endpoint_finder_js(),
+        src = drag_endpoint_json(src),
+        dst = drag_endpoint_json(dst),
+    )
+}
+
+/// Verify the element currently under viewport point `(x, y)` is (or is
+/// inside) the drag source — layout can still move after the coords eval
+/// (animated scroll-behavior, late-loading embeds), so the trusted-input
+/// path probes this before pressing the button. Returns `"hit"`, `"miss"`,
+/// or `"gone"` (source element no longer resolves).
+pub fn build_drag_hittest_js(src: &DragEndpoint, x: f64, y: f64) -> String {
+    format!(
+        r#"(() => {{ const __aqDrag = true;
+{prelude}
+{find}
+{finder}
+  const src = __aqDragFind({src});
+  if (!src) return "gone";
+  const el = document.elementFromPoint({x}, {y});
+  return el && (el === src || src.contains(el) || el.contains(src)) ? "hit" : "miss";
+}})()"#,
+        prelude = activation_prelude(),
+        find = scoped_find_helper_js(),
+        finder = endpoint_finder_js(),
+        src = drag_endpoint_json(src),
+        x = x,
+        y = y,
+    )
+}
+
 /// The endpoint resolver shared by `drag`, `contextmenu`, and friends:
 /// `__aqDragFind({kind, value?|role?|…, scope})` → the node or null. Pair it
 /// with `activation_prelude()` + `scoped_find_helper_js()`.
@@ -1000,5 +1057,29 @@ mod tests {
         assert!(js.contains("\"kind\":\"xpath\""), "{js}");
         assert!(js.contains("\"kind\":\"text\""), "{js}");
         assert!(js.contains("//li[1]") && js.contains("Archive"), "{js}");
+    }
+
+    #[test]
+    fn drag_coords_js_centres_and_returns_points() {
+        let js = build_drag_coords_js(
+            &DragEndpoint::Css(".src".into()),
+            &DragEndpoint::Css(".dst".into()),
+        );
+        assert!(js.contains("\".src\"") && js.contains("\".dst\""), "{js}");
+        assert!(js.contains("scrollIntoView"), "{js}");
+        // The scroll must not animate — a smooth scroll would leave the
+        // coordinates stale by the time the trusted gesture lands.
+        assert!(js.contains("behavior: 'instant'"), "{js}");
+        assert!(js.contains("getBoundingClientRect"), "{js}");
+        assert!(js.contains("src-miss") && js.contains("dst-miss"), "{js}");
+    }
+
+    #[test]
+    fn drag_hittest_js_checks_the_source_under_the_point() {
+        let js = build_drag_hittest_js(&DragEndpoint::Css(".src".into()), 10.5, 20.0);
+        assert!(js.contains("\".src\""), "{js}");
+        assert!(js.contains("elementFromPoint(10.5, 20)"), "{js}");
+        assert!(js.contains("\"hit\"") && js.contains("\"miss\""), "{js}");
+        assert!(js.contains("\"gone\""), "{js}");
     }
 }

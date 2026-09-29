@@ -170,6 +170,8 @@
     "golden:selftest": "bun selftest/run.ts",
     "selftest:accept": "bun selftest/accept.ts",
     "golden:frame:tc01": "bun golden/frame-tc01.ts",
+    "golden:demoqa-widgets:tc01": "bun golden/demoqa-widgets-tc01.ts",
+    "golden:demoqa-widgets:tc02": "bun golden/demoqa-widgets-tc02.ts",
     "golden:contextmenu:tc01": "bun golden/contextmenu-tc01.ts",
     "golden:edge:tc01": "bun golden/edge-tc01.ts",
     "golden:edge:tc02": "bun golden/edge-tc02.ts",
