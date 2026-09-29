@@ -84,9 +84,13 @@ export interface EdgeGolden extends GoldenContext {
   // `wait url` — poll resource timing until a matching request completed,
   // live at record and in the replayed scenario (`params.timeoutMs` honored).
   waitRequest(pattern: string, intent: string, timeoutMs?: number): Promise<void>;
+  // `wait url` — poll resource timing until a matching request completed,
+  // live at record and in the replayed scenario (`params.timeoutMs` honored).
+  waitRequest(pattern: string, intent: string, timeoutMs?: number): Promise<void>;
   assertElementText(selector: string, expected: string, intent: string): Promise<void>;
   assertElementAttribute(selector: string, attribute: string, predicate: string, expected: string, intent: string): Promise<void>;
   assertElementCount(selector: string, count: number, intent: string): Promise<void>;
+  assertElementCount(selector: string, predicate: string, count: number, intent: string): Promise<void>;
   assertElementAbsent(selector: string, intent: string): Promise<void>;
   assertElementPresent(selector: string, intent: string): Promise<void>;
   assertUrlContains(fragment: string, intent: string): Promise<void>;
@@ -410,6 +414,9 @@ export async function runEdgeGolden(
     async assertElementCount(selector, count, stepIntent) {
       await record(ctx, "assert", { kind: "elementCount", args: [selector, count], intent: stepIntent });
     },
+    async assertElementCount(selector, predicate, count, stepIntent) {
+      await record(ctx, "assert", { kind: "elementCount", args: [selector, predicate, count], intent: stepIntent });
+    },
     async assertElementAbsent(selector, stepIntent) {
       await record(ctx, "assert", { kind: "elementAbsent", args: [selector], intent: stepIntent });
     },
@@ -551,6 +558,7 @@ export async function runEdgeGolden(
     await steps(golden);
     await run(ctx, "verify", [ctx.agentQa, "verify"]);
     await run(ctx, "flush", [ctx.agentQa, "flush", ...(opts.flushArgs ?? [])]);
+    await run(ctx, "check", [ctx.agentQa, "scenario", "check", resolve(ctx.scenariosRoot, sid, "scenario.json")]);
     await run(ctx, "replay", [ctx.agentQa, "replay", sid, "--session", `${ctx.session}-replay`]);
     pass = true;
   } catch (err) {
