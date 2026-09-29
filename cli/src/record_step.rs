@@ -12,10 +12,31 @@ use crate::schema;
 use crate::verb_shape;
 
 pub fn run(args: &[String]) -> Result<u8> {
-    let opts = parse_args(args)?;
-    match record(&opts)? {
-        Some(row) => println!("recorded step {} (stepId={})", row.step_index, row.step_id),
-        None => println!("skipped (recording paused — `record resume` to capture)"),
+    match parse_args(args)? {
+        Parsed::One(opts) => match record(&opts)? {
+            Some(row) => {
+                println!("recorded step {} (stepId={})", row.step_index, row.step_id)
+            }
+            None => println!("skipped (recording paused — `record resume` to capture)"),
+        },
+        Parsed::Stream { kind, drafts } => {
+            let mut state = RecorderState::load_active()?;
+            let session = state.session.clone();
+            let mut recorded = 0usize;
+            let mut skipped = 0usize;
+            for (line_no, payload) in drafts.iter().enumerate() {
+                match record_draft(&mut state, kind, payload, &session)
+                    .with_context(|| format!("stdin draft {}", line_no + 1))?
+                {
+                    Some(row) => {
+                        println!("recorded step {} (stepId={})", row.step_index, row.step_id);
+                        recorded += 1;
+                    }
+                    None => skipped += 1,
+                }
+            }
+            println!("stdin: {recorded} recorded, {skipped} skipped");
+        }
     }
     Ok(0)
 }
@@ -25,6 +46,8 @@ fn print_help() {
 
 Usage:
   agent-qa record-step <do|check> <draft-json>
+  agent-qa record-step <do|check> -        # read JSONL drafts from stdin,
+                                           # one step per line
 
 The recorder assigns id and kind. The draft must omit both fields.
 
@@ -67,13 +90,18 @@ struct Opts {
     payload: Json,
 }
 
+enum Parsed {
+    One(Opts),
+    Stream { kind: StepKind, drafts: Vec<Json> },
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct RecordedStep {
     pub(crate) step_index: usize,
     pub(crate) step_id: String,
 }
 
-fn parse_args(args: &[String]) -> Result<Opts> {
+fn parse_args(args: &[String]) -> Result<Parsed> {
     if args
         .iter()
         .any(|a| matches!(a.as_str(), "-h" | "--help" | "help"))
@@ -82,12 +110,40 @@ fn parse_args(args: &[String]) -> Result<Opts> {
         std::process::exit(0);
     }
     if args.len() != 2 {
-        bail!("usage: record-step <do|check> <draft-json>");
+        bail!("usage: record-step <do|check> <draft-json | ->");
     }
     let kind = StepKind::parse(&args[0])?;
+    if args[1] == "-" {
+        let stdin = std::io::read_to_string(std::io::stdin()).context("read drafts stdin")?;
+        return Ok(Parsed::Stream {
+            kind,
+            drafts: parse_stdin_drafts(&stdin)?,
+        });
+    }
     let payload: Json = serde_json::from_str(&args[1])
         .with_context(|| format!("parse draft JSON: {:?}", args[1]))?;
-    Ok(Opts { kind, payload })
+    Ok(Parsed::One(Opts { kind, payload }))
+}
+
+/// JSONL: one draft per non-empty line — the batch form agents emit when they
+/// stream a whole flow at once. Blank lines are skipped; a line's parse error
+/// names its 1-based line number. Shared with record-setup's `-` form.
+pub(crate) fn parse_stdin_drafts(text: &str) -> Result<Vec<Json>> {
+    let mut drafts = Vec::new();
+    for (line_no, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        drafts.push(
+            serde_json::from_str::<Json>(line)
+                .with_context(|| format!("parse draft JSON on stdin line {}", line_no + 1))?,
+        );
+    }
+    if drafts.is_empty() {
+        bail!("stdin carried no JSON items");
+    }
+    Ok(drafts)
 }
 
 fn record(opts: &Opts) -> Result<Option<RecordedStep>> {
@@ -215,8 +271,18 @@ pub(crate) fn parse_draft(kind: StepKind, payload: &Json, step_id: &str) -> Resu
     }
     draft.insert("id".into(), Json::String(step_id.to_string()));
     draft.insert("kind".into(), Json::String(kind.as_str().to_string()));
-    let step: Step =
-        serde_json::from_value(Json::Object(draft)).context("parse scenario/2 step")?;
+    let step: Step = serde_json::from_value(Json::Object(draft)).with_context(|| {
+        match kind {
+            StepKind::Do => {
+                "parse scenario/2 step — a do draft is {\"intent\": ..., \"verb\": ...}; \
+                 literal values are typed: \"value\": {\"from\":\"literal\",\"literal\":\"...\"}"
+            }
+            StepKind::Check => {
+                "parse scenario/2 step — a check draft is {\"intent\": ..., \"claim\": {\"subject\": ..., \"predicate\": ...}}"
+            }
+        }
+        .to_string()
+    })?;
     match (&kind, &step) {
         (StepKind::Do, Step::Do { .. }) => verb_shape::assert_verb_shape(&step)?,
         (StepKind::Check, Step::Check { .. }) => {}
@@ -372,6 +438,18 @@ mod tests {
             click_inert("\"{\\\"dm\\\":0,\\\"nav\\\":false,\\\"dr\\\":2}\""),
             Some(false)
         );
+    }
+
+    #[test]
+    fn parse_stdin_drafts_reads_jsonl_and_reports_the_line() {
+        let drafts = parse_stdin_drafts(
+            "{\"intent\":\"a\",\"verb\":\"reload\"}\n\n{\"intent\":\"b\",\"verb\":\"reload\"}\n",
+        )
+        .unwrap();
+        assert_eq!(drafts.len(), 2);
+        assert!(parse_stdin_drafts("\n  \n").is_err());
+        let err = parse_stdin_drafts("{}\nnot-json").unwrap_err().to_string();
+        assert!(err.contains("line 2"), "{err}");
     }
 
     #[test]

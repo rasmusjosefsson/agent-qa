@@ -84,6 +84,11 @@
             "reason": { "type": "string", "minLength": 1 }
           },
           "$comment": "Named-and-shamed escape hatch. `reason` is required so PR review sees why we fell off the accessible-name + role rails."
+        },
+        {
+          "type": "string",
+          "pattern": "^(css|xpath|testId|text):\\S+$",
+          "$comment": "Shorthand for the named raw locator — \"css:sel\", \"xpath:expr\", \"testId:key\", \"text:txt\". Lowers to {\"raw\":{kind,value},\"reason\":\"locator shorthand\"}."
         }
       ]
     },
@@ -222,7 +227,8 @@
             "element": { "$ref": "#/$defs/Locator" },
             "attribute": { "type": "string" },
             "ofKind": { "enum": ["text", "value", "count", "attribute"] }
-          }
+          },
+          "$comment": "attribute reads: raw css/testId locators hit the DOM (text/value/checked/focused/style:<prop>/getAttribute); role locators read the a11y snapshot's state tokens (checked/disabled/required/expanded/pressed/selected/readonly/current/level/orientation/valuemin/valuemax/valuenow, value tail, text = accessible name)."
         },
         {
           "type": "object",
@@ -414,25 +420,38 @@
       "properties": {
         "subject": { "$ref": "#/$defs/ClaimSubject" },
         "predicate": {
-          "enum": [
-            "isVisible",
-            "isHidden",
-            "isEnabled",
-            "isDisabled",
-            "isChecked",
-            "isUnchecked",
-            "exists",
-            "notExists",
-            "equals",
-            "contains",
-            "matches",
-            "startsWith",
-            "endsWith",
-            "gt",
-            "gte",
-            "lt",
-            "lte",
-            "countEquals"
+          "oneOf": [
+            {
+              "enum": [
+                "isVisible",
+                "isHidden",
+                "isEnabled",
+                "isDisabled",
+                "isChecked",
+                "isUnchecked",
+                "exists",
+                "notExists",
+                "equals",
+                "contains",
+                "matches",
+                "startsWith",
+                "endsWith",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "countEquals"
+              ]
+            },
+            {
+              "type": "object",
+              "minProperties": 1,
+              "maxProperties": 1,
+              "propertyNames": {
+                "enum": ["equals", "contains", "matches", "startsWith", "endsWith", "gt", "gte", "lt", "lte", "countEquals"]
+              },
+              "$comment": "Sugar: {\"predicate\": {\"contains\": \"x\"}} lowers to predicate:\"contains\" + value:\"x\"."
+            }
           ]
         },
         "value": {},
@@ -507,6 +526,8 @@
             "mock",
             "unmock",
             "state",
+            "hold",
+            "swipe",
             "frame",
             "emulate",
             "loop",
