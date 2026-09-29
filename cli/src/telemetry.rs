@@ -29,6 +29,10 @@ const TELEMETRY_HOSTS: &[&str] = &[
     "luckyorange.com",
     "criteo.com",
     "adservice.google.com",
+    "googlesyndication.com",
+    "fundingchoicesmessages.google.com",
+    "adtrafficquality.google",
+    "consent.google.com",
 ];
 
 /// Same-origin beacon paths a host blocklist can't see. `/cdn-cgi/` is
@@ -73,6 +77,12 @@ mod tests {
         assert!(is_telemetry_url("https://example.com/cdn-cgi/rum"));
         assert!(is_telemetry_url(
             "https://example.com/cdn-cgi/challenge-platform/h/b/jsd/oneshot/abc"
+        ));
+        assert!(is_telemetry_url(
+            "https://fundingchoicesmessages.google.com/el/ABC123"
+        ));
+        assert!(is_telemetry_url(
+            "https://pagead2.googlesyndication.com/pagead/x"
         ));
         assert!(!is_telemetry_url("https://api.optimizelyx.com/v1"));
         assert!(!is_telemetry_url("https://example.com/api/customers"));
