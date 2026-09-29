@@ -258,7 +258,8 @@
     "golden:orangehrm:tc01": "bun golden/orangehrm-tc01.ts",
     "golden:orangehrm:tc02": "bun golden/orangehrm-tc02.ts",
     "golden:orangehrm:tc03": "bun golden/orangehrm-tc03.ts",
-    "golden:orangehrm:tc04": "bun golden/orangehrm-tc04.ts"
+    "golden:orangehrm:tc04": "bun golden/orangehrm-tc04.ts",
+    "golden:wait-state:tc01": "bun golden/wait-state-tc01.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"

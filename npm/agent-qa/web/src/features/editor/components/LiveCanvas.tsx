@@ -1,6 +1,6 @@
 // web/src/features/editor/components/LiveCanvas.tsx
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ChevronLeftIcon, ChevronRightIcon, CircleDotIcon, CrosshairIcon, MousePointer2Icon, RotateCwIcon } from 'lucide-react'
+import { ChevronLeftIcon, ChevronRightIcon, CircleDotIcon, CrosshairIcon, DatabaseZapIcon, MousePointer2Icon, RotateCwIcon } from 'lucide-react'
 import {
   Select,
   SelectContent,
@@ -279,6 +279,13 @@ export function LiveCanvas({
         >
           {liveStatus.text}
         </span>
+        {clickMode === 'record' && (
+          <NavBtn
+            icon={<DatabaseZapIcon className="size-3.5" />}
+            title="Record a do/state step seeding this page's storage + cookies"
+            onClick={() => sendInput({ type: 'captureState' })}
+          />
+        )}
         <Select value={clickMode} onValueChange={(v) => onClickModeChange(v as ClickMode)}>
           <SelectTrigger size="sm" className="h-7 w-[140px] text-xs" title="What a click on the live page does">
             <SelectValue />
