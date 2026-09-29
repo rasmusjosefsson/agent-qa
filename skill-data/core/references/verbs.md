@@ -51,7 +51,7 @@ without a `heal-promote` step.
 | `scenario insert <sid> --step '<json>' [--after <stepId> \| --at <index>]` | Splice a validated step into a saved scenario. |
 | `scenario extract <sid> [--run <id>] [--through <stepId>] [--to <new>]` | Clone a scenario truncated at the run's first failing step — the repro unit. |
 | `scenario coverage <file>` / `scenario coverage-all` | Per-scenario and whole-suite do→check coverage rolls. |
-| `scenario lint <file> [--strict]` / `scenario lint-all` | Common lints (duplicate ids, bare do, …); `--format github` emits CI annotations. |
+| `scenario lint <file> [--strict]` / `scenario lint-all [--root <dir>]` | Common lints (duplicate ids, bare do, …); `--format github` emits CI annotations. |
 | `audit health` | Suite rollup: flaky + slow + heal-chronic step ids per scenario. |
 | `audit flaky <sid> [--min-runs N]` / `audit slow <sid>` | Steps whose pass/fail interleaves; steps whose duration regressed. |
 | `audit show <sid> <runId\|latest>` / `audit list <sid>` | One run's audit.json; every recorded run. |

@@ -135,7 +135,7 @@ reload with `params.reload: true`.
 | `skills list \| get <name> \| path [name]` | Serve embedded agent runbooks. `list --json`. |
 | `plugins list \| doctor \| path <kind>` | Manage plugin discovery. `list --json`, `doctor --json`, `--plugin <path>` overrides. |
 | `scenario validate <file>` | Schema-validate one scenario. Flags: `--json`, `--format text\|json\|github`. |
-| `scenario validate-all` | Schema-validate every scenario under the root. Flags: `--json`, `--format text\|json\|github`. |
+| `scenario validate-all` | Schema-validate every scenario under the root. Flags: `--root <dir>` (overrides the configured root), `--json`, `--format text\|json\|github`. |
 | `scenario summary <file>` | Per-step summary. Flags: `--filter <substr>`, `--json`. |
 | `scenario inputs <file>` | List declared inputs. `--json`. |
 | `scenario new <file>` | Scaffold a minimal valid scenario. Flags: `--force`, `--url`, `--intent`. |
@@ -152,13 +152,13 @@ reload with `params.reload: true`.
 | `scenario tag <sid>` | List or mutate a scenario's `tags[]` — the field `replay --tags` selects on. Flags: `--add <a,b>`, `--remove <c,d>`, `--json` |
 | `scenario delete <sid>` | Remove a scenario directory. `--yes` / `-y` confirms; otherwise dry-run. |
 | `scenario prune-replays <sid> --keep N` | Keep most recent N replays. `--yes` / `-y` confirms. |
-| `scenario prune-all --keep N` | Same across every scenario. `--yes` / `-y` confirms. |
+| `scenario prune-all --keep N` | Same across every scenario. `--yes` / `-y` confirms; `--root <dir>` overrides the root. |
 | `scenario coverage <file>` | Per-step check coverage ratio. `--json`. |
-| `scenario coverage-all` | The same do→check ratio rolled up across every scenario in the root — rows sorted worst-first + OVERALL rollup. `--filter <substr>`, `--json`. |
+| `scenario coverage-all` | The same do→check ratio rolled up across every scenario in the root — rows sorted worst-first + OVERALL rollup. `--filter <substr>`, `--root <dir>`, `--json`. |
 | `scenario lint <file>` | Common-smell linter. Flags: `--json`, `--format text\|json\|github`, `--strict`, `--rule <code>` (repeatable), `--exclude-rule <code>` (repeatable), `--list-rules`. |
-| `scenario lint-all` | Same across every scenario under the root. Flags: `--json`, `--format`, `--strict`, `--rule`, `--exclude-rule`. |
+| `scenario lint-all` | Same across every scenario under the root. Flags: `--root <dir>` (overrides the configured root), `--json`, `--format`, `--strict`, `--rule`, `--exclude-rule`. |
 | `scenario check <file>` | Schema validate + lint in one pass. Flags: `--strict`, `--format`. |
-| `scenario check-all` | Same combo across every scenario under the root. Flags: `--strict`, `--format`. |
+| `scenario check-all` | Same combo across every scenario under the root. Flags: `--root <dir>` (overrides the configured root), `--strict`, `--format`. |
 
 ## Top-level flags
 
