@@ -258,11 +258,63 @@ pub struct LocatorRaw {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum Locator {
     Role(LocatorRole),
     Raw(LocatorRaw),
+}
+
+// `on` also accepts a one-string shorthand — "css:sel", "xpath:expr",
+// "testId:key", "text:txt" — which lowers to the named raw locator with a
+// canned reason. Hand-authored steps (record-step, scenario insert, PR
+// review) shouldn't have to spell the full {"raw":{kind,value},reason}
+// shape for a plain selector.
+impl<'de> Deserialize<'de> for Locator {
+    fn deserialize<D>(de: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let v = Json::deserialize(de)?;
+        if let Some(short) = v.as_str() {
+            let (prefix, value) = short.split_once(':').ok_or_else(|| {
+                serde::de::Error::custom(
+                    "locator shorthand needs a kind prefix — \
+                         \"css:sel\", \"xpath:expr\", \"testId:key\", or \"text:txt\"",
+                )
+            })?;
+            let kind = match prefix {
+                "css" => RawLocatorKind::Css,
+                "xpath" => RawLocatorKind::Xpath,
+                "testId" => RawLocatorKind::TestId,
+                "text" => RawLocatorKind::Text,
+                other => {
+                    return Err(serde::de::Error::custom(format!(
+                        "unknown locator prefix \"{other}:\" — \
+                         use css:, xpath:, testId:, or text:"
+                    )))
+                }
+            };
+            if value.is_empty() {
+                return Err(serde::de::Error::custom(
+                    "locator shorthand has an empty selector",
+                ));
+            }
+            return Ok(Locator::Raw(LocatorRaw {
+                raw: LocatorRawSpec {
+                    kind,
+                    value: value.to_string(),
+                },
+                reason: "locator shorthand".to_string(),
+            }));
+        }
+        if let Ok(role) = serde_json::from_value::<LocatorRole>(v.clone()) {
+            return Ok(Locator::Role(role));
+        }
+        serde_json::from_value::<LocatorRaw>(v)
+            .map(Locator::Raw)
+            .map_err(|e| serde::de::Error::custom(format!("invalid locator: {e}")))
+    }
 }
 
 // ---------- Value ----------
@@ -918,6 +970,70 @@ fn origin_of(url: &str) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn locator_shorthand_lowers_to_named_raw() {
+        let loc: Locator = serde_json::from_value(json!("css:p > a")).unwrap();
+        assert!(matches!(
+            loc,
+            Locator::Raw(LocatorRaw {
+                raw: LocatorRawSpec {
+                    kind: RawLocatorKind::Css,
+                    ..
+                },
+                ..
+            })
+        ));
+        if let Locator::Raw(r) = loc {
+            assert_eq!(r.raw.value, "p > a");
+            assert_eq!(r.reason, "locator shorthand");
+        }
+        // every prefix
+        for (short, want) in [
+            ("xpath://a", RawLocatorKind::Xpath),
+            ("testId:save-btn", RawLocatorKind::TestId),
+            ("text:Sign in", RawLocatorKind::Text),
+        ] {
+            let loc: Locator = serde_json::from_value(json!(short)).unwrap();
+            assert!(matches!(
+                loc,
+                Locator::Raw(LocatorRaw {
+                    raw: LocatorRawSpec { kind, .. },
+                    ..
+                }) if kind == want
+            ));
+        }
+        // missing / unknown prefixes fail with a hint
+        assert!(serde_json::from_value::<Locator>(json!("p > a"))
+            .unwrap_err()
+            .to_string()
+            .contains("kind prefix"));
+        assert!(serde_json::from_value::<Locator>(json!("id:#x"))
+            .unwrap_err()
+            .to_string()
+            .contains("unknown locator prefix"));
+        // colons inside the selector survive (split at the FIRST colon only)
+        let loc: Locator = serde_json::from_value(json!("css:a:not(.x)")).unwrap();
+        assert!(matches!(
+            loc,
+            Locator::Raw(LocatorRaw {
+                raw: LocatorRawSpec { value, .. },
+                ..
+            }) if value == "a:not(.x)"
+        ));
+        // object forms unchanged
+        assert!(matches!(
+            serde_json::from_value::<Locator>(json!({"role": "link", "name": "x"})).unwrap(),
+            Locator::Role(_)
+        ));
+        assert!(matches!(
+            serde_json::from_value::<Locator>(
+                json!({"raw": {"kind": "css", "value": "#y"}, "reason": "r"})
+            )
+            .unwrap(),
+            Locator::Raw(_)
+        ));
+    }
 
     #[test]
     fn retarget_origin_rewrites_navs_and_gotos() {
