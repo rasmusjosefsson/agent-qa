@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { CircleDotIcon, CheckCircle2Icon, ClipboardCheckIcon, ImageIcon, ImageOffIcon, PauseIcon, PlayIcon, PencilIcon, Trash2Icon } from 'lucide-react'
+import { CameraIcon, CircleDotIcon, CheckCircle2Icon, ClipboardCheckIcon, ImageIcon, ImageOffIcon, PauseIcon, PlayIcon, PencilIcon, Trash2Icon } from 'lucide-react'
 import {
   recordingArtifactUrl,
   pauseChatRecording,
   resumeChatRecording,
   editChatRecordingStep,
   deleteChatRecordingStep,
+  insertChatRecordingStep,
   checkChatRecording,
   type RecordingState,
   type RecordingStep,
@@ -161,6 +162,24 @@ export function RecordingView({
         {noShot.has(step.stepId) ? <div className="flex items-center gap-2 px-1 py-3 text-xs text-muted-foreground"><ImageOffIcon className="size-4 opacity-50" />No keyframe captured for this step.</div> : <img src={recordingArtifactUrl(cid, step.stepId, 'screenshot')} alt={`step ${step.stepIndex} screenshot`} loading="lazy" className="w-full rounded border border-border" onError={() => setNoShot((previous) => new Set(previous).add(step.stepId))} />}
         {editable && editing !== step.stepIndex && (
           <div className="mt-1.5 flex justify-end gap-1.5">
+            {step.kind === 'do' && (
+              <button
+                type="button"
+                disabled={busy}
+                title={`Add a visual check ({"shot": "${step.stepId}"} claim) after this step`}
+                onClick={() =>
+                  void run(() =>
+                    insertChatRecordingStep(cid, step.stepIndex + 1, 'check', {
+                      intent: 'page looks right',
+                      claim: { subject: { shot: step.stepId }, predicate: 'matches' },
+                    })
+                  )
+                }
+                className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
+              >
+                <CameraIcon className="size-3" />Shot
+              </button>
+            )}
             <button type="button" disabled={busy} onClick={() => { setEditing(step.stepIndex); setDraft(draftOf(step)); setError('') }} className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"><PencilIcon className="size-3" />Edit draft</button>
             <button type="button" disabled={busy} onClick={() => void run(() => deleteChatRecordingStep(cid, step.stepIndex))} className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-destructive/15 hover:text-destructive disabled:opacity-40"><Trash2Icon className="size-3" />Delete</button>
           </div>
