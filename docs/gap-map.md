@@ -52,11 +52,10 @@ the picture shifts materially.
    live capture (#293: the bridge answers the opening dialog — accept,
    with the page's own `defaultPrompt` for prompts — then emits the
    check `{"dialog": true}` + `do/dialog` pair in the order replay
-   expects). Still open: `download` (browser download events may never
-   reach the page session while the daemon owns download policy),
-   `frame` (pick is top-frame only), `viewport` (window resize), and a
-   `state`-seed affordance (replay seeds storage/cookies; recording has
-   no "capture current state" action). Structural verbs
+   expects). All four remaining surfaces have capture PRs open: file
+   uploads (#263 merged; `download` = #307), iframes (`frame` move
+   emission = #295), window resizes → `do/viewport` (#297), and a
+   `state`-seed action (`capture page state` = #294). Structural verbs
    (`loop`/`group`/`useTemplate`) stay authored by design.
 
 ### P3 — polish
@@ -162,6 +161,36 @@ so the file-based verbs and their defaults were never exercised:
   `truncate`, `buffer discard`, `verify`, `list`, `info`, `config`,
   `plugins`, `skills` — all clean.
 
+## Dogfood pass III — role locators + shadow DOM (#342–#344)
+
+- **a11y snapshot `@eN` refs ARE driveable** — `agent-browser click @e65`
+  / `fill @e65` act on the ref directly, and `find role <r> --name` does
+  not exist (`--name` is rejected): the name-filtered path is
+  `--json snapshot -i` → `data.refs` (a `ref → {role, name}` map), then
+  drive the ref. Earlier notes that refs couldn't be driven were wrong.
+- **Role locators pierce open shadow roots** — the a11y tree flattens
+  through them, so `type`/`click` on `{role, name}` reaches inputs no css
+  selector can see (selectorshub xpath-practice-page, shub-tc01). The
+  `@eN` drive makes the record path possible too.
+- **Element `attribute` claims on role locators read the snapshot tail**
+  (#342): `value`/`text`/`focused`/`FLAG_STATES`/`NUMERIC_STATES` resolve
+  from the live a11y tree — the only claim path that reaches inside
+  shadow DOM without a piercing selector.
+- **Draft typos fail at record, not replay** (#343): `record-step`/
+  `run-step`/stdin JSONL validate the *raw* draft against the schema
+  before serde — a misplaced key inside a locator (e.g.
+  `{"role":...,"attribute":"x"}`) now dies at record with the offending
+  instance printed instead of a misleading predicate error later.
+- **Ad/telemetry-heavy pages flood `--auto-network`** — selectorshub
+  emits google-docs/play.google.com beacon claims on flush; the beacon
+  filter (#315) covers same-origin `/cdn-cgi/rum` but not third-party
+  hosts. For noisy pages flush `--no-auto-network` (shub-tc01 does via
+  `flushArgs`) and hand-author the claims worth keeping.
+- **`start` has no `--sid`; `flush` has no positional arg** — sids are
+  generated (`s<ts>`); rename post-flush with `scenario rename`. Both
+  flag guesses error cleanly, but agents reach for them every time —
+  worth a skill-doc line.
+
 ## Lessons from the fresh-site sweeps
 
 Real sites taught durable patterns:
@@ -195,6 +224,15 @@ Real sites taught durable patterns:
 
 ## Recently closed (for orientation)
 
+- Authoring ergonomics dogfood (#325–#341): `init` literal fix +
+  claim-value lint, `run-report`/`compare`/`audit` `latest` resolution,
+  scenario readers take sids, locator shorthand (`css:…`), `-h` anywhere,
+  predicate sugar, role/xpath `exists` probes, `record-step` draft hints
+  + `smart-fill`, buffer `s<N>` ids, `--root` on `*-all` verbs,
+  `record-setup -` JSONL, `record-setup` nav warning
+- Role-locator attribute claims via the a11y snapshot (#342);
+  record-time schema validation of raw drafts + `deny_unknown_fields`
+  on locator variants (#343); selectorshub shadow-DOM sweep (#344)
 - Touch verbs: `hold`+`swipe` (#259), `pinch` (#262), `rotate` (#267);
   `rightclick` (#266) + live-pane capture (#268); record-side gesture
   classification (#291)
