@@ -173,6 +173,7 @@
     "golden:expand-login:tc02": "bun golden/expand-login-tc02.ts",
     "golden:expand-pages:tc01": "bun golden/expand-pages-tc01.ts",
     "golden:demoqa:tc01": "bun golden/demoqa-tc01.ts",
+    "golden:gestures:tc01": "bun run golden/gestures-tc01.ts",
     "golden:frame:tc01": "bun golden/frame-tc01.ts",
     "golden:contextmenu:tc01": "bun golden/contextmenu-tc01.ts",
     "golden:edge:tc01": "bun golden/edge-tc01.ts",

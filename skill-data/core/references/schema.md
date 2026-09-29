@@ -280,6 +280,35 @@ In the workbench, drag an element to its target on the live canvas while
 recording — the gesture is recorded as a `drag` step automatically (both
 endpoints must have an accessible role + name).
 
+### Touch gestures
+
+`do/hold` presses `on` (required locator) for `params.ms` (default 500) without
+releasing: `pointerdown`/`mousedown`/`touchstart` on the element, a wait, then
+`pointerup`/`mouseup`/`touchend`. No `click` event is dispatched, so hold-only
+handlers (long-press menus) trigger while tap handlers do not.
+
+`do/swipe` dispatches a `touchstart → touchmove×8 → touchend` gesture
+(pointer/mouse fallback included): `params.direction` (required, one of
+`up|down|left|right` — the direction the finger travels, so `up` scrolls a page
+down) and `params.distance` (default 300 px). Optional `on` starts the gesture
+at the element's center; omit it for a viewport-centered swipe.
+
+```json
+{ "id": "s4", "intent": "long-press the row", "kind": "do", "verb": "hold",
+  "on": { "raw": { "kind": "css", "value": ".row" }, "reason": "row" },
+  "params": { "ms": 800 } },
+{ "id": "s5", "intent": "swipe the card away", "kind": "do", "verb": "swipe",
+  "on": { "raw": { "kind": "css", "value": ".card" }, "reason": "card" },
+  "params": { "direction": "left", "distance": 200 } },
+{ "id": "s6", "intent": "scroll the feed", "kind": "do", "verb": "swipe",
+  "params": { "direction": "up" } }
+```
+
+Both gestures are synthesized in-page (eval), so they work on desktop
+headless too — no mobile emulation needed. Pages that only listen to
+`click`/`scroll` won't see them; a real `scrollTo`/`click` verb is still the
+right tool there.
+
 ### Secondary click (rightclick)
 
 `do/rightclick` fires a secondary-button pointer+mouse chain on `on`
