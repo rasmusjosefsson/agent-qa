@@ -486,8 +486,12 @@ handlers are bound. Mitigation in the sweep: short recorded `wait`
 settles (~700ms) before each nav click. Replay side now self-warns:
 `click_locator` arms a MutationObserver + url/resource probe and
 eprintlns "click produced no observable effect" when nothing changed
-(landed in #362); record-side detection stays open — the live pane's
-click goes through agent-browser, not our verb path.
+(landed in #362); **record-side detection shipped in #364** — `start`
+arms a per-document probe (capture-phase click listener + MutationObserver
+snapshotting mutations/url/resources/activeElement), `record-step` diffs
+the latest click's snapshot on click-family verbs and eprintln-advises on
+an all-zero delta, re-arming after every do-step to survive navigation.
+Focus moves count as an effect; a pending dialog suppresses the check.
 
 Site vetoes catalogued while scouting: `uitestingplayground.com` has a
 broken cert (ERR_CERT_COMMON_NAME_INVALID, apex + www; http blocked),
