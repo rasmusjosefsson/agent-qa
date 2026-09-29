@@ -407,6 +407,102 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
             state_apply(ctx.session, p, scope).map_err(|e| anyhow!("step '{id}' state: {e}"))?;
             Ok(None)
         }
+        Verb::Hold => {
+            let src = drag_endpoint(on.unwrap(), scope, ctx.scenario_dir)
+                .map_err(|e| anyhow!("step '{id}' hold: {e}"))?;
+            let ms = params
+                .and_then(|p| p.get("ms"))
+                .map(|v| match v {
+                    serde_json::Value::Number(n) => n.as_u64().ok_or_else(|| {
+                        anyhow!("step '{id}' hold: params.ms must be a positive integer")
+                    }),
+                    serde_json::Value::String(s) => {
+                        let s = crate::value::substitute_scenario_vars(s, scope);
+                        s.parse::<u64>().map_err(|_| {
+                            anyhow!("step '{id}' hold: params.ms must be a positive integer")
+                        })
+                    }
+                    _ => bail!("step '{id}' hold: params.ms must be a positive integer"),
+                })
+                .transpose()?
+                .unwrap_or(500);
+            let out = browser::eval_expression(
+                ctx.session,
+                &crate::dom_activate::build_hold_down_js(&src),
+            )
+            .map_err(|e| anyhow!("step '{id}' hold: {e}"))?;
+            let trimmed = out.trim();
+            let code: String =
+                serde_json::from_str(trimmed).unwrap_or_else(|_| trimmed.to_string());
+            match code.as_str() {
+                "true" => {}
+                "el-miss" => bail!("step '{id}' hold: element not found"),
+                other => bail!("step '{id}' hold: unexpected result {other:?}"),
+            }
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+            let out =
+                browser::eval_expression(ctx.session, &crate::dom_activate::build_hold_up_js())
+                    .map_err(|e| anyhow!("step '{id}' hold release: {e}"))?;
+            let trimmed = out.trim();
+            let code: String =
+                serde_json::from_str(trimmed).unwrap_or_else(|_| trimmed.to_string());
+            match code.as_str() {
+                "true" => Ok(None),
+                "no-hold" => {
+                    bail!("step '{id}' hold: the pressed element left the DOM before release")
+                }
+                other => bail!("step '{id}' hold release: unexpected result {other:?}"),
+            }
+        }
+        Verb::Swipe => {
+            let p = params.ok_or_else(|| anyhow!("step '{id}' swipe: params required"))?;
+            let dir_raw = p
+                .get("direction")
+                .ok_or_else(|| anyhow!("step '{id}' swipe: params.direction is required"))?;
+            let dir = match dir_raw {
+                serde_json::Value::String(s) => crate::value::substitute_scenario_vars(s, scope),
+                _ => bail!("step '{id}' swipe: params.direction must be a string"),
+            };
+            let distance = p
+                .get("distance")
+                .map(|v| match v {
+                    serde_json::Value::Number(n) => n.as_f64().ok_or_else(|| {
+                        anyhow!("step '{id}' swipe: params.distance must be a number")
+                    }),
+                    serde_json::Value::String(s) => {
+                        let s = crate::value::substitute_scenario_vars(s, scope);
+                        s.parse::<f64>().map_err(|_| {
+                            anyhow!("step '{id}' swipe: params.distance must be a number")
+                        })
+                    }
+                    _ => bail!("step '{id}' swipe: params.distance must be a number"),
+                })
+                .transpose()?
+                .unwrap_or(300.0);
+            let ep = match on {
+                Some(loc) => Some(
+                    drag_endpoint(loc, scope, ctx.scenario_dir)
+                        .map_err(|e| anyhow!("step '{id}' swipe: {e}"))?,
+                ),
+                None => None,
+            };
+            let out = browser::eval_expression(
+                ctx.session,
+                &crate::dom_activate::build_swipe_js(ep.as_ref(), &dir, distance),
+            )
+            .map_err(|e| anyhow!("step '{id}' swipe: {e}"))?;
+            let trimmed = out.trim();
+            let code: String =
+                serde_json::from_str(trimmed).unwrap_or_else(|_| trimmed.to_string());
+            match code.as_str() {
+                "true" => Ok(None),
+                "el-miss" => bail!("step '{id}' swipe: origin element not found"),
+                "bad-dir" => bail!(
+                    "step '{id}' swipe: params.direction must be up|down|left|right, got {dir:?}"
+                ),
+                other => bail!("step '{id}' swipe: unexpected result {other:?}"),
+            }
+        }
         Verb::Frame => {
             let p = params.ok_or_else(|| anyhow!("step '{id}' frame: params required"))?;
             let sel = if p.get("main").and_then(|v| v.as_bool()) == Some(true) {

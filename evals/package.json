@@ -169,6 +169,7 @@
     "golden:network:tc01": "bun golden/network-tc01.ts",
     "golden:selftest": "bun selftest/run.ts",
     "selftest:accept": "bun selftest/accept.ts",
+    "golden:gestures:tc01": "bun run golden/gestures-tc01.ts",
     "golden:frame:tc01": "bun golden/frame-tc01.ts",
     "golden:demoqa-widgets:tc01": "bun golden/demoqa-widgets-tc01.ts",
     "golden:demoqa-widgets:tc02": "bun golden/demoqa-widgets-tc02.ts",
