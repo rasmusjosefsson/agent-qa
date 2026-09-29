@@ -78,6 +78,8 @@ export interface EdgeGolden extends GoldenContext {
   waitSelectorAbsent(selector: string, intent: string): Promise<void>;
   waitSelectorText(selector: string, text: string, intent: string): Promise<void>;
   waitLoad(state: string, intent: string): Promise<void>;
+  enterFrame(selector: string, intent: string): Promise<void>;
+  exitFrame(intent: string): Promise<void>;
   // `wait url` — poll resource timing until a matching request completed,
   // live at record and in the replayed scenario (`params.timeoutMs` honored).
   waitRequest(pattern: string, intent: string, timeoutMs?: number): Promise<void>;
@@ -299,6 +301,14 @@ export async function runEdgeGolden(
     async waitMs(ms, stepIntent) {
       await Bun.sleep(ms);
       await record(ctx, "wait", { condition: { kind: "duration", ms }, intent: stepIntent });
+    },
+    async enterFrame(selector, stepIntent) {
+      await run(ctx, `frame ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "frame", selector]);
+      await record(ctx, "action", { method: "enterFrame", args: [selector], intent: stepIntent });
+    },
+    async exitFrame(stepIntent) {
+      await run(ctx, "frame main", [ctx.agentBrowser, "--session", ctx.session, "frame", "main"]);
+      await record(ctx, "action", { method: "exitFrame", args: [], intent: stepIntent });
     },
     async waitSelector(selector, stepIntent) {
       await run(ctx, `wait ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "wait", selector]);
