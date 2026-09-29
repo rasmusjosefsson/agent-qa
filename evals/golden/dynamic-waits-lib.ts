@@ -1,4 +1,5 @@
 import { toRecordDraft } from "./record-translate";
+import { clickTrustedOrVisible, clickVisibleEval } from "./visible";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -123,7 +124,7 @@ export async function runDynamicWaitsGolden(
       await record(ctx, "wait", { condition: { kind: "selector", selector: '[data-testid="scenarios-list"]' }, intent: "practice scenarios rendered" });
     },
     async clickSelector(selector, stepIntent) {
-      await run(ctx, `click ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "click", selector]);
+      await clickTrustedOrVisible(ctx, (n, c) => run(ctx, n, c), selector);
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
     async domClickSelector(selector, stepIntent) {
@@ -132,7 +133,7 @@ export async function runDynamicWaitsGolden(
         "--session",
         ctx.session,
         "eval",
-        `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) throw new Error("selector not found"); el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window })); el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window })); el.click(); return true; })()`,
+        clickVisibleEval(selector),
       ]);
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
