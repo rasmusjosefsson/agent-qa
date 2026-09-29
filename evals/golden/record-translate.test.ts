@@ -120,6 +120,8 @@ describe("toRecordDraft — emitted verbs are shipped", () => {
     ["assert", { kind: "elementAbsent", args: ["#x"] }],
     ["assert", { kind: "elementText", args: ["#x", "hi"] }],
     ["assert", { kind: "elementAttribute", args: ["#x", "href", "equals", "/a"] }],
+    ["assert", { kind: "elementCount", args: [".item", "equals", 30] }],
+    ["assert", { kind: "elementCount", args: [".item", "gte", 1] }],
     ["assert", { kind: "roleAttribute", args: ["textbox", "user name field", "value", "x"] }],
     ["assert", { kind: "elementChecked", args: ["#c"] }],
     ["assert", { kind: "elementChecked", args: ["#c", false] }],

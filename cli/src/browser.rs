@@ -809,13 +809,26 @@ pub fn network_requests(session: &str) -> Result<Vec<CapturedRequest>, AgentBrow
         .get("requests")
         .cloned()
         .unwrap_or(serde_json::Value::Array(vec![]));
-    let mut reqs: Vec<CapturedRequest> =
+    let mut requests: Vec<CapturedRequest> =
         serde_json::from_value(list).map_err(|e| AgentBrowserError::NonZero {
             verb: "network requests".to_string(),
             exit_code: 0,
             stderr: format!("unparseable requests array: {e}"),
             hint: String::new(),
         })?;
+    // Redirect hops the daemon never lists — the own-CDP Network
+    // capture recovers their statuses (see cdp_net). The daemon logs the
+    // hop too but with a null status: drop that stub when a CDP hop entry
+    // for the same url+method exists so the log reads as one 302 row.
+    let hops = crate::cdp_net::redirect_entries(session);
+    for hop in &hops {
+        requests.retain(|r| {
+            !(r.status.is_none() && r.url == hop.url && r.method.eq_ignore_ascii_case(&hop.method))
+        });
+    }
+    requests.extend(hops);
+    requests.extend(mocked_requests(session));
+    Ok(requests)
     // WebSockets are invisible to the daemon's fetch/XHR capture — merge
     // the entries our own CDP listener saw (`cdpws-*`).
     if let Ok(ws_entries) = crate::cdp::ws_entries(session) {
@@ -1112,11 +1125,19 @@ pub fn wait_for_resource(
         "(function(){{var re=new RegExp({});var es=performance.getEntriesByType('resource');for(var i=0;i<es.length;i++){{if(re.test(es[i].name))return '1';}}return '0';}})()",
         serde_json::to_string(&re).unwrap_or_else(|_| "\"\"".into())
     );
+    let event_re = regex::Regex::new(&re).ok();
     let start = std::time::Instant::now();
     loop {
         let hit = eval_expression(session, &expr)
             .map(|s| s.trim().contains("\"1\"") || s.trim() == "1")
-            .unwrap_or(false);
+            .unwrap_or(false)
+            // The daemon's resource-timing read can't see redirect hops
+            // or a request still flushing to the timing buffer — the own
+            // Network.* capture covers both.
+            || event_re
+                .as_ref()
+                .map(|re| crate::cdp_net::find_completed(session, re))
+                .unwrap_or(false);
         if hit {
             return Ok(());
         }
