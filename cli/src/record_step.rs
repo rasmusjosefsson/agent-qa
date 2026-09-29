@@ -167,13 +167,93 @@ pub(crate) fn record_draft(
     let step_index = state.steps.len();
     let step_id = format!("s{step_index}");
     let step = parse_draft(kind, payload, &step_id)?;
+    let is_click = matches!(&step, Step::Do { verb, .. } if click_verb(verb));
+    let is_do = matches!(&step, Step::Do { .. });
     state.steps.push(step);
     state.save()?;
+    // Click-effect advisory: only meaningful while a dialog isn't blocking
+    // evals (the pending dialog IS the click's effect).
+    if is_do && !browser::dialog_pending(session) {
+        if is_click {
+            warn_if_click_inert(session);
+        }
+        arm_click_fx(session);
+    }
     capture_step_sidecars(&state.sid, session, &step_id);
     Ok(Some(RecordedStep {
         step_index,
         step_id,
     }))
+}
+
+/// Persistent (per-document) click-effect probe. A capture-phase click
+/// listener snapshots the DOM mutation count, URL, and resource count at each
+/// click; `record-step` later diffs the latest snapshot against the present.
+/// A click that produced nothing — no navigation, mutation, or fetch — is
+/// almost always a handler that was not bound yet (post-commit-effect apps)
+/// and earns an advisory while the session is still open to retry.
+///
+/// The probe dies on navigation, so `record-step` re-arms it after every do
+/// step: the step's own click is covered when the previous step re-armed.
+const CLICK_FX_ARM: &str = "(function(){try{if(window.__aqFx)return '1';window.__aqFx={m:0,clicks:[]};new MutationObserver(function(x){window.__aqFx.m+=x.length}).observe(document.documentElement,{subtree:true,childList:true,attributes:true,characterData:true});document.addEventListener('click',function(){var f=window.__aqFx;if(!f)return;if(f.clicks.length>20)f.clicks.shift();var a=document.activeElement;f.clicks.push({t:Date.now(),m:f.m,u:location.href,r:performance.getEntriesByType('resource').length,a:a?a.tagName+'#'+(a.id||''):''})},true);return '1'}catch(e){return '1'}})()";
+
+const CLICK_FX_CHECK: &str = "(function(){var p=window.__aqFx;if(!p)return '';var c=p.clicks[p.clicks.length-1];if(!c||Date.now()-c.t>30000)return '';var a=document.activeElement;var fa=(a?a.tagName+'#'+(a.id||''):'')!==c.a;return JSON.stringify({dm:p.m-c.m,nav:location.href!==c.u,dr:performance.getEntriesByType('resource').length-c.r,fa:fa})})()";
+
+fn click_verb(verb: &crate::scenario::Verb) -> bool {
+    matches!(
+        verb,
+        crate::scenario::Verb::Click
+            | crate::scenario::Verb::DblClick
+            | crate::scenario::Verb::RightClick
+            | crate::scenario::Verb::Check
+            | crate::scenario::Verb::Uncheck
+    )
+}
+
+/// `Some(true)` when the probe saw a click that produced no navigation, DOM
+/// mutation, or resource fetch; `None`/`Some(false)` are both "no warning".
+fn click_inert(raw: &str) -> Option<bool> {
+    let raw = raw.trim();
+    // eval results arrive JSON-encoded: a JS string result reads
+    // `"{\"dm\":0,...}"` — decode the outer layer first, then the payload.
+    let payload = serde_json::from_str::<String>(raw).unwrap_or_else(|_| raw.to_string());
+    let payload = payload.trim();
+    if payload.is_empty() {
+        return None;
+    }
+    let parsed: Json = serde_json::from_str(payload).ok()?;
+    let dm = parsed.get("dm").and_then(|v| v.as_i64()).unwrap_or(0);
+    let nav = parsed.get("nav").and_then(|v| v.as_bool()).unwrap_or(true);
+    let dr = parsed.get("dr").and_then(|v| v.as_i64()).unwrap_or(0);
+    // Focus moving (e.g. clicking to focus an input) counts as an effect.
+    let fa = parsed.get("fa").and_then(|v| v.as_bool()).unwrap_or(false);
+    Some(dm == 0 && !nav && dr == 0 && !fa)
+}
+
+/// Re-install the probe if the page navigated it away. Best-effort: a dead
+/// or dialog-blocked session just skips.
+fn arm_click_fx(session: &str) {
+    let _ = browser::eval_expression(session, CLICK_FX_ARM);
+}
+
+fn warn_if_click_inert(session: &str) {
+    let Ok(raw) = browser::eval_expression(session, CLICK_FX_CHECK) else {
+        return;
+    };
+    if click_inert(&raw) == Some(true) {
+        eprintln!(
+            "[v2-record] click produced no observable effect (no navigation, DOM mutation, or network) — the app's handler may not have been bound yet; a short wait before clicking usually fixes it"
+        );
+    }
+}
+
+/// Arms the click-effect probe at record start so the first page's clicks
+/// are covered. Public for `start`.
+pub(crate) fn arm_click_probe(session: &str) {
+    if browser::dialog_pending(session) {
+        return;
+    }
+    arm_click_fx(session);
 }
 
 pub(crate) fn parse_draft(kind: StepKind, payload: &Json, step_id: &str) -> Result<Step> {
@@ -328,6 +408,36 @@ mod tests {
         std::env::remove_var(crate::paths::RECORD_DIR_ENV);
         std::env::remove_var(browser::BIN_ENV);
         browser::_reset_bin_cache_for_tests();
+    }
+
+    #[test]
+    fn click_inert_reads_the_probe_result() {
+        // No probe / no recent click → advisory suppressed.
+        assert_eq!(click_inert("\"\""), None);
+        assert_eq!(click_inert(""), None);
+        assert_eq!(click_inert("not json"), None);
+        // Zero delta across mutation/url/resources → inert.
+        assert_eq!(
+            click_inert("\"{\\\"dm\\\":0,\\\"nav\\\":false,\\\"dr\\\":0}\""),
+            Some(true)
+        );
+        // Any single signal discharges the warning.
+        assert_eq!(
+            click_inert("\"{\\\"dm\\\":4,\\\"nav\\\":false,\\\"dr\\\":0}\""),
+            Some(false)
+        );
+        assert_eq!(
+            click_inert("\"{\\\"dm\\\":0,\\\"nav\\\":false,\\\"dr\\\":0,\\\"fa\\\":true}\""),
+            Some(false)
+        );
+        assert_eq!(
+            click_inert("\"{\\\"dm\\\":0,\\\"nav\\\":true,\\\"dr\\\":0}\""),
+            Some(false)
+        );
+        assert_eq!(
+            click_inert("\"{\\\"dm\\\":0,\\\"nav\\\":false,\\\"dr\\\":2}\""),
+            Some(false)
+        );
     }
 
     #[test]
