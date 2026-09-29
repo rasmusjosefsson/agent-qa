@@ -237,7 +237,11 @@
     "golden:books:tc03": "bun golden/books-tc03.ts",
     "golden:pta:tc01": "bun golden/pta-tc01.ts",
     "golden:pta:tc02": "bun golden/pta-tc02.ts",
-    "golden:pta:tc03": "bun golden/pta-tc03.ts"
+    "golden:pta:tc03": "bun golden/pta-tc03.ts",
+    "golden:reactadmin:tc01": "bun golden/reactadmin-tc01.ts",
+    "golden:reactadmin:tc02": "bun golden/reactadmin-tc02.ts",
+    "golden:reactadmin:tc03": "bun golden/reactadmin-tc03.ts",
+    "golden:reactadmin:tc04": "bun golden/reactadmin-tc04.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"
