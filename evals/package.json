@@ -256,7 +256,11 @@
     "golden:wiki:tc02": "bun golden/wiki-tc02.ts",
     "golden:wiki:tc03": "bun golden/wiki-tc03.ts",
     "golden:wiki:tc04": "bun golden/wiki-tc04.ts",
-    "golden:wait-state:tc01": "bun golden/wait-state-tc01.ts"
+    "golden:wait-state:tc01": "bun golden/wait-state-tc01.ts",
+    "golden:petstore:tc01": "bun golden/petstore-tc01.ts",
+    "golden:petstore:tc02": "bun golden/petstore-tc02.ts",
+    "golden:petstore:tc03": "bun golden/petstore-tc03.ts",
+    "golden:petstore:tc04": "bun golden/petstore-tc04.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"
