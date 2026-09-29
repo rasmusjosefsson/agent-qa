@@ -358,15 +358,7 @@ fn list(
         .ok_or_else(|| anyhow!("usage: audit list <sid>"))?;
     let dir = paths::scenario_dir(sid)?;
     let replays_dir = dir.join("replays");
-    let mut runs: Vec<std::path::PathBuf> = match fs::read_dir(&replays_dir) {
-        Ok(it) => it
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.is_dir())
-            .collect(),
-        Err(_) => Vec::new(),
-    };
-    runs.sort();
+    let runs = crate::paths::run_dirs(&replays_dir);
 
     #[derive(serde::Serialize)]
     #[serde(rename_all = "camelCase")]
@@ -538,15 +530,7 @@ fn stats(
         .ok_or_else(|| anyhow!("usage: audit stats <sid>"))?;
     let dir = paths::scenario_dir(sid)?;
     let replays_dir = dir.join("replays");
-    let mut runs: Vec<std::path::PathBuf> = match fs::read_dir(&replays_dir) {
-        Ok(it) => it
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.is_dir())
-            .collect(),
-        Err(_) => Vec::new(),
-    };
-    runs.sort();
+    let runs = crate::paths::run_dirs(&replays_dir);
 
     let mut total = 0u32;
     let mut passes = 0u32;
@@ -739,10 +723,7 @@ fn count(positionals: &[String]) -> Result<u8> {
         .ok_or_else(|| anyhow!("usage: audit count <sid>"))?;
     let dir = paths::scenario_dir(sid)?;
     let replays_dir = dir.join("replays");
-    let n = match fs::read_dir(&replays_dir) {
-        Ok(it) => it.flatten().filter(|e| e.path().is_dir()).count(),
-        Err(_) => 0,
-    };
+    let n = crate::paths::run_dirs(&replays_dir).len();
     println!("{n}");
     Ok(0)
 }
@@ -1114,15 +1095,7 @@ fn stats_all(json_out: bool, since_ms: Option<u64>, until_ms: Option<u64>) -> Re
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
         let replays_dir = jdir.join("replays");
-        let mut runs: Vec<std::path::PathBuf> = match fs::read_dir(&replays_dir) {
-            Ok(it) => it
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| p.is_dir())
-                .collect(),
-            Err(_) => Vec::new(),
-        };
-        runs.sort();
+        let runs = crate::paths::run_dirs(&replays_dir);
         let (mut total, mut passes, mut failures, mut unknown) = (0u32, 0u32, 0u32, 0u32);
         let mut last_pass: Option<String> = None;
         let mut last_fail: Option<String> = None;
@@ -1293,15 +1266,7 @@ struct FlakyStep {
 
 fn collect_flaky(dir: &std::path::Path, min_flips: usize, min_runs: usize) -> Vec<FlakyStep> {
     let replays_dir = dir.join("replays");
-    let mut runs: Vec<PathBuf> = match fs::read_dir(&replays_dir) {
-        Ok(it) => it
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.is_dir())
-            .collect(),
-        Err(_) => Vec::new(),
-    };
-    runs.sort();
+    let runs = crate::paths::run_dirs(&replays_dir);
 
     // Per step: ordered outcome observations + which runs failed + heal rows.
     #[derive(Default)]
@@ -1434,15 +1399,7 @@ fn collect_slow(
     min_runs: usize,
 ) -> Vec<SlowStep> {
     let replays_dir = dir.join("replays");
-    let mut runs: Vec<PathBuf> = match fs::read_dir(&replays_dir) {
-        Ok(it) => it
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.is_dir())
-            .collect(),
-        Err(_) => Vec::new(),
-    };
-    runs.sort();
+    let runs = crate::paths::run_dirs(&replays_dir);
 
     // Per step: chronological pass-ms observations + a fail count for context.
     #[derive(Default)]
@@ -1663,15 +1620,7 @@ fn sparkline(values: &[Option<f64>]) -> String {
 
 fn collect_trend(dir: &std::path::Path, sid: &str, limit: Option<usize>) -> TrendOut {
     let replays_dir = dir.join("replays");
-    let mut runs: Vec<PathBuf> = fs::read_dir(&replays_dir)
-        .map(|it| {
-            it.flatten()
-                .map(|e| e.path())
-                .filter(|p| p.is_dir())
-                .collect()
-        })
-        .unwrap_or_default();
-    runs.sort();
+    let mut runs = crate::paths::run_dirs(&replays_dir);
     if let Some(n) = limit {
         runs.drain(..runs.len().saturating_sub(n));
     }
@@ -1932,10 +1881,7 @@ fn collect_clusters(root: &std::path::Path, min_size: usize) -> Vec<Cluster> {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
         let replays = sid_dir.join("replays");
-        let Ok(runs) = fs::read_dir(&replays) else {
-            continue;
-        };
-        for run_dir in runs.flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
+        for run_dir in crate::paths::run_dirs(&replays) {
             let run_id = run_dir
                 .file_name()
                 .map(|s| s.to_string_lossy().into_owned())
@@ -2073,16 +2019,7 @@ pub(crate) fn resolve_run_id(scenario_dir: &std::path::Path, run_ref: &str) -> R
         }
     }
     // 2) Fall back to the highest lex-sorted run dir.
-    let mut entries: Vec<PathBuf> = match fs::read_dir(scenario_dir.join("replays")) {
-        Ok(it) => it
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.is_dir())
-            .collect(),
-        Err(_) => Vec::new(),
-    };
-    entries.sort();
-    let last = entries
+    let last = crate::paths::run_dirs(&scenario_dir.join("replays"))
         .pop()
         .ok_or_else(|| anyhow!("audit show: no replays under {}", scenario_dir.display()))?;
     Ok(last
@@ -2982,8 +2919,11 @@ mod tests {
         write_audit_ms(&jdir, "2026-01-01__a", 0, 1000);
         write_audit_ms(&jdir, "2026-01-02__b", 0, 1000);
         write_audit_ms(&jdir, "2026-01-03__c", 0, 1000);
-        // A run dir without audit.json still lists but contributes no outcome.
-        std::fs::create_dir_all(jdir.join("replays").join("2026-01-04__d")).unwrap();
+        // A partial run (events written, audit never landed) still lists
+        // but contributes no outcome.
+        let partial = jdir.join("replays").join("2026-01-04__d");
+        std::fs::create_dir_all(&partial).unwrap();
+        std::fs::write(partial.join("events.jsonl"), "").unwrap();
         let out = collect_trend(&jdir, "sid", Some(2));
         assert_eq!(out.runs.len(), 2);
         assert_eq!(out.runs[0].run_id, "2026-01-03__c");
