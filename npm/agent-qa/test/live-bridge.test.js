@@ -897,3 +897,40 @@ test('a click back in the main frame emits a frame main step', async () => {
   assert.deepEqual(recorded[2].payload.params, { main: true });
   assert.equal(recorded[3].payload.verb, 'click');
 });
+
+test('a window resize records a do/viewport step once', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  const ft0 = sock.sent.find((m) => m.method === 'Page.getFrameTree');
+  if (ft0) sock.recv({ id: ft0.id, result: { frameTree: { frame: { id: 'MAIN' } } } });
+  for (const size of [{ width: 1280, height: 800 }, { width: 1280, height: 800 }, { width: 375, height: 812 }]) {
+    sock.recv({
+      method: 'Runtime.bindingCalled',
+      params: { name: '__aqRecord', payload: JSON.stringify({ kind: 'viewport', ...size }) },
+    });
+    await flush();
+  }
+  assert.equal(recorded.length, 2, 'repeat size dedupes');
+  assert.deepEqual(recorded[0].payload, { intent: 'viewport 1280x800', verb: 'viewport', params: { width: 1280, height: 800 } });
+  assert.deepEqual(recorded[1].payload.params, { width: 375, height: 812 });
+});
+
+test('a resize inside an iframe does not record viewport', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  const ft0 = sock.sent.find((m) => m.method === 'Page.getFrameTree');
+  if (ft0) sock.recv({ id: ft0.id, result: { frameTree: { frame: { id: 'MAIN' } } } });
+  await flush(); // let mainFrameId settle
+  sock.recv({
+    method: 'Runtime.executionContextCreated',
+    params: { context: { id: 9, auxData: { isDefault: true, frameId: 'F1' } } },
+  });
+  sock.recv({
+    method: 'Runtime.bindingCalled',
+    params: { name: '__aqRecord', executionContextId: 9, payload: JSON.stringify({ kind: 'viewport', width: 300, height: 200 }) },
+  });
+  await flush();
+  assert.equal(recorded.length, 0);
+});

@@ -149,6 +149,9 @@ function createLiveBridge({
   let mainFrameId = null;
   let recordedFrameChain = [];
   const ctxFrames = new Map();
+  // Last viewport size recorded this connection — dedupes the debounced
+  // resize stream (a settle burst would otherwise emit repeat steps).
+  let lastViewport = null;
 
   // Reads the focused field's accessible label + current value so typing can
   // be recorded as one fillByLabel step instead of per-keystroke noise.
@@ -205,6 +208,16 @@ function createLiveBridge({
       const rec = { kind: 'rightclick', name: aqName(t), selector: aqSel(t) };
       try { __aqRecord(JSON.stringify(rec)); } catch (e) { /* binding absent */ }
     }, true);
+    // Window resizes settle into a do/viewport step — debounced so a drag
+    // records one size, not every intermediate.
+    let aqResizeT = null;
+    window.addEventListener('resize', () => {
+      clearTimeout(aqResizeT);
+      aqResizeT = setTimeout(() => {
+        const rec = { kind: 'viewport', width: window.innerWidth, height: window.innerHeight };
+        try { __aqRecord(JSON.stringify(rec)); } catch (e) { /* binding absent */ }
+      }, 600);
+    });
     document.addEventListener('change', (ev) => {
       const t = ev.target;
       if (!(t instanceof HTMLElement)) return;
@@ -372,6 +385,7 @@ function createLiveBridge({
     mainFrameId = null;
     recordedFrameChain = [];
     ctxFrames.clear();
+    lastViewport = null;
     for (const { reject } of calls.values()) {
       try {
         reject(new Error('live browser disconnected'));
@@ -759,6 +773,19 @@ function createLiveBridge({
     // event fired in — records emitted below move the buffer into it first.
     const frameId = ctxId != null ? ctxFrames.get(ctxId) : null;
     if (!rec || typeof rec !== 'object') return;
+    if (rec.kind === 'viewport') {
+      // Only the top window's size maps to do/viewport — an iframe's own
+      // innerWidth resizes when its element resizes, not the browser's.
+      if (frameId && mainFrameId && frameId !== mainFrameId) return;
+      const w = Number(rec.width);
+      const h = Number(rec.height);
+      if (!Number.isInteger(w) || w <= 0 || !Number.isInteger(h) || h <= 0) return;
+      const key = `${w}x${h}`;
+      if (key === lastViewport) return;
+      lastViewport = key;
+      void emitFramed(null, 'do', { intent: `viewport ${key}`, verb: 'viewport', params: { width: w, height: h } });
+      return;
+    }
     // rightclick falls back to its css selector — a nameless icon button or
     // canvas region is still recordable.
     if (!rec.name && !(rec.kind === 'rightclick' && rec.selector)) {
