@@ -438,3 +438,28 @@ signin POST 302-redirects into the account page. Two real findings:
   accept` (#129–#186)
 - Suite tooling: parallel `--jobs`, `--retry`, `--until-fail`, `--watch`,
   JUnit, HTML report
+
+## Dogfood pass VIII — demoblaze.com: storefront SPA with modal auth
+
+- **Async dialogs are the norm, not the exception.** TAP's alerts fired
+  synchronously inside the click handler, so a single-shot
+  `dialog status` read after the click worked. demoblaze's add-to-cart
+  and signup alerts fire from XHR `.then` handlers ~1–1.5s after the
+  click returns — the lib's `assertDialogText` now polls (8s window)
+  instead of racing. Any site where a dialog is triggered by a network
+  response needs this shape. Replay was never affected: the recorded
+  `{dialog: true}` check claim already polls.
+- **`fillSelectorReplayValue`** landed in `edge-pages-lib` (mirroring
+  the automation-exercise lib): type a live-minted username, record
+  `{{vars._unique}}` — each replay signs up a fresh account and the
+  auto-network claims verify `POST /signup` + `POST /login` actually
+  hit the API. Template fills are the record-side answer to
+  unique-value flows.
+- demoblaze's category rail reuses `id="itemc"` on all three links
+  (Phones/Laptops/Monitors) — the click selector has to key off the
+  `onclick="byCat('...')"` argument, not the id. Duplicate-id sites
+  defeat `#id` locators; prefer attribute hooks.
+- demoblaze keeps `.modal` in the DOM with `display:none` after close —
+  same "close-by-style" trap as jQuery UI; the nav link stays covered
+  until the fade finishes, so the sweep waits ~800ms (bootstrap's
+  transition) before the next click.
