@@ -399,6 +399,102 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
             state_apply(ctx.session, p, scope).map_err(|e| anyhow!("step '{id}' state: {e}"))?;
             Ok(None)
         }
+        Verb::Hold => {
+            let src = drag_endpoint(on.unwrap(), scope, ctx.scenario_dir)
+                .map_err(|e| anyhow!("step '{id}' hold: {e}"))?;
+            let ms = params
+                .and_then(|p| p.get("ms"))
+                .map(|v| match v {
+                    serde_json::Value::Number(n) => n.as_u64().ok_or_else(|| {
+                        anyhow!("step '{id}' hold: params.ms must be a positive integer")
+                    }),
+                    serde_json::Value::String(s) => {
+                        let s = crate::value::substitute_scenario_vars(s, scope);
+                        s.parse::<u64>().map_err(|_| {
+                            anyhow!("step '{id}' hold: params.ms must be a positive integer")
+                        })
+                    }
+                    _ => bail!("step '{id}' hold: params.ms must be a positive integer"),
+                })
+                .transpose()?
+                .unwrap_or(500);
+            let out = browser::eval_expression(
+                ctx.session,
+                &crate::dom_activate::build_hold_down_js(&src),
+            )
+            .map_err(|e| anyhow!("step '{id}' hold: {e}"))?;
+            let trimmed = out.trim();
+            let code: String =
+                serde_json::from_str(trimmed).unwrap_or_else(|_| trimmed.to_string());
+            match code.as_str() {
+                "true" => {}
+                "el-miss" => bail!("step '{id}' hold: element not found"),
+                other => bail!("step '{id}' hold: unexpected result {other:?}"),
+            }
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+            let out =
+                browser::eval_expression(ctx.session, &crate::dom_activate::build_hold_up_js())
+                    .map_err(|e| anyhow!("step '{id}' hold release: {e}"))?;
+            let trimmed = out.trim();
+            let code: String =
+                serde_json::from_str(trimmed).unwrap_or_else(|_| trimmed.to_string());
+            match code.as_str() {
+                "true" => Ok(None),
+                "no-hold" => {
+                    bail!("step '{id}' hold: the pressed element left the DOM before release")
+                }
+                other => bail!("step '{id}' hold release: unexpected result {other:?}"),
+            }
+        }
+        Verb::Swipe => {
+            let p = params.ok_or_else(|| anyhow!("step '{id}' swipe: params required"))?;
+            let dir_raw = p
+                .get("direction")
+                .ok_or_else(|| anyhow!("step '{id}' swipe: params.direction is required"))?;
+            let dir = match dir_raw {
+                serde_json::Value::String(s) => crate::value::substitute_scenario_vars(s, scope),
+                _ => bail!("step '{id}' swipe: params.direction must be a string"),
+            };
+            let distance = p
+                .get("distance")
+                .map(|v| match v {
+                    serde_json::Value::Number(n) => n.as_f64().ok_or_else(|| {
+                        anyhow!("step '{id}' swipe: params.distance must be a number")
+                    }),
+                    serde_json::Value::String(s) => {
+                        let s = crate::value::substitute_scenario_vars(s, scope);
+                        s.parse::<f64>().map_err(|_| {
+                            anyhow!("step '{id}' swipe: params.distance must be a number")
+                        })
+                    }
+                    _ => bail!("step '{id}' swipe: params.distance must be a number"),
+                })
+                .transpose()?
+                .unwrap_or(300.0);
+            let ep = match on {
+                Some(loc) => Some(
+                    drag_endpoint(loc, scope, ctx.scenario_dir)
+                        .map_err(|e| anyhow!("step '{id}' swipe: {e}"))?,
+                ),
+                None => None,
+            };
+            let out = browser::eval_expression(
+                ctx.session,
+                &crate::dom_activate::build_swipe_js(ep.as_ref(), &dir, distance),
+            )
+            .map_err(|e| anyhow!("step '{id}' swipe: {e}"))?;
+            let trimmed = out.trim();
+            let code: String =
+                serde_json::from_str(trimmed).unwrap_or_else(|_| trimmed.to_string());
+            match code.as_str() {
+                "true" => Ok(None),
+                "el-miss" => bail!("step '{id}' swipe: origin element not found"),
+                "bad-dir" => bail!(
+                    "step '{id}' swipe: params.direction must be up|down|left|right, got {dir:?}"
+                ),
+                other => bail!("step '{id}' swipe: unexpected result {other:?}"),
+            }
+        }
         Verb::Frame => {
             let p = params.ok_or_else(|| anyhow!("step '{id}' frame: params required"))?;
             let sel = if p.get("main").and_then(|v| v.as_bool()) == Some(true) {
@@ -567,7 +663,7 @@ fn select_option(
     let option_lit = json_str(value);
     let body = |selector_lit: String| -> String {
         format!(
-            "(() => new Promise((resolve, reject) => {{ const el = document.querySelector({sel}); if (!el) return reject(new Error('selector not found: ' + {sel})); if (el.tagName === 'SELECT') {{ const raw = String({val}); const values = raw.includes(',') ? raw.split(',').map((item) => item.trim()).filter(Boolean) : [raw]; for (const option of el.options) option.selected = values.includes(option.value) || values.includes(option.text); el.dispatchEvent(new Event('input', {{ bubbles: true }})); el.dispatchEvent(new Event('change', {{ bubbles: true }})); return resolve(true); }} el.focus(); el.dispatchEvent(new KeyboardEvent('keydown', {{ key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }})); el.dispatchEvent(new KeyboardEvent('keyup', {{ key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }})); setTimeout(() => {{ try {{ const want = {opt}; const options = Array.from(document.querySelectorAll('[role=\"option\"]')); const hit = options.find((node) => (node.textContent || '').trim() === want && node.getClientRects().length > 0); if (!hit) throw new Error('option not found: ' + want); hit.dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true, cancelable: true, view: window }})); hit.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true, cancelable: true, view: window }})); hit.click(); resolve(true); }} catch (err) {{ reject(err); }} }}, 50); }}))()",
+            "(() => new Promise((resolve, reject) => {{ const els = Array.from(document.querySelectorAll({sel})); const el = els.find((n) => n.getClientRects().length > 0) || els[0]; if (!el) return reject(new Error('selector not found: ' + {sel})); if (el.tagName === 'SELECT') {{ const raw = String({val}); const values = raw.includes(',') ? raw.split(',').map((item) => item.trim()).filter(Boolean) : [raw]; for (const option of el.options) option.selected = values.includes(option.value) || values.includes(option.text); el.dispatchEvent(new Event('input', {{ bubbles: true }})); el.dispatchEvent(new Event('change', {{ bubbles: true }})); return resolve(true); }} el.focus(); el.dispatchEvent(new KeyboardEvent('keydown', {{ key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }})); el.dispatchEvent(new KeyboardEvent('keyup', {{ key: 'Enter', code: 'Enter', bubbles: true, cancelable: true }})); setTimeout(() => {{ try {{ const want = {opt}; const options = Array.from(document.querySelectorAll('[role=\"option\"]')); const hit = options.find((node) => (node.textContent || '').trim() === want && node.getClientRects().length > 0); if (!hit) throw new Error('option not found: ' + want); hit.dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true, cancelable: true, view: window }})); hit.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true, cancelable: true, view: window }})); hit.click(); resolve(true); }} catch (err) {{ reject(err); }} }}, 50); }}))()",
             sel = selector_lit,
             val = value_lit,
             opt = option_lit,
@@ -886,6 +982,7 @@ fn emulate_apply(
         "reducedMotion",
         "headers",
         "credentials",
+        "permissions",
     ];
     for k in params.keys() {
         if !KEYS.contains(&k.as_str()) {
@@ -934,18 +1031,61 @@ fn emulate_apply(
         .map_err(|e| anyhow!("set credentials: {e}"))?;
     }
     if let Some(v) = params.get("geo") {
-        let mut f = |k: &str| -> Result<String> {
+        let mut f = |k: &str| -> Result<f64> {
             let n = v
                 .get(k)
                 .ok_or_else(|| anyhow!("params.geo.{k} is required"))?;
             match n {
-                Json::Number(n) => Ok(n.to_string()),
-                Json::String(_) => Ok(subst(n, scope)?),
+                Json::Number(n) => n
+                    .as_f64()
+                    .ok_or_else(|| anyhow!("params.geo.{k} must be a finite number")),
+                Json::String(_) => subst(n, scope)?
+                    .parse::<f64>()
+                    .map_err(|_| anyhow!("params.geo.{k} must be a number")),
                 _ => bail!("params.geo.{k} must be a number"),
             }
         };
-        browser::set_emulation(session, &["geo".into(), f("lat")?, f("lng")?])
-            .map_err(|e| anyhow!("set geo: {e}"))?;
+        let (lat, lng) = (f("lat")?, f("lng")?);
+        let accuracy = v.get("accuracy").and_then(|a| a.as_f64()).unwrap_or(50.0);
+        // `set geo` scopes the override to the daemon's current target —
+        // when a leftover page (e.g. chrome://newtab) holds it, the real
+        // page never sees the override. Prefer our own flat-session
+        // override aimed at the active page; fall back to `set geo` when
+        // no page exists yet (emulate before the first goto).
+        if !crate::cdp::set_geo_override(session, lat, lng, accuracy)
+            .map_err(|e| anyhow!("set geo override: {e}"))?
+        {
+            browser::set_emulation(session, &["geo".into(), lat.to_string(), lng.to_string()])
+                .map_err(|e| anyhow!("set geo: {e}"))?;
+        }
+        // A geolocation override without the permission leaves
+        // navigator.geolocation hanging. Grants must be origin-scoped —
+        // unscoped grants no-op on the synthetic browser context headless
+        // pages run in (see cdp::grant_permissions). No page → nothing to
+        // grant yet; the override above still applies post-goto.
+        let origin = crate::cdp::active_page_origin(session)
+            .map_err(|e| anyhow!("resolve page origin: {e}"))?;
+        crate::cdp::grant_permissions(session, &["geolocation"], origin.as_deref())
+            .map_err(|e| anyhow!("grant geolocation permission: {e}"))?;
+    }
+    if let Some(v) = params.get("permissions") {
+        let list = v
+            .as_array()
+            .ok_or_else(|| anyhow!("params.permissions must be an array of strings"))?;
+        let mut names: Vec<String> = Vec::new();
+        for p in list {
+            match p {
+                Json::String(_) => names.push(subst(p, scope)?),
+                _ => bail!("params.permissions entries must be strings"),
+            }
+        }
+        if !names.is_empty() {
+            let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+            let origin = crate::cdp::active_page_origin(session)
+                .map_err(|e| anyhow!("resolve page origin: {e}"))?;
+            crate::cdp::grant_permissions(session, &refs, origin.as_deref())
+                .map_err(|e| anyhow!("grant permissions {names:?}: {e}"))?;
+        }
     }
     if let Some(v) = params.get("offline") {
         let on = v
@@ -1262,7 +1402,8 @@ fn try_text_native_click(session: &str, text: &str) -> anyhow::Result<bool> {
 fn try_selector_native_click(session: &str, selector: &str) -> anyhow::Result<bool> {
     let expr = format!(
         r#"(() => {{
-  const el = document.querySelector({selector_lit});
+  const els = Array.from(document.querySelectorAll({selector_lit}));
+  const el = els.find((n) => n.getClientRects().length > 0) || els[0];
   if (!el) return false;
   const tag = el.tagName;
   const type = (el.getAttribute('type') || '').toLowerCase();
@@ -1277,12 +1418,16 @@ fn try_selector_native_click(session: &str, selector: &str) -> anyhow::Result<bo
   // alert/confirm/prompt blocks the page's JS thread, which stops the daemon
   // from delivering the eval result at all (~30s internal timeout). A ~150ms
   // timer lets the response land first — the dialog then surfaces as pending
-  // for the next `dialog` step.
+  // for the next `dialog` step. The node is re-resolved at fire time: themes
+  // that re-render a control during hydration detach the handle we captured
+  // above, which would silently drop the dispatch.
   setTimeout(() => {{
     try {{
-      el.dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true, cancelable: true, view: window }}));
-      el.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true, cancelable: true, view: window }}));
-      el.click();
+      const els2 = Array.from(document.querySelectorAll({selector_lit}));
+      const el2 = els2.find((n) => n.getClientRects().length > 0) || els2[0] || el;
+      el2.dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true, cancelable: true, view: window }}));
+      el2.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true, cancelable: true, view: window }}));
+      el2.click();
     }} catch (e) {{}}
   }}, 150);
   return true;
@@ -1312,7 +1457,8 @@ fn fill_or_act_via_selector(
     // after the fill, so a single synchronous check is racy.
     let expr = format!(
         r#"(() => new Promise((resolve) => {{
-  const el = document.querySelector({selector_lit});
+  const els = Array.from(document.querySelectorAll({selector_lit}));
+  const el = els.find((n) => n.getClientRects().length > 0) || els[0];
   if (!el) return resolve('missing');
   const want = {value_lit};
   const apply = () => {{
