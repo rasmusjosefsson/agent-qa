@@ -384,6 +384,29 @@ fn render_failure_block(p: &FailurePointer) -> String {
     )
 }
 
+/// Emulation toggles applied via `agent-browser set` (a `do/emulate` step
+/// or `set` CLI call) are daemon-side state: they survive a run and poison
+/// the next replay on the reused session — a stale `offline on` silently
+/// drops every request while a warm `goto` skip hides that anything is
+/// wrong. Reset the toggles that have a documented off state at run start,
+/// before `--offline`/`--mock-from` and `do/emulate` steps re-apply what
+/// *this* run wants. `viewport`, `device`, `geo`, `credentials`, and
+/// `media` have no `set`-level clear — they still carry over.
+fn reset_persistent_emulation(session: &str) {
+    for args in [["set", "offline", "off"], ["set", "headers", "{}"]] {
+        if let Err(e) = crate::browser::run(
+            session,
+            args,
+            crate::browser::RunOpts::new().lenient().capture(),
+        ) {
+            eprintln!(
+                "[v2-replay] emulation reset ({}) skipped: {e}",
+                args.join(" ")
+            );
+        }
+    }
+}
+
 /// Make a path absolute + copy-pasteable for display. Prefers the
 /// canonical form when the file exists (capture succeeded); otherwise
 /// joins the cwd so the printed path is still absolute.
@@ -422,26 +445,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         if let Err(e) = crate::browser::network_clear(&opts.session_name) {
             eprintln!("[v2-replay] network log clear skipped: {e}");
         }
-    }
-
-    // The browser's request capture is per-session: a replayed session
-    // still holds the previous run's traffic. Clear it so this run's
-    // network.json (and {"network"} claims) sees only its own requests.
-    // Best-effort — a session that doesn't exist yet just warns.
-    if !opts.dry_run {
-        if let Err(e) = crate::browser::network_clear(&opts.session_name) {
-            eprintln!("[v2-replay] network log clear skipped: {e}");
-        }
-    }
-
-    // The browser's request capture is per-session: a replayed session
-    // still holds the previous run's traffic. Clear it so this run's
-    // network.json (and {"network"} claims) sees only its own requests.
-    // Best-effort — a session that doesn't exist yet just warns.
-    if !opts.dry_run {
-        if let Err(e) = crate::browser::network_clear(&opts.session_name) {
-            eprintln!("[v2-replay] network log clear skipped: {e}");
-        }
+        reset_persistent_emulation(&opts.session_name);
     }
 
     // 1. Load + validate.
@@ -3191,6 +3195,62 @@ mod tests {
             ab.contains("--session test open https://example.com/"),
             "got: {ab}"
         );
+        clear_fake_browser();
+    }
+
+    #[test]
+    fn replay_clears_capture_once_and_resets_persistent_emulation() {
+        let _g = lock_env();
+        let work = TempDir::new().unwrap();
+        let log = work.path().join("ab.log");
+        install_fake_browser(work.path(), &log);
+
+        let jdir = work.path().join("sid");
+        fs::create_dir_all(&jdir).unwrap();
+        let jfile = jdir.join("scenario.json");
+        fs::write(&jfile, minimal_scenario()).unwrap();
+
+        let opts = RunOptions {
+            source: ScenarioSource::Path(jfile),
+            profile: None,
+            persona: None,
+            environment: None,
+            session_name: "test".into(),
+            heal_from_run: None,
+            headed: false,
+            input_overrides: BTreeMap::new(),
+            dry_run: false,
+            no_sidecars: false,
+            quiet: false,
+            plain: false,
+            tag: None,
+            output_audit: None,
+            from_step: None,
+            until_step: None,
+            update_baselines: false,
+            keep_going: false,
+            record_video: None,
+            junit: None,
+            base_url: None,
+            auto_promote: false,
+            freeze: None,
+            har: false,
+            mock_from: None,
+            offline: false,
+        };
+        run(&opts).unwrap();
+
+        // The reused-session hygiene at run start: request log cleared once,
+        // and the emulation toggles that outlive a run (offline, headers)
+        // reset so a previous scenario can't poison this one.
+        let ab = fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            ab.matches("network requests --clear").count(),
+            1,
+            "got: {ab}"
+        );
+        assert!(ab.contains("--session test set offline off"), "got: {ab}");
+        assert!(ab.contains("--session test set headers {}"), "got: {ab}");
         clear_fake_browser();
     }
 
