@@ -1952,8 +1952,23 @@ mod tests {
             "id": "s1", "intent": "x", "kind": "do", "verb": "wait",
             "params": { "ms": 250 }
         }));
-        let out = run_one(&s);
-        assert!(out.contains("--session sess wait 250"), "got: {out}");
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake(tmp.path(), &log);
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        let start = std::time::Instant::now();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+        clear_fake();
+        assert!(start.elapsed() >= std::time::Duration::from_millis(250));
+        // a timed wait never touches the browser — a pending dialog can't wedge it
+        assert!(!log.exists());
     }
 
     #[test]
