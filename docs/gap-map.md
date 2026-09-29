@@ -106,8 +106,12 @@ the picture shifts materially.
     (#353). The probe lists `indexedDB.databases()` before opening so
     `notExists` never creates the db; seeding creates missing stores via
     a version bump.
-15. **Clipboard** — no claim or step can read/set clipboard contents, so
-    copy-to-clipboard UX can't be covered.
+15. ~~Clipboard~~ — closed by the `{"clipboard": true}` claim +
+    `do/state` `params.clipboard` seeding (#354). Reads go through
+    origin-scoped `Browser.setPermission` (`clipboard-read`, `+write`)
+    and focus emulation over the pooled CDP connection — both required
+    headless; `file://` pages have no grantable origin. Empty clipboard
+    maps to `null` so `exists` means "holds text".
 16. **Service-worker-served responses** — cache-first PWAs answer from
     the SW without a `Network.*` hit on the page target; `network`
     claims on those endpoints would time out. Untested whether the
