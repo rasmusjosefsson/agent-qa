@@ -82,9 +82,57 @@ the picture shifts materially.
     (below fold / zero-size / covered): the click dispatches to nothing
     and the recorded scenario replays the miss. Seen on three sites
     (formy submit anchor, testpages dialog buttons, buggy register).
-    Fixed at the golden layer by `ensureHittable` (#321) — hit-test +
-    scroll + recorded scrollTo step; a daemon-side fix upstream would be
-    the real close.
+    Golden layer: `ensureHittable` (#321). Replay layer: #324 hit-tests
+    every raw-locator coordinate action (click/hover/focus/fill/dblclick/
+    xpath) — scrolls + warns `[v2-replay] ... is unhittable` so the miss
+    is visible in the step log. Still open: role-locator hover/fill go
+    through `find_role_act` unguarded (resolving role+name in-page needs
+    the role engine), and a daemon-side fix upstream would be the real
+    close.
+
+## Entry-point dogfood pass (`init → start → record-step → buffer → flush → replay → audit`)
+
+Driving the CLI as a fresh user surfaced a class of papercuts the golden
+suites couldn't see — golden runners assemble scenarios programmatically,
+so the file-based verbs and their defaults were never exercised:
+
+- **`record --open <url>` sealed nothing** — the URL only navigated the
+  warm browser, so `env.open` was `[fresh]` and a cold replay (or
+  `--offline`, which skips the cached session) started on about:blank.
+  #329 seals `--open` as an `EnvOp::Nav` in the recorder state.
+- **Every `scenario <verb>` wanted a file path, not a sid** — `scenario
+  check hello` read `hello` as a literal path. #328 adds
+  `scenario_file_arg`: `-`, existing paths, then `<scenarios>/<arg>/
+  scenario.json` sid lookup.
+- **Authoring a `do` step by hand needed the full `Locator` object** —
+  three failure modes hit in sequence (`missing intent` → `requires on`
+  → untagged-enum decode errors on every sane guess at the shape).
+  #330's shorthand `"on": "css:.x" | "xpath:…" | "testId:…" | "text:…"`
+  lowers to a named raw locator at deserialize time.
+- **`audit <verb> <sid>` required an explicit runId** — #331 defaults
+  it to `latest` (the already-stamped replays/latest.txt or lex-max dir).
+- **`record pause`/`resume`, `buffer check`/`load`/`move`/`edit`/
+  `discard`, `scenario copy`/`rename`/`delete`/`prune-replays`,
+  `doctor --deep`, `init --ci`, `replay --mock-from recorded --offline`,
+  and the full `audit` family** — all verified working end to end on a
+  recorded session in `/tmp/e2e-dogfood`.
+
+### What the dogfood pass says about the remaining surface
+
+- The **verb-level** surface is mature; the remaining sharp edges are all
+  in the **file/argument affordances** around it — defaults that assume
+  workbench context (`latest.txt`), paths where a sid is the natural
+  handle, schema shapes that are fine for JSON tooling but hostile to a
+  hand-edited draft.
+- **Cold-vs-warm divergence is the trap to keep testing**: anything that
+  "works" while the recording session is still alive must be replayed
+  with `record` stopped (or `--offline`) to prove it doesn't rely on
+  daemon state.
+- **Where authoring friction remains**: `record-step` still requires the
+  caller to know step-shape (`intent`, claim subject spelling); a
+  `record-step --from-stdin` batch mode or `scenario new --from-har`
+  would shorten the LLM authoring loop further — both are deliberately
+  unbuilt until a second dogfood wave proves which one earns it.
 
 ## Lessons from the fresh-site sweeps
 
