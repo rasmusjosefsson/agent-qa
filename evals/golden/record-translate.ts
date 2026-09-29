@@ -305,6 +305,15 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
             args[2] ?? "equals",
             args[3],
           );
+        case "elementCount":
+          // args: [selector, predicate, count] — numeric predicates compare
+          // document.querySelectorAll(sel).length to the expected count.
+          return checkStep(
+            intent,
+            { element: css(args[0]), ofKind: "count" },
+            args[1] ?? "equals",
+            args[2],
+          );
         case "fileExists":
           return checkStep(intent, { file: args[0] }, "exists");
         case "fileAbsent":
