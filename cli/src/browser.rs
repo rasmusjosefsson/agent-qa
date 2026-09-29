@@ -1121,6 +1121,10 @@ pub enum RoleAct {
     Hover,
     Focus,
     Fill,
+    /// Read act — returns the element's text. Used as a side-effect-free
+    /// presence probe; `find <sel> focus` is not a valid action on
+    /// agent-browser (focus only exists as a top-level selector verb).
+    Text,
 }
 
 impl RoleAct {
@@ -1130,6 +1134,7 @@ impl RoleAct {
             RoleAct::Hover => "hover",
             RoleAct::Focus => "focus",
             RoleAct::Fill => "fill",
+            RoleAct::Text => "text",
         }
     }
 }
@@ -1206,6 +1211,7 @@ pub fn selector_act(
             RunOpts::new(),
         )
         .map(|_| ()),
+        RoleAct::Text => run(session, ["text", selector], RunOpts::new()).map(|_| ()),
     }
 }
 

@@ -1459,8 +1459,9 @@ fn locator_resolves(
     scenario_dir: &std::path::Path,
 ) -> Result<()> {
     // Re-use the same locator → CLI mapping as dispatch_do uses for
-    // its act calls; here we use Focus (the cheapest no-op-ish act
-    // agent-browser exposes) just to confirm the element resolves.
+    // its act calls; here we probe with a read act (`text`) just to
+    // confirm the element resolves. `find <sel> focus` is not a valid
+    // action on agent-browser — it errored every role/xpath probe.
     // If/when agent-browser grows a dedicated `find ... exists` or
     // `query` subverb, switch to that.
     match loc {
@@ -1485,8 +1486,7 @@ fn locator_resolves(
             }
             // Probe role+name quietly so a recovering miss doesn't print a
             // misleading `✗ Element not found` line.
-            match browser::find_role_act_quiet(session, &role.role, name_str, RoleAct::Focus, None)
-            {
+            match browser::find_role_act_quiet(session, &role.role, name_str, RoleAct::Text, None) {
                 Ok(()) => Ok(()),
                 Err(e) if !name_str.is_empty() => {
                     // Same parity hack as verbs.rs::act_on_locator: agent-browser's
@@ -1525,7 +1525,7 @@ fn locator_resolves(
                     css_presence_probe(session, &v)?;
                 }
                 RawLocatorKind::Xpath => {
-                    browser::find_xpath_act(session, &v, RoleAct::Focus, None)?;
+                    xpath_presence_probe(session, &v)?;
                 }
                 RawLocatorKind::TestId => {
                     let css = format!("[data-testid=\"{}\"]", v.replace('"', "\\\""));
@@ -1553,6 +1553,18 @@ fn css_presence_probe(session: &str, selector: &str) -> Result<()> {
     let expr = format!(
         "(() => {{ const selector = {q}; const hit = document.querySelector(selector); if (!hit) throw new Error('selector not found: ' + selector); }})()",
         q = serde_json::to_string(selector).expect("string serializes")
+    );
+    browser::eval_expression(session, &expr)?;
+    Ok(())
+}
+
+/// Presence probe for XPath locators. agent-browser has no `find xpath`
+/// subcommand, so the probe evaluates `document.evaluate` in-page; an
+/// unmatched expression throws, same signal as a failed find.
+fn xpath_presence_probe(session: &str, xpath: &str) -> Result<()> {
+    let expr = format!(
+        "(() => {{ const xp = {q}; const hit = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue; if (!hit) throw new Error('xpath not found: ' + xp); }})()",
+        q = serde_json::to_string(xpath).expect("string serializes")
     );
     browser::eval_expression(session, &expr)?;
     Ok(())
