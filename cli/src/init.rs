@@ -36,7 +36,7 @@ const HELLO: &str = r#"{
       "claim": {
         "subject": { "url": true },
         "predicate": "contains",
-        "value": { "from": "literal", "literal": "example.com" }
+        "value": "example.com"
       }
     }
   ]

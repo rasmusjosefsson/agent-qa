@@ -1823,6 +1823,32 @@ pub(crate) fn lint(
         }
     }
 
+    // 3f) claim value carrying a do-step `{"from": ...}` spec — claim values
+    // are plain JSON; an object spec serializes verbatim and never matches,
+    // so the check fails with a confusing "expected to contain {from:…}".
+    if let Some(steps) = raw.get("steps").and_then(|s| s.as_array()) {
+        for step in steps {
+            if step.get("kind").and_then(|k| k.as_str()) != Some("check") {
+                continue;
+            }
+            let looks_like_spec = step
+                .get("claim")
+                .and_then(|c| c.get("value"))
+                .and_then(|v| v.as_object())
+                .is_some_and(|o| o.contains_key("from"));
+            if looks_like_spec {
+                let sid = step.get("id").and_then(|i| i.as_str()).unwrap_or("?");
+                findings.push(Finding {
+                    severity: "error",
+                    code: "claim-value-spec",
+                    message: format!(
+                        "step {sid:?} claim value is a do-step {{\"from\":…}} spec — claims take plain JSON (e.g. \"value\": \"example.com\")"
+                    ),
+                });
+            }
+        }
+    }
+
     // 4) input references vs declarations
     let declared: HashSet<String> = j
         .inputs
@@ -2866,6 +2892,24 @@ fn lint_collect(
                 .unwrap_or(false);
             if !has_condition && active("wait-without-condition") {
                 warnings += 1;
+            }
+        }
+    }
+    // claim-value-spec — mirror of the raw-JSON rule in lint()
+    if active("claim-value-spec") {
+        if let Some(steps) = raw.get("steps").and_then(|s| s.as_array()) {
+            for step in steps {
+                if step.get("kind").and_then(|k| k.as_str()) != Some("check") {
+                    continue;
+                }
+                let looks_like_spec = step
+                    .get("claim")
+                    .and_then(|c| c.get("value"))
+                    .and_then(|v| v.as_object())
+                    .is_some_and(|o| o.contains_key("from"));
+                if looks_like_spec {
+                    errors += 1;
+                }
             }
         }
     }
@@ -3977,6 +4021,42 @@ mod tests {
         assert_eq!(lint_one(serde_json::json!({ "ms": 500, "idle": true })), 0);
         assert_eq!(lint_one(serde_json::json!({ "url": "*/api/*" })), 0);
         assert_eq!(lint_one(serde_json::json!({ "idle": true })), 0);
+    }
+
+    #[test]
+    fn lint_claim_value_spec_flags_from_objects() {
+        let tmp = TempDir::new().unwrap();
+        let lint_one = |value: serde_json::Value| {
+            let p = write(
+                tmp.path(),
+                &format!(
+                    r#"{{
+                      "schema": "scenario/2", "id": "j", "intent": "x",
+                      "steps": [
+                        {{ "id": "s0", "intent": "go", "kind": "do", "verb": "goto",
+                          "value": {{ "from": "literal", "literal": "http://x/" }} }},
+                        {{ "id": "s1", "intent": "url", "kind": "check",
+                          "claim": {{ "subject": {{ "url": true }}, "predicate": "contains",
+                            "value": {value} }} }}
+                      ]
+                    }}"#
+                ),
+            );
+            lint(
+                &p,
+                LintFormat::Text,
+                true,
+                Some(&["claim-value-spec".to_string()]),
+                None,
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            lint_one(serde_json::json!({ "from": "literal", "literal": "x" })),
+            1
+        );
+        assert_eq!(lint_one(serde_json::json!("x")), 0);
+        assert_eq!(lint_one(serde_json::json!(42)), 0);
     }
 
     #[test]
