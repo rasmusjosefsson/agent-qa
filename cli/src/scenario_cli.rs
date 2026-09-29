@@ -1756,6 +1756,11 @@ fn list_lint_rules(json_out: bool) -> Result<u8> {
             description: "A raw css/xpath locator is positional or generated-looking (xpath [N]/last()/position(), css :nth-* chains, #id with a digit/hash tail). Self-heal can't rescue these — prefer role+name, text, or a stable css/testid.",
         },
         Rule {
+            code: "hardcoded-secret",
+            severity: "warning",
+            description: "A do/type step targets a password-shaped field (any locator string containing 'password') while carrying a plain {from: literal} value — the secret sits verbatim in scenario.json. Run 'scenario redact' to move it into a sensitive input.",
+        },
+        Rule {
             code: "fixed-sleep",
             severity: "warning",
             description: "A do/wait step whose only condition is params.ms — a fixed delay flakes when the app is slow and idles when it is fast. Gate on the outcome instead: params.until/url/idle/locator.",
@@ -2084,6 +2089,56 @@ pub(crate) fn lint(
                     message: format!(
                         "step {sid:?} waits {ms}ms with no condition — prefer params.until/url/idle/locator so the step gates on the outcome, not the clock",
                         ms = get("ms").and_then(|m| m.as_u64()).unwrap_or(0)
+                    ),
+                });
+            }
+        }
+    }
+
+    // 3f) hardcoded secrets — a type step on a password-shaped field whose
+    // value is a plain {from: literal} puts the secret verbatim in a file
+    // that gets committed. `scenario redact` rewrites it as a sensitive
+    // inputs ref.
+    if let Some(steps) = raw.get("steps").and_then(|s| s.as_array()) {
+        for step in steps {
+            let is_type = step
+                .get("verb")
+                .and_then(|v| v.as_str())
+                .is_some_and(|v| v == "type");
+            if !is_type {
+                continue;
+            }
+            let literal = step
+                .get("value")
+                .and_then(|v| v.get("literal"))
+                .and_then(|l| l.as_str());
+            if !literal.is_some_and(|l| !l.is_empty()) {
+                continue;
+            }
+            let Some(on) = step.get("on") else { continue };
+            // Any locator string mentioning "password" counts — css
+            // `input[type=password]`, a role name like "Password", or a
+            // testid. Conservative: no hint, no finding.
+            let mut hints_password = false;
+            let mut stack = vec![on];
+            while let Some(v) = stack.pop() {
+                match v {
+                    serde_json::Value::String(s) if s.to_lowercase().contains("password") => {
+                        hints_password = true;
+                        break;
+                    }
+                    serde_json::Value::Object(m) => stack.extend(m.values()),
+                    serde_json::Value::Array(a) => stack.extend(a.iter()),
+                    _ => {}
+                }
+            }
+            if hints_password {
+                let sid = step.get("id").and_then(|i| i.as_str()).unwrap_or("?");
+                findings.push(Finding {
+                    severity: "warning",
+                    code: "hardcoded-secret",
+                    message: format!(
+                        "step {sid:?} types a literal into a password-shaped field — the secret sits verbatim in scenario.json; run 'agent-qa scenario redact <file> --name <VAR> --step {sid}' to move it into a sensitive input"
                     ),
                 });
             }
@@ -4323,6 +4378,58 @@ mod tests {
         assert_eq!(lint_one(serde_json::json!({ "ms": 500, "idle": true })), 0);
         assert_eq!(lint_one(serde_json::json!({ "url": "*/api/*" })), 0);
         assert_eq!(lint_one(serde_json::json!({ "idle": true })), 0);
+    }
+
+    #[test]
+    fn lint_hardcoded_secret_flags_password_literals_only() {
+        let tmp = TempDir::new().unwrap();
+        let lint_one = |on: serde_json::Value, value: serde_json::Value| {
+            let p = write(
+                tmp.path(),
+                &format!(
+                    r#"{{
+                      "schema": "scenario/2", "id": "x", "intent": "y",
+                      "steps": [
+                        {{ "id": "s0", "intent": "go", "kind": "do", "verb": "goto",
+                          "value": {{ "from": "literal", "literal": "http://x/" }} }},
+                        {{ "id": "s1", "intent": "type", "kind": "do", "verb": "type",
+                          "on": {on}, "value": {value} }}
+                      ]
+                    }}"#
+                ),
+            );
+            lint(
+                &p,
+                LintFormat::Text,
+                true,
+                Some(&["hardcoded-secret".to_string()]),
+                None,
+            )
+            .unwrap()
+        };
+        let lit = |s: &str| serde_json::json!({ "from": "literal", "literal": s });
+        let css =
+            |s: &str| serde_json::json!({ "raw": { "kind": "css", "value": s }, "reason": "t" });
+        // password-shaped locators flag
+        assert_eq!(lint_one(css("input[type=password]"), lit("hunter2")), 1);
+        assert_eq!(
+            lint_one(
+                serde_json::json!({ "role": "textbox", "name": "Password" }),
+                lit("hunter2")
+            ),
+            1
+        );
+        // already-redacted steps are clean
+        assert_eq!(
+            lint_one(
+                css("input[type=password]"),
+                serde_json::json!({ "from": "input", "input": "PASS" })
+            ),
+            0
+        );
+        // non-password fields and empty literals are clean
+        assert_eq!(lint_one(css("input[name=email]"), lit("hunter2")), 0);
+        assert_eq!(lint_one(css("input[type=password]"), lit("")), 0);
     }
 
     #[test]
