@@ -37,12 +37,20 @@ interface GoldenContext {
   agentBrowser: string;
   env: Record<string, string>;
   results: StepResult[];
+  // Per-session mint for fillUnique: mirrors replay's scenario-scoped
+  // {{vars._unique}} cache so two fields sharing one template (password +
+  // confirm) observe the same record-side value.
+  uniqueMint?: string;
 }
 
 export interface EdgeGolden extends GoldenContext {
   openPage(): Promise<void>;
   clickSelector(selector: string, intent: string): Promise<void>;
   fillSelector(selector: string, value: string, intent: string): Promise<void>;
+  // Fill a selector with a template containing `{{vars._unique}}`: mints a
+  // fresh value at record time for the live fill, and records the template
+  // verbatim so replay mints a different one (uniqueness-constrained fields).
+  fillUnique(selector: string, template: string, intent: string): Promise<void>;
   selectOption(selector: string, value: string, intent: string): Promise<void>;
   checkSelector(selector: string, intent: string): Promise<void>;
   dblclickSelector(selector: string, intent: string): Promise<void>;
@@ -71,10 +79,9 @@ export interface EdgeGolden extends GoldenContext {
   waitSelectorAbsent(selector: string, intent: string): Promise<void>;
   waitSelectorText(selector: string, text: string, intent: string): Promise<void>;
   waitLoad(state: string, intent: string): Promise<void>;
-  // `wait url` — poll resource timing until a matching request completed.
-  // Record-side nothing is pending (the request already fired); the wait
-  // exists for replay.
-  waitRequest(pattern: string, intent: string): Promise<void>;
+  // `wait url` — poll resource timing until a matching request completed,
+  // live at record and in the replayed scenario (`params.timeoutMs` honored).
+  waitRequest(pattern: string, intent: string, timeoutMs?: number): Promise<void>;
   assertElementText(selector: string, expected: string, intent: string): Promise<void>;
   assertElementAttribute(selector: string, attribute: string, predicate: string, expected: string, intent: string): Promise<void>;
   assertElementAbsent(selector: string, intent: string): Promise<void>;
@@ -189,6 +196,14 @@ export async function runEdgeGolden(
       await run(ctx, `fill ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, value]);
       await record(ctx, "action", { method: "fillBySelector", args: [selector, value], intent: stepIntent });
     },
+    async fillUnique(selector, template, stepIntent) {
+      ctx.uniqueMint ??= Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) =>
+        b.toString(16).padStart(2, "0"),
+      ).join("");
+      const resolved = template.replaceAll("{{vars._unique}}", ctx.uniqueMint);
+      await run(ctx, `fill ${selector} (unique)`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, resolved]);
+      await record(ctx, "action", { method: "fillBySelector", args: [selector, template], intent: stepIntent });
+    },
     async selectOption(selector, value, stepIntent) {
       await run(ctx, `select ${value}`, [ctx.agentBrowser, "--session", ctx.session, "select", selector, value]);
       await record(ctx, "action", { method: "selectBySelector", args: [selector, value], intent: stepIntent });
@@ -302,8 +317,31 @@ export async function runEdgeGolden(
     async waitLoad(state, stepIntent) {
       await record(ctx, "wait", { condition: { kind: "loadState", state }, intent: stepIntent });
     },
-    async waitRequest(pattern, stepIntent) {
-      await record(ctx, "wait", { condition: { kind: "networkRequest", pattern }, intent: stepIntent });
+    async waitRequest(pattern, stepIntent, timeoutMs = 10_000) {
+      // Record-time: poll the page's resource timing until a matching entry
+      // completes, so steps that depend on the request's side effects (e.g.
+      // an alert fired on ajax success) can observe them live.
+      const deadline = Date.now() + timeoutMs;
+      const glob = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replaceAll("*", ".*");
+      const re = new RegExp(glob);
+      for (;;) {
+        const probe = await run(ctx, `poll ${pattern}`, [
+          ctx.agentBrowser, "--session", ctx.session, "--json", "eval",
+          `JSON.stringify(performance.getEntriesByType('resource').map(e=>e.name))`,
+        ]);
+        try {
+          const names = JSON.parse(JSON.parse(probe).data ?? "[]") as string[];
+          if (names.some((n) => re.test(n))) break;
+        } catch { /* fall through to deadline check */ }
+        if (Date.now() > deadline) {
+          throw new Error(`${stepIntent}: no request matched ${pattern} within ${timeoutMs}ms`);
+        }
+        await Bun.sleep(400);
+      }
+      await record(ctx, "wait", {
+        condition: { kind: "networkRequest", pattern, timeoutMs },
+        intent: stepIntent,
+      });
     },
     async assertElementText(selector, expected, stepIntent) {
       await record(ctx, "assert", { kind: "elementText", args: [selector, expected], intent: stepIntent });
