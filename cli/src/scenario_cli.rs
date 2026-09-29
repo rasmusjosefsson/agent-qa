@@ -1286,9 +1286,7 @@ fn delete(sid: &str, confirmed: bool) -> Result<u8> {
     if !dir.is_dir() {
         bail!("scenario delete: not found at {}", dir.display());
     }
-    let replays = std::fs::read_dir(dir.join("replays"))
-        .map(|it| it.flatten().filter(|e| e.path().is_dir()).count())
-        .unwrap_or(0);
+    let replays = crate::paths::run_dirs(&dir.join("replays")).len();
     if !confirmed {
         println!(
             "would delete: {}\n  ({} replay(s) under replays/)\nre-run with --yes / -y to confirm.",
@@ -1340,15 +1338,7 @@ fn prune_all(
         // also prints its own per-sid header line which would be very
         // noisy across N scenarios).
         let replays_dir = dir.join("replays");
-        let mut runs: Vec<std::path::PathBuf> = match std::fs::read_dir(&replays_dir) {
-            Ok(it) => it
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| p.is_dir())
-                .collect(),
-            Err(_) => Vec::new(),
-        };
-        runs.sort();
+        let runs = crate::paths::run_dirs(&replays_dir);
         if runs.len() <= keep {
             continue;
         }
@@ -1413,16 +1403,7 @@ fn prune_replays(sid: &str, keep: usize, confirmed: bool, keep_failed: bool) -> 
         bail!("scenario prune-replays: not found at {}", dir.display());
     }
     let replays_dir = dir.join("replays");
-    let mut entries: Vec<std::path::PathBuf> = match std::fs::read_dir(&replays_dir) {
-        Ok(it) => it
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.is_dir())
-            .collect(),
-        Err(_) => Vec::new(),
-    };
-    // run_id directories are timestamp-prefixed; lex sort → chronological.
-    entries.sort();
+    let entries = crate::paths::run_dirs(&replays_dir);
     let is_failed = |run_dir: &std::path::Path| -> bool {
         let audit_path = run_dir.join("audit.json");
         let bytes = match std::fs::read(&audit_path) {
@@ -5422,7 +5403,9 @@ mod tests {
         std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
         let d = tmp.path().join("sid");
         for i in 0..5 {
-            fs::create_dir_all(d.join("replays").join(format!("2026-01-0{i}__hash{i}"))).unwrap();
+            let run = d.join("replays").join(format!("2026-01-0{i}__hash{i}"));
+            fs::create_dir_all(&run).unwrap();
+            fs::write(run.join("events.jsonl"), "").unwrap();
         }
         assert_eq!(prune_replays("sid", 2, true, false).unwrap(), 0);
         let mut kept: Vec<String> = std::fs::read_dir(d.join("replays"))
@@ -5451,7 +5434,9 @@ mod tests {
         let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
         std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
         let d = tmp.path().join("sid");
-        fs::create_dir_all(d.join("replays").join("r1")).unwrap();
+        let run = d.join("replays").join("r1");
+        fs::create_dir_all(&run).unwrap();
+        fs::write(run.join("events.jsonl"), "").unwrap();
         assert_eq!(prune_replays("sid", 5, true, false).unwrap(), 0);
         assert!(d.join("replays").join("r1").is_dir());
         match prev {
@@ -5508,13 +5493,13 @@ mod tests {
         for j in ["a", "b"] {
             let count = if j == "a" { 5 } else { 2 };
             for i in 0..count {
-                fs::create_dir_all(
-                    tmp.path()
-                        .join(j)
-                        .join("replays")
-                        .join(format!("2026-01-0{i}__hash{i}")),
-                )
-                .unwrap();
+                let run = tmp
+                    .path()
+                    .join(j)
+                    .join("replays")
+                    .join(format!("2026-01-0{i}__hash{i}"));
+                fs::create_dir_all(&run).unwrap();
+                fs::write(run.join("events.jsonl"), "").unwrap();
             }
         }
         assert_eq!(prune_all(2, true, false, None).unwrap(), 0);
