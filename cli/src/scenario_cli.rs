@@ -1488,6 +1488,11 @@ fn list_lint_rules(json_out: bool) -> Result<u8> {
             severity: "warning",
             description: "A raw css/xpath locator is positional or generated-looking (xpath [N]/last()/position(), css :nth-* chains, #id with a digit/hash tail). Self-heal can't rescue these — prefer role+name, text, or a stable css/testid.",
         },
+        Rule {
+            code: "fixed-sleep",
+            severity: "warning",
+            description: "A do/wait step whose only condition is params.ms — a fixed delay flakes when the app is slow and idles when it is fast. Gate on the outcome instead: params.until/url/idle/locator.",
+        },
     ];
     if json_out {
         println!("{}", serde_json::to_string_pretty(&rules)?);
@@ -1780,6 +1785,40 @@ pub(crate) fn lint(
                         ),
                     });
                 }
+            }
+        }
+    }
+
+    // 3e) fixed sleeps — a do/wait whose only condition is `ms` guesses at
+    // timing; it flakes when the app is slow and idles when it is fast.
+    // Wait on the outcome instead (until/url/idle/locator).
+    if let Some(steps) = raw.get("steps").and_then(|s| s.as_array()) {
+        for step in steps {
+            let is_wait = step
+                .get("verb")
+                .and_then(|v| v.as_str())
+                .is_some_and(|v| v == "wait");
+            if !is_wait {
+                continue;
+            }
+            let params = step.get("params");
+            let get = |k: &str| params.and_then(|p| p.get(k));
+            if get("ms").is_some()
+                && get("until").is_none()
+                && get("url").is_none()
+                && get("idle").is_none()
+                && get("idleMs").is_none()
+                && get("locator").is_none()
+            {
+                let sid = step.get("id").and_then(|i| i.as_str()).unwrap_or("?");
+                findings.push(Finding {
+                    severity: "warning",
+                    code: "fixed-sleep",
+                    message: format!(
+                        "step {sid:?} waits {ms}ms with no condition — prefer params.until/url/idle/locator so the step gates on the outcome, not the clock",
+                        ms = get("ms").and_then(|m| m.as_u64()).unwrap_or(0)
+                    ),
+                });
             }
         }
     }
@@ -3896,6 +3935,48 @@ mod tests {
             brittle(serde_json::json!({ "role": "button", "name": "Save" })),
             0
         );
+    }
+
+    #[test]
+    fn lint_fixed_sleep_flags_ms_only_waits() {
+        let tmp = TempDir::new().unwrap();
+        let lint_one = |params: serde_json::Value| {
+            let p = write(
+                tmp.path(),
+                &format!(
+                    r#"{{
+                      "schema": "scenario/2", "id": "j", "intent": "x",
+                      "steps": [
+                        {{ "id": "s0", "intent": "go", "kind": "do", "verb": "goto",
+                          "value": {{ "from": "literal", "literal": "http://x/" }} }},
+                        {{ "id": "s1", "intent": "wait", "kind": "do", "verb": "wait",
+                          "params": {params} }}
+                      ]
+                    }}"#
+                ),
+            );
+            lint(
+                &p,
+                LintFormat::Text,
+                true,
+                Some(&["fixed-sleep".to_string()]),
+                None,
+            )
+            .unwrap()
+        };
+        assert_eq!(lint_one(serde_json::json!({ "ms": 500 })), 1);
+        // Conditioned waits stay clean.
+        assert_eq!(
+            lint_one(serde_json::json!({ "ms": 500, "url": "*/api/*" })),
+            0
+        );
+        assert_eq!(
+            lint_one(serde_json::json!({ "ms": 500, "until": "load" })),
+            0
+        );
+        assert_eq!(lint_one(serde_json::json!({ "ms": 500, "idle": true })), 0);
+        assert_eq!(lint_one(serde_json::json!({ "url": "*/api/*" })), 0);
+        assert_eq!(lint_one(serde_json::json!({ "idle": true })), 0);
     }
 
     #[test]
