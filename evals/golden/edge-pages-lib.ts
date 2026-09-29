@@ -46,6 +46,7 @@ export interface EdgeGolden extends GoldenContext {
   fillSelector(selector: string, value: string, intent: string): Promise<void>;
   selectOption(selector: string, value: string, intent: string): Promise<void>;
   checkSelector(selector: string, intent: string): Promise<void>;
+  dblclickSelector(selector: string, intent: string): Promise<void>;
   hoverSelector(selector: string, intent: string): Promise<void>;
   pressKey(key: string, intent: string): Promise<void>;
   pressOn(selector: string, key: string, intent: string): Promise<void>;
@@ -73,6 +74,7 @@ export interface EdgeGolden extends GoldenContext {
   waitLoad(state: string, intent: string): Promise<void>;
   assertElementText(selector: string, expected: string, intent: string): Promise<void>;
   assertElementAttribute(selector: string, attribute: string, predicate: string, expected: string, intent: string): Promise<void>;
+  assertElementCount(selector: string, predicate: string, count: number, intent: string): Promise<void>;
   assertElementAbsent(selector: string, intent: string): Promise<void>;
   assertElementPresent(selector: string, intent: string): Promise<void>;
   assertUrlContains(fragment: string, intent: string): Promise<void>;
@@ -84,6 +86,11 @@ export interface EdgeGolden extends GoldenContext {
   assertStorage(keyOrMatcher: string | { key: string; scope?: string }, expectPresent: boolean, intent: string): Promise<void>;
   assertStyle(selector: string, cssProperty: string, expected: string, intent: string): Promise<void>;
   a11yAudit(matcher: true | Record<string, unknown>, predicate: string, value: number | undefined, intent: string): Promise<void>;
+  // Role-locator drives resolve through the a11y snapshot refs, which
+  // pierce open shadow roots where a plain css selector cannot.
+  typeRole(role: string, name: string, value: string, intent: string): Promise<void>;
+  clickRoleLocator(role: string, name: string, intent: string): Promise<void>;
+  assertRoleAttribute(role: string, name: string, attribute: string, expected: string, intent: string): Promise<void>;
 }
 
 function createContext(tc: string, intent: string, keepDialogs: boolean, label = "edge"): GoldenContext {
@@ -153,13 +160,53 @@ async function record(ctx: GoldenContext, kind: string, payload: unknown): Promi
   await run(ctx, `record ${kind}`, [ctx.agentQa, "record-step", draftKind, JSON.stringify(draft)]);
 }
 
+// A synthetic click on an element whose centre isn't hit-testable (below
+// the fold, zero-size, or covered) dispatches to nothing while the driver
+// still reports success — the recorded scenario then replays a click that
+// never landed. Scroll it into view first so the scenario stays faithful;
+// the scroll is recorded as its own step.
+async function ensureHittable(ctx: GoldenContext, selector: string, stepIntent: string): Promise<void> {
+  const expr = `(()=>{const el=document.querySelector(${JSON.stringify(selector)});if(!el)return'missing';const r=el.getBoundingClientRect();if(r.width===0||r.height===0)return'empty';const x=r.x+r.width/2,y=r.y+r.height/2;if(x<0||y<0||x>window.innerWidth||y>window.innerHeight)return'offscreen';const t=document.elementFromPoint(x,y);if(!t)return'uncovered';return t===el||el.contains(t)||t.contains(el)?'ok':'blocked'})()`;
+  const hit = (await run(ctx, `hit-test ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "eval", expr])).replace(/"/g, "").trim();
+  if (hit === "ok") return;
+  await run(ctx, `scroll ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "scrollintoview", selector]);
+  await record(ctx, "action", { method: "scrollToBySelector", args: [selector], intent: `bring ${stepIntent} into view` });
+}
+
+// Role+name → snapshot ref. The a11y snapshot's refs map pierces open
+// shadow roots; agent-browser's `fill`/`click` accept `@<ref>` targets.
+async function resolveSnapshotRef(ctx: GoldenContext, role: string, name: string): Promise<string> {
+  const out = await run(ctx, `resolve ${role} "${name}"`, [
+    ctx.agentBrowser,
+    "--session",
+    ctx.session,
+    "--json",
+    "snapshot",
+    "-i",
+  ]);
+  const data = (JSON.parse(out).data ?? {}) as {
+    refs?: Record<string, { role?: string; name?: string }>;
+  };
+  const want = name.toLowerCase();
+  const matches = Object.entries(data.refs ?? {}).filter(
+    ([, n]) => n.role === role && (n.name ?? "").toLowerCase().includes(want),
+  );
+  if (matches.length === 0) {
+    throw new Error(`no ${role} named ${JSON.stringify(name)} in snapshot`);
+  }
+  if (matches.length > 1) {
+    throw new Error(`${matches.length} ${role}s named ${JSON.stringify(name)} in snapshot`);
+  }
+  return matches[0][0];
+}
+
 export async function runEdgeGolden(
   tc: string,
   intent: string,
   pagePath: string,
   readySelector: string,
   steps: (golden: EdgeGolden) => Promise<void>,
-  opts: { keepDialogs?: boolean; label?: string } = {},
+  opts: { keepDialogs?: boolean; label?: string; flushArgs?: string[] } = {},
 ): Promise<void> {
   const ctx = createContext(tc, intent, opts.keepDialogs ?? false, opts.label ?? "edge");
   const pageUrl = edgeUrl(pagePath);
@@ -177,6 +224,8 @@ export async function runEdgeGolden(
     },
     async clickSelector(selector, stepIntent) {
       await clickTrustedOrVisible(ctx, (n, c) => run(ctx, n, c), selector);
+      await ensureHittable(ctx, selector, stepIntent);
+      await run(ctx, `click ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "click", selector]);
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
     async fillSelector(selector, value, stepIntent) {
@@ -189,11 +238,17 @@ export async function runEdgeGolden(
     },
     async checkSelector(selector, stepIntent) {
       await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `check ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "check", selector], checkVisibleEval(selector));
+      await ensureHittable(ctx, selector, stepIntent);
+      await run(ctx, `check ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "check", selector]);
       await record(ctx, "action", { method: "checkBySelector", args: [selector], intent: stepIntent });
     },
     async hoverSelector(selector, stepIntent) {
       await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `hover ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "hover", selector], hoverVisibleEval(selector));
       await record(ctx, "action", { method: "hoverBySelector", args: [selector], intent: stepIntent });
+    },
+    async dblclickSelector(selector, stepIntent) {
+      await run(ctx, `dblclick ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "dblclick", selector]);
+      await record(ctx, "action", { method: "dblclickBySelector", args: [selector], intent: stepIntent });
     },
     async pressKey(key, stepIntent) {
       await run(ctx, `press ${key}`, [ctx.agentBrowser, "--session", ctx.session, "press", key]);
@@ -298,6 +353,9 @@ export async function runEdgeGolden(
     async assertElementAttribute(selector, attribute, predicate, expected, stepIntent) {
       await record(ctx, "assert", { kind: "elementAttribute", args: [selector, attribute, predicate, expected], intent: stepIntent });
     },
+    async assertElementCount(selector, predicate, count, stepIntent) {
+      await record(ctx, "assert", { kind: "elementCount", args: [selector, predicate, count], intent: stepIntent });
+    },
     async assertElementAbsent(selector, stepIntent) {
       await record(ctx, "assert", { kind: "elementAbsent", args: [selector], intent: stepIntent });
     },
@@ -376,6 +434,44 @@ export async function runEdgeGolden(
         intent: stepIntent,
       });
     },
+    async typeRole(role, name, value, stepIntent) {
+      const ref = await resolveSnapshotRef(ctx, role, name);
+      await run(ctx, `fill ${role} "${name}"`, [
+        ctx.agentBrowser,
+        "--session",
+        ctx.session,
+        "fill",
+        `@${ref}`,
+        value,
+      ]);
+      await record(ctx, "action", {
+        method: "typeByRole",
+        args: [role, name, value],
+        intent: stepIntent,
+      });
+    },
+    async clickRoleLocator(role, name, stepIntent) {
+      const ref = await resolveSnapshotRef(ctx, role, name);
+      await run(ctx, `click ${role} "${name}"`, [
+        ctx.agentBrowser,
+        "--session",
+        ctx.session,
+        "click",
+        `@${ref}`,
+      ]);
+      await record(ctx, "action", {
+        method: "clickRole",
+        args: [role, name],
+        intent: stepIntent,
+      });
+    },
+    async assertRoleAttribute(role, name, attribute, expected, stepIntent) {
+      await record(ctx, "assert", {
+        kind: "roleAttribute",
+        args: [role, name, attribute, expected],
+        intent: stepIntent,
+      });
+    },
     async assertUrlContains(fragment, stepIntent) {
       await record(ctx, "assert", { kind: "url", args: [fragment], intent: stepIntent });
     },
@@ -386,7 +482,7 @@ export async function runEdgeGolden(
     sid = start.match(/started sid=(\S+)/)?.[1] || "";
     await steps(golden);
     await run(ctx, "verify", [ctx.agentQa, "verify"]);
-    await run(ctx, "flush", [ctx.agentQa, "flush"]);
+    await run(ctx, "flush", [ctx.agentQa, "flush", ...(opts.flushArgs ?? [])]);
     await run(ctx, "replay", [ctx.agentQa, "replay", sid, "--session", `${ctx.session}-replay`]);
     pass = true;
   } catch (err) {
