@@ -16,14 +16,21 @@ pub fn run(args: &[String]) -> Result<u8> {
         return Ok(0);
     }
     if args.len() != 1 {
-        bail!("usage: record-setup <env-op-json>");
+        bail!("usage: record-setup <env-op-json>|-");
     }
-    let raw: Json = serde_json::from_str(&args[0]).context("parse setup JSON")?;
-    let op = parse_env_op(&raw)?;
+    let raws: Vec<Json> = if args[0] == "-" {
+        let stdin = std::io::read_to_string(std::io::stdin()).context("read stdin")?;
+        crate::record_step::parse_stdin_drafts(&stdin).context("record-setup stdin")?
+    } else {
+        vec![serde_json::from_str(&args[0]).context("parse setup JSON")?]
+    };
     let mut state = RecorderState::load_active()?;
-    state.env_open.push(op);
+    for (i, raw) in raws.iter().enumerate() {
+        let op = parse_env_op(raw).with_context(|| format!("setup op {}", i + 1))?;
+        state.env_open.push(op);
+    }
     state.save()?;
-    println!("recorded setup operation");
+    println!("recorded {} setup operation(s)", raws.len());
     Ok(0)
 }
 
@@ -32,7 +39,10 @@ fn print_help() {
         "agent-qa record-setup — append one replay setup operation
 
 Usage:
-  agent-qa record-setup '<env-op-json>'
+  agent-qa record-setup '<env-op-json>'    append one env op
+  agent-qa record-setup -                  read env ops as JSONL from stdin
+                                           (one op per line, blanks skipped,
+                                           errors name their line number)
 
 The JSON must be one schema-valid scenario/2 env.open operation. Supported
 kinds are fresh, useProfile, nav, cookie, localStorage, gql, and flag.
@@ -111,11 +121,15 @@ mod tests {
         .unwrap();
 
         run(&[r#"{"kind":"flag","name":"example-flag","enabled":true}"#.into()]).unwrap();
+        // a second valid op lands in order behind the first
+        run(&[r#"{"kind":"flag","name":"other-flag","enabled":false}"#.into()]).unwrap();
 
         let state = RecorderState::load_active().unwrap();
-        assert!(
-            matches!(state.env_open.as_slice(), [EnvOp::Flag { name, enabled: true, .. }] if name == "example-flag")
-        );
+        assert!(matches!(
+            state.env_open.as_slice(),
+            [EnvOp::Flag { name: a, enabled: true, .. }, EnvOp::Flag { name: b, enabled: false, .. }]
+                if a == "example-flag" && b == "other-flag"
+        ));
         std::env::remove_var(paths::RECORD_DIR_ENV);
     }
 

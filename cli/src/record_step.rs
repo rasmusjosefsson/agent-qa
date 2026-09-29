@@ -127,8 +127,8 @@ fn parse_args(args: &[String]) -> Result<Parsed> {
 
 /// JSONL: one draft per non-empty line — the batch form agents emit when they
 /// stream a whole flow at once. Blank lines are skipped; a line's parse error
-/// names its 1-based line number.
-fn parse_stdin_drafts(text: &str) -> Result<Vec<Json>> {
+/// names its 1-based line number. Shared with record-setup's `-` form.
+pub(crate) fn parse_stdin_drafts(text: &str) -> Result<Vec<Json>> {
     let mut drafts = Vec::new();
     for (line_no, line) in text.lines().enumerate() {
         let line = line.trim();
@@ -141,7 +141,7 @@ fn parse_stdin_drafts(text: &str) -> Result<Vec<Json>> {
         );
     }
     if drafts.is_empty() {
-        bail!("record-step: stdin carried no drafts");
+        bail!("stdin carried no JSON items");
     }
     Ok(drafts)
 }
