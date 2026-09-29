@@ -350,6 +350,9 @@ pub fn build_scoped_role_act(
             "el.scrollIntoView({{block:'center',inline:'nearest'}}); el.focus(); el.value = {}; el.dispatchEvent(new Event('input', {{ bubbles: true }})); el.dispatchEvent(new Event('change', {{ bubbles: true }})); return \"true\";",
             json_str(value.unwrap_or(""))
         ),
+        // Presence-probe act: touching textContent reads the element
+        // without mutating it.
+        browser::RoleAct::Text => "el.textContent; return \"true\";".to_string(),
     };
     format!(
         "(() => {{{prelude}\n{find}\n{chain}{act}\n}})()",
