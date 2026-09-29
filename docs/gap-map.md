@@ -15,7 +15,7 @@ the picture shifts materially.
 | Audit | `flaky`, `slow`, `heal-chronic` (+`--all`), `verdict` (+`--all`), `cluster`, `trend` (+`--all`), `health`, run-vs-run compare (CLI + workbench) |
 | Lint | `no-visual-check`, `shot-without-baseline`, `domshot-without-baseline`, `orphan-baseline`, `brittle-locator`, `fixed-sleep`, `check-all` in smoke |
 | CI | `qa-gate` (fixture goldens + sticky verdict + run-report artifacts), `ui-goldens` (visual gate w/ embedded before/after/diff images), `qa-crawl` (draft coverage on UI PRs), `qa-adopt` + `/qa accept` commands, composite `action.yml` (+npm install mode, +app-under-test boot), `evals-nightly`, changelog-driven releases |
-| Golden suites | ~30 QA Playground pages, ~34 the-internet edge cases (six sweeps), saucedemo suite (login/sort, full 21-step purchase, negative auth, logout, cookie+storage lifecycle), expandtesting (login round-trip, dynamic table, infinite scroll), todomvc (stateful SPA), demoqa widgets, httpbin hermetic-mock loop, workbench selftest goldens, quotes.toscrape.com (pagination, HttpOnly cookie claims, scroll offsets), parabank (registration with `{{vars._unique}}`, login/logout, profile update — volatile-URL claims normalized), demoblaze (category filters, add-to-cart alert claims, cart session persistence across reload, full purchase flow), automation-exercise (signup+cart lifecycle), wikipedia (search nav, TOC, history, REST API claims), formy (full form, bootstrap modal, jQuery datepicker, JS dropdown), testpages (ajax cascade, form POST echo, native dialogs, onblur validation), coffee-cart (cart badge, promo modal, checkout form, quantity steppers), globalsqa XYZ Bank (AngularJS login, deposit/withdraw, transactions ledger, manager console), hackernews (live HN API claims), selectorshub (shadow-DOM fills + snapshot attribute reads), practicesoftwaretesting (search, cart, login + QUERY-method API claims), lambdatest OpenCart (GET-form search with percent-encoded routes, hidden sticky-bar twins, delegated jQuery cart POST, cart page quantity rows) |
+| Golden suites | ~30 QA Playground pages, ~34 the-internet edge cases (six sweeps), saucedemo suite (login/sort, full 21-step purchase, negative auth, logout, cookie+storage lifecycle), expandtesting (login round-trip, dynamic table, infinite scroll), todomvc (stateful SPA), demoqa widgets, httpbin hermetic-mock loop, workbench selftest goldens, quotes.toscrape.com (pagination, HttpOnly cookie claims, scroll offsets), parabank (registration with `{{vars._unique}}`, login/logout, profile update — volatile-URL claims normalized), demoblaze (category filters, add-to-cart alert claims, cart session persistence across reload, full purchase flow), automation-exercise (signup+cart lifecycle), wikipedia (search nav, TOC, history, REST API claims), formy (full form, bootstrap modal, jQuery datepicker, JS dropdown), testpages (ajax cascade, form POST echo, native dialogs, onblur validation), coffee-cart (cart badge, promo modal, checkout form, quantity steppers), globalsqa XYZ Bank (AngularJS login, deposit/withdraw, transactions ledger, manager console), hackernews (live HN API claims), selectorshub (shadow-DOM fills + snapshot attribute reads), practicesoftwaretesting (search, cart, login + QUERY-method API claims), lambdatest OpenCart (GET-form search with percent-encoded routes, hidden sticky-bar twins, delegated jQuery cart POST, cart page quantity rows), bonigarcia selenium-webdriver-java (GET form submit, open shadow DOM text, jQuery UI mouse drag, native dialogs + Bootstrap modal, web storage seeding) |
 
 ## Ranked gaps
 
@@ -287,8 +287,36 @@ class the sweep list hadn't hit yet:
   is required. When a type+Enter pattern stalls on a new site, reach
   for the submit control first.
 
+## Dogfood pass V — bonigarcia.dev: a second tool class of pages
+
+The selenium-webdriver-java practice site adds shapes QA Playground and
+the storefronts don't have. All five cases passed record→replay on the
+first run once the right helpers existed:
+
+- **Text waits pierce open shadow roots** — the only way to claim
+  shadow-DOM content from the record path; new `waitText` lib helper
+  records `wait condition {kind:"text"}` which lands as an element
+  visibility claim on a text locator. css `wait`/`present` still can't
+  reach inside the root — document that pairing.
+- **Two drag classes exist and need different live drives** — HTML5
+  draggables respond to `DragEvent` dispatch; jQuery UI `draggable()`
+  (bonigarcia, and demoqa's widgets) listens to real mouse sequences.
+  New `dragSelectorMouse` dispatches mousedown→move→up live while
+  recording the same `do/drag` step — replay's trusted-mouse path
+  covers both. A lib-level `dragSelector` still synthesizes DragEvents
+  for HTML5 pages.
+- **do/state storage seeding is recordable** — `seedStorage` drives the
+  live browser with `localStorage.setItem` and records the equivalent
+  `do/state` params; the web-storage page rendering the seed back is
+  the claim.
+- **Page-visible dialog outcomes assert cleanly** — bonigarcia writes
+  `You chose: false` / `You typed: X` into the DOM, which chains
+  alert/confirm/prompt claims to page state on real pages for the
+  first time.
+
 ## Recently closed (for orientation)
 
+- bonigarcia sweep incl. recordable storage seeds + mouse-driven drag helper (#351)
 - OpenCart/lambdatest findings: prefer-visible css resolution + deferred
   click re-resolve (#348), persistent-emulation reset at run start +
   `network requests --clear` dedupe (#349), lambdatest goldens (#350)
