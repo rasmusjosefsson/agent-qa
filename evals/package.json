@@ -227,7 +227,9 @@
     "golden:emulate:tc02": "bun golden/emulate-tc02.ts",
     "golden:hermetic:tc01": "bun golden/hermetic-tc01.ts",
     "golden:claims:tc01": "bun golden/claims-tc01.ts",
-    "golden:state:tc01": "bun golden/state-tc01.ts"
+    "golden:state:tc01": "bun golden/state-tc01.ts",
+    "golden:ws:tc01": "bun golden/ws-tc01.ts",
+    "golden:idb:tc01": "bun golden/idb-tc01.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"
