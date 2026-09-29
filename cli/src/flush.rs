@@ -488,6 +488,7 @@ mod tests {
             resource_type: Some(rt.to_string()),
             mime_type: None,
             post_data: None,
+            ws_frames: vec![],
         };
         let mut steps = vec![crate::scenario::Step::Do {
             id: "s0".into(),
@@ -537,6 +538,7 @@ mod tests {
                 resource_type: Some("XHR".into()),
                 mime_type: None,
                 post_data: None,
+                ws_frames: vec![],
             },
             CapturedRequest {
                 request_id: String::new(),
@@ -546,6 +548,7 @@ mod tests {
                 resource_type: Some("XHR".into()),
                 mime_type: None,
                 post_data: None,
+                ws_frames: vec![],
             },
             CapturedRequest {
                 request_id: String::new(),
@@ -555,6 +558,7 @@ mod tests {
                 resource_type: Some("Fetch".into()),
                 mime_type: None,
                 post_data: None,
+                ws_frames: vec![],
             },
         ];
         insert_auto_network_claims(&mut steps, &requests);
