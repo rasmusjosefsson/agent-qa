@@ -17,6 +17,13 @@ inputs:
       Extra args appended to `agent-qa replay --all` — e.g.
       "--shard 1/3 --tags smoke --retry 2 --junit".
     default: ""
+  check:
+    description: >-
+      Run `scenario check-all` (schema + lint) before replaying, so a
+      malformed or lint-flagged scenario fails fast instead of mid-run.
+      "true" (default) runs the check, "strict" fails on warnings too,
+      "false" skips it.
+    default: "true"
   version:
     description: >-
       Published agent-qa version to install from npm (e.g. "0.1.0").
@@ -94,6 +101,16 @@ runs:
           echo "qa=${{ github.action_path }}/cli/target/debug/agent-qa" >> "$GITHUB_OUTPUT"
           echo "browser=${{ github.action_path }}/npm/agent-qa/node_modules/.bin/agent-browser" >> "$GITHUB_OUTPUT"
         fi
+    - name: check suite (schema + lint)
+      if: inputs.check != 'false'
+      shell: bash
+      env:
+        AGENT_QA_SCENARIOS_DIR: ${{ github.workspace }}/${{ inputs.scenarios }}
+        CHECK: ${{ inputs.check }}
+      run: |
+        args=""
+        if [ "$CHECK" = "strict" ]; then args="--strict"; fi
+        "${{ steps.bin.outputs.qa }}" scenario check-all $args
     - name: browser install
       shell: bash
       env:
