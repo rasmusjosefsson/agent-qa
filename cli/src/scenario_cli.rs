@@ -1742,13 +1742,19 @@ fn brittle_locator_reason(kind: &str, value: &str) -> Option<&'static str> {
     None
 }
 
-pub(crate) fn lint(
-    path: &Path,
-    format: LintFormat,
-    strict: bool,
-    only_rules: Option<&[String]>,
-    exclude_rules: Option<&[String]>,
-) -> Result<u8> {
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct Finding {
+    severity: &'static str,
+    code: &'static str,
+    message: String,
+}
+
+/// Runs every lint rule against one scenario file and returns the raw
+/// findings, unfiltered by --rule/--exclude-rule. Shared by `lint`
+/// (renders) and `lint_collect` (counts for `scenario check`) so a new
+/// rule cannot drift between the two paths.
+fn lint_findings(path: &Path) -> Result<(Vec<Finding>, Scenario)> {
     // For stdin ('-'), buffer once via io::stdin_or_path; the guard
     // keeps the tempfile alive for the rest of this function.
     let _guard = crate::io::stdin_or_path(path)?;
@@ -1761,15 +1767,7 @@ pub(crate) fn lint(
         serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
     let j = load_scenario(path)?;
 
-    #[derive(serde::Serialize, Clone)]
-    #[serde(rename_all = "camelCase")]
-    struct Finding {
-        severity: &'static str,
-        code: &'static str,
-        message: String,
-    }
     let mut findings: Vec<Finding> = Vec::new();
-
     use crate::scenario::Step;
     use std::collections::{HashMap, HashSet};
 
@@ -1925,6 +1923,32 @@ pub(crate) fn lint(
                     message: format!(
                         "step {sid:?} waits {ms}ms with no condition — prefer params.until/url/idle/locator so the step gates on the outcome, not the clock",
                         ms = get("ms").and_then(|m| m.as_u64()).unwrap_or(0)
+                    ),
+                });
+            }
+        }
+    }
+
+    // 3f) claim value carrying a do-step `{"from": ...}` spec — claim values
+    // are plain JSON; an object spec serializes verbatim and never matches,
+    // so the check fails with a confusing "expected to contain {from:…}".
+    if let Some(steps) = raw.get("steps").and_then(|s| s.as_array()) {
+        for step in steps {
+            if step.get("kind").and_then(|k| k.as_str()) != Some("check") {
+                continue;
+            }
+            let looks_like_spec = step
+                .get("claim")
+                .and_then(|c| c.get("value"))
+                .and_then(|v| v.as_object())
+                .is_some_and(|o| o.contains_key("from"));
+            if looks_like_spec {
+                let sid = step.get("id").and_then(|i| i.as_str()).unwrap_or("?");
+                findings.push(Finding {
+                    severity: "error",
+                    code: "claim-value-spec",
+                    message: format!(
+                        "step {sid:?} claim value is a do-step {{\"from\":…}} spec — claims take plain JSON (e.g. \"value\": \"example.com\")"
                     ),
                 });
             }
@@ -2209,6 +2233,18 @@ pub(crate) fn lint(
             }
         }
     }
+
+    Ok((findings, j))
+}
+
+pub(crate) fn lint(
+    path: &Path,
+    format: LintFormat,
+    strict: bool,
+    only_rules: Option<&[String]>,
+    exclude_rules: Option<&[String]>,
+) -> Result<u8> {
+    let (mut findings, j) = lint_findings(path)?;
 
     if let Some(only) = only_rules {
         let set: std::collections::HashSet<&str> = only.iter().map(String::as_str).collect();
@@ -2828,8 +2864,6 @@ fn lint_collect(
     only_rules: Option<&[String]>,
     exclude_rules: Option<&[String]>,
 ) -> Result<(usize, usize)> {
-    use crate::scenario::Step;
-    use std::collections::{HashMap, HashSet};
     let exclude: std::collections::HashSet<String> = exclude_rules
         .map(|r| r.iter().cloned().collect())
         .unwrap_or_default();
@@ -2844,171 +2878,15 @@ fn lint_collect(
             Box::new(move |c: &str| set.contains(c) && !ex.contains(c))
         }
     };
-    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    let raw: serde_json::Value =
-        serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
-    let j = load_scenario(path)?;
-
-    let mut errors = 0usize;
-    let mut warnings = 0usize;
-
-    let mut id_counts: HashMap<&str, usize> = HashMap::new();
-    for step in &j.steps {
-        *id_counts.entry(step.id()).or_insert(0) += 1;
-    }
-    for n in id_counts.values() {
-        if *n > 1 && active("duplicate-step-id") {
-            errors += 1;
-        }
-    }
-    for step in &j.steps {
-        if step.intent().trim().is_empty() && active("empty-intent") {
-            warnings += 1;
-        }
-    }
-    let mut prev_was_do = false;
-    for step in &j.steps {
-        match step {
-            Step::Do { .. } => {
-                if prev_was_do && active("bare-do") {
-                    warnings += 1;
-                }
-                prev_was_do = true;
-            }
-            Step::Check { .. } => {
-                prev_was_do = false;
-            }
-        }
-    }
-    if prev_was_do && active("bare-do") {
-        warnings += 1;
-    }
-    let declared: HashSet<String> = j
-        .inputs
-        .as_ref()
-        .map(|m| m.keys().cloned().collect())
-        .unwrap_or_default();
-    let mut referenced: HashSet<String> = HashSet::new();
-    collect_input_refs(&raw, &mut referenced);
-    for input in &referenced {
-        if !declared.contains(input) && active("undeclared-input") {
-            errors += 1;
-        }
-    }
-    for input in &declared {
-        if !referenced.contains(input) && active("unused-input") {
-            warnings += 1;
-        }
-    }
-    let step_ids: HashSet<String> = j.steps.iter().map(|s| s.id().to_string()).collect();
-    let mut step_refs: HashSet<String> = HashSet::new();
-    collect_step_refs(&raw, &mut step_refs);
-    for r in &step_refs {
-        if !step_ids.contains(r) && active("undeclared-step-ref") {
-            errors += 1;
-        }
-    }
-    // goto-without-url
-    for step in &j.steps {
-        if let Step::Do {
-            verb: crate::scenario::Verb::Goto,
-            value,
-            ..
-        } = step
-        {
-            if value.is_none() && active("goto-without-url") {
-                errors += 1;
-            }
-        }
-    }
-    // missing-locator
-    for step in &j.steps {
-        if let Step::Do { verb, on, .. } = step {
-            let needs_locator = matches!(
-                verb,
-                crate::scenario::Verb::Click
-                    | crate::scenario::Verb::Type
-                    | crate::scenario::Verb::Clear
-                    | crate::scenario::Verb::Hover
-                    | crate::scenario::Verb::Focus
-                    | crate::scenario::Verb::Blur
-                    | crate::scenario::Verb::Check
-                    | crate::scenario::Verb::Uncheck
-            );
-            if needs_locator && on.is_none() && active("missing-locator") {
-                errors += 1;
-            }
-        }
-    }
-    // params-on-noop
-    for step in &j.steps {
-        if let Step::Do { verb, params, .. } = step {
-            let is_noop = matches!(
-                verb,
-                crate::scenario::Verb::Reload
-                    | crate::scenario::Verb::Back
-                    | crate::scenario::Verb::Forward
-            );
-            if is_noop
-                && params.as_ref().map(|p| !p.is_empty()).unwrap_or(false)
-                && active("params-on-noop")
-            {
-                warnings += 1;
-            }
-        }
-    }
-    // no-env-open
-    let open_count = j
-        .env
-        .as_ref()
-        .and_then(|e| e.open.as_ref())
-        .map(|v| v.len())
-        .unwrap_or(0);
-    if open_count == 0 && active("no-env-open") {
-        warnings += 1;
-    }
-    // no-checks
-    let check_count = j
-        .steps
+    let (findings, _j) = lint_findings(path)?;
+    let errors = findings
         .iter()
-        .filter(|s| matches!(s, Step::Check { .. }))
+        .filter(|f| f.severity == "error" && active(f.code))
         .count();
-    if !j.steps.is_empty() && check_count == 0 && active("no-checks") {
-        warnings += 1;
-    }
-    // no-navigation
-    if !j.steps.is_empty() && !scenario_navigates(&j) && active("no-navigation") {
-        warnings += 1;
-    }
-    // empty-steps
-    if j.steps.is_empty() && active("empty-steps") {
-        warnings += 1;
-    }
-    // wait-without-condition
-    for step in &j.steps {
-        if let Step::Do {
-            verb: crate::scenario::Verb::Wait,
-            params,
-            ..
-        } = step
-        {
-            let has_condition = params
-                .as_ref()
-                .map(|p| {
-                    p.get("ms").is_some()
-                        || p.get("until").is_some()
-                        || p.get("url").is_some()
-                        || p.get("timeoutMs").is_some()
-                        || p.get("locator").is_some()
-                        || p.get("idle").is_some()
-                        || p.get("idleMs").is_some()
-                })
-                .unwrap_or(false);
-            if !has_condition && active("wait-without-condition") {
-                warnings += 1;
-            }
-        }
-    }
+    let warnings = findings
+        .iter()
+        .filter(|f| f.severity == "warning" && active(f.code))
+        .count();
     Ok((errors, warnings))
 }
 
@@ -4144,6 +4022,42 @@ mod tests {
         assert_eq!(lint_one(serde_json::json!({ "ms": 500, "idle": true })), 0);
         assert_eq!(lint_one(serde_json::json!({ "url": "*/api/*" })), 0);
         assert_eq!(lint_one(serde_json::json!({ "idle": true })), 0);
+    }
+
+    #[test]
+    fn lint_claim_value_spec_flags_from_objects() {
+        let tmp = TempDir::new().unwrap();
+        let lint_one = |value: serde_json::Value| {
+            let p = write(
+                tmp.path(),
+                &format!(
+                    r#"{{
+                      "schema": "scenario/2", "id": "j", "intent": "x",
+                      "steps": [
+                        {{ "id": "s0", "intent": "go", "kind": "do", "verb": "goto",
+                          "value": {{ "from": "literal", "literal": "http://x/" }} }},
+                        {{ "id": "s1", "intent": "url", "kind": "check",
+                          "claim": {{ "subject": {{ "url": true }}, "predicate": "contains",
+                            "value": {value} }} }}
+                      ]
+                    }}"#
+                ),
+            );
+            lint(
+                &p,
+                LintFormat::Text,
+                true,
+                Some(&["claim-value-spec".to_string()]),
+                None,
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            lint_one(serde_json::json!({ "from": "literal", "literal": "x" })),
+            1
+        );
+        assert_eq!(lint_one(serde_json::json!("x")), 0);
+        assert_eq!(lint_one(serde_json::json!(42)), 0);
     }
 
     #[test]

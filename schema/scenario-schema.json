@@ -208,13 +208,15 @@
       "properties": {
         "urlMatches": { "type": "string" },
         "operationName": { "type": "string" },
-        "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"] },
-        "postDataContains": { "type": "string" }
+        "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "WS"] },
+        "postDataContains": { "type": "string" },
+        "wsPayloadContains": { "type": "string" }
       },
       "anyOf": [
         { "required": ["urlMatches"] },
         { "required": ["operationName"] },
-        { "required": ["postDataContains"] }
+        { "required": ["postDataContains"] },
+        { "required": ["wsPayloadContains"] }
       ]
     },
     "ClaimSubject": {
@@ -333,6 +335,25 @@
             "cookie": { "type": "string", "minLength": 1 }
           },
           "$comment": "cookie claim subject — assert on a cookie visible to document.cookie (httpOnly cookies never appear). exists/notExists for presence; string predicates compare the value."
+        },
+        {
+          "type": "object",
+          "required": ["indexeddb"],
+          "additionalProperties": false,
+          "properties": {
+            "indexeddb": {
+              "type": "object",
+              "required": ["db", "store"],
+              "additionalProperties": false,
+              "properties": {
+                "db": { "type": "string", "minLength": 1 },
+                "store": { "type": "string", "minLength": 1 },
+                "key": { "type": "string" }
+              }
+            },
+            "path": { "type": "string" }
+          },
+          "$comment": "indexeddb claim subject — assert on an IndexedDB record. exists/notExists for record presence (store presence when key is omitted); string predicates compare the stored value; 'path' walks a JSON-structured value."
         },
         {
           "type": "object",

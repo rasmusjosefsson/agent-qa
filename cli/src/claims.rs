@@ -164,6 +164,14 @@ pub fn dispatch_check(
         ClaimSubject::Cookie { cookie } => {
             check_cookie(cookie, &claim.predicate, claim.value.as_ref(), ctx, scope)
         }
+        ClaimSubject::IndexedDb { indexeddb, path } => check_indexeddb(
+            indexeddb,
+            path.as_deref(),
+            &claim.predicate,
+            claim.value.as_ref(),
+            ctx,
+            scope,
+        ),
         ClaimSubject::Timing { timing } => {
             check_timing(timing, &claim.predicate, claim.value.as_ref(), ctx, scope)
         }
@@ -738,6 +746,79 @@ fn check_cookie(
     check_value(&actual, predicate, expected, scope).map_err(|e| anyhow!("cookie {name:?}: {e:#}"))
 }
 
+/// `{"indexeddb": {"db","store","key"?}}` — read an IndexedDB record in the
+/// live page. The db is probed via `indexedDB.databases()` first: opening a
+/// name that doesn't exist would create it, which would turn `notExists`
+/// into a false pass (and leave junk behind).
+fn check_indexeddb(
+    matcher: &crate::scenario::IndexedDbMatcher,
+    path: Option<&str>,
+    predicate: &Predicate,
+    expected: Option<&Json>,
+    ctx: &CheckContext,
+    scope: &mut ValueScope,
+) -> Result<()> {
+    let db = substitute_scenario_vars(&matcher.db, scope);
+    let store = substitute_scenario_vars(&matcher.store, scope);
+    let key = matcher
+        .key
+        .as_ref()
+        .map(|k| substitute_scenario_vars(k, scope));
+    let key_js = match &key {
+        Some(k) => serde_json::to_string(k)?,
+        None => "null".into(),
+    };
+    let expr = format!(
+        "(async () => {{ \
+           const DB = {db}, STORE = {store}, KEY = {key}; \
+           if (!indexedDB.databases) return '__aq_idb_unsupported__'; \
+           const names = (await indexedDB.databases()).map(d => d.name); \
+           if (!names.includes(DB)) return null; \
+           const db = await new Promise((res, rej) => {{ \
+             const r = indexedDB.open(DB); \
+             r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); \
+           }}); \
+           try {{ \
+             if (!db.objectStoreNames.contains(STORE)) return null; \
+             if (KEY === null) return '__aq_idb_store__'; \
+             const v = await new Promise((res, rej) => {{ \
+               const rq = db.transaction(STORE).objectStore(STORE).get(KEY); \
+               rq.onsuccess = () => res(rq.result === undefined ? null : rq.result); \
+               rq.onerror = () => rej(rq.error); \
+             }}); \
+             return v; \
+           }} finally {{ db.close(); }} \
+         }})()",
+        db = serde_json::to_string(&db)?,
+        store = serde_json::to_string(&store)?,
+        key = key_js,
+    );
+    let raw = browser::eval_expression(ctx.session, &expr)?;
+    let raw = raw.trim();
+    if raw == "\"__aq_idb_unsupported__\"" {
+        bail!("indexeddb claim requires IndexedDB.databases() support in the page");
+    }
+    let actual: Json = if raw.is_empty() || raw == "null" {
+        Json::Null
+    } else {
+        let decoded: String = serde_json::from_str(raw).unwrap_or_else(|_| raw.to_string());
+        if decoded == "__aq_idb_store__" {
+            Json::Bool(true)
+        } else {
+            serde_json::from_str(&decoded).unwrap_or(Json::String(decoded))
+        }
+    };
+    let actual = match path {
+        Some(p) if !actual.is_null() => select_json_path(&actual, p)?,
+        _ => actual,
+    };
+    let label = match &key {
+        Some(k) => format!("indexeddb {db}.{store}[{k:?}]"),
+        None => format!("indexeddb {db}.{store}"),
+    };
+    check_value(&actual, predicate, expected, scope).map_err(|e| anyhow!("{label}: {e:#}"))
+}
+
 // ---------- timing ----------
 
 /// `{"timing": "<stepId>"}` — read the run's `events.jsonl` and compare the
@@ -1142,21 +1223,28 @@ fn check_network(
         .post_data_contains
         .as_deref()
         .map(|s| substitute_scenario_vars(s, scope));
+    let ws_filter = matcher
+        .ws_payload_contains
+        .as_deref()
+        .map(|s| substitute_scenario_vars(s, scope));
 
     let deadline = Instant::now() + timeout;
     let mut pending: String;
     loop {
         match browser::network_requests(ctx.session) {
             Ok(reqs) => {
-                let matches = filter_by_post(
-                    matching_requests(
-                        url_re.as_ref(),
-                        op_name.as_deref(),
-                        matcher.method.as_ref(),
-                        &reqs,
+                let matches = filter_by_ws_payload(
+                    filter_by_post(
+                        matching_requests(
+                            url_re.as_ref(),
+                            op_name.as_deref(),
+                            matcher.method.as_ref(),
+                            &reqs,
+                        ),
+                        post_filter.as_deref(),
+                        ctx.session,
                     ),
-                    post_filter.as_deref(),
-                    ctx.session,
+                    ws_filter.as_deref(),
                 );
                 match evaluate_network(
                     &kind,
@@ -1206,6 +1294,29 @@ fn filter_by_post<'r>(
                 })
                 .map(|pd| pd.contains(needle))
                 .unwrap_or(false)
+        })
+        .collect()
+}
+
+/// Keep candidates carrying a WebSocket frame whose payload contains the
+/// needle — only `cdpws-*` entries have `ws_frames`, so this narrows to
+/// sockets.
+fn filter_by_ws_payload<'r>(
+    matches: Vec<&'r CapturedRequest>,
+    needle: Option<&str>,
+) -> Vec<&'r CapturedRequest> {
+    let Some(needle) = needle else {
+        return matches;
+    };
+    matches
+        .into_iter()
+        .filter(|r| {
+            r.ws_frames.iter().any(|f| {
+                f.get("payload")
+                    .and_then(|p| p.as_str())
+                    .map(|p| p.contains(needle))
+                    .unwrap_or(false)
+            })
         })
         .collect()
 }
@@ -2585,6 +2696,127 @@ mod tests {
         }
 
         #[test]
+        fn indexeddb_subject_parses_matcher_forms() {
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "indexeddb": { "db": "cart", "store": "items" } },
+                "predicate": "exists"
+            }))
+            .unwrap();
+            match claim.subject {
+                ClaimSubject::IndexedDb { indexeddb, path } => {
+                    assert_eq!(indexeddb.db, "cart");
+                    assert_eq!(indexeddb.store, "items");
+                    assert!(indexeddb.key.is_none());
+                    assert!(path.is_none());
+                }
+                _ => panic!("expected indexeddb subject"),
+            }
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": {
+                    "indexeddb": { "db": "cart", "store": "items", "key": "sku-1" },
+                    "path": "$.qty"
+                },
+                "predicate": "gte",
+                "value": 1
+            }))
+            .unwrap();
+            match claim.subject {
+                ClaimSubject::IndexedDb { indexeddb, path } => {
+                    assert_eq!(indexeddb.key.as_deref(), Some("sku-1"));
+                    assert_eq!(path.as_deref(), Some("$.qty"));
+                }
+                _ => panic!("expected indexeddb subject"),
+            }
+        }
+
+        #[test]
+        fn indexeddb_record_walks_json_by_path() {
+            let _g = lock_env();
+            let tmp = TempDir::new().unwrap();
+            install_fake_eval(tmp.path(), r#"{"qty":2}"#);
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": {
+                    "indexeddb": { "db": "cart", "store": "items", "key": "sku-1" },
+                    "path": "$.qty"
+                },
+                "predicate": "equals",
+                "value": 2
+            }))
+            .unwrap();
+            let mut scope = ValueScope::default();
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: Path::new("."),
+                run_dir: None,
+            };
+            dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+            clear();
+        }
+
+        #[test]
+        fn indexeddb_absent_record_passes_not_exists() {
+            let _g = lock_env();
+            let tmp = TempDir::new().unwrap();
+            install_fake_eval(tmp.path(), "null");
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "indexeddb": { "db": "cart", "store": "items", "key": "gone" } },
+                "predicate": "notExists"
+            }))
+            .unwrap();
+            let mut scope = ValueScope::default();
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: Path::new("."),
+                run_dir: None,
+            };
+            dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+            clear();
+        }
+
+        #[test]
+        fn indexeddb_store_probe_passes_exists() {
+            let _g = lock_env();
+            let tmp = TempDir::new().unwrap();
+            install_fake_eval(tmp.path(), "\"__aq_idb_store__\"");
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "indexeddb": { "db": "cart", "store": "items" } },
+                "predicate": "exists"
+            }))
+            .unwrap();
+            let mut scope = ValueScope::default();
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: Path::new("."),
+                run_dir: None,
+            };
+            dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+            clear();
+        }
+
+        #[test]
+        fn indexeddb_unsupported_browser_bails() {
+            let _g = lock_env();
+            let tmp = TempDir::new().unwrap();
+            install_fake_eval(tmp.path(), "\"__aq_idb_unsupported__\"");
+            let claim: Claim = serde_json::from_value(json!({
+                "subject": { "indexeddb": { "db": "cart", "store": "items" } },
+                "predicate": "exists"
+            }))
+            .unwrap();
+            let mut scope = ValueScope::default();
+            let ctx = CheckContext {
+                session: "s",
+                scenario_dir: Path::new("."),
+                run_dir: None,
+            };
+            let err = dispatch_check(&claim, &ctx, &mut scope, None)
+                .unwrap_err()
+                .to_string();
+            clear();
+            assert!(err.contains("databases()"), "got: {err}");
+        }
+
+        #[test]
         fn storage_subject_walks_json_value_by_path() {
             let _g = lock_env();
             let tmp = TempDir::new().unwrap();
@@ -2985,6 +3217,7 @@ mod tests {
             resource_type: None,
             mime_type: None,
             post_data: None,
+            ws_frames: vec![],
         }
     }
 
@@ -3160,6 +3393,27 @@ mod tests {
             err.to_string().contains("does not support predicate"),
             "got: {err}"
         );
+        // wsPayloadContains narrows to sockets carrying a matching frame
+        {
+            use super::*;
+            let entries = [CapturedRequest {
+                request_id: "cdpws-0".into(),
+                url: "wss://echo.example/socket".into(),
+                method: "WS".into(),
+                status: Some(101),
+                resource_type: Some("WebSocket".into()),
+                mime_type: None,
+                post_data: None,
+                ws_frames: vec![
+                    serde_json::json!({"dir": "received", "opcode": 1, "payload": "pong:hello"}),
+                ],
+            }];
+            let got = filter_by_ws_payload(entries.iter().collect(), Some("pong:hello"));
+            assert_eq!(got.len(), 1);
+            let got = filter_by_ws_payload(entries.iter().collect(), Some("nope"));
+            assert!(got.is_empty());
+        }
+
         // bad urlMatches regex → immediate bail
         let claim = net_claim(json!({
             "subject": {"network": {"urlMatches": "([bad"}},
