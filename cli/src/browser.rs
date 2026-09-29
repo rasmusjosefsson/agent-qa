@@ -1124,7 +1124,7 @@ pub enum RoleAct {
 }
 
 impl RoleAct {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             RoleAct::Click => "click",
             RoleAct::Hover => "hover",
