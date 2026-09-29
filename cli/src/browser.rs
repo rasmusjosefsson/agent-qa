@@ -862,6 +862,7 @@ fn mocked_requests(session: &str) -> Vec<CapturedRequest> {
                 .get("postData")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
+            ws_frames: vec![],
         })
         .collect()
 }
