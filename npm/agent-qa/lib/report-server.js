@@ -37,6 +37,7 @@ const ARTIFACT_KINDS = {
   screenshots: { ext: '.png', type: 'image/png' },
   snapshots: { ext: '.txt', type: 'text/plain; charset=utf-8' },
   'shots-diff': { ext: '.diff.png', type: 'image/png' },
+  'domshots-diff': { ext: '.diff.txt', type: 'text/plain; charset=utf-8' },
   network: { ext: '.json', type: 'application/json; charset=utf-8' },
   probes: { ext: '.json', type: 'application/json; charset=utf-8' },
   perf: { ext: '.json', type: 'application/json; charset=utf-8' },
@@ -1678,6 +1679,8 @@ async function runDetail(root, sid, runId) {
   // claim missed its baseline. Listed here so the Runs pane can render the
   // delta map inline on the failing check step.
   const shotDiffs = await listShotDiffs(runDir);
+  // Same for {"domshot"} claims — text diffs under domshots-diff/.
+  const domshotDiffs = await listDomshotDiffs(runDir);
   const video = await fileExists(path.join(runDir, 'run.webm'));
   return {
     sid,
@@ -1688,21 +1691,30 @@ async function runDetail(root, sid, runId) {
     events,
     heals,
     shotDiffs,
+    domshotDiffs,
     video,
     network,
   };
 }
 
-async function listShotDiffs(runDir) {
+async function listDiffDir(runDir, dir, ext) {
   let names;
   try {
-    names = await fsp.readdir(path.join(runDir, 'shots-diff'));
+    names = await fsp.readdir(path.join(runDir, dir));
   } catch {
     return [];
   }
   return names
-    .filter((n) => n.endsWith('.diff.png'))
-    .map((n) => n.slice(0, -'.diff.png'.length));
+    .filter((n) => n.endsWith(ext))
+    .map((n) => n.slice(0, -ext.length));
+}
+
+async function listShotDiffs(runDir) {
+  return listDiffDir(runDir, 'shots-diff', '.diff.png');
+}
+
+async function listDomshotDiffs(runDir) {
+  return listDiffDir(runDir, 'domshots-diff', '.diff.txt');
 }
 
 // -------- http helpers --------
@@ -4005,6 +4017,47 @@ function createRequestHandler(root, deps, chat) {
         await fsp.mkdir(baselineDir, { recursive: true });
         await fsp.copyFile(shot, path.join(baselineDir, `${stepId}.png`));
         return sendJson(res, 200, { ok: true, minted: [stepId] });
+      }
+
+      // POST /api/scenarios/:sid/runs/:runId/domshot-accept {stepId} or
+      // {all:true} — mint ARIA-snapshot text baselines via the CLI's
+      // `domshot-accept` verb (it owns the claimed-steps default + the
+      // stale-scenario warning).
+      if (
+        req.method === 'POST' &&
+        segAll[0] === 'api' &&
+        segAll[1] === 'scenarios' &&
+        segAll[3] === 'runs' &&
+        segAll[5] === 'domshot-accept' &&
+        segAll.length === 6
+      ) {
+        const sid = decodeURIComponent(segAll[2]);
+        const runId = decodeURIComponent(segAll[4]);
+        if (!isSafeSegment(sid) || !isSafeSegment(runId)) return badRequest(res, 'unsafe id');
+        const body = await readJsonBody(req);
+        if (!deps || typeof deps.runCli !== 'function') {
+          return sendJson(res, 503, { error: 'domshot-accept unavailable: agent-qa CLI not resolved' });
+        }
+        const args = ['domshot-accept', sid, '--run', runId, '--json'];
+        if (body.all === true) {
+          // claimed-steps default — every id a {"domshot"} claim references.
+        } else {
+          const stepId = typeof body.stepId === 'string' ? body.stepId : '';
+          if (!isSafeSegment(stepId)) return badRequest(res, 'stepId (safe segment) is required');
+          args.push('--steps', stepId);
+        }
+        const r = await deps.runCli(args, {});
+        if (r.spawnError) return sendJson(res, 500, { error: 'domshot-accept failed to start' });
+        if (r.code !== 0) {
+          return sendJson(res, 422, { error: (r.stderr || r.stdout || 'domshot-accept failed').trim().slice(0, 2000) });
+        }
+        let minted = [];
+        try {
+          minted = JSON.parse((r.stdout || '').trim() || '[]');
+        } catch {
+          /* minted list is best-effort */
+        }
+        return sendJson(res, 200, { ok: true, minted });
       }
 
       // POST /api/scenarios/:sid/runs/:runId/heal-promote {stepId} — absorb the
