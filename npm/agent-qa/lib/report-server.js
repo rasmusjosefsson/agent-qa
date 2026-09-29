@@ -301,6 +301,7 @@ function coverageOf(steps) {
   let checked = 0;
   let bare = 0;
   let shotCovered = 0;
+  let goldenCovered = 0;
   let prevDoId = null;
   for (const s of steps) {
     const isDo = s && s.kind === 'do';
@@ -312,8 +313,14 @@ function coverageOf(steps) {
     } else if (isCheck) {
       if (prevDoId) {
         checked += 1;
-        if (s.claim && s.claim.subject && s.claim.subject.shot === prevDoId) {
+        const sub = s.claim && s.claim.subject;
+        if (sub && sub.shot === prevDoId) {
           shotCovered += 1;
+        }
+        // Golden coverage = any baseline claim (pixel shot or structural
+        // domshot) pinned to the preceding do step.
+        if (sub && (sub.shot === prevDoId || sub.domshot === prevDoId)) {
+          goldenCovered += 1;
         }
         prevDoId = null;
       }
@@ -325,8 +332,10 @@ function coverageOf(steps) {
     checked,
     bare,
     shotCovered,
+    goldenCovered,
     ratio: doSteps === 0 ? 1 : checked / doSteps,
     shotRatio: doSteps === 0 ? 1 : shotCovered / doSteps,
+    goldenRatio: doSteps === 0 ? 1 : goldenCovered / doSteps,
   };
 }
 

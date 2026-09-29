@@ -38,7 +38,11 @@ function makeFixture() {
       intent: 'open example.com and click a missing button',
       steps: [
         { id: 'navHome', kind: 'do' },
-        { id: 'headingVisible', kind: 'check' },
+        {
+          id: 'headingVisible',
+          kind: 'check',
+          claim: { subject: { domshot: 'navHome' }, predicate: 'matches' },
+        },
         { id: 'clickMissingLogin', kind: 'do' },
       ],
     }),
@@ -380,7 +384,8 @@ test('report viewer endpoints', async (t) => {
     assert.equal(sc.latestRun.summary, 'SUMMARY: 2/3 (FAIL)');
     assert.equal(sc.latestRun.state, 'done');
     assert.equal(sc.latestRun.ok, false);
-    // do→check coverage: navHome covered by headingVisible; clickMissingLogin bare.
+    // do→check coverage: navHome covered by headingVisible; clickMissingLogin
+    // bare. headingVisible's domshot claim counts toward golden (not shot).
     assert.deepEqual(sc.coverage, {
       doSteps: 2,
       checked: 1,
@@ -388,6 +393,8 @@ test('report viewer endpoints', async (t) => {
       ratio: 0.5,
       shotCovered: 0,
       shotRatio: 0,
+      goldenCovered: 1,
+      goldenRatio: 0.5,
     });
   });
 
