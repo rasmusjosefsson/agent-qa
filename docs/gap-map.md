@@ -44,11 +44,10 @@ the picture shifts materially.
    stub+reject init script is registered via `AGENT_BROWSER_INIT_SCRIPTS`
    before the browser opens, so every navigation of the recording is
    hermetic, not just the first page.
-6. **Live-input divergence** (carried from #253): agent-browser's real
-   input click doesn't trigger React state on saucedemo's add-to-cart;
-   recorded `click` replays fine via native DOM click. If live clicks
-   keep missing delegated handlers, the record path may silently drop
-   user actions worth capturing — watch for it.
+6. ~~**Live-input divergence**~~ — could not reproduce on
+   agent-browser 0.37.1: a real `click` on saucedemo's add-to-cart
+   updates React state (cart badge 1→2). Likely fixed upstream; drop the
+   watch item unless a counter-example resurfaces.
 7. **Untouched-recordable surfaces** — `dialog` now records during
    live capture (#293: the bridge answers the opening dialog — accept,
    with the page's own `defaultPrompt` for prompts — then emits the
@@ -121,7 +120,13 @@ Real sites taught three durable patterns:
 - Dialog tolerance on dialog-opening clicks (#246); record-side dialog
   capture — answer + check/do pair (#293); `start --mock-from`/
   `--offline` hermetic recording (#292)
-- Auto-claims on flush: `--auto-network`/`--auto-errors` (#252)
+- Auto-claims on flush: `--auto-network`/`--auto-errors` (#252); flush
+  skips telemetry beacons incl. same-origin `/cdn-cgi/rum` (#315)
+- Fresh-site sweeps III–VII: orangehrm SPA auth (#311), books.toscrape
+  (#312), practicetestautomation (#313), react-admin MUI SPA with
+  cross-origin API claims + hidden-popover trap (#314), automationcamp —
+  record-driven `frame` verb, delayed dialogs, visibility triggers
+  (#316)
 - Cookie/storage goldens + `do/state` seeding (#253)
 - `pageError` + `console` + `a11y` claim subjects (#248/#167/#240)
 - Network claims fired/status/json (#143), postDataContains (#205),
