@@ -1,6 +1,12 @@
 'use strict';
 // Live-browser bridge for the authoring editor.
 //
+// Downloads: when the bridge records (an onRecord host), it arms
+// `Page.setDownloadBehavior` to allow+name into a scratch dir so
+// `Page.downloadWillBegin` events fire. A click held in the suppression
+// window when the event lands records `do/download` (on the clicked
+// locator, value `downloads/<file>`) instead of `do/click`.
+//
 // Screencasts the running agent-browser CDP session into the editor's
 // "Live page" pane and forwards clicks/keystrokes back. It is a read-only
 // RELAY: it streams frames and dispatches synthetic input, but every
@@ -121,6 +127,13 @@ function createLiveBridge({
   captureMs = 300,
   reconnectMs = 500,
   logger = () => {},
+  // How long a recorded click waits for a downloadWillBegin before it is
+  // committed as a plain `do/click`. 0 disables the suppression window.
+  downloadHoldMs = 1000,
+  // Where recorded downloads land. Defaults to a fresh scratch dir; the
+  // recorded step always points at `downloads/<name>` scenario-relative,
+  // this dir is only so Chrome has somewhere to write at record time.
+  downloadDir = null,
 }) {
   if (typeof getCdpUrl !== 'function') throw new TypeError('getCdpUrl is required');
 
@@ -137,6 +150,9 @@ function createLiveBridge({
   let currentUrl = null;
   let stopped = false;
   let reconnectTimer = null;
+  let heldClick = null; // { el: {role,name}, timer } — click awaiting a possible download
+  let recentClick = null; // { el, ts } — last emitted click, for late download correlation
+  let dlDir = downloadDir;
   let captureSentAt = 0;
   // Auto-record (codegen) state.
   let typingDirty = false;
@@ -357,6 +373,8 @@ function createLiveBridge({
     capturing = false;
     typingDirty = false;
     lastFill = null;
+    heldClick = null;
+    recentClick = null;
     if (typingTimer) {
       clearTimeout(typingTimer);
       typingTimer = null;
@@ -401,6 +419,12 @@ function createLiveBridge({
     // injected listener via the __aqRecord binding.
     if (msg.method === 'Runtime.bindingCalled' && msg.params && msg.params.name === '__aqRecord') {
       handlePageRecord(msg.params.payload);
+      return;
+    }
+    // A click that triggers a download must record do/download, not
+    // do/click — convert the held click if one is inside the window.
+    if (msg.method === 'Page.downloadWillBegin' && msg.params) {
+      onDownloadWillBegin(msg.params);
       return;
     }
     if (!msg.id) return;
@@ -448,6 +472,19 @@ function createLiveBridge({
           send('Runtime.addBinding', { name: '__aqRecord' });
           send('Page.addScriptToEvaluateOnNewDocument', { source: RECORD_LISTENER_JS });
           send('Runtime.evaluate', { expression: RECORD_LISTENER_JS });
+          // Arm download events + redirect downloads into a scratch dir —
+          // only on the recording bridge: the replay-watch bridges must not
+          // override the download handling the run's own do/download verbs
+          // rely on.
+          if (onRecord) {
+            if (!dlDir) dlDir = makeDownloadDir();
+            if (dlDir) {
+              call('Page.setDownloadBehavior', {
+                behavior: 'allowAndName',
+                downloadPath: dlDir,
+              }).catch(() => {});
+            }
+          }
           requestMetrics();
           requestFrame(); // instant first frame
           startPolling();
@@ -457,6 +494,9 @@ function createLiveBridge({
         sock.addEventListener('message', onMessage);
         sock.addEventListener('close', () => {
           if (ws === sock) {
+            // The click physically dispatched even if the socket died —
+            // commit it as a plain click rather than dropping it.
+            flushHeldClick();
             ws = null;
             stopPolling();
             resetConnState();
@@ -531,6 +571,10 @@ function createLiveBridge({
   // every tab to refresh. Without onRecord (tests / no server) we fall back to
   // broadcasting a 'recordable' event for a client to persist.
   async function emitRecord(kind, payload) {
+    // Any other recorded step lands chronologically AFTER a click that is
+    // still inside the download window — flush it first so buffer order
+    // matches user order.
+    flushHeldClick();
     if (!onRecord) {
       broadcastRecordable(kind, payload);
       return;
@@ -690,7 +734,7 @@ function createLiveBridge({
         // The injected change listener records check/uncheck — a bare click
         // here would double-record (and hide whether it set or cleared).
       } else if (el.name) {
-        emitRecord('do', { intent: `click ${el.name}`, verb: 'click', on: { role: el.role, name: el.name } });
+        holdClick(el);
       } else {
         broadcastEvent('record-skip', { reason: `${el.role} has no accessible name` });
       }
@@ -702,6 +746,94 @@ function createLiveBridge({
     send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, buttons: 0 });
     send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 });
     send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 });
+  }
+
+  function makeDownloadDir() {
+    try {
+      const fs = require('fs');
+      const os = require('os');
+      const path = require('path');
+      return fs.mkdtempSync(path.join(os.tmpdir(), 'agent-qa-dl-'));
+    } catch {
+      return null;
+    }
+  }
+
+  // A click that starts a download must record `do/download`, not
+  // `do/click` — but downloadWillBegin only fires once the response head
+  // arrives, so every recorded click waits in a short suppression window
+  // first. Plain clicks surface in the buffer ~downloadHoldMs later.
+  function holdClick(el) {
+    flushHeldClick();
+    if (!downloadHoldMs) {
+      emitClick(el);
+      return;
+    }
+    heldClick = {
+      el,
+      timer: setTimeout(() => {
+        heldClick = null;
+        emitClick(el);
+      }, downloadHoldMs),
+    };
+    if (heldClick.timer.unref) heldClick.timer.unref();
+  }
+
+  function emitClick(el) {
+    recentClick = { el, ts: Date.now() };
+    emitRecord('do', {
+      intent: `click ${el.name}`,
+      verb: 'click',
+      on: { role: el.role, name: el.name },
+    });
+  }
+
+  function flushHeldClick() {
+    if (!heldClick) return;
+    clearTimeout(heldClick.timer);
+    const el = heldClick.el;
+    heldClick = null;
+    emitClick(el);
+  }
+
+  function sanitizeFilename(name) {
+    const base = String(name || '').split(/[\\/]/).pop() || '';
+    const safe = base.replace(/[^\w.\- ]+/g, '_').trim();
+    return safe || 'download';
+  }
+
+  function emitDownload(el, filename) {
+    emitRecord('do', {
+      intent: `download ${filename}`,
+      verb: 'download',
+      on: { role: el.role, name: el.name },
+      value: { from: 'literal', literal: `downloads/${filename}` },
+    });
+  }
+
+  function onDownloadWillBegin(p) {
+    const filename = sanitizeFilename(p.suggestedFilename);
+    // Inside the suppression window the held click IS the trigger.
+    if (heldClick) {
+      const held = heldClick;
+      heldClick = null;
+      clearTimeout(held.timer);
+      emitDownload(held.el, filename);
+      return;
+    }
+    // The click already committed (slow server before the response head) —
+    // still record the download on the same locator and flag the earlier
+    // click step as a duplicated trigger for the buffer UI to surface.
+    if (recentClick && Date.now() - recentClick.ts < 3000) {
+      emitDownload(recentClick.el, filename);
+      broadcastEvent('record-skip', {
+        reason: 'download started late — the click step just above duplicates the trigger; delete it before flush',
+      });
+      return;
+    }
+    broadcastEvent('record-skip', {
+      reason: 'download detected with no recorded click — step skipped',
+    });
   }
 
   // The same drag gesture `do/drag` emits, run directly on the resolved nodes.

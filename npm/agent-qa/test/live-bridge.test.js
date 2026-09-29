@@ -63,6 +63,7 @@ function makeBridge() {
     WebSocketImpl: FakeWS,
     fetchImpl: fakeFetch,
     captureMs: 100000, // never auto-fire; the immediate first frame is enough
+    downloadHoldMs: 0, // clicks commit immediately — download window covered by its own tests
   });
 }
 
@@ -74,6 +75,7 @@ function makeRecordingBridge(onRecord) {
     fetchImpl: fakeFetch,
     captureMs: 100000,
     onRecord,
+    downloadHoldMs: 0,
   });
 }
 
@@ -756,4 +758,129 @@ test('captureState on a stateless page reports a record-skip, not an empty step'
   sock.recv({ id: evalId, result: { result: { value: { localStorage: {}, sessionStorage: {}, cookies: [] } } } });
   await flush();
   assert.ok(events.some((e) => e.includes('event: record-skip') && e.includes('no storage or cookies')));
+});
+
+// -- download capture -------------------------------------------------------
+
+// Drives a recorded click's whole pick() chain so the click lands held in the
+// download-suppression window (or committed, when the hold is disabled).
+async function driveRecordedClick(sock, bridge) {
+  const metId = sock.sent.find((m) => m.method === 'Page.getLayoutMetrics').id;
+  sock.recv({ id: metId, result: { cssLayoutViewport: { clientWidth: 800, clientHeight: 600 } } });
+  bridge.input({ type: 'click', nx: 0.5, ny: 0.5, record: true });
+  await flush();
+  const loc = sock.sent.find((m) => m.method === 'DOM.getNodeForLocation');
+  sock.recv({ id: loc.id, result: { backendNodeId: 7 } });
+  await flush();
+  const ax = sock.sent.find((m) => m.method === 'Accessibility.getPartialAXTree');
+  sock.recv({
+    id: ax.id,
+    result: { nodes: [{ role: { value: 'link' }, name: { value: 'Get report' } }] },
+  });
+  await flush();
+  const box = sock.sent.find((m) => m.method === 'DOM.getBoxModel');
+  if (box) sock.recv({ id: box.id, result: { model: { content: [0, 0, 10, 0, 10, 10, 0, 10] } } });
+  await flush();
+}
+
+test('recording bridge arms download capture on connect', async () => {
+  const bridge = makeRecordingBridge(async () => {});
+  await connect(bridge, { write() {}, end() {} });
+  const sock = FakeWS.instances.at(-1);
+  const dl = sock.sentMethod('Page.setDownloadBehavior');
+  assert.ok(dl, 'setDownloadBehavior sent');
+  assert.equal(dl.params.behavior, 'allowAndName');
+  assert.ok(dl.params.downloadPath, 'a scratch dir is provided');
+  bridge.stop();
+});
+
+test('a click that starts a download records do/download, not do/click', async () => {
+  const recorded = [];
+  FakeWS.instances = [];
+  const bridge = createLiveBridge({
+    getCdpUrl: async () => 'ws://127.0.0.1:1/devtools/browser/x',
+    WebSocketImpl: FakeWS,
+    fetchImpl: fakeFetch,
+    captureMs: 100000,
+    downloadHoldMs: 5000, // long enough that only the download event resolves it
+    onRecord: async (kind, payload) => recorded.push({ kind, ...payload }),
+  });
+  const sock = await connect(bridge, { write() {}, end() {} });
+  await driveRecordedClick(sock, bridge);
+
+  // Download starts inside the suppression window.
+  sock.recv({
+    method: 'Page.downloadWillBegin',
+    params: { guid: 'g1', url: 'https://x.example/report.pdf', suggestedFilename: 'report.pdf' },
+  });
+  await flush();
+
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0].kind, 'do');
+  assert.equal(recorded[0].verb, 'download');
+  assert.deepEqual(recorded[0].on, { role: 'link', name: 'Get report' });
+  assert.equal(recorded[0].value.literal, 'downloads/report.pdf');
+  bridge.stop();
+});
+
+test('a download with no recorded click inside the window is skipped, not mis-recorded', async () => {
+  const recorded = [];
+  const events = [];
+  FakeWS.instances = [];
+  const bridge = createLiveBridge({
+    getCdpUrl: async () => 'ws://127.0.0.1:1/devtools/browser/x',
+    WebSocketImpl: FakeWS,
+    fetchImpl: fakeFetch,
+    captureMs: 100000,
+    downloadHoldMs: 5000,
+    onRecord: async (kind, payload) => recorded.push({ kind, ...payload }),
+  });
+  const sock = await connect(bridge, { write: (s) => events.push(s), end() {} });
+
+  sock.recv({
+    method: 'Page.downloadWillBegin',
+    params: { guid: 'g2', url: 'https://x.example/x.zip', suggestedFilename: 'x.zip' },
+  });
+  await flush();
+
+  assert.equal(recorded.length, 0, 'no step recorded for an untriggered download');
+  assert.ok(
+    events.some((e) => e.includes('record-skip')),
+    'a record-skip notice explains the skip',
+  );
+  bridge.stop();
+});
+
+test('a late download after the click committed still records the step and flags the duplicate', async () => {
+  const recorded = [];
+  const events = [];
+  FakeWS.instances = [];
+  const bridge = createLiveBridge({
+    getCdpUrl: async () => 'ws://127.0.0.1:1/devtools/browser/x',
+    WebSocketImpl: FakeWS,
+    fetchImpl: fakeFetch,
+    captureMs: 100000,
+    downloadHoldMs: 0, // click commits immediately
+    onRecord: async (kind, payload) => recorded.push({ kind, ...payload }),
+  });
+  const sock = await connect(bridge, { write: (s) => events.push(s), end() {} });
+  await driveRecordedClick(sock, bridge);
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0].verb, 'click', 'the click committed as a plain click');
+
+  // The response head arrives late — inside the 3s orphan window.
+  sock.recv({
+    method: 'Page.downloadWillBegin',
+    params: { guid: 'g3', url: 'https://x.example/r.pdf', suggestedFilename: 'r.pdf' },
+  });
+  await flush();
+
+  assert.equal(recorded.length, 2);
+  assert.equal(recorded[1].verb, 'download');
+  assert.equal(recorded[1].value.literal, 'downloads/r.pdf');
+  assert.ok(
+    events.some((e) => e.includes('record-skip') && e.includes('duplicate')),
+    'the duplicate click trigger is flagged',
+  );
+  bridge.stop();
 });
