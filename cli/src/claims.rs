@@ -1358,7 +1358,7 @@ fn check_element(
         let mut last_actual = String::new();
         let mut last_err: Option<anyhow::Error> = None;
         while Instant::now() < deadline {
-            match read_element_attribute(ctx.session, loc, attribute, scope) {
+            match read_element_attribute(ctx.session, loc, attribute, scope, ctx.scenario_dir) {
                 Ok(actual) => {
                     last_actual = actual.clone();
                     match compare_string(predicate, &actual, &need) {
@@ -1481,8 +1481,12 @@ fn read_element_attribute(
     loc: &Locator,
     attribute: &str,
     scope: &mut ValueScope,
+    scenario_dir: &std::path::Path,
 ) -> Result<String> {
     match loc {
+        Locator::Role(role) => {
+            read_role_snapshot_attribute(session, role, attribute, scope, scenario_dir)
+        }
         Locator::Raw(raw) => {
             let v = substitute_scenario_vars(&raw.raw.value, scope);
             let selector = match &raw.raw.kind {
@@ -1536,7 +1540,124 @@ fn read_element_attribute(
             let raw = browser::eval_expression(session, &expr)?;
             Ok(decode_json_string(raw.trim()))
         }
-        _ => bail!("element attribute claims currently require a raw css or testId locator"),
+    }
+}
+
+/// Attribute reads on a `role`+`name` locator resolve through the page's
+/// ARIA snapshot instead of a CSS selector: the line matching
+/// `<role> "<name>"` carries the states the accessibility tree reports
+/// (`[checked=true]`, `[disabled]`, `[required]`, `[expanded=false]`,
+/// `level`, `pressed`, `selected`, `readonly`, `current`,
+/// `orientation`, `valuemin`/`valuemax`/`valuenow`), and a `: <text>`
+/// tail with the node's value. `value` reads that tail; `text` reads
+/// the accessible name. Flag attributes absent from the line read as
+/// `"false"`. Attributes the tree does not carry (`href`, `src`,
+/// `data-*`, `focused`, `style:*`, ...) still need a raw css/testId
+/// locator — the error says which set is readable here.
+fn read_role_snapshot_attribute(
+    session: &str,
+    role: &crate::scenario::LocatorRole,
+    attribute: &str,
+    scope: &mut ValueScope,
+    scenario_dir: &std::path::Path,
+) -> Result<String> {
+    if role.scope.is_some() {
+        bail!("element attribute claims on role locators do not support scope yet — use a raw css or testId locator");
+    }
+    let snap = browser::snapshot_full(session)
+        .map_err(|e| anyhow!("snapshot for element attribute claim: {e}"))?;
+    let name = crate::verbs::resolve_name_match(role.name.as_ref(), scope, scenario_dir)?;
+    let want = name.as_deref().unwrap_or("");
+    let regex_mode = matches!(
+        role.name.as_ref(),
+        Some(crate::scenario::NameMatch::Pattern {
+            r#match: Some(crate::scenario::NameMatchMode::Regex),
+            ..
+        })
+    );
+    let re = if regex_mode {
+        Some(regex::Regex::new(want).with_context(|| format!("invalid name regex '{want}'"))?)
+    } else {
+        None
+    };
+    // Mirror `find role --name`'s case-insensitive substring default,
+    // except regex names which match the pattern against the accname.
+    let named_lines = browser::snapshot_named_lines(&snap, &role.role);
+    let matched: Vec<&(String, String)> = named_lines
+        .iter()
+        .filter(|(accname, _)| {
+            if let Some(re) = &re {
+                re.is_match(accname)
+            } else {
+                accname.to_lowercase().contains(&want.to_lowercase())
+            }
+        })
+        .collect();
+    let (_, line) = match matched.as_slice() {
+        [] => bail!("no `{role} \"{want}\"` node in the a11y snapshot", role = role.role),
+        [one] => one,
+        many => bail!(
+            "{n} a11y nodes match role='{role}' name='{want}' — narrow the name or use a raw locator",
+            n = many.len(),
+            role = role.role
+        ),
+    };
+    snapshot_line_attribute(line, attribute)
+}
+
+/// Read `attribute` off a matched snapshot line
+/// (`checkbox "Sunday" [checked=true, ref=e195]: tail`). Pure — split
+/// out for unit tests.
+fn snapshot_line_attribute(line: &str, attribute: &str) -> Result<String> {
+    // Tokens inside the `[...]` block following the quoted name:
+    // `checked=true`, bare `disabled`, `ref=eN`, `level=1`, ...
+    let bracket_start = line.find('[');
+    let bracket_end = line.find(']');
+    let tokens: Vec<String> = match (bracket_start, bracket_end) {
+        (Some(s), Some(e)) if s < e => line[s + 1..e]
+            .split(',')
+            .map(|t| t.trim().to_string())
+            .collect(),
+        _ => Vec::new(),
+    };
+    let lookup = |key: &str| -> Option<String> {
+        for t in &tokens {
+            if t == key {
+                return Some("true".to_string());
+            }
+            if let Some(v) = t.strip_prefix(&format!("{key}=")) {
+                return Some(v.to_string());
+            }
+        }
+        None
+    };
+    const FLAG_STATES: &[&str] = &[
+        "checked", "disabled", "required", "expanded", "pressed", "selected", "readonly", "current",
+    ];
+    const NUMERIC_STATES: &[&str] = &["level", "orientation", "valuemin", "valuemax", "valuenow"];
+    match attribute {
+        "value" => {
+            // `: <text>` tail after the bracket block.
+            let tail = bracket_end
+                .and_then(|e| line[e + 1..].strip_prefix(':').map(str::trim))
+                .unwrap_or("");
+            Ok(tail.to_string())
+        }
+        "text" => {
+            // The accessible name is the quoted span after the role.
+            let name = line
+                .split_once('"')
+                .and_then(|(_, rest)| rest.split_once('"'))
+                .map(|(n, _)| n.to_string())
+                .unwrap_or_default();
+            Ok(name)
+        }
+        a if FLAG_STATES.contains(&a) => Ok(lookup(a).unwrap_or_else(|| "false".to_string())),
+        a if NUMERIC_STATES.contains(&a) => lookup(a)
+            .with_context(|| format!("element has no a11y state '{a}'")),
+        other => bail!(
+            "attribute '{other}' is not readable via a role locator (a11y snapshot carries: checked, disabled, required, expanded, pressed, selected, readonly, current, level, orientation, valuemin/valuemax/valuenow, value, text) — use a raw css or testId locator"
+        ),
     }
 }
 
@@ -1547,8 +1668,9 @@ fn locator_resolves(
     scenario_dir: &std::path::Path,
 ) -> Result<()> {
     // Re-use the same locator → CLI mapping as dispatch_do uses for
-    // its act calls; here we use Focus (the cheapest no-op-ish act
-    // agent-browser exposes) just to confirm the element resolves.
+    // its act calls; here we probe with a read act (`text`) just to
+    // confirm the element resolves. `find <sel> focus` is not a valid
+    // action on agent-browser — it errored every role/xpath probe.
     // If/when agent-browser grows a dedicated `find ... exists` or
     // `query` subverb, switch to that.
     match loc {
@@ -1573,8 +1695,7 @@ fn locator_resolves(
             }
             // Probe role+name quietly so a recovering miss doesn't print a
             // misleading `✗ Element not found` line.
-            match browser::find_role_act_quiet(session, &role.role, name_str, RoleAct::Focus, None)
-            {
+            match browser::find_role_act_quiet(session, &role.role, name_str, RoleAct::Text, None) {
                 Ok(()) => Ok(()),
                 Err(e) if !name_str.is_empty() => {
                     // Same parity hack as verbs.rs::act_on_locator: agent-browser's
@@ -1613,7 +1734,7 @@ fn locator_resolves(
                     css_presence_probe(session, &v)?;
                 }
                 RawLocatorKind::Xpath => {
-                    browser::find_xpath_act(session, &v, RoleAct::Focus, None)?;
+                    xpath_presence_probe(session, &v)?;
                 }
                 RawLocatorKind::TestId => {
                     let css = format!("[data-testid=\"{}\"]", v.replace('"', "\\\""));
@@ -1641,6 +1762,18 @@ fn css_presence_probe(session: &str, selector: &str) -> Result<()> {
     let expr = format!(
         "(() => {{ const selector = {q}; const hit = document.querySelector(selector); if (!hit) throw new Error('selector not found: ' + selector); }})()",
         q = serde_json::to_string(selector).expect("string serializes")
+    );
+    browser::eval_expression(session, &expr)?;
+    Ok(())
+}
+
+/// Presence probe for XPath locators. agent-browser has no `find xpath`
+/// subcommand, so the probe evaluates `document.evaluate` in-page; an
+/// unmatched expression throws, same signal as a failed find.
+fn xpath_presence_probe(session: &str, xpath: &str) -> Result<()> {
+    let expr = format!(
+        "(() => {{ const xp = {q}; const hit = document.evaluate(xp, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue; if (!hit) throw new Error('xpath not found: ' + xp); }})()",
+        q = serde_json::to_string(xpath).expect("string serializes")
     );
     browser::eval_expression(session, &expr)?;
     Ok(())
@@ -1893,6 +2026,53 @@ mod tests {
         compare_string(&pred_from_json(json!("matches")), "abc123", r"\d{3}$").unwrap();
         compare_string(&pred_from_json(json!("startsWith")), "abc", "ab").unwrap();
         compare_string(&pred_from_json(json!("endsWith")), "abc", "bc").unwrap();
+    }
+
+    #[test]
+    fn snapshot_line_attribute_reads_state_tokens() {
+        let checked = r#"checkbox "Sunday" [checked=true, ref=e195]"#;
+        assert_eq!(snapshot_line_attribute(checked, "checked").unwrap(), "true");
+        let unchecked = r#"radio "Male" [checked=false, ref=e193]"#;
+        assert_eq!(
+            snapshot_line_attribute(unchecked, "checked").unwrap(),
+            "false"
+        );
+        // Bare flag token + absent flag → "false".
+        let disabled = r#"button "Save" [disabled, ref=e9]"#;
+        assert_eq!(
+            snapshot_line_attribute(disabled, "disabled").unwrap(),
+            "true"
+        );
+        assert_eq!(
+            snapshot_line_attribute(disabled, "checked").unwrap(),
+            "false"
+        );
+        // Numeric/enum state key=value.
+        let heading = r#"heading "Automation" [level=1, ref=e3]"#;
+        assert_eq!(snapshot_line_attribute(heading, "level").unwrap(), "1");
+        // `: tail` reads as value.
+        let textbox = r#"textbox "Enter Name" [required, ref=e57]: Devin Dogfood"#;
+        assert_eq!(
+            snapshot_line_attribute(textbox, "value").unwrap(),
+            "Devin Dogfood"
+        );
+        assert_eq!(
+            snapshot_line_attribute(textbox, "required").unwrap(),
+            "true"
+        );
+        assert_eq!(
+            snapshot_line_attribute(textbox, "text").unwrap(),
+            "Enter Name"
+        );
+        // Attributes the a11y tree doesn't carry point at raw locators.
+        let err = snapshot_line_attribute(textbox, "href")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("raw css or testId"), "err={err}");
+        let err = snapshot_line_attribute(checked, "level")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no a11y state"), "err={err}");
     }
 
     #[test]

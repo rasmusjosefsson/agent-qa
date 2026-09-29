@@ -66,7 +66,7 @@ jobs:
           AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
         run: ./node_modules/.bin/agent-browser install
       - uses: oven-sh/setup-bun@v2
-      - name: replay + mint baselines (accept.ts replays, then shot-accepts)
+      - name: replay + mint baselines (accept.ts replays, then accepts shot + domshot goldens)
         working-directory: evals
         env:
           AGENT_QA_EVAL_AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
