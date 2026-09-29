@@ -1142,21 +1142,28 @@ fn check_network(
         .post_data_contains
         .as_deref()
         .map(|s| substitute_scenario_vars(s, scope));
+    let ws_filter = matcher
+        .ws_payload_contains
+        .as_deref()
+        .map(|s| substitute_scenario_vars(s, scope));
 
     let deadline = Instant::now() + timeout;
     let mut pending: String;
     loop {
         match browser::network_requests(ctx.session) {
             Ok(reqs) => {
-                let matches = filter_by_post(
-                    matching_requests(
-                        url_re.as_ref(),
-                        op_name.as_deref(),
-                        matcher.method.as_ref(),
-                        &reqs,
+                let matches = filter_by_ws_payload(
+                    filter_by_post(
+                        matching_requests(
+                            url_re.as_ref(),
+                            op_name.as_deref(),
+                            matcher.method.as_ref(),
+                            &reqs,
+                        ),
+                        post_filter.as_deref(),
+                        ctx.session,
                     ),
-                    post_filter.as_deref(),
-                    ctx.session,
+                    ws_filter.as_deref(),
                 );
                 match evaluate_network(
                     &kind,
@@ -1206,6 +1213,29 @@ fn filter_by_post<'r>(
                 })
                 .map(|pd| pd.contains(needle))
                 .unwrap_or(false)
+        })
+        .collect()
+}
+
+/// Keep candidates carrying a WebSocket frame whose payload contains the
+/// needle — only `cdpws-*` entries have `ws_frames`, so this narrows to
+/// sockets.
+fn filter_by_ws_payload<'r>(
+    matches: Vec<&'r CapturedRequest>,
+    needle: Option<&str>,
+) -> Vec<&'r CapturedRequest> {
+    let Some(needle) = needle else {
+        return matches;
+    };
+    matches
+        .into_iter()
+        .filter(|r| {
+            r.ws_frames.iter().any(|f| {
+                f.get("payload")
+                    .and_then(|p| p.as_str())
+                    .map(|p| p.contains(needle))
+                    .unwrap_or(false)
+            })
         })
         .collect()
 }
@@ -2985,6 +3015,7 @@ mod tests {
             resource_type: None,
             mime_type: None,
             post_data: None,
+            ws_frames: vec![],
         }
     }
 
@@ -3160,6 +3191,27 @@ mod tests {
             err.to_string().contains("does not support predicate"),
             "got: {err}"
         );
+        // wsPayloadContains narrows to sockets carrying a matching frame
+        {
+            use super::*;
+            let entries = [CapturedRequest {
+                request_id: "cdpws-0".into(),
+                url: "wss://echo.example/socket".into(),
+                method: "WS".into(),
+                status: Some(101),
+                resource_type: Some("WebSocket".into()),
+                mime_type: None,
+                post_data: None,
+                ws_frames: vec![
+                    serde_json::json!({"dir": "received", "opcode": 1, "payload": "pong:hello"}),
+                ],
+            }];
+            let got = filter_by_ws_payload(entries.iter().collect(), Some("pong:hello"));
+            assert_eq!(got.len(), 1);
+            let got = filter_by_ws_payload(entries.iter().collect(), Some("nope"));
+            assert!(got.is_empty());
+        }
+
         // bad urlMatches regex → immediate bail
         let claim = net_claim(json!({
             "subject": {"network": {"urlMatches": "([bad"}},
