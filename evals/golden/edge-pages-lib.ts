@@ -83,6 +83,11 @@ export interface EdgeGolden extends GoldenContext {
   assertStorage(keyOrMatcher: string | { key: string; scope?: string }, expectPresent: boolean, intent: string): Promise<void>;
   assertStyle(selector: string, cssProperty: string, expected: string, intent: string): Promise<void>;
   a11yAudit(matcher: true | Record<string, unknown>, predicate: string, value: number | undefined, intent: string): Promise<void>;
+  // Role-locator drives resolve through the a11y snapshot refs, which
+  // pierce open shadow roots where a plain css selector cannot.
+  typeRole(role: string, name: string, value: string, intent: string): Promise<void>;
+  clickRoleLocator(role: string, name: string, intent: string): Promise<void>;
+  assertRoleAttribute(role: string, name: string, attribute: string, expected: string, intent: string): Promise<void>;
 }
 
 function createContext(tc: string, intent: string, keepDialogs: boolean, label = "edge"): GoldenContext {
@@ -152,13 +157,40 @@ async function record(ctx: GoldenContext, kind: string, payload: unknown): Promi
   await run(ctx, `record ${kind}`, [ctx.agentQa, "record-step", draftKind, JSON.stringify(draft)]);
 }
 
+// Role+name → snapshot ref. The a11y snapshot's refs map pierces open
+// shadow roots; agent-browser's `fill`/`click` accept `@<ref>` targets.
+async function resolveSnapshotRef(ctx: GoldenContext, role: string, name: string): Promise<string> {
+  const out = await run(ctx, `resolve ${role} "${name}"`, [
+    ctx.agentBrowser,
+    "--session",
+    ctx.session,
+    "--json",
+    "snapshot",
+    "-i",
+  ]);
+  const data = (JSON.parse(out).data ?? {}) as {
+    refs?: Record<string, { role?: string; name?: string }>;
+  };
+  const want = name.toLowerCase();
+  const matches = Object.entries(data.refs ?? {}).filter(
+    ([, n]) => n.role === role && (n.name ?? "").toLowerCase().includes(want),
+  );
+  if (matches.length === 0) {
+    throw new Error(`no ${role} named ${JSON.stringify(name)} in snapshot`);
+  }
+  if (matches.length > 1) {
+    throw new Error(`${matches.length} ${role}s named ${JSON.stringify(name)} in snapshot`);
+  }
+  return matches[0][0];
+}
+
 export async function runEdgeGolden(
   tc: string,
   intent: string,
   pagePath: string,
   readySelector: string,
   steps: (golden: EdgeGolden) => Promise<void>,
-  opts: { keepDialogs?: boolean; label?: string } = {},
+  opts: { keepDialogs?: boolean; label?: string; flushArgs?: string[] } = {},
 ): Promise<void> {
   const ctx = createContext(tc, intent, opts.keepDialogs ?? false, opts.label ?? "edge");
   const pageUrl = edgeUrl(pagePath);
@@ -375,6 +407,44 @@ export async function runEdgeGolden(
         intent: stepIntent,
       });
     },
+    async typeRole(role, name, value, stepIntent) {
+      const ref = await resolveSnapshotRef(ctx, role, name);
+      await run(ctx, `fill ${role} "${name}"`, [
+        ctx.agentBrowser,
+        "--session",
+        ctx.session,
+        "fill",
+        `@${ref}`,
+        value,
+      ]);
+      await record(ctx, "action", {
+        method: "typeByRole",
+        args: [role, name, value],
+        intent: stepIntent,
+      });
+    },
+    async clickRoleLocator(role, name, stepIntent) {
+      const ref = await resolveSnapshotRef(ctx, role, name);
+      await run(ctx, `click ${role} "${name}"`, [
+        ctx.agentBrowser,
+        "--session",
+        ctx.session,
+        "click",
+        `@${ref}`,
+      ]);
+      await record(ctx, "action", {
+        method: "clickRole",
+        args: [role, name],
+        intent: stepIntent,
+      });
+    },
+    async assertRoleAttribute(role, name, attribute, expected, stepIntent) {
+      await record(ctx, "assert", {
+        kind: "roleAttribute",
+        args: [role, name, attribute, expected],
+        intent: stepIntent,
+      });
+    },
     async assertUrlContains(fragment, stepIntent) {
       await record(ctx, "assert", { kind: "url", args: [fragment], intent: stepIntent });
     },
@@ -385,7 +455,7 @@ export async function runEdgeGolden(
     sid = start.match(/started sid=(\S+)/)?.[1] || "";
     await steps(golden);
     await run(ctx, "verify", [ctx.agentQa, "verify"]);
-    await run(ctx, "flush", [ctx.agentQa, "flush"]);
+    await run(ctx, "flush", [ctx.agentQa, "flush", ...(opts.flushArgs ?? [])]);
     await run(ctx, "replay", [ctx.agentQa, "replay", sid, "--session", `${ctx.session}-replay`]);
     pass = true;
   } catch (err) {
