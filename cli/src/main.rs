@@ -273,7 +273,7 @@ Verbs:
   heal-promote <sid> [--run <id>] [--steps <…>] [--apply]   Promote replay-side patches
   heal-apply <sid> --step <id> [--target-step <…>] [--dry-run]   Patch buffer in place
   heal-list <sid> [--run <id>] [--json]    List heal-responses + applied state
-  heal-chronic <sid> [--min-runs N] [--json]  Flag steps that self-heal across runs
+  heal-chronic <sid> [--min-runs N] [--json] [--issue]  Flag steps that self-heal across runs
   shot-accept <sid> [--run <id>] [--steps <…>] [--json]   Mint screenshot baselines for shot claims
 
 Step dispatch covers `do` verbs and `check` claims."
