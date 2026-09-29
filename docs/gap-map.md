@@ -101,10 +101,11 @@ the picture shifts materially.
 
 ### P5 — uncovered surfaces (smaller, real)
 
-14. **IndexedDB is not assertable** — `storage` claims cover localStorage/
-    sessionStorage and `cookie` covers the CDP jar; IndexedDB (the store
-    real apps actually use for offline data) has no claim or seeding
-    path.
+14. ~~IndexedDB is not assertable~~ — closed by the `{"indexeddb": {"db",
+    "store","key"?}}` claim + `do/state` `params.indexeddb` seeding
+    (#353). The probe lists `indexedDB.databases()` before opening so
+    `notExists` never creates the db; seeding creates missing stores via
+    a version bump.
 15. **Clipboard** — no claim or step can read/set clipboard contents, so
     copy-to-clipboard UX can't be covered.
 16. **Service-worker-served responses** — cache-first PWAs answer from
@@ -336,6 +337,7 @@ signin POST 302-redirects into the account page. Two real findings:
 
 ## Recently closed (for orientation)
 
+- IndexedDB claim + `do/state` seeding (#353) — P5 #14 closed
 - JPetStore sweep incl. `;jsessionid` matcher normalization (#352)
 - bonigarcia sweep incl. recordable storage seeds + mouse-driven drag helper (#351)
 - OpenCart/lambdatest findings: prefer-visible css resolution + deferred
