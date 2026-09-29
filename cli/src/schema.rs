@@ -136,6 +136,27 @@ mod tests {
         }
     }
 
+    /// `{"indexeddb": {"db","store","key"?}}` claims validate — record
+    /// presence via exists/notExists, `path` walks a JSON value.
+    #[test]
+    fn indexeddb_claim_subject_validates() {
+        for subject in [
+            json!({"indexeddb": {"db": "cart", "store": "items"}}),
+            json!({"indexeddb": {"db": "cart", "store": "items", "key": "sku-1"}}),
+            json!({"indexeddb": {"db": "cart", "store": "items", "key": "sku-1"}, "path": "$.qty"}),
+        ] {
+            let j = json!({
+                "schema": "scenario/2", "id": "j1", "intent": "smoke",
+                "steps": [{
+                    "id": "s1", "intent": "x", "kind": "check",
+                    "claim": {"subject": subject, "predicate": "exists"}
+                }]
+            });
+            validate_value(&j)
+                .unwrap_or_else(|e| panic!("subject={subject:?} should validate: {e}"));
+        }
+    }
+
     /// The smoke scenario under examples/scenarios/smoke/scenario.json is a
     /// hand-authored document — schema-validate it from inside cargo
     /// test so a future schema tightening catches the doc drift before
