@@ -179,11 +179,7 @@ fn volatile_segment_pattern(path: &str) -> String {
         if i > 0 {
             out.push('/');
         }
-        if seg.len() >= 16
-            && seg
-                .chars()
-                .all(|c| c.is_ascii_hexdigit() || c == '-')
-        {
+        if seg.len() >= 16 && seg.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
             out.push_str("[0-9a-fA-F-]{16,}");
         } else if seg.len() >= 6 && seg.chars().all(|c| c.is_ascii_digit()) {
             out.push_str("[0-9]+");
@@ -537,9 +533,17 @@ mod tests {
         insert_auto_network_claims(
             &mut steps,
             &[
-                req("GET", "https://x/api/contacts/6abbfc58b45a2a0015047afa", "XHR"),
+                req(
+                    "GET",
+                    "https://x/api/contacts/6abbfc58b45a2a0015047afa",
+                    "XHR",
+                ),
                 // a second entity id collapses onto the same pattern claim
-                req("GET", "https://x/api/contacts/00112233445566778899aabb", "XHR"),
+                req(
+                    "GET",
+                    "https://x/api/contacts/00112233445566778899aabb",
+                    "XHR",
+                ),
                 req("GET", "https://x/api/items/1234567", "XHR"),
                 req("GET", "https://x/api/v2/users", "XHR"),
             ],
