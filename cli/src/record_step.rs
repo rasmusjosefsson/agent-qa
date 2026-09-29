@@ -135,8 +135,18 @@ pub(crate) fn parse_draft(kind: StepKind, payload: &Json, step_id: &str) -> Resu
     }
     draft.insert("id".into(), Json::String(step_id.to_string()));
     draft.insert("kind".into(), Json::String(kind.as_str().to_string()));
-    let step: Step =
-        serde_json::from_value(Json::Object(draft)).context("parse scenario/2 step")?;
+    let step: Step = serde_json::from_value(Json::Object(draft)).with_context(|| {
+        match kind {
+            StepKind::Do => {
+                "parse scenario/2 step — a do draft is {\"intent\": ..., \"verb\": ...}; \
+                 literal values are typed: \"value\": {\"from\":\"literal\",\"literal\":\"...\"}"
+            }
+            StepKind::Check => {
+                "parse scenario/2 step — a check draft is {\"intent\": ..., \"claim\": {\"subject\": ..., \"predicate\": ...}}"
+            }
+        }
+        .to_string()
+    })?;
     match (&kind, &step) {
         (StepKind::Do, Step::Do { .. }) => verb_shape::assert_verb_shape(&step)?,
         (StepKind::Check, Step::Check { .. }) => {}
