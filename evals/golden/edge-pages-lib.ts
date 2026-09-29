@@ -81,11 +81,17 @@ export interface EdgeGolden extends GoldenContext {
   waitSelectorAbsent(selector: string, intent: string): Promise<void>;
   waitSelectorText(selector: string, text: string, intent: string): Promise<void>;
   waitLoad(state: string, intent: string): Promise<void>;
+  enterFrame(selector: string, intent: string): Promise<void>;
+  exitFrame(intent: string): Promise<void>;
+  // `wait url` — poll resource timing until a matching request completed,
+  // live at record and in the replayed scenario (`params.timeoutMs` honored).
+  waitRequest(pattern: string, intent: string, timeoutMs?: number): Promise<void>;
   // `wait url` — poll resource timing until a matching request completed,
   // live at record and in the replayed scenario (`params.timeoutMs` honored).
   waitRequest(pattern: string, intent: string, timeoutMs?: number): Promise<void>;
   assertElementText(selector: string, expected: string, intent: string): Promise<void>;
   assertElementAttribute(selector: string, attribute: string, predicate: string, expected: string, intent: string): Promise<void>;
+  assertElementCount(selector: string, count: number, intent: string): Promise<void>;
   assertElementCount(selector: string, predicate: string, count: number, intent: string): Promise<void>;
   assertElementAbsent(selector: string, intent: string): Promise<void>;
   assertElementPresent(selector: string, intent: string): Promise<void>;
@@ -372,6 +378,14 @@ export async function runEdgeGolden(
       await Bun.sleep(ms);
       await record(ctx, "wait", { condition: { kind: "duration", ms }, intent: stepIntent });
     },
+    async enterFrame(selector, stepIntent) {
+      await run(ctx, `frame ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "frame", selector]);
+      await record(ctx, "action", { method: "enterFrame", args: [selector], intent: stepIntent });
+    },
+    async exitFrame(stepIntent) {
+      await run(ctx, "frame main", [ctx.agentBrowser, "--session", ctx.session, "frame", "main"]);
+      await record(ctx, "action", { method: "exitFrame", args: [], intent: stepIntent });
+    },
     async waitSelector(selector, stepIntent) {
       await run(ctx, `wait ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "wait", selector]);
       await record(ctx, "wait", { condition: { kind: "selector", selector }, intent: stepIntent });
@@ -416,6 +430,9 @@ export async function runEdgeGolden(
     },
     async assertElementAttribute(selector, attribute, predicate, expected, stepIntent) {
       await record(ctx, "assert", { kind: "elementAttribute", args: [selector, attribute, predicate, expected], intent: stepIntent });
+    },
+    async assertElementCount(selector, count, stepIntent) {
+      await record(ctx, "assert", { kind: "elementCount", args: [selector, count], intent: stepIntent });
     },
     async assertElementCount(selector, predicate, count, stepIntent) {
       await record(ctx, "assert", { kind: "elementCount", args: [selector, predicate, count], intent: stepIntent });
