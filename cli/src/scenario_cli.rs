@@ -2148,8 +2148,8 @@ fn list_lint_rules(json_out: bool) -> Result<u8> {
         },
         Rule {
             code: "empty-steps",
-            severity: "warning",
-            description: "Scenario has zero steps; replay will only open env then close it.",
+            severity: "error",
+            description: "Scenario has zero steps; replay refuses it outright (a 0/0 PASS verifies nothing).",
         },
         Rule {
             code: "wait-without-condition",
@@ -2818,12 +2818,13 @@ fn lint_findings(path: &Path) -> Result<(Vec<Finding>, Scenario)> {
         });
     }
 
-    // 11) scenario has zero steps
+    // 11) scenario has zero steps — replay refuses it outright (#420):
+    // a 0/0 PASS verifies nothing. Error severity, matching the bail.
     if j.steps.is_empty() {
         findings.push(Finding {
-            severity: "warning",
+            severity: "error",
             code: "empty-steps",
-            message: "scenario has zero steps; replay will only open env then close it".into(),
+            message: "scenario has zero steps — replay refuses it outright".into(),
         });
     }
 
@@ -5614,7 +5615,7 @@ mod tests {
     }
 
     #[test]
-    fn lint_empty_steps_is_warning() {
+    fn lint_empty_steps_is_an_error() {
         let tmp = TempDir::new().unwrap();
         let p = write(
             tmp.path(),
@@ -5624,7 +5625,9 @@ mod tests {
               "steps": []
             }"#,
         );
-        assert_eq!(lint(&p, LintFormat::Json, false, None, None).unwrap(), 0);
+        // replay refuses a zero-step scenario outright (#420) — so the
+        // lint is an error in both modes, not just under --strict.
+        assert_eq!(lint(&p, LintFormat::Json, false, None, None).unwrap(), 1);
         assert_eq!(lint(&p, LintFormat::Json, true, None, None).unwrap(), 1);
     }
 
