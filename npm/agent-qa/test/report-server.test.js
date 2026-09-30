@@ -2229,3 +2229,40 @@ test('GET /api/scenarios surfaces a corrupt scenario.json instead of hiding the 
   assert.equal(sc.hasScenario, false);
   assert.match(sc.scenarioError, /unparseable scenario\.json/);
 });
+
+// A wedged CLI child used to hang the request forever (no execFile
+// timeout), and if it did die to a signal the null exit code surfaced
+// as code:0 — a silent success. makeCliRunner now bounds every call.
+test('makeCliRunner kills a hung CLI at the host timeout', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-hung-cli-'));
+  const bin = path.join(tmp, 'hung-cli.js');
+  fs.writeFileSync(bin, '#!/usr/bin/env node\nsetTimeout(() => {}, 60000);\n');
+  fs.chmodSync(bin, 0o755);
+  const runCli = srv.makeCliRunner({ bin, env: { ...process.env }, cwd: tmp, timeoutMs: 250 });
+  const r = await runCli(['anything']);
+  assert.equal(r.code, 124);
+  assert.equal(r.spawnError, null);
+  assert.match(r.stderr, /host timeout/);
+});
+
+test('makeCliRunner never maps a signal death to exit 0', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-sig-cli-'));
+  const bin = path.join(tmp, 'sig-cli.js');
+  fs.writeFileSync(bin, '#!/usr/bin/env node\nprocess.kill(process.pid, "SIGKILL");\n');
+  fs.chmodSync(bin, 0o755);
+  const runCli = srv.makeCliRunner({ bin, env: { ...process.env }, cwd: tmp });
+  const r = await runCli(['anything']);
+  assert.notEqual(r.code, 0);
+  assert.notEqual(r.code, null);
+});
+
+test('makeCliRunner still reports a clean exit code', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-ok-cli-'));
+  const bin = path.join(tmp, 'ok-cli.js');
+  fs.writeFileSync(bin, '#!/usr/bin/env node\nconsole.log("out");\nprocess.exit(3);\n');
+  fs.chmodSync(bin, 0o755);
+  const runCli = srv.makeCliRunner({ bin, env: { ...process.env }, cwd: tmp });
+  const r = await runCli(['anything']);
+  assert.equal(r.code, 3);
+  assert.match(r.stdout, /out/);
+});
