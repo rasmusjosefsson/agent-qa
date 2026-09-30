@@ -866,7 +866,7 @@ fn help() {
                                             commit. --value sweeps every step's strings; --selector /
                                             --step rewrite a do-step's value without the secret on
                                             the command line.
-  agent-qa scenario diff <a> <b>             Unified diff between two scenario.json files\n                                            (canonicalised JSON; exit 1 on difference)\n  agent-qa scenario hash <file>              SHA-256 of scenario.json bytes (same algorithm\n                                            replay + heal-promote use for the rebase guard)\n  agent-qa scenario id <file>                Print the scenario's id field (one line)\n  agent-qa scenario intent <file>            Print the scenario's intent field (one line)\n  agent-qa scenario step-ids <file>          Print every step id, one per line\n  agent-qa scenario field <file> <name>      Print any top-level scenario field (id, intent,\n                                            schema, etc.); object/array → compact JSON.\n  agent-qa scenario coverage <file> [--json] Per-step check coverage: how many do steps are\n                                            followed by a check claim, and how many are bare.\n  agent-qa scenario coverage-all [--filter <substr>] [--root <dir>] [--json]\n                                            The same ratio rolled up across every scenario under\n                                            the root (--root overrides it) — per-scenario rows sorted worst-first plus\n                                            an OVERALL rollup.\n  agent-qa scenario lint <file> [--json] [--strict] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run common lints (use '-' for stdin)\n                                            (duplicate ids, empty intent, bare do,\n                                            undeclared/unused inputs). Exit 1 iff\n                                            any errors are reported (--strict treats\n                                            warnings as errors). --rule narrows to specific\n                                            codes; --exclude-rule subtracts (both repeatable).\n                                            --format github emits GitHub Actions annotations.\n  agent-qa scenario lint --list-rules [--json]\n                                            Enumerate the lint rules + their severities.\n  agent-qa scenario lint-all [--json] [--strict] [--root <dir>] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run lints against every scenario under the\n                                            scenarios root (--root overrides it);\n                                            exit 1 iff any errors are reported\n                                            (--strict treats warnings as errors). --rule\n                                            narrows to specific codes; --exclude-rule\n                                            subtracts (both repeatable).\n  agent-qa scenario rename <sid> <new-sid>   Rename a scenario: patches scenario.json's id\n                                            field, then moves the directory under the\n                                            scenarios root. (refuses to overwrite).\n  agent-qa scenario copy <sid> <new-sid>     Copy a scenario (scenario.json with id patched +\n                                            baselines/ carried; replays NOT copied). Refuses to overwrite.\n  agent-qa scenario delete <sid> [--yes/-y]  Remove a scenario directory + all its replays.\n                                            Dry-run by default; --yes confirms.\n  agent-qa scenario prune-replays <sid> --keep N [--yes] [--keep-failed]\n                                            Keep the N most recent replays under\n                                            <sid>/replays/; dry-run by default.\n                                            --keep-failed preserves all non-zero-exit\n                                            runs regardless of N.\n  agent-qa scenario prune-all --keep N [--yes] [--keep-failed] [--root <dir>]\n                                            Like prune-replays but across every scenario\n                                            under the scenarios root (--root overrides it). --keep-failed\n                                            preserves failed runs per scenario."
+  agent-qa scenario diff <a> <b>             Unified diff between two scenario.json files\n                                            (canonicalised JSON; exit 1 on difference)\n  agent-qa scenario hash <file>              SHA-256 of scenario.json bytes (same algorithm\n                                            replay + heal-promote use for the rebase guard)\n  agent-qa scenario id <file>                Print the scenario's id field (one line)\n  agent-qa scenario intent <file>            Print the scenario's intent field (one line)\n  agent-qa scenario step-ids <file>          Print every step id, one per line\n  agent-qa scenario field <file> <name>      Print any top-level scenario field (id, intent,\n                                            schema, etc.); object/array → compact JSON.\n  agent-qa scenario coverage <file> [--json] Per-step check coverage: how many do steps are\n                                            followed by a check claim, and how many are bare.\n  agent-qa scenario coverage-all [--filter <substr>] [--root <dir>] [--json]\n                                            The same ratio rolled up across every scenario under\n                                            the root (--root overrides it) — per-scenario rows sorted worst-first plus\n                                            an OVERALL rollup.\n  agent-qa scenario lint <file> [--json] [--strict] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run common lints (use '-' for stdin)\n                                            (duplicate ids, empty intent, bare do,\n                                            undeclared/unused inputs). Exit 1 iff\n                                            any errors are reported (--strict treats\n                                            warnings as errors). --rule narrows to specific\n                                            codes; --exclude-rule subtracts (both repeatable).\n                                            --format github emits GitHub Actions annotations.\n  agent-qa scenario lint --list-rules [--json]\n                                            Enumerate the lint rules + their severities.\n  agent-qa scenario lint-all [--json] [--strict] [--root <dir>] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run lints against every scenario under the\n                                            scenarios root (--root overrides it);\n                                            exit 1 iff any errors are reported\n                                            (--strict treats warnings as errors). --rule\n                                            narrows to specific codes; --exclude-rule\n                                            subtracts (both repeatable).\n  agent-qa scenario rename <sid> <new-sid>   Rename a scenario: patches scenario.json's id\n                                            field, then moves the directory under the\n                                            scenarios root. (refuses to overwrite).\n  agent-qa scenario copy <sid> <new-sid>     Copy a scenario (scenario.json with id patched +\n                                            baselines/, files/, inputs.local.json carried;\n                                            replays NOT copied). Refuses to overwrite.\n  agent-qa scenario delete <sid> [--yes/-y]  Remove a scenario directory + all its replays.\n                                            Dry-run by default; --yes confirms.\n  agent-qa scenario prune-replays <sid> --keep N [--yes] [--keep-failed]\n                                            Keep the N most recent replays under\n                                            <sid>/replays/; dry-run by default.\n                                            --keep-failed preserves all non-zero-exit\n                                            runs regardless of N.\n  agent-qa scenario prune-all --keep N [--yes] [--keep-failed] [--root <dir>]\n                                            Like prune-replays but across every scenario\n                                            under the scenarios root (--root overrides it). --keep-failed\n                                            preserves failed runs per scenario."
     );
 }
 
@@ -1203,36 +1203,48 @@ fn copy(from_sid: &str, to_sid: &str) -> Result<u8> {
     let patched = serde_json::to_string_pretty(&parsed)?;
     fs::write(to_dir.join("scenario.json"), format!("{patched}\n"))
         .with_context(|| format!("write {}", to_dir.join("scenario.json").display()))?;
-    let copied_baselines = copy_baselines(&from_dir, &to_dir)?;
+    let copied = copy_scenario_assets(&from_dir, &to_dir)?;
     println!(
-        "copied: {} → {}\nid: {:?} → {:?}\n(replays not copied; {} baseline(s) copied)",
+        "copied: {} → {}\nid: {:?} → {:?}\n(replays not copied; {} asset(s) copied)",
         scenario_file.display(),
         to_dir.join("scenario.json").display(),
         from_sid,
         to_sid,
-        copied_baselines
+        copied
     );
     Ok(0)
 }
 
-/// Baselines are part of a scenario's meaning — a shot claim without its
-/// golden always fails, so clones carry them. Replays stay run history.
-fn copy_baselines(from_dir: &Path, to_dir: &Path) -> Result<usize> {
+/// Baselines, packaged upload files, and the local inputs sidecar are
+/// part of a scenario's meaning — a shot claim without its golden, an
+/// upload literal without its file, or a {from: input} ref without its
+/// local value all fail on the clone, so copies carry them. Replays
+/// stay run history.
+fn copy_scenario_assets(from_dir: &Path, to_dir: &Path) -> Result<usize> {
     let mut copied = 0usize;
-    let from_baselines = from_dir.join("baselines");
-    if from_baselines.is_dir() {
-        let to_baselines = to_dir.join("baselines");
-        fs::create_dir_all(&to_baselines)
-            .with_context(|| format!("create {}", to_baselines.display()))?;
-        for entry in fs::read_dir(&from_baselines)? {
-            let entry = entry?;
-            if !entry.file_type()?.is_file() {
-                continue;
+    for dir in ["baselines", "files"] {
+        let from = from_dir.join(dir);
+        if from.is_dir() {
+            let to = to_dir.join(dir);
+            fs::create_dir_all(&to).with_context(|| format!("create {}", to.display()))?;
+            for entry in fs::read_dir(&from)? {
+                let entry = entry?;
+                if !entry.file_type()?.is_file() {
+                    continue;
+                }
+                fs::copy(entry.path(), to.join(entry.file_name()))
+                    .with_context(|| format!("copy {}", entry.path().display()))?;
+                copied += 1;
             }
-            fs::copy(entry.path(), to_baselines.join(entry.file_name()))
-                .with_context(|| format!("copy {}", entry.path().display()))?;
-            copied += 1;
         }
+    }
+    // inputs.local.json is machine-local (gitignored) — carrying it
+    // keeps {from: input} refs resolving on the clone.
+    let inputs = from_dir.join("inputs.local.json");
+    if inputs.is_file() {
+        fs::copy(&inputs, to_dir.join("inputs.local.json"))
+            .with_context(|| format!("copy {}", inputs.display()))?;
+        copied += 1;
     }
     Ok(copied)
 }
@@ -1384,7 +1396,7 @@ fn extract(
         format!("{}\n", serde_json::to_string_pretty(&parsed)?),
     )
     .with_context(|| format!("write {}", to_dir.join("scenario.json").display()))?;
-    let copied_baselines = copy_baselines(&from_dir, &to_dir)?;
+    let copied_assets = copy_scenario_assets(&from_dir, &to_dir)?;
 
     if json {
         println!(
@@ -1397,19 +1409,19 @@ fn extract(
                 "cutAt": cut_idx,
                 "keptSteps": kept,
                 "droppedSteps": total - kept,
-                "baselines": copied_baselines,
+                "assets": copied_assets,
             })
         );
     } else {
         println!(
-            "extracted: {} → {}\nrun: {} ({})\nsteps: kept {}/{} ({} baseline(s) copied)",
+            "extracted: {} → {}\nrun: {} ({})\nsteps: kept {}/{} ({} asset(s) copied)",
             scenario_file.display(),
             to_dir.join("scenario.json").display(),
             run_id,
             cut_reason,
             kept,
             total,
-            copied_baselines
+            copied_assets
         );
     }
     Ok(0)
@@ -5918,6 +5930,34 @@ mod tests {
         );
         assert!(dst.join("baselines").join("s2.png").is_file());
         assert!(!dst.join("replays").exists());
+        match prev {
+            Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    #[test]
+    fn copy_carries_files_and_local_inputs() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        let src = tmp.path().join("orig");
+        fs::create_dir_all(src.join("files")).unwrap();
+        fs::write(
+            src.join("scenario.json"),
+            r#"{"schema":"scenario/2","id":"orig","intent":"x","steps":[]}"#,
+        )
+        .unwrap();
+        fs::write(src.join("files").join("avatar.png"), b"png").unwrap();
+        fs::write(src.join("inputs.local.json"), b"{}").unwrap();
+        assert_eq!(copy("orig", "new").unwrap(), 0);
+        let dst = tmp.path().join("new");
+        assert_eq!(
+            fs::read(dst.join("files").join("avatar.png")).unwrap(),
+            b"png"
+        );
+        assert!(dst.join("inputs.local.json").is_file());
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
