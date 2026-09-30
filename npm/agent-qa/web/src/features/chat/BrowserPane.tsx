@@ -1,6 +1,6 @@
 // web/src/features/chat/BrowserPane.tsx
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ChevronLeftIcon, ChevronRightIcon, Loader2Icon, RotateCwIcon } from 'lucide-react'
+import { ChevronLeftIcon, ChevronRightIcon, GlobeIcon, Loader2Icon, RotateCwIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 type Status = { text: string; tone: 'idle' | 'busy' | 'ok' | 'err' }
@@ -212,6 +212,9 @@ export function BrowserPane({ available, chatId, navigate, initialSession }: Bro
     }
   }, [available, effective])
 
+  // Connected, but the tab has no address yet (about:blank).
+  const blankTab = phase === 'live' && !url.trim()
+
   async function browserAction(payload: Record<string, unknown>) {
     try {
       const res = await navigate({ ...payload, session: sessionRef.current })
@@ -261,26 +264,46 @@ export function BrowserPane({ available, chatId, navigate, initialSession }: Bro
           {autoRecording ? `rec · ${status.text}` : status.text}
         </span>
       </div>
-      <div className="aqa-dots relative flex min-h-0 flex-1 items-center justify-center bg-muted/30">
-        <canvas ref={canvasRef} width={1280} height={800} className="max-h-full max-w-full object-contain" />
+      <div className="aqa-dots relative flex min-h-0 flex-1 items-center justify-center bg-muted/30 p-3">
+        <canvas
+          ref={canvasRef}
+          width={1280}
+          height={800}
+          className={cn(
+            'max-h-full max-w-full rounded-md object-contain shadow-sm ring-1 ring-border',
+            // A blank tab streams as a black frame; keep it hidden behind the
+            // "ready" state until a page has an address.
+            (phase !== 'live' || blankTab) && 'invisible'
+          )}
+        />
         {phase === 'connecting' && (
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className="flex items-center gap-2 rounded-xl border border-border bg-card/90 px-4 py-3 shadow-sm backdrop-blur text-xs text-muted-foreground">
+            <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-3 text-xs text-muted-foreground shadow-sm">
               <Loader2Icon className="size-4 animate-spin text-primary" />
               Connecting to the browser…
             </div>
           </div>
         )}
-        {phase === 'idle' && (
+        {(phase === 'idle' || blankTab) && (
           <div className="absolute inset-0 flex items-center justify-center p-6">
-            <div className="max-w-xs rounded-xl border border-border bg-card/90 px-4 py-3 shadow-sm backdrop-blur text-center text-xs leading-relaxed text-muted-foreground">
-              No page open yet — type a URL above, or ask the agent to open one.
+            <div className="flex max-w-xs flex-col items-center gap-3 text-center">
+              <div className="grid size-11 place-items-center rounded-xl bg-primary/10 text-primary">
+                <GlobeIcon className="size-5" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold tracking-tight text-foreground">
+                  {blankTab ? 'Browser ready' : 'No page open yet'}
+                </div>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  Type a URL above, or ask the agent to open a page. You&apos;ll watch it here as it happens.
+                </p>
+              </div>
             </div>
           </div>
         )}
         {phase === 'off' && (
           <div className="absolute inset-0 flex items-center justify-center p-6">
-            <div className="max-w-xs rounded-xl border border-border bg-card/90 px-4 py-3 shadow-sm backdrop-blur text-center text-xs leading-relaxed text-muted-foreground">
+            <div className="max-w-xs rounded-xl border border-border bg-card px-4 py-3 text-center text-xs leading-relaxed text-muted-foreground shadow-sm">
               Live browser unavailable — launch via the agent-qa CLI.
             </div>
           </div>
