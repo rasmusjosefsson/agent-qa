@@ -250,11 +250,18 @@
       const el = e.composedPath?.()[0] || e.target;
       const name = el.localName;
       if (name === "select") {
+        // el.value is only the FIRST selected option — a multi-select
+        // would silently lose the rest, and a valueless option's value
+        // is "" which matches nothing. Replay matches values OR text
+        // split on ',', so emit the full selection.
+        const picked = el.multiple
+          ? [...el.selectedOptions].map((o) => o.value || o.text)
+          : [el.value || el.options[el.selectedIndex]?.text || ""];
         send(
           stepMsg(
             doDraft(`select ${label(el)}`, "select", {
               on: locator(el),
-              value: literal(el.value),
+              value: literal(picked.join(",")),
             })
           )
         );
@@ -274,7 +281,29 @@
         );
         return;
       }
-      if (type === "file") return; // native pickers can't be captured
+      if (type === "file") {
+        // File contents can't cross worlds, but the names can — record
+        // an upload step referencing files/<name> so the flow replays
+        // and the bundle can name which files to drop in. A silent skip
+        // here loses the interaction entirely.
+        const names = [...(el.files || [])].map((f) => f.name).filter(Boolean);
+        if (!names.length) return;
+        send(
+          stepMsg(
+            doDraft(`upload ${names.join(", ")}`, "upload", {
+              on: locator(el),
+              value: {
+                from: "literal",
+                literal:
+                  names.length === 1
+                    ? `files/${names[0]}`
+                    : names.map((n) => `files/${n}`),
+              },
+            })
+          )
+        );
+        return;
+      }
       if (el.value === "") return;
       send(
         stepMsg(

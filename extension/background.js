@@ -169,6 +169,30 @@ async function handle(msg, sender) {
           "the iframe element can't be located from inside it",
       );
     }
+    // Upload steps carry `files/<name>` references — the names survive
+    // but the contents can't cross worlds, so replay needs the files
+    // dropped in. Name them so fixing it is a copy, not a guess.
+    const uploadRefs = [];
+    for (const st of s.steps) {
+      const d = st && st.draft;
+      if (!d || d.verb !== "upload") continue;
+      const lit = d.value && d.value.literal;
+      for (const n of Array.isArray(lit) ? lit : [lit].filter(Boolean)) {
+        uploadRefs.push(n);
+      }
+    }
+    if (uploadRefs.length) {
+      (bundle.warnings ||= []).push(
+        `file upload(s) recorded as references — contents can't be captured; ` +
+          `drop ${uploadRefs.join(", ")} under the scenario dir before replaying`,
+      );
+    }
+    if (s.popupTabs) {
+      (bundle.warnings ||= []).push(
+        `${s.popupTabs} new tab/window opened during recording — capture is ` +
+          "per-tab, so interactions in the popup are not in this bundle",
+      );
+    }
     const host = safeHost(s.url) || "page";
     const stamp = s.startedAt.replace(/[:.]/g, "-").slice(0, 19);
     const err = await download(
@@ -296,4 +320,18 @@ chrome.webNavigation.onCommitted.addListener((d) => {
 });
 chrome.webNavigation.onHistoryStateUpdated.addListener((d) => {
   if (d.frameId === 0) recordNav(d.tabId, d.url);
+});
+
+// A target=_blank link or window.open mid-recording spawns a new tab —
+// capture is per-tab, so everything the user does in the popup lands in
+// a session that doesn't exist. Count it and flag the badge; the export
+// warning names the gap.
+chrome.webNavigation.onCreatedNavigationTarget.addListener((d) => {
+  getSession(d.sourceTabId).then((s) => {
+    if (!s) return;
+    s.popupTabs = (s.popupTabs || 0) + 1;
+    persist(d.sourceTabId);
+    chrome.action.setBadgeText({ tabId: d.sourceTabId, text: "!" });
+    chrome.action.setBadgeBackgroundColor({ tabId: d.sourceTabId, color: "#e80" });
+  });
 });
