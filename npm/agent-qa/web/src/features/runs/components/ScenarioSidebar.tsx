@@ -58,9 +58,9 @@ function HealthBadges({ sid, runs }: { sid: string; runs: RunsApi }) {
   )
 }
 
-function Badge({ tone, children }: { tone: string; children: React.ReactNode }) {
+function Badge({ tone, title, children }: { tone: string; title?: string; children: React.ReactNode }) {
   return (
-    <span data-qa-volatile className={cn('shrink-0 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide', TONE[tone] || 'bg-muted text-muted-foreground')}>
+    <span data-qa-volatile title={title} className={cn('shrink-0 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide', TONE[tone] || 'bg-muted text-muted-foreground')}>
       {children}
     </span>
   )
@@ -169,7 +169,13 @@ export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
                 >
                   <div className="flex items-center gap-2">
                     <span className="truncate text-[13px] font-medium leading-tight">{sc.intent || sc.scenarioId || sc.sid}</span>
-                    {verdict && <Badge tone={verdict}>{verdict}</Badge>}
+                    {sc.scenarioError ? (
+                      <Badge tone="fail" title={sc.scenarioError}>
+                        unreadable
+                      </Badge>
+                    ) : (
+                      verdict && <Badge tone={verdict}>{verdict}</Badge>
+                    )}
                     <HealthBadges sid={sc.sid} runs={runs} />
                   </div>
                   {sc.tags.length > 0 && (

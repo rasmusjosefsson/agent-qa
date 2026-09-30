@@ -2195,3 +2195,21 @@ test('GET/POST /api/config/settings round-trips and validates', async (t) => {
   assert.equal((await j('POST', '/api/config/settings', { chatBackend: 'wat' })).status, 400);
   assert.equal((await j('POST', '/api/config/settings', { headedDefault: 'yes' })).status, 400);
 });
+
+test('GET /api/scenarios surfaces a corrupt scenario.json instead of hiding the sid', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-report-corrupt-'));
+  const badSid = 'broken-sid';
+  fs.mkdirSync(path.join(root, badSid), { recursive: true });
+  fs.writeFileSync(path.join(root, badSid, 'scenario.json'), '{"schema":"scenario/2","steps":[');
+
+  const { server, base } = await boot(root);
+  t.after(() => server.close());
+  const res = await fetch(`${base}/api/scenarios`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.scenarios.length, 1);
+  const sc = body.scenarios[0];
+  assert.equal(sc.sid, badSid);
+  assert.equal(sc.hasScenario, false);
+  assert.match(sc.scenarioError, /unparseable scenario\.json/);
+});
