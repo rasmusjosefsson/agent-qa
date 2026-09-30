@@ -4,12 +4,12 @@
 //! Errors are intentionally rich: we want `plugins doctor` to print
 //! actionable information when something is wrong with a third-party plugin.
 
-use std::io::Write;
+use std::io::{Read, Write};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -68,6 +68,12 @@ pub enum InvokeError {
         plugin_version: u32,
         host_version: u32,
     },
+    #[error("plugin `{binary}` did not exit within {timeout_secs:.0}s — killed (stderr tail: {stderr_tail})")]
+    TimedOut {
+        binary: String,
+        timeout_secs: f64,
+        stderr_tail: String,
+    },
 }
 
 /// What a successful invocation returned. The caller of `invoke` is expected
@@ -78,14 +84,15 @@ pub struct InvokeOutcome {
 }
 
 /// Run `<binary> <kind> [<op>]` with the given request payload on stdin.
-/// Timeout is approximate (we don't kill the child) — agent-qa plugins are
-/// expected to be fast or to handle their own timeouts internally.
+/// The child is killed after `timeout` — callers declare per-kind budgets
+/// (5s ping, 15s probe, 120s login) and a hung plugin must surface as a
+/// named error, not a stalled verb.
 pub fn invoke(
     binary: &Path,
     kind: &str,
     op: Option<&str>,
     request_payload: Value,
-    _timeout: Duration,
+    timeout: Duration,
 ) -> Result<InvokeOutcome, InvokeError> {
     let bin_str = binary.display().to_string();
 
@@ -148,20 +155,82 @@ pub fn invoke(
         // stdin dropped here → EOF → plugin can stop reading.
     }
 
-    let output = child.wait_with_output().map_err(|e| InvokeError::Wait {
-        binary: bin_str.clone(),
-        source: e,
-    })?;
+    // Drain stdout/stderr on threads while polling the child: waiting on
+    // exit first (`wait_with_output`) deadlocks when a plugin fills the
+    // 64KiB pipe buffer mid-run, and polling without draining does the
+    // same. The drain threads end on pipe EOF once the child exits or is
+    // killed.
+    let mut out_pipe = child.stdout.take();
+    let mut err_pipe = child.stderr.take();
+    let out_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(p) = out_pipe.as_mut() {
+            let _ = p.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let err_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(p) = err_pipe.as_mut() {
+            let _ = p.read_to_end(&mut buf);
+        }
+        buf
+    });
 
-    if !output.status.success() {
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break None;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(e) => {
+                return Err(InvokeError::Wait {
+                    binary: bin_str.clone(),
+                    source: e,
+                })
+            }
+        }
+    };
+    let stdout_bytes = out_reader.join().unwrap_or_default();
+    let stderr_bytes = err_reader.join().unwrap_or_default();
+    let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
+
+    let Some(status) = status else {
+        let tail: String = stderr
+            .trim()
+            .chars()
+            .rev()
+            .take(200)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        return Err(InvokeError::TimedOut {
+            binary: bin_str,
+            timeout_secs: timeout.as_secs_f64(),
+            stderr_tail: if tail.is_empty() {
+                "<empty>".to_string()
+            } else {
+                tail
+            },
+        });
+    };
+
+    if !status.success() {
         return Err(InvokeError::NonZeroExit {
             binary: bin_str,
-            status: output.status.code().unwrap_or(-1),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            status: status.code().unwrap_or(-1),
+            stderr,
         });
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
     let parsed: PluginResponse =
         serde_json::from_str(stdout.trim()).map_err(|e| InvokeError::BadJson {
             binary: bin_str.clone(),
@@ -324,5 +393,43 @@ mod tests {
         );
         let pong = ping(&plugin).unwrap();
         assert_eq!(pong.protocol_version, 1);
+    }
+
+    #[test]
+    fn invoke_kills_a_hung_plugin_at_the_deadline() {
+        let tmp = TempDir::new().unwrap();
+        let plugin = write_exec(
+            tmp.path(),
+            "agent-qa-plugin-hang",
+            "#!/bin/sh\nexec sleep 60\n",
+        );
+        let started = std::time::Instant::now();
+        let err = invoke(&plugin, "ping", None, json!({}), Duration::from_millis(300)).unwrap_err();
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "invoke should have timed out fast"
+        );
+        match err {
+            InvokeError::TimedOut { timeout_secs, .. } => {
+                assert!(timeout_secs < 1.0)
+            }
+            other => panic!("expected TimedOut, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invoke_drains_pipes_so_a_stderr_flood_cannot_deadlock() {
+        // A plugin writing past the 64KiB pipe buffer on stderr used to
+        // hang `wait_with_output` forever — it blocked in write() while
+        // we blocked in wait(). Draining on threads unblocks both.
+        let tmp = TempDir::new().unwrap();
+        let plugin = write_exec(
+            tmp.path(),
+            "agent-qa-plugin-flood",
+            "#!/bin/sh\nhead -c 200000 /dev/zero | tr '\\0' 'x' 1>&2\necho '{\"ok\":true,\"response\":{\"protocolVersion\":1,\"name\":\"f\",\"kinds\":[]}}'\nexit 0\n",
+        );
+        let outcome = invoke(&plugin, "ping", None, json!({}), Duration::from_secs(10))
+            .expect("stderr flood must not deadlock invoke");
+        assert!(outcome.response.get("name").is_some());
     }
 }
