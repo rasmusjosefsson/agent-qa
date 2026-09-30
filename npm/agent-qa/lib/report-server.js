@@ -855,7 +855,7 @@ async function handlePlans(req, res, root, seg, deps) {
       }
       const scn = await readJson(path.join(root, sid, 'scenario.json'));
       if (!scn) {
-        skipped.push({ caseId: cid, reason: 'scenario missing' });
+        skipped.push({ caseId: cid, reason: 'scenario missing or unreadable' });
         continue;
       }
       const session = sessionForReplay(sid, runOpts.profile);
