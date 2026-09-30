@@ -819,3 +819,65 @@ re-audit of the surfaces the last wave didn't touch:
 - **`record-step` validation depth** — raw-draft schema pass catches
   misplaced keys before serde drops them; stdin JSONL names the bad
   line; TTY `-` bails instead of blocking on read.
+
+## Dogfood pass XVII — extension capture-surface + silent-trap sweep (#432–#437)
+
+Audited the whole extension (content.js, inject.js, background.js,
+popup.js, manifest) plus the remaining workbench/CLI spawn and
+param-validation surface for never-stuck / silent-loss classes.
+
+- **A failed export destroyed the bundle** (#435): `chrome.downloads.
+  download` is callback-async — the popup's Stop handler resolved before
+  the download's fate was known, and a failed download still deleted the
+  persisted session. The handler now awaits a `download()` that resolves
+  to an error string via `chrome.runtime.lastError`; on failure it keeps
+  the session, returns `recording: true` so the armed stop-button
+  re-enters `popup:stop` and retries the same bundle, and the popup
+  paints the error instead of silently restarting.
+- **File uploads were silently skipped** (#436): `input[type=file]`
+  changes hit a bare `return`. They now emit a real `upload` draft
+  carrying `files/<name>` literals (contents can't cross worlds, names
+  can) — the flow replays end to end and the bundle warning names every
+  file to drop under the scenario dir.
+- **Multi-selects recorded one option** (#436): `el.value` is only the
+  first selected option and "" for valueless options; the draft now
+  carries every selected value (or text) joined on ',' — exactly the
+  shape the replay `select` verb splits and matches.
+- **Popup/new-tab flows were silently lost** (#436): `target=_blank` /
+  `window.open` spawns a tab capture can't follow. `webNavigation.
+  onCreatedNavigationTarget` counts them, flags the badge, and the
+  export bundle names the gap.
+- **Form posts were invisible to body matching** (#437): `URLSearchParams`
+  and `FormData` request bodies (the standard login/CRUD shape) recorded
+  `postData: undefined`, and `responseType:"json"` XHRs had no response
+  body. Both serialize into the entry now — `postDataContains` and mock
+  matching can see them.
+- **`mock`/`unmock` params silently wrong** (#434): `params.status`
+  outside 100–999 truncated into a nonsense status (`u16`), a non-string
+  `unmock url` cleared ALL rules, and an unmatched unmock glob did
+  nothing. All three now bail or warn.
+- **Malformed `agent-qa.toml` was silently dropped** (#433): a parse
+  error meant the whole config file was ignored; it now warns.
+- **Hung CLI calls killed workbench requests silently** (#432): every
+  `execFile`/`exec` path in report-server has a timeout now (180s CLI
+  runner, 30s browser-session closer), and a timeout-kill resolves
+  `code: 124` instead of the confusing `code: 0`-equivalent.
+
+### Verified-not-broken in this sweep (no change needed)
+
+- **`record`/`buffer` arg surface** — unknown flags bail across
+  replay/scenario/buffer/heal-chronic; stray positionals name the
+  expected usage.
+- **`heal-chronic`/`audit` tails** — bounded iteration, corrupt lines
+  skipped by design, `--issue`/`--apply`/`--json` combos guarded.
+- **`buffer discard`** — clears the state file and reports; the
+  browser session persists intentionally for reuse.
+- **Web frontend fetch surface** — all calls funnel through api libs
+  with `.catch(() => offline(...))` + `res.ok` checks; the three direct
+  fetches (version badge, blob convert, session poller) each handle
+  failure appropriately for their role.
+- **cli/src/crawl.rs** — `wait_for_load_capped(5s)` + bounded BFS.
+- **`inject.js` duplicate guard** (`__aqNetInstalled`), tail-loss on
+  post-stop requests is benign, `clip()` bounds body size.
+- **`parse_draft` multi-shape** — schema `"literal": {}` is
+  unconstrained, so array `files/<n>` literals validate end to end.
