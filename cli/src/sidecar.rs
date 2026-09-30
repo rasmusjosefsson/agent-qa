@@ -81,11 +81,15 @@ pub enum InputType {
     Object,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ParameterSource {
     Default,
     Cli,
+    /// The value came from `inputs.local.json` beside the scenario — the
+    /// gitignored file `flush` writes recorded secrets into so a committed
+    /// scenario still replays on the machine that recorded it.
+    Local,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

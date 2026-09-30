@@ -1,4 +1,5 @@
 import { toRecordDraft } from "./record-translate";
+import { clickVisibleEval, pickVisible } from "./visible";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -139,7 +140,7 @@ export async function runAutomationExerciseGolden(
         "--session",
         ctx.session,
         "eval",
-        `(() => new Promise((resolve, reject) => { const started = Date.now(); const tick = () => { const el = document.querySelector(${JSON.stringify(selector)}); if (el) { el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window })); el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window })); el.click(); resolve(true); } else if (Date.now() - started > 5000) reject(new Error("selector not found")); else setTimeout(tick, 100); }; tick(); }))()`,
+        `(() => new Promise((resolve, reject) => { const started = Date.now(); const tick = () => { const el = ${pickVisible(selector)} ?? document.querySelector(${JSON.stringify(selector)}); if (el) { el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window })); el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window })); el.click(); resolve(true); } else if (Date.now() - started > 5000) reject(new Error("selector not found")); else setTimeout(tick, 100); }; tick(); }))()`,
       ]);
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
@@ -149,7 +150,7 @@ export async function runAutomationExerciseGolden(
         "--session",
         ctx.session,
         "eval",
-        `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) throw new Error("selector not found"); el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window })); el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window })); el.click(); return true; })()`,
+        clickVisibleEval(selector),
       ]);
     },
     async fillSelector(selector, value, stepIntent) {
@@ -210,6 +211,7 @@ export async function runAutomationExerciseGolden(
     await steps(golden);    await run(ctx, "verify", [ctx.agentQa, "verify"]);
 
     await run(ctx, "flush", [ctx.agentQa, "flush"]);
+    await run(ctx, "check", [ctx.agentQa, "scenario", "check", resolve(ctx.scenariosRoot, sid, "scenario.json")]);
     await run(ctx, "replay", [ctx.agentQa, "replay", sid, "--session", `${ctx.session}-replay`]);
     pass = true;
   } catch (err) {
