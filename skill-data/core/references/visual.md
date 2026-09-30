@@ -88,3 +88,30 @@ A miss writes `shots-diff/<stepId>.diff.png` (red overlay on the run shot)
 next to the run dir and fails the step with the differing-pixel fraction.
 Read the diff image first — it tells you whether drift is content (re-mint)
 or a bug (fix the app).
+
+## Structural goldens (domshot claims)
+
+`{"domshot": "<stepId>"}` is the text counterpart of `shot`: it diffs
+the step's ARIA snapshot (`snapshots/<stepId>.txt` — written per step
+already) against `baselines/<stepId>.snap.txt`. Prefer it when the
+regression you care about is *structural* — an element appearing,
+disappearing, a role/name change — because the tree is immune to font
+rasterization and AA noise, and the failure artifact is a unified text
+diff (`<run>/domshots-diff/<stepId>.diff.txt`) an LLM can read directly.
+
+```json
+{ "claim": { "subject": { "domshot": "s2", "skip": ["generated \\d+:\\d+"] }, "predicate": "matches" } }
+```
+
+- `skip` lists regexes; lines matching any drop from BOTH sides before
+  comparing — the text equivalent of `mask` (volatile rows, timestamps).
+- `@eN` element refs are normalized to `@e` automatically (numbering
+  shifts across runs — never hand-compare on refs).
+- Only `matches` is supported; equality is exact after normalization.
+
+Mint with `agent-qa domshot-accept <sid>` (same flags as `shot-accept`:
+`--dry-run`, `--steps`, `--json`; `--update-baselines` on replay mints
+both kinds). Minting defaults to the ids domshot claims actually
+reference — check-step sidecar snapshots are not minted into baselines
+(they'd be orphan goldens). Lint rules `domshot-without-baseline` and
+`orphan-baseline` cover the text side the same as the pixel side.

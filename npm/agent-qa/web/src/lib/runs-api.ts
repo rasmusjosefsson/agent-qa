@@ -153,6 +153,38 @@ export async function promoteHeal(
   return { ok: false, error: j.error || String(res.status) }
 }
 
+// POST .../runs/:runId/domshot-accept {stepId} — mint the run's ARIA
+// snapshot for stepId as the checked-in text baseline (web-side
+// `agent-qa domshot-accept`). The server shells out to the CLI.
+export async function acceptDomshot(
+  sid: string,
+  runId: string,
+  stepId: string
+): Promise<{ ok: boolean; minted?: string[]; error?: string }> {
+  const res = await fetch(
+    `/api/scenarios/${encodeURIComponent(sid)}/runs/${encodeURIComponent(runId)}/domshot-accept`,
+    { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stepId }) }
+  )
+  const j = (await res.json().catch(() => ({}))) as { ok?: boolean; minted?: string[]; error?: string }
+  if (res.ok && j.ok) return { ok: true, minted: j.minted || [] }
+  return { ok: false, error: j.error || String(res.status) }
+}
+
+// Same route with {all:true} — mint every step a {"domshot"} claim
+// references in this run.
+export async function acceptAllDomshots(
+  sid: string,
+  runId: string
+): Promise<{ ok: boolean; minted?: string[]; error?: string }> {
+  const res = await fetch(
+    `/api/scenarios/${encodeURIComponent(sid)}/runs/${encodeURIComponent(runId)}/domshot-accept`,
+    { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ all: true }) }
+  )
+  const j = (await res.json().catch(() => ({}))) as { ok?: boolean; minted?: string[]; error?: string }
+  if (res.ok && j.ok) return { ok: true, minted: j.minted || [] }
+  return { ok: false, error: j.error || String(res.status) }
+}
+
 // Same route with {all:true} — promote every screenshot captured in the run
 // (the "apply new goldens" path after an intentional UI change).
 export async function acceptAllShots(

@@ -187,6 +187,7 @@ const ARTIFACT_DIRS: &[&str] = &[
     "snapshots",
     "diffs",
     "shots-diff",
+    "domshots-diff",
     "heal-responses",
 ];
 
