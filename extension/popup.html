@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {
+        margin: 0;
+        padding: 14px;
+        width: 220px;
+        font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+        background: #101418;
+        color: #e8e8e8;
+        text-align: center;
+      }
+      #btn {
+        width: 100%;
+        padding: 14px 0;
+        font-size: 16px;
+        font-weight: 700;
+        border: 0;
+        border-radius: 10px;
+        cursor: pointer;
+        background: #d33;
+        color: #fff;
+      }
+      #btn.idle {
+        background: #2d7d46;
+      }
+      #meta {
+        margin-top: 10px;
+        font-size: 12px;
+        color: #9aa4af;
+        min-height: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <button id="btn" class="idle">Record</button>
+    <div id="meta"></div>
+    <script src="popup.js"></script>
+  </body>
+</html>
