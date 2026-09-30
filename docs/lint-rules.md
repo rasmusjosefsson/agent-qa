@@ -19,6 +19,8 @@ for the live table (this doc may lag the binary).
 | `no-checks` | warning | The scenario has steps but zero check claims; replay can only fail on browser errors, not assertions. |
 | `empty-steps` | warning | The scenario has zero steps; replay will only open env then close it. |
 | `wait-without-condition` | warning | A do/wait step has none of `params.ms`/`until`/`url`/`timeoutMs`/`locator`; it falls back to a `networkidle` wait that may not reflect the condition the author intended. |
+| `domshot-without-baseline` | warning | A `{"domshot": <stepId>}` claim has no `baselines/<stepId>.snap.txt`; replay will fail with a missing-baseline hint. Minted by `domshot-accept`. Skipped for stdin input. |
+| `orphan-baseline` | warning | `baselines/<stepId>.png` or `.snap.txt` exists but no shot/domshot claim references `<stepId>` — a stale golden left by a deleted or renamed step. Skipped for stdin input. |
 
 ## Severity → exit code
 

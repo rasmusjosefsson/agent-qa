@@ -60,8 +60,10 @@ export interface ScenarioSummary {
     checked: number
     bare: number
     shotCovered: number
+    goldenCovered: number
     ratio: number
     shotRatio: number
+    goldenRatio: number
   } | null
   // scenario.json's tags[] — `replay --tags` selects on these.
   tags: string[]
@@ -135,6 +137,9 @@ export interface RunDetail {
   // StepIds whose {"shot"} claim missed the baseline this run — each has a
   // shots-diff/<stepId>.diff.png delta map servable via artifactUrl.
   shotDiffs?: string[]
+  // StepIds whose {"domshot"} claim missed — each has a
+  // domshots-diff/<stepId>.diff.txt unified diff servable via artifactUrl.
+  domshotDiffs?: string[]
   // run.webm exists in the run dir (replay ran with --record-video) —
   // servable via runFileUrl(sid, runId, 'run.webm').
   video?: boolean

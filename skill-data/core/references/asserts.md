@@ -43,6 +43,7 @@ Every claim is `{"subject": <one of>, "predicate": <pred>}`.
 | `{"file": "downloads/x.pdf"}` | A file saved into the scenario dir by a `download` step (`exists`, `equals` on name, `gt` on byte size, `contains` on content). |
 | `{"dialog": true}` | A pending native dialog (`exists`/`notExists`; string predicates match its message). |
 | `{"shot": "<stepId>"}` | `screenshots/<stepId>.png` pixel-diffed vs `baselines/<stepId>.png` (`matches` + optional `tolerance.pixels`) — see `visual.md`. |
+| `{"domshot": "<stepId>"}` | `snapshots/<stepId>.txt` (the per-step ARIA tree) text-diffed vs `baselines/<stepId>.snap.txt` (`matches`; optional `skip` regex list drops volatile lines) — see `visual.md`. |
 
 Predicates (camelCase): `isVisible`, `isHidden`, `isEnabled`, `isDisabled`,
 `isChecked`, `isUnchecked`, `exists`, `notExists`, `equals`, `contains`,

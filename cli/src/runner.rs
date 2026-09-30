@@ -1263,6 +1263,21 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             ),
             Err(err) => eprintln!("baselines: skipped ({err})"),
         }
+        match crate::domshot_accept::mint_domshot_baselines(
+            &scenario_dir,
+            &run.run_id,
+            None,
+            false,
+            false,
+        ) {
+            Ok(minted) => eprintln!(
+                "baselines: minted {} domshot(s) from run {}: {}",
+                minted.len(),
+                run.run_id,
+                minted.join(", ")
+            ),
+            Err(err) => eprintln!("domshot baselines: skipped ({err})"),
+        }
     }
 
     // 11. `--junit` — XML report for CI test-result ingestion. Written
