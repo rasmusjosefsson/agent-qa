@@ -116,9 +116,17 @@ pub fn discover(opts: &DiscoveryOpts) -> Result<Vec<DiscoveredPlugin>> {
             Ok(b) => b,
             Err(_) => continue,
         };
+        // Same silent-drop class as skills discovery: a malformed global
+        // config vanished every plugin it declared. Warn, don't skip.
         let cfg: ConfigFile = match toml::from_str(&bytes) {
             Ok(c) => c,
-            Err(_) => continue,
+            Err(e) => {
+                eprintln!(
+                    "[plugins] ignoring {} — TOML parse failed: {e}",
+                    global_path.display()
+                );
+                continue;
+            }
         };
         for (kind, binary_spec) in cfg.plugins.unwrap_or_default() {
             let resolved = resolve_plugin_spec(&binary_spec, &global_path)?;
