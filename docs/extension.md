@@ -36,6 +36,7 @@ What it captures per interaction:
 | Event | Draft produced |
 | --- | --- |
 | click on link/button/submit | `do/click` on a stable css locator (`#id` → `[data-qa]` → class path, hash-noise classes skipped) |
+| double-click | `do/dblclick` — the paired `click` drafts are debounced ~350ms and collapse into one dblclick |
 | navigate (link nav, typed URL, SPA pushState, back/forward) | `do/goto` with the landing URL (worker-side `webNavigation` — survives the page teardown) |
 | change on input/textarea | `do/type` with the committed value |
 | change on select | `do/select` with the option value |
