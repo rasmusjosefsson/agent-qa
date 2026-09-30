@@ -1413,11 +1413,28 @@ fn flatten_steps(
     flatten_steps_with_scope(steps, templates, None)
 }
 
+/// Deepest group/useTemplate/loop nesting flatten tolerates. A template
+/// whose steps `useTemplate` itself (or a mutual A->B->A) recurses
+/// forever — the cap turns that stack overflow into a named error.
+const MAX_EXPAND_DEPTH: usize = 64;
+
 fn flatten_steps_with_scope(
     steps: &[Step],
     templates: Option<&std::collections::BTreeMap<String, crate::scenario::Template>>,
     inputs: Option<&std::collections::HashMap<String, serde_json::Value>>,
 ) -> Result<Vec<Step>> {
+    flatten_steps_depth(steps, templates, inputs, 0)
+}
+
+fn flatten_steps_depth(
+    steps: &[Step],
+    templates: Option<&std::collections::BTreeMap<String, crate::scenario::Template>>,
+    inputs: Option<&std::collections::HashMap<String, serde_json::Value>>,
+    depth: usize,
+) -> Result<Vec<Step>> {
+    if depth > MAX_EXPAND_DEPTH {
+        bail!("step expansion deeper than {MAX_EXPAND_DEPTH} — a group/useTemplate/loop cycle?");
+    }
     let mut out: Vec<Step> = Vec::with_capacity(steps.len());
     for step in steps {
         match step {
@@ -1442,7 +1459,7 @@ fn flatten_steps_with_scope(
                         })?;
                     subs.push(parsed);
                 }
-                for sub in flatten_steps_with_scope(&subs, templates, inputs)? {
+                for sub in flatten_steps_depth(&subs, templates, inputs, depth + 1)? {
                     out.push(sub);
                 }
             }
@@ -1469,7 +1486,9 @@ fn flatten_steps_with_scope(
                     )
                 })?;
                 let nested_templates = template.templates.as_ref().or(Some(templates));
-                for sub in flatten_steps_with_scope(&template.steps, nested_templates, inputs)? {
+                for sub in
+                    flatten_steps_depth(&template.steps, nested_templates, inputs, depth + 1)?
+                {
                     out.push(sub);
                 }
             }
@@ -1552,7 +1571,7 @@ fn flatten_steps_with_scope(
                         subs.push(parsed);
                     }
                 }
-                for sub in flatten_steps_with_scope(&subs, templates, inputs)? {
+                for sub in flatten_steps_depth(&subs, templates, inputs, depth + 1)? {
                     out.push(sub);
                 }
             }
@@ -4898,6 +4917,35 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         let steps: Vec<Step> = serde_json::from_value(body).unwrap();
         let err = flatten_steps(&steps, None).unwrap_err().to_string();
         assert!(err.contains("no templates"));
+    }
+
+    #[test]
+    fn flatten_steps_use_template_self_cycle_errors_not_crash() {
+        // A template whose steps useTemplate itself would recurse without
+        // bound — the depth cap turns the stack overflow into an error.
+        use crate::scenario::Template;
+        let body = serde_json::json!([
+            { "id": "u1", "intent": "x", "kind": "do", "verb": "useTemplate",
+              "params": { "template": "loop" } }
+        ]);
+        let steps: Vec<Step> = serde_json::from_value(body).unwrap();
+        let template: Template = serde_json::from_value(serde_json::json!({
+            "steps": [
+                { "id": "t1", "intent": "a", "kind": "do", "verb": "reload" },
+                { "id": "t2", "intent": "recurse", "kind": "do", "verb": "useTemplate",
+                  "params": { "template": "loop" } }
+            ]
+        }))
+        .unwrap();
+        let mut templates = std::collections::BTreeMap::new();
+        templates.insert("loop".to_string(), template);
+        let err = flatten_steps(&steps, Some(&templates))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("deeper than"),
+            "expected a depth-cap error, got: {err}"
+        );
     }
 
     #[test]
