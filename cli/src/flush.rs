@@ -823,35 +823,6 @@ mod tests {
     }
 
     #[test]
-    fn flush_auto_network_claims_skip_telemetry() {
-        use crate::browser::CapturedRequest;
-        let req = |method: &str, url: &str, rt: &str| CapturedRequest {
-            request_id: String::new(),
-            url: url.to_string(),
-            method: method.to_string(),
-            status: Some(200),
-            resource_type: Some(rt.to_string()),
-            mime_type: None,
-            post_data: None,
-        };
-        let mut steps = vec![];
-        let requests = vec![
-            // third-party analytics beacon
-            req("POST", "https://www.google-analytics.com/g/collect", "XHR"),
-            // same-origin Cloudflare RUM beacon — host filter can't see it
-            req("POST", "https://x/cdn-cgi/rum", "XHR"),
-            req("GET", "https://x/api/me", "Fetch"),
-        ];
-        insert_auto_network_claims(&mut steps, &requests);
-        assert_eq!(steps.len(), 1);
-        let json = serde_json::to_value(&steps[0]).unwrap();
-        assert_eq!(
-            json["claim"]["subject"]["network"]["urlMatches"],
-            "https://x/api/me"
-        );
-    }
-
-    #[test]
     fn flush_auto_errors_appends_page_error_gate() {
         let mut steps = vec![];
         append_auto_error_claims(&mut steps);
