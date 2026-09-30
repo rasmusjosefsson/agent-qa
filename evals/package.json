@@ -304,7 +304,14 @@
     "golden:expand-login:tc01": "bun golden/expand-login-tc01.ts",
     "golden:expand-login:tc02": "bun golden/expand-login-tc02.ts",
     "golden:expand-pages:tc01": "bun golden/expand-pages-tc01.ts",
-    "golden:demoqa:tc01": "bun golden/demoqa-tc01.ts"
+    "golden:demoqa:tc01": "bun golden/demoqa-tc01.ts",
+    "golden:demoqa-widgets:tc01": "bun golden/demoqa-widgets-tc01.ts",
+    "golden:demoqa-widgets:tc02": "bun golden/demoqa-widgets-tc02.ts",
+    "golden:tap:tc05": "bun golden/tap-tc05.ts",
+    "golden:xyz:tc01": "bun golden/xyz-tc01.ts",
+    "golden:xyz:tc02": "bun golden/xyz-tc02.ts",
+    "golden:xyz:tc03": "bun golden/xyz-tc03.ts",
+    "golden:xyz:tc04": "bun golden/xyz-tc04.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"
