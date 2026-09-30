@@ -217,6 +217,88 @@ pub fn build_role_name_click(role: &str, name: &str) -> String {
     )
 }
 
+/// Build JS that resolves `role`+`name` to an element — same candidate set,
+/// visibility filter, popup-scope preference, and exact→partial→digit-tolerant
+/// ladder as `build_role_name_click` — then hit-tests it instead of activating.
+/// Returns `"missing"`/`"empty"`/`"offscreen"`/`"covered:<tag>"`/`"ok"`, the
+/// same vocabulary `ensure_click_target` reports for raw locators. Callers
+/// warn on the unhittable states so a hover/fill that agent-browser would
+/// dispatch into nothing doesn't pass silently.
+pub fn build_role_hit_test(role: &str, name: &str) -> String {
+    format!(
+        r#"(() => {{{prelude}
+  const want = __aqText({name_lit});
+  const role = {role_lit};
+  const map = {map};
+  const sels = (role && map[role]) ? map[role]
+    : (role ? ['[role="' + role + '"]'] : Object.keys(map).reduce((a, k) => a.concat(map[k]), []));
+  const cands = Array.from(document.querySelectorAll(sels.join(',')));
+  const exact = (n) => __aqName(n).some((c) => __aqText(c) === want);
+  const partial = (n) => want.length >= 3 && __aqName(n).some((c) => __aqText(c).includes(want));
+  const wantND = __aqND(want);
+  const digitTol = wantND.replace(/#/g, '').trim().length >= 3
+    && ((n) => __aqName(n).some((c) => __aqND(__aqText(c)) === wantND));
+  const root = __aqScopeRoot();
+  const vis = cands.filter(__aqVisible);
+  const el = __aqPrefer(vis.filter(exact), root)[0]
+    || __aqPrefer(cands.filter(exact), root)[0]
+    || __aqPrefer(vis.filter(partial), root)[0]
+    || __aqPrefer(cands.filter(partial), root)[0]
+    || (digitTol && __aqPrefer(vis.filter(digitTol), root)[0])
+    || (digitTol && __aqPrefer(cands.filter(digitTol), root)[0]);
+  if (!el) return 'missing';
+{tail}
+}})()"#,
+        prelude = activation_prelude(),
+        name_lit = json_str(name),
+        role_lit = json_str(role),
+        map = role_candidate_map_js(),
+        tail = hit_state_tail_js(),
+    )
+}
+
+/// The elementFromPoint hit-test tail shared by every hit-test builder —
+/// expects `el` bound in scope, returns 'empty'|'offscreen'|'covered:<tag>'|
+/// 'ok' with one scrollIntoView retry. `ensure_click_target`'s resolver JS
+/// and the role builders above/below all emit this identical tail.
+fn hit_state_tail_js() -> &'static str {
+    r#"  const hitState = () => {
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) return 'empty';
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    const hit = document.elementFromPoint(cx, cy);
+    if (!hit) return 'offscreen';
+    return (hit === el || el.contains(hit) || hit.contains(el))
+      ? 'ok'
+      : 'covered:' + hit.tagName.toLowerCase();
+  };
+  let s = hitState();
+  if (s === 'offscreen' || s.startsWith('covered')) {
+    el.scrollIntoView({ block: 'center', inline: 'center' });
+    s = hitState();
+  }
+  return s;"#
+}
+
+/// Scoped variant of [`build_role_hit_test`] — narrows through the scope
+/// chain (same `__aqScopedFind` resolution + `scope-miss:<i>` early return as
+/// `build_scoped_role_act`), then hit-tests the resolved element. Callers
+/// warn on unhittable states; a `scope-miss` result reaches the same
+/// `warn_unhittable` filter and stays silent — the act's own ScopeMiss bail
+/// reports the level.
+pub fn build_scoped_role_hit_test(role: &str, name: &str, scope: &[ScopeStep]) -> String {
+    format!(
+        "(() => {{{prelude}\n{find}\n{chain}const el = __aqScopedFind({role}, {name}, __aqOuter);\nif (!el) return 'missing';\n{tail}\n}})()",
+        prelude = activation_prelude(),
+        find = scoped_find_helper_js(),
+        chain = build_scope_chain(scope),
+        role = json_str(role),
+        name = json_str(name),
+        tail = hit_state_tail_js(),
+    )
+}
+
 /// JS collecting the page's live accessible-name candidates for a role —
 /// the input the auto-heal strategy ladder matches the recorded name
 /// against. Uses the same candidate set, visibility filter, and popup-scope
@@ -1175,6 +1257,24 @@ mod tests {
         // Synthetic clicks must focus like a real mouse click so keyboard
         // input lands on the element afterwards.
         assert!(js.contains("focus()"));
+    }
+
+    #[test]
+    fn role_hit_test_resolves_then_hit_checks() {
+        let js = build_role_hit_test("button", "Save");
+        assert!(js.contains("Save"));
+        assert!(js.contains("\"button\""));
+        assert!(js.contains("elementFromPoint"));
+        assert!(js.contains("scrollIntoView"));
+        // Returns the shared hit-state vocabulary, never activates.
+        assert!(js.contains("'missing'"));
+        assert!(js.contains("'covered:'"));
+        // Never activates — __aqPick is defined by the shared prelude but
+        // must not be invoked.
+        assert!(
+            !js.contains("__aqPick(el)"),
+            "hit test must not click: {js}"
+        );
     }
 
     #[test]

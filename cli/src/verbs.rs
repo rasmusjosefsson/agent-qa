@@ -2339,6 +2339,29 @@ fn act_on_scoped_role(
 ) -> Result<()> {
     let steps = scope_steps(role.scope.as_deref().unwrap_or(&[]), scope, scenario_dir)?;
     let name = resolve_name_match(role.name.as_ref(), scope, scenario_dir)?.unwrap_or_default();
+    // Same pre-flight as the unscoped Role branch: hover/fill dispatch
+    // through agent-browser's coordinate path with no post-check — probe the
+    // resolved element inside the scope chain first. Skipped for empty
+    // names (the "first match" probe can't distinguish a real target).
+    if matches!(act, RoleAct::Hover | RoleAct::Fill) && !name.is_empty() {
+        let state = browser::eval_expression(
+            session,
+            &crate::dom_activate::build_scoped_role_hit_test(&role.role, &name, &steps),
+        )
+        .map(|out| {
+            serde_json::from_str::<String>(out.trim()).unwrap_or_else(|_| out.trim().to_string())
+        })
+        .unwrap_or_else(|_| "eval-error".to_string());
+        warn_unhittable(
+            act.as_str(),
+            &format!(
+                "role='{}' name='{name}' ({} scope level(s))",
+                role.role,
+                steps.len()
+            ),
+            &state,
+        );
+    }
     match crate::dom_activate::act_scoped(session, &role.role, &name, &steps, act, value)? {
         crate::dom_activate::ScopedOutcome::Done => {
             eprintln!(
@@ -2378,6 +2401,29 @@ fn act_on_locator(
             }
             let name = resolve_name_match(role.name.as_ref(), scope, scenario_dir)?;
             let name_str = name.as_deref().unwrap_or("");
+            // Hover/fill on a role locator dispatch through agent-browser's
+            // coordinate path with no post-check — hit-test the resolved
+            // element first so a covered/offscreen target warns instead of
+            // silently missing. Click is already covered by ClickProbe's
+            // post-click effect check. Skipped for empty names: the
+            // name-less "first match" probe can't tell a real target from
+            // an arbitrary first candidate.
+            if matches!(act, RoleAct::Hover | RoleAct::Fill) && !name_str.is_empty() {
+                let state = browser::eval_expression(
+                    session,
+                    &crate::dom_activate::build_role_hit_test(&role.role, name_str),
+                )
+                .map(|out| {
+                    serde_json::from_str::<String>(out.trim())
+                        .unwrap_or_else(|_| out.trim().to_string())
+                })
+                .unwrap_or_else(|_| "eval-error".to_string());
+                warn_unhittable(
+                    act.as_str(),
+                    &format!("role='{}' name='{name_str}'", role.role),
+                    &state,
+                );
+            }
             // agent-browser's find requires --name when matching by
             // accessible name; without a name we fall back to role-only
             // (first match).
@@ -3895,6 +3941,106 @@ mod tests {
         let out = fs::read_to_string(&log).unwrap();
         clear_fake();
         assert!(out.contains("Select All"), "got: {out}");
+    }
+
+    #[test]
+    fn hover_and_fill_on_role_run_hit_test_eval() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake_eval_true(tmp.path(), &log);
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        // `type` is the step verb that dispatches RoleAct::Fill.
+        for verb in ["hover", "type"] {
+            let mut step = json!({
+                "id": "s1", "intent": "x", "kind": "do", "verb": verb,
+                "on": { "role": "button", "name": "Save" }
+            });
+            if verb == "type" {
+                step["value"] = json!({ "from": "literal", "literal": "v" });
+            }
+            dispatch_do(&parse(step), &ctx, &mut scope).unwrap();
+        }
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        // The eval payload is multi-line in the log; count the hit-test
+        // marker line — one per verb's pre-flight probe.
+        let hit_evals = out.matches("elementFromPoint").count();
+        assert_eq!(hit_evals, 2, "both verbs should probe the target: {out}");
+        assert!(out.contains("Save"), "probe carries the name: {out}");
+    }
+
+    #[test]
+    fn hover_on_scoped_role_runs_hit_test_eval() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake_eval_true(tmp.path(), &log);
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(
+            &parse(json!({
+                "id": "s1", "intent": "x", "kind": "do", "verb": "hover",
+                "on": {
+                    "role": "button", "name": "Save",
+                    "scope": [{"raw": {"kind": "css", "value": "nav"}, "reason": "t"}]
+                }
+            })),
+            &ctx,
+            &mut scope,
+        )
+        .unwrap();
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        assert!(
+            out.contains("elementFromPoint"),
+            "scoped hover probes: {out}"
+        );
+        assert!(
+            out.contains("__aqScopedFind"),
+            "probe resolves inside the scope chain: {out}"
+        );
+    }
+
+    #[test]
+    fn hover_on_nameless_role_skips_hit_test() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake_eval_true(tmp.path(), &log);
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(
+            &parse(json!({
+                "id": "s1", "intent": "x", "kind": "do", "verb": "hover",
+                "on": { "role": "button" }
+            })),
+            &ctx,
+            &mut scope,
+        )
+        .unwrap();
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        assert!(
+            !out.contains("elementFromPoint"),
+            "name-less role probe would resolve an arbitrary first match: {out}"
+        );
     }
 
     #[test]
