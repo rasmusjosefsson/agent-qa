@@ -82,6 +82,7 @@ async function handle(msg, sender) {
       steps: [],
       network: [],
       url: tab.url,
+      lastUrl: tab.url,
       startedAt: new Date().toISOString(),
     });
     persist(msg.tabId);
@@ -154,4 +155,34 @@ function download(filename, text) {
 chrome.tabs.onRemoved.addListener((tabId) => {
   sessions.delete(tabId);
   chrome.storage.session.remove(keyOf(tabId)).catch(() => {});
+});
+
+// Navigation capture: a link click that triggers a full nav, a
+// hand-typed URL, or an SPA pushState all move the page mid-recording
+// — with no matching goto step the bundle replays against a page that
+// isn't there. webNavigation is worker-side so it survives the content
+// script being torn down by the nav itself.
+async function recordNav(tabId, url) {
+  const s = await getSession(tabId);
+  if (!s) return;
+  // Dedupe: onCommitted and onHistoryStateUpdated can both fire for
+  // one transition, and the landing URL is already the bundle's `url`.
+  if (!url || url === s.lastUrl) return;
+  s.lastUrl = url;
+  s.steps.push({
+    kind: "do",
+    draft: {
+      intent: `navigate to ${safeHost(url) || url}`,
+      verb: "goto",
+      value: { from: "literal", literal: url },
+    },
+  });
+  persist(tabId);
+}
+
+chrome.webNavigation.onCommitted.addListener((d) => {
+  if (d.frameId === 0) recordNav(d.tabId, d.url);
+});
+chrome.webNavigation.onHistoryStateUpdated.addListener((d) => {
+  if (d.frameId === 0) recordNav(d.tabId, d.url);
 });
