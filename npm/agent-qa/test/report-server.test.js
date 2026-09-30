@@ -735,6 +735,22 @@ test('report viewer endpoints', async (t) => {
     }
   });
 
+  await t.test('artifact whose file becomes unreadable fails fast instead of hanging', async () => {
+    // stat() succeeds on a mode-000 file (metadata needs only the parent
+    // dir), then the open fails — before streamFile the socket stayed open
+    // and the client waited forever on the promised content-length.
+    const victim = path.join(fx.root, fx.sid, 'replays', fx.runId, 'screenshots', 'locked.png');
+    fs.writeFileSync(victim, 'PNGDATA-locked');
+    fs.chmodSync(victim, 0o000);
+    try {
+      await assert.rejects(
+        fetch(`${base}/api/scenarios/${fx.sid}/runs/${fx.runId}/artifact/screenshots/locked`),
+      );
+    } finally {
+      fs.chmodSync(victim, 0o644);
+    }
+  });
+
   await t.test('static index.html (React runs entry) is served', async () => {
     const res = await fetch(`${base}/`);
     assert.equal(res.status, 200);
