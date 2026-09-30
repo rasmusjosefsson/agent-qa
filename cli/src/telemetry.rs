@@ -33,13 +33,36 @@ const TELEMETRY_HOSTS: &[&str] = &[
     "fundingchoicesmessages.google.com",
     "adtrafficquality.google",
     "consent.google.com",
+    // Ad + tracker networks whose beacons carry per-impression ids —
+    // never app traffic, never refirable on replay.
+    "adnxs.com",
+    "adform.net",
+    "amazon-adsystem.com",
+    "adsafeprotected.com",
+    "adtrafficquality.google.com",
+    "bat.bing.com",
+    "chartbeat.com",
+    "connect.facebook.net",
+    "doubleverify.com",
+    "facebook.net",
+    "moatads.com",
+    "outbrain.com",
+    "quantserve.com",
+    "scorecardresearch.com",
+    "taboola.com",
+    "analytics.tiktok.com",
+    "tr.snapchat.com",
+    "alb.reddit.com",
+    "pixel.onaudience.com",
 ];
 
 /// Same-origin beacon paths a host blocklist can't see. `/cdn-cgi/` is
 /// Cloudflare's reserved namespace (rum, challenge-platform, zaraz,
 /// scripts) — every path under it is infrastructure, never app traffic,
 /// and the URLs carry per-visitor nonces that cannot refire on replay.
-const TELEMETRY_PATHS: &[&str] = &["/cdn-cgi/"];
+/// `/_vercel/` is Vercel's analytics/speed-insights reserved namespace —
+/// same deal on Vercel-hosted apps.
+const TELEMETRY_PATHS: &[&str] = &["/cdn-cgi/", "/_vercel/"];
 
 pub(crate) fn is_telemetry_url(url: &str) -> bool {
     let after_scheme = url.split("://").nth(1).unwrap_or("");
@@ -83,6 +106,11 @@ mod tests {
         ));
         assert!(is_telemetry_url(
             "https://pagead2.googlesyndication.com/pagead/x"
+        ));
+        assert!(is_telemetry_url("https://sb.scorecardresearch.com/beacon"));
+        assert!(is_telemetry_url("https://ads.amazon-adsystem.com/aax"));
+        assert!(is_telemetry_url(
+            "https://app.example.com/_vercel/insights/view"
         ));
         assert!(!is_telemetry_url("https://api.optimizelyx.com/v1"));
         assert!(!is_telemetry_url("https://example.com/api/customers"));

@@ -453,7 +453,7 @@ pub(crate) fn refuse_if_recording_active(session: &str) -> Result<()> {
     if let Some(rec) = crate::recorder_state::RecorderState::peek_active_session()? {
         if rec == session {
             bail!(
-                "session {session:?} is mid-recording — `record flush` or `record stop` it first, or run with a different --session"
+                "session {session:?} is mid-recording — `flush` it or `start --force` to abandon it, or run with a different --session"
             );
         }
     }

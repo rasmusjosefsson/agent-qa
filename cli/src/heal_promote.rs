@@ -343,6 +343,15 @@ fn apply_plan(plan: &Plan) -> Result<()> {
         let unmatched: Vec<&String> = by_id.keys().collect();
         bail!("patches reference unknown step ids: {unmatched:?}");
     }
+    // Promoting into a scenario a live recording has loaded is silently
+    // overwritten by the buffer copy at the next flush.
+    if let Some(sid) = scenario.get("id").and_then(|v| v.as_str()) {
+        if let Some(steps) = crate::recorder_state::RecorderState::bound_steps(sid)? {
+            eprintln!(
+                "warning: {sid:?} is bound to the active recording ({steps} step(s)) — `buffer load` again after promoting, or the next flush will overwrite this change"
+            );
+        }
+    }
     let mut bytes = serde_json::to_vec_pretty(&scenario)?;
     bytes.push(b'\n');
     atomic_write_file(&plan.scenario_file, &bytes)?;
