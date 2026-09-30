@@ -102,3 +102,37 @@
   already, not that verify or the recording is broken. Sequence: record every
   step, `agent-qa verify`, then `agent-qa flush`, then `agent-qa scenario
   check <path>` to validate the sealed file.
+
+- **Session id ≠ scenario sid, and neither flag you'd guess exists.**
+  `start` names the *browser session* with `--session <name>` (there is no
+  `--sid`); it generates a scenario sid like `s-<ts>__<rand>` that `flush`
+  writes and `scenario rename <sid> <new>` changes afterwards. `flush`
+  itself takes flags only — no positional intent or sid. `record-step`
+  and `record-setup` take no `--session` either: they append to the one
+  active buffer, they never drive a browser.
+
+- **There is no `fill` verb — the verb is `type`.** Drafts like
+  `{"verb":"fill"}` fail schema validation (which now runs on the raw
+  draft before serde, so a misplaced key inside a locator is caught at
+  record time too). `fill-unique`/`smart-fill` are CLI helpers, not step
+  verbs; a `type` step's `value` takes `{"from":"literal","literal":"…"}`
+  or `{"from":"input","input":"<name>"}`.
+
+- **`agent-browser find role <role>` cannot filter by name.** `--name`
+  is rejected. To drive a named element by ref: take
+  `agent-qa browser --session <s> --json snapshot -i`, read `data.refs`
+  (a `ref → {role, name}` map), pick the matching `@eN`, then
+  `click @eN`/`fill @eN` — refs are driveable, and they pierce open
+  shadow roots where no css selector reaches.
+
+- **Role locators reach into open shadow DOM.** For pages whose inputs
+  sit inside shadow roots (e.g. selectorshub's practice page), prefer
+  `{role, name}` locators over css — the a11y tree flattens through
+  shadow boundaries, and `element` attribute claims on role locators
+  read the snapshot's own `value`/`text`/state fields.
+
+- **Telemetry-heavy pages flood `--auto-network`.** Flush's default
+  auto-claims cover same-origin `/cdn-cgi/` beacons, but third-party
+  beacon hosts (any host not in the telemetry list) still become claims
+  whose nonce URLs never refire. On ad/analytics-heavy pages, flush
+  `--no-auto-network` and hand-author the claims that matter.

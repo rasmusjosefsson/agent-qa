@@ -434,6 +434,14 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                 .map_err(|e| anyhow!("step '{id}' drag: params.to is not a locator: {e}"))?;
             let dst = drag_endpoint(&to_loc, scope, ctx.scenario_dir)
                 .map_err(|e| anyhow!("step '{id}' drag.to: {e}"))?;
+            match drag_via_mouse(ctx.session, &src, &dst)
+                .map_err(|e| anyhow!("step '{id}' drag: {e}"))?
+            {
+                MouseDrag::Done => return Ok(None),
+                MouseDrag::SrcMiss => bail!("step '{id}' drag: source element not found"),
+                MouseDrag::DstMiss => bail!("step '{id}' drag: drop target not found"),
+                MouseDrag::Unsupported => {}
+            }
             let out = browser::eval_expression(
                 ctx.session,
                 &crate::dom_activate::build_drag_js(&src, &dst),
@@ -2049,6 +2057,117 @@ pub(crate) fn resolve_name_match(
         }
         None => Ok(None),
     }
+}
+
+/// Outcome of the trusted-input drag attempt.
+enum MouseDrag {
+    /// The whole gesture ran through the daemon's `mouse` primitives.
+    Done,
+    /// Source locator didn't resolve on the live page.
+    SrcMiss,
+    /// Drop-target locator didn't resolve on the live page.
+    DstMiss,
+    /// Coordinate resolution or the first `mouse move` failed — the
+    /// daemon lacks real input (fake browser) or is too old. Caller
+    /// should fall back to the DOM-dispatch gesture.
+    Unsupported,
+}
+
+/// Drag by real pointer input: resolve both endpoints to viewport
+/// coordinates, then drive the daemon's `mouse` primitives
+/// (Input.dispatchMouseEvent under the hood — trusted events). Native
+/// HTML5 dnd backends (react-dnd, SortableJS) and mouse-tracking
+/// widgets (jQuery UI, react-draggable) both ignore DOM-dispatched
+/// synthetic events but respond to real input. The move is interpolated
+/// in steps: several libraries only update while the pointer travels.
+fn drag_via_mouse(
+    session: &str,
+    src: &crate::dom_activate::DragEndpoint,
+    dst: &crate::dom_activate::DragEndpoint,
+) -> Result<MouseDrag> {
+    let opts = || browser::RunOpts::new();
+    let xy = |x: f64, y: f64| [format!("{x:.0}"), format!("{y:.0}")];
+    // Resolve coords, then confirm the source is actually under the pointer
+    // before pressing — animated scrollIntoView or late-loading embeds can
+    // shift the layout between the two evals, which used to press dead
+    // space and silently no-op the drag. One fresh-coords retry on miss.
+    let mut coords = (0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64);
+    let mut pressed_at_src = false;
+    for attempt in 0..2 {
+        let out = match browser::eval_expression(
+            session,
+            &crate::dom_activate::build_drag_coords_js(src, dst),
+        ) {
+            Ok(v) => v,
+            Err(_) => return Ok(MouseDrag::Unsupported),
+        };
+        let parsed: serde_json::Value = match serde_json::from_str(out.trim()) {
+            Ok(v) => v,
+            Err(_) => return Ok(MouseDrag::Unsupported),
+        };
+        match parsed.as_str() {
+            Some("src-miss") => return Ok(MouseDrag::SrcMiss),
+            Some("dst-miss") => return Ok(MouseDrag::DstMiss),
+            _ => {}
+        }
+        let (Some(sx), Some(sy), Some(dx), Some(dy)) = (
+            parsed.get("sx").and_then(|n| n.as_f64()),
+            parsed.get("sy").and_then(|n| n.as_f64()),
+            parsed.get("dx").and_then(|n| n.as_f64()),
+            parsed.get("dy").and_then(|n| n.as_f64()),
+        ) else {
+            return Ok(MouseDrag::Unsupported);
+        };
+        coords = (sx, sy, dx, dy);
+        // The first move doubles as the capability probe: an Err means the
+        // daemon doesn't do real input and nothing was pressed — safe to
+        // fall back to the DOM-dispatch path.
+        let [ax, ay] = xy(sx, sy);
+        if browser::run(session, ["mouse", "move", ax.as_str(), ay.as_str()], opts()).is_err() {
+            return Ok(MouseDrag::Unsupported);
+        }
+        let hit = browser::eval_expression(
+            session,
+            &crate::dom_activate::build_drag_hittest_js(src, sx, sy),
+        )
+        .unwrap_or_else(|_| "\"miss\"".into());
+        match hit.trim() {
+            "\"hit\"" => {
+                pressed_at_src = true;
+                break;
+            }
+            "\"gone\"" => return Ok(MouseDrag::SrcMiss),
+            "\"miss\"" if attempt == 0 => continue,
+            "\"miss\"" => return Ok(MouseDrag::SrcMiss),
+            // A non-string means the page can't run the probe (e.g. a fake
+            // browser) — don't gate the gesture on a broken hit test.
+            _ => {
+                pressed_at_src = true;
+                break;
+            }
+        }
+    }
+    if !pressed_at_src {
+        return Ok(MouseDrag::SrcMiss);
+    }
+    let (sx, sy, dx, dy) = coords;
+    let gesture = (|| -> Result<()> {
+        browser::run(session, ["mouse", "down"], opts()).map_err(|e| anyhow!("mouse down: {e}"))?;
+        const STEPS: u32 = 12;
+        for i in 1..=STEPS {
+            let x = sx + (dx - sx) * f64::from(i) / f64::from(STEPS);
+            let y = sy + (dy - sy) * f64::from(i) / f64::from(STEPS);
+            let [ax, ay] = xy(x, y);
+            browser::run(session, ["mouse", "move", ax.as_str(), ay.as_str()], opts())
+                .map_err(|e| anyhow!("mouse move {i}/{STEPS}: {e}"))?;
+        }
+        Ok(())
+    })();
+    // Always release the button so a failed gesture can't leave the
+    // pointer pressed for later steps.
+    let up = browser::run(session, ["mouse", "up"], opts());
+    gesture.and_then(|()| up.map_err(|e| anyhow!("mouse up: {e}")))?;
+    Ok(MouseDrag::Done)
 }
 
 /// Lower a `Locator` to a drag endpoint: role locators keep role + resolved
