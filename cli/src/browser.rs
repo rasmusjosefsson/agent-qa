@@ -495,10 +495,25 @@ fn exit_code(status: ExitStatus) -> i32 {
     status.code().unwrap_or(-1)
 }
 
+/// Fallback cap on every agent-browser subprocess call when
+/// `AGENT_QA_AGENT_BROWSER_TIMEOUT_MS` is unset: a wedged daemon call (eval on
+/// a deadlocked page, a get that never drains) must fail the step, not hang
+/// the replay forever. 300s sits above any legitimate call — slow opens,
+/// big eval payloads, a real file download — while still bounding a wedge.
+/// The env var overrides it; `0` disables the cap entirely.
+const DEFAULT_AGENT_BROWSER_TIMEOUT: Duration = Duration::from_secs(300);
+
 fn agent_browser_timeout() -> Option<Duration> {
-    let raw = env::var("AGENT_QA_AGENT_BROWSER_TIMEOUT_MS").ok()?;
-    let ms = raw.parse::<u64>().ok()?;
-    (ms > 0).then(|| Duration::from_millis(ms))
+    match env::var("AGENT_QA_AGENT_BROWSER_TIMEOUT_MS") {
+        Ok(raw) => match raw.parse::<u64>() {
+            Ok(0) => None,
+            Ok(ms) => Some(Duration::from_millis(ms)),
+            // A malformed value still gets the cap — silently disabling it
+            // is how a wedge hangs the replay forever.
+            Err(_) => Some(DEFAULT_AGENT_BROWSER_TIMEOUT),
+        },
+        Err(_) => Some(DEFAULT_AGENT_BROWSER_TIMEOUT),
+    }
 }
 
 fn socket_stall_hint(stderr: &str, stdout: &str, verb: &str, session: &str) -> String {
@@ -2242,6 +2257,50 @@ mod tests {
         env::set_var(BIN_ENV, "/nope/missing");
         _reset_bin_cache_for_tests();
         assert!(!close_session("default"));
+        clear_bin();
+    }
+
+    #[test]
+    fn default_timeout_applies_when_env_unset() {
+        let _g = lock_env();
+        env::remove_var("AGENT_QA_AGENT_BROWSER_TIMEOUT_MS");
+        assert_eq!(
+            agent_browser_timeout(),
+            Some(Duration::from_secs(300)),
+            "unset env must still bound subprocess calls"
+        );
+    }
+
+    #[test]
+    fn env_timeout_overrides_default_and_zero_disables() {
+        let _g = lock_env();
+        env::set_var("AGENT_QA_AGENT_BROWSER_TIMEOUT_MS", "42");
+        assert_eq!(agent_browser_timeout(), Some(Duration::from_millis(42)));
+        env::set_var("AGENT_QA_AGENT_BROWSER_TIMEOUT_MS", "0");
+        assert_eq!(agent_browser_timeout(), None, "0 opts out explicitly");
+        env::set_var("AGENT_QA_AGENT_BROWSER_TIMEOUT_MS", "garbage");
+        assert_eq!(
+            agent_browser_timeout(),
+            Some(Duration::from_secs(300)),
+            "a malformed value falls back to the cap, not off"
+        );
+        env::remove_var("AGENT_QA_AGENT_BROWSER_TIMEOUT_MS");
+    }
+
+    #[test]
+    fn timeout_kills_a_hung_call() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let bin = fake_browser(tmp.path(), "#!/bin/sh\nsleep 30\n");
+        set_bin(&bin);
+        let r = run(
+            "s",
+            ["get", "url"],
+            RunOpts::new().lenient().capture().timeout_ms(80),
+        )
+        .unwrap();
+        assert_eq!(r.exit_code, 124, "got: {}", r.stderr);
+        assert!(r.stderr.contains("timed out"), "got: {}", r.stderr);
         clear_bin();
     }
 }
