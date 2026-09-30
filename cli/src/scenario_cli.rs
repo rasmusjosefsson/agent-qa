@@ -807,11 +807,22 @@ pub fn run(args: &[String]) -> Result<u8> {
             let mut force = false;
             let mut url = "https://example.com/".to_string();
             let mut intent = "describe what this scenario does".to_string();
+            let mut from_har: Option<String> = None;
             let rest = &args[1..];
             let mut it = rest.iter();
             while let Some(a) = it.next() {
                 match a.as_str() {
                     "--force" => force = true,
+                    "--from-har" => {
+                        from_har = Some(
+                            it.next()
+                                .cloned()
+                                .ok_or_else(|| anyhow!("--from-har requires a value"))?,
+                        )
+                    }
+                    s if s.starts_with("--from-har=") => {
+                        from_har = Some(s["--from-har=".len()..].to_string())
+                    }
                     "--url" => {
                         url = it
                             .next()
@@ -836,6 +847,9 @@ pub fn run(args: &[String]) -> Result<u8> {
                 }
             }
             let file = file.ok_or_else(|| anyhow!("usage: scenario new <file>"))?;
+            if let Some(har) = from_har {
+                return new_from_har(Path::new(file), Path::new(&har), force, &intent);
+            }
             new(Path::new(file), force, &url, &intent)
         }
         Some("--help" | "-h" | "help") | None => {
@@ -850,7 +864,7 @@ pub fn run(args: &[String]) -> Result<u8> {
 
 fn help() {
     println!(
-        "agent-qa scenario — operations on a scenario JSON\n\nUsage:\n  agent-qa scenario validate <file> [--json | --format text|json|github]\n                                            Schema-validate the scenario (use '-' for stdin)\n  agent-qa scenario check <file> [--strict]  Schema-validate AND lint in one pass\n                                            (combined exit code: 0 iff both pass).\n                                            (use '-' for stdin)\n  agent-qa scenario check-all [--strict] [--root <dir>] [--format text|json|github]\n                                            Same combo across every scenario under the\n                                            scenarios root (--root overrides it);\n                                            exit 1 iff any fail.\n  agent-qa scenario validate-all [--root <dir>] [--json | --format text|json|github]\n                                            Schema-validate every scenario under the\n                                            scenarios root (--root overrides it);\n                                            exit 1 iff any fail\n  agent-qa scenario ls [--filter <substr>] [--root <dir>] [--json]\n                                            Print every sid under the scenarios root\n                                            (--root overrides it),\n                                            one per line (lex sort).\n  agent-qa scenario latest [--filter <substr>] [--root <dir>]\n                                            Print the sid whose scenario.json was most\n                                            recently modified (--root overrides the root).\n  agent-qa scenario count [--filter <substr>] [--root <dir>] [--json]\n                                            Print the number of scenarios under the root\n                                            (--root overrides it).\n                                            --filter narrows to sids containing <substr>.\n                                            --json wraps the count + filter in a JSON object.\n  agent-qa scenario summary  <file> [--filter <substr>] [--json]\n                                            Per-step summary (id, kind, verb/claim).\n                                            (use '-' for stdin)\n                                            --filter: case-insensitive substring\n                                            matched against id/intent/verb.\n  agent-qa scenario inputs   <file> [--json] List declared inputs (type/default/sensitive)\n  agent-qa scenario new      <file>          Scaffold a minimal valid scenario.json\n                                            (--force to overwrite, --url, --intent)\n  agent-qa scenario insert <file> <do|check> <draft-json> [--after <stepId> | --at <index>]
+        "agent-qa scenario — operations on a scenario JSON\n\nUsage:\n  agent-qa scenario validate <file> [--json | --format text|json|github]\n                                            Schema-validate the scenario (use '-' for stdin)\n  agent-qa scenario check <file> [--strict]  Schema-validate AND lint in one pass\n                                            (combined exit code: 0 iff both pass).\n                                            (use '-' for stdin)\n  agent-qa scenario check-all [--strict] [--root <dir>] [--format text|json|github]\n                                            Same combo across every scenario under the\n                                            scenarios root (--root overrides it);\n                                            exit 1 iff any fail.\n  agent-qa scenario validate-all [--root <dir>] [--json | --format text|json|github]\n                                            Schema-validate every scenario under the\n                                            scenarios root (--root overrides it);\n                                            exit 1 iff any fail\n  agent-qa scenario ls [--filter <substr>] [--root <dir>] [--json]\n                                            Print every sid under the scenarios root\n                                            (--root overrides it),\n                                            one per line (lex sort).\n  agent-qa scenario latest [--filter <substr>] [--root <dir>]\n                                            Print the sid whose scenario.json was most\n                                            recently modified (--root overrides the root).\n  agent-qa scenario count [--filter <substr>] [--root <dir>] [--json]\n                                            Print the number of scenarios under the root\n                                            (--root overrides it).\n                                            --filter narrows to sids containing <substr>.\n                                            --json wraps the count + filter in a JSON object.\n  agent-qa scenario summary  <file> [--filter <substr>] [--json]\n                                            Per-step summary (id, kind, verb/claim).\n                                            (use '-' for stdin)\n                                            --filter: case-insensitive substring\n                                            matched against id/intent/verb.\n  agent-qa scenario inputs   <file> [--json] List declared inputs (type/default/sensitive)\n  agent-qa scenario new      <file>          Scaffold a minimal valid scenario.json\n                                            (--force to overwrite, --url, --intent,\n                                            --from-har <har> rebuilds a nav skeleton\n                                            from a captured HAR — goto + url check +\n                                            idle wait per document nav; pair with\n                                            --mock-from/--offline at replay)\n  agent-qa scenario insert <file> <do|check> <draft-json> [--after <stepId> | --at <index>]
                                             Splice a validated step into a saved scenario.
                                             Draft shape matches record-step (id/kind
                                             omitted); position defaults to the end.
@@ -914,6 +928,143 @@ fn new(path: &Path, force: bool, url: &str, intent: &str) -> Result<u8> {
     bytes.push(b'\n');
     fs::write(path, &bytes).with_context(|| format!("write {}", path.display()))?;
     println!("wrote {} ({} bytes)", path.display(), bytes.len());
+    Ok(0)
+}
+
+/// `scenario new <file> --from-har <har>` — reconstruct a nav skeleton
+/// from a captured HAR: one goto + url-check + network-idle wait per
+/// document navigation (entries grouped by `pageref`, or the HTML
+/// responses in order when the export has none). Pair with
+/// `replay --mock-from <har> --offline` to re-run the captured session
+/// against its own backend state.
+fn new_from_har(path: &Path, har_path: &Path, force: bool, intent: &str) -> Result<u8> {
+    if path.exists() && !force {
+        bail!(
+            "refusing to overwrite {} (pass --force to replace)",
+            path.display()
+        );
+    }
+    let body =
+        fs::read_to_string(har_path).with_context(|| format!("read {}", har_path.display()))?;
+    let har: serde_json::Value = serde_json::from_str(&body)
+        .with_context(|| format!("unparseable HAR {}", har_path.display()))?;
+    let entries = har["log"]["entries"]
+        .as_array()
+        .ok_or_else(|| anyhow!("{}: no log.entries", har_path.display()))?;
+    if entries.is_empty() {
+        bail!("{}: empty log.entries", har_path.display());
+    }
+
+    // Document navigations, in capture order: GET entries whose response
+    // is HTML. When `pageref`s exist, keep at most the first doc per page
+    // (the page's own navigation, not an html fragment it fetched).
+    let mut navs: Vec<String> = Vec::new();
+    let mut seen_pages: Vec<String> = Vec::new();
+    let mut docs = 0usize;
+    for e in entries {
+        let method = e["request"]["method"].as_str().unwrap_or("");
+        let url = e["request"]["url"].as_str().unwrap_or("");
+        let mime = e["response"]["content"]["mimeType"].as_str().unwrap_or("");
+        if method != "GET" || !mime.contains("html") || url.is_empty() {
+            continue;
+        }
+        docs += 1;
+        if let Some(page) = e["pageref"].as_str() {
+            if seen_pages.iter().any(|p| p == page) {
+                continue;
+            }
+            seen_pages.push(page.to_string());
+        }
+        if navs.last().map(|u| u.as_str()) == Some(url) {
+            continue; // consecutive reload of the same document
+        }
+        navs.push(url.to_string());
+    }
+    if navs.is_empty() {
+        bail!(
+            "{}: no HTML document navigations in the HAR ({} entries{} — it may start mid-session; `--mock-from` still replays its API traffic)",
+            har_path.display(),
+            entries.len(),
+            if docs > 0 { ", docs were fetched-only" } else { "" }
+        );
+    }
+
+    let mut steps: Vec<serde_json::Value> = Vec::new();
+    let mut n = 0usize;
+    for url in &navs {
+        n += 1;
+        steps.push(serde_json::json!({
+            "id": format!("s{n}"),
+            "intent": format!("navigate to {url}"),
+            "kind": "do",
+            "verb": "goto",
+            "value": { "from": "literal", "literal": url }
+        }));
+        n += 1;
+        let label = url
+            .split_once("://")
+            .map(|(_, rest)| rest)
+            .unwrap_or(url)
+            .split(['?', '#'])
+            .next()
+            .unwrap_or(url);
+        steps.push(serde_json::json!({
+            "id": format!("s{n}"),
+            "intent": format!("landed on {label}"),
+            "kind": "check",
+            "claim": { "subject": { "url": true }, "predicate": "exists" }
+        }));
+        n += 1;
+        steps.push(serde_json::json!({
+            "id": format!("s{n}"),
+            "intent": "page settles (network idle)",
+            "kind": "do",
+            "verb": "wait",
+            "params": { "idle": true, "timeoutMs": 10_000 }
+        }));
+    }
+
+    let id = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("scenario")
+        .to_string();
+    let intent = if intent.is_empty() {
+        format!(
+            "reconstructed from {}",
+            har_path.file_name().unwrap_or_default().to_string_lossy()
+        )
+    } else {
+        intent.to_string()
+    };
+    let body = serde_json::json!({
+        "schema": "scenario/2",
+        "id": id,
+        "intent": intent,
+        "env": {
+            "open": [
+                { "kind": "nav", "url": navs[0], "intent": "land on the page" }
+            ]
+        },
+        "steps": steps,
+    });
+    schema::validate_value(&body).context("from-har scenario failed schema validation")?;
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
+        }
+    }
+    let mut bytes = serde_json::to_string_pretty(&body)?.into_bytes();
+    bytes.push(b'\n');
+    fs::write(path, &bytes).with_context(|| format!("write {}", path.display()))?;
+    println!(
+        "wrote {} ({} bytes) — {} navigation(s); replay it against the captured backend with `replay <sid> --mock-from {} --offline`",
+        path.display(),
+        bytes.len(),
+        navs.len(),
+        har_path.display()
+    );
     Ok(0)
 }
 
@@ -4225,6 +4376,132 @@ mod tests {
         new(&p, true, "https://x/", "x").unwrap();
         let body = fs::read_to_string(&p).unwrap();
         assert!(body.contains("\"schema\": \"scenario/2\""));
+    }
+
+    fn write_har(dir: &std::path::Path, entries: serde_json::Value) -> std::path::PathBuf {
+        let p = dir.join("cap.har");
+        fs::write(
+            &p,
+            serde_json::json!({"log": {"version": "1.2", "entries": entries}}).to_string(),
+        )
+        .unwrap();
+        p
+    }
+
+    fn har_entry(url: &str, method: &str, mime: &str, pageref: Option<&str>) -> serde_json::Value {
+        let mut e = serde_json::json!({
+            "request": { "method": method, "url": url },
+            "response": { "status": 200, "content": { "mimeType": mime } }
+        });
+        if let Some(pr) = pageref {
+            e["pageref"] = serde_json::Value::String(pr.to_string());
+        }
+        e
+    }
+
+    #[test]
+    fn new_from_har_builds_nav_skeleton_per_page() {
+        let tmp = TempDir::new().unwrap();
+        let har = write_har(
+            tmp.path(),
+            serde_json::json!([
+                har_entry(
+                    "https://app.example.com/login",
+                    "GET",
+                    "text/html",
+                    Some("page_1")
+                ),
+                har_entry(
+                    "https://api.example.com/me",
+                    "GET",
+                    "application/json",
+                    Some("page_1")
+                ),
+                har_entry(
+                    "https://app.example.com/login/form.html",
+                    "GET",
+                    "text/html",
+                    Some("page_1")
+                ),
+                har_entry(
+                    "https://app.example.com/dash",
+                    "GET",
+                    "text/html",
+                    Some("page_2")
+                ),
+                har_entry(
+                    "https://api.example.com/items",
+                    "POST",
+                    "application/json",
+                    Some("page_2")
+                ),
+            ]),
+        );
+        let p = tmp.path().join("s1.json");
+        new_from_har(&p, &har, false, "debug repro").unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&fs::read(&p).unwrap()).unwrap();
+        // One nav per pageref (the fetched html fragment is skipped).
+        assert_eq!(
+            parsed["env"]["open"][0]["url"],
+            "https://app.example.com/login"
+        );
+        let steps = parsed["steps"].as_array().unwrap();
+        assert_eq!(steps.len(), 6, "2 navs × (goto + check + wait): {steps:?}");
+        assert_eq!(steps[0]["verb"], "goto");
+        assert_eq!(
+            steps[0]["value"]["literal"],
+            "https://app.example.com/login"
+        );
+        assert_eq!(steps[3]["value"]["literal"], "https://app.example.com/dash");
+        assert_eq!(steps[2]["params"]["idle"], true);
+        assert_eq!(parsed["intent"], "debug repro");
+        // The scaffolded file passes the schema gate.
+        validate(&p, LintFormat::Text).unwrap();
+    }
+
+    #[test]
+    fn new_from_har_without_pageref_uses_html_responses() {
+        let tmp = TempDir::new().unwrap();
+        let har = write_har(
+            tmp.path(),
+            serde_json::json!([
+                har_entry("https://a.example/", "GET", "text/html", None),
+                har_entry("https://a.example/x.js", "GET", "text/javascript", None),
+                har_entry("https://a.example/api", "POST", "application/json", None),
+                har_entry("https://b.example/", "GET", "text/html;charset=utf-8", None),
+            ]),
+        );
+        let p = tmp.path().join("s2.json");
+        new_from_har(&p, &har, false, "").unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&fs::read(&p).unwrap()).unwrap();
+        let steps = parsed["steps"].as_array().unwrap();
+        assert_eq!(steps.len(), 6);
+        assert_eq!(steps[0]["value"]["literal"], "https://a.example/");
+        assert_eq!(steps[3]["value"]["literal"], "https://b.example/");
+        assert!(parsed["intent"].as_str().unwrap().contains("cap.har"));
+    }
+
+    #[test]
+    fn new_from_har_refuses_empty_and_docless_hars() {
+        let tmp = TempDir::new().unwrap();
+        let empty = write_har(tmp.path(), serde_json::json!([]));
+        let err = new_from_har(&tmp.path().join("a.json"), &empty, false, "x")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("empty log.entries"), "{err}");
+        let no_docs = write_har(
+            tmp.path(),
+            serde_json::json!([har_entry(
+                "https://api.example/me",
+                "GET",
+                "application/json",
+                None
+            )]),
+        );
+        let err = new_from_har(&tmp.path().join("b.json"), &no_docs, false, "x")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no HTML document navigations"), "{err}");
     }
 
     #[test]
