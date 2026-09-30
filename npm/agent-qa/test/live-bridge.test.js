@@ -1278,3 +1278,29 @@ test('a late download after the click committed still records the step and flags
   );
   bridge.stop();
 });
+
+test('stale event fires after 3 lost captures, fresh when a capture answers', async () => {
+  FakeWS.instances = [];
+  const bridge = createLiveBridge({
+    getCdpUrl: async () => 'ws://127.0.0.1:1/devtools/browser/x',
+    WebSocketImpl: FakeWS,
+    fetchImpl: fakeFetch,
+    captureMs: 1,
+    captureWatchdogMs: 1,
+    downloadHoldMs: 0,
+  });
+  const events = [];
+  const res = { write: (s) => events.push(s), end() {} };
+  const sock = await connect(bridge, res);
+  // Never answer any capture — the renderer-hung case. ~1ms per lost capture.
+  await new Promise((r) => setTimeout(r, 50));
+  assert.ok(
+    events.some((e) => e.includes('event: stale')),
+    'stale broadcast after the lost-capture streak',
+  );
+  // A late capture response recovers and announces 'fresh'.
+  const capId = sock.sent.findLast((m) => m.method === 'Page.captureScreenshot').id;
+  sock.recv({ id: capId, result: { data: 'JPEGBASE64' } });
+  assert.ok(events.some((e) => e.includes('event: fresh')), 'recovery announces fresh');
+  bridge.stop();
+});
