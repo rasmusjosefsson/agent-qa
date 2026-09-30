@@ -118,6 +118,24 @@ fn set_paused(paused: bool, args: &[String]) -> Result<u8> {
         );
     } else {
         println!("resumed {} — capturing steps again", state.sid);
+        // Resume on a dead session flips the flag but nothing recaptures —
+        // the daemon's capture died with it. Probe (same 3s bound status
+        // uses) and say so instead of printing a lie.
+        let alive = browser::run(
+            &state.session,
+            ["--json", "errors"],
+            browser::RunOpts::new()
+                .capture()
+                .lenient()
+                .timeout_ms(3_000),
+        )
+        .is_ok_and(|r| r.exit_code == 0);
+        if !alive {
+            eprintln!(
+                "[v2-record] warning: session {:?} is unreachable — resume can't restart a dead session's capture; `record status` checks liveness, `agent-qa start --force` begins a fresh recording",
+                state.session
+            );
+        }
     }
     Ok(0)
 }
@@ -207,6 +225,20 @@ mod tests {
         let tmp = seed(false);
         set_paused(true, &[]).unwrap();
         assert!(RecorderState::load_active().unwrap().paused);
+        set_paused(false, &[]).unwrap();
+        assert!(!RecorderState::load_active().unwrap().paused);
+        drop(tmp);
+        cleanup();
+    }
+
+    #[test]
+    fn resume_on_a_dead_session_still_flips_the_flag() {
+        let _guard = lock_env();
+        let tmp = seed(true);
+        // The 3s liveness probe fails fast with no binary — resume warns
+        // about the dead session but still succeeds (flag flips).
+        std::env::remove_var(crate::browser::BIN_ENV);
+        crate::browser::_reset_bin_cache_for_tests();
         set_paused(false, &[]).unwrap();
         assert!(!RecorderState::load_active().unwrap().paused);
         drop(tmp);
