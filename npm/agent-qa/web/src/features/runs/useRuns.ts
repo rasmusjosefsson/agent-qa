@@ -273,19 +273,28 @@ export function useRuns(): RunsApi {
       if (!res.ok) return res
       autoFollow.current = true
       setExpanded((prev) => new Set(prev).add(sid))
+      // Poll for the new run's audit to land. A replay that dies before
+      // minting its run dir (schema error, bin resolution) never registers —
+      // without a deadline the click looks like it did nothing.
       const deadline = Date.now() + 30000
-      const tick = async () => {
-        await loadRuns(sid)
+      const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+      while (Date.now() < deadline) {
+        await sleep(500)
+        await loadRuns(sid).catch(() => {})
         const fresh = (runsRef.current[sid] || []).filter((r) => !before.has(r.runId))
         if (fresh.length) {
           fresh.sort((a, b) => (a.runId < b.runId ? 1 : -1))
           await selectRun(sid, fresh[0].runId, false)
-          return
+          return { ok: true }
         }
-        if (Date.now() < deadline) setTimeout(tick, 700)
       }
-      setTimeout(tick, 500)
-      return { ok: true }
+      return {
+        ok: false,
+        error:
+          'the replay process never registered a run — it likely died before the first step (bad scenario or missing browser). Run `agent-qa replay ' +
+          sid +
+          '` in a terminal for the real error.',
+      }
     },
     [loadRuns, selectRun]
   )
