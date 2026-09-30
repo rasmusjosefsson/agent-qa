@@ -1870,6 +1870,16 @@ fn list_lint_rules(json_out: bool) -> Result<u8> {
             description: "baselines/<stepId>.png or .snap.txt exists but no shot/domshot claim references <stepId> — a stale golden left by a deleted or renamed step. Skipped for stdin input.",
         },
         Rule {
+            code: "upload-file-missing",
+            severity: "warning",
+            description: "An upload/fileChooser step references a path that doesn't exist — replay fails at the step. Skipped for stdin input and for {{...}} or ${...} templated paths.",
+        },
+        Rule {
+            code: "upload-file-absolute",
+            severity: "warning",
+            description: "An upload/fileChooser step references an absolute path — it replays on this machine only; package it under the scenario's files/ dir and reference files/<name>.",
+        },
+        Rule {
             code: "brittle-locator",
             severity: "warning",
             description: "A raw css/xpath locator is positional or generated-looking (xpath [N]/last()/position(), css :nth-* chains, #id with a digit/hash tail). Self-heal can't rescue these — prefer role+name, text, or a stable css/testid.",
@@ -2654,6 +2664,68 @@ fn lint_findings(path: &Path) -> Result<(Vec<Finding>, Scenario)> {
                             ),
                         });
                     }
+                }
+            }
+
+            // 14) upload/fileChooser file refs — a path that doesn't
+            // resolve at lint time fails at replay anyway; an absolute
+            // path works only on the machine it was recorded on
+            // (flush's files/ packaging exists for portability).
+            let mut file_refs: Vec<(String, String)> = Vec::new(); // (stepId, path)
+            if let Some(steps) = raw.get("steps").and_then(|s| s.as_array()) {
+                for step in steps {
+                    if step.get("kind").and_then(|k| k.as_str()) != Some("do") {
+                        continue;
+                    }
+                    let step_id = step
+                        .get("id")
+                        .and_then(|i| i.as_str())
+                        .unwrap_or("?")
+                        .to_string();
+                    let node = match step.get("verb").and_then(|v| v.as_str()) {
+                        Some("upload") => step.get("value").and_then(|v| v.get("literal")),
+                        Some("fileChooser") => step.get("params").and_then(|p| p.get("files")),
+                        _ => None,
+                    };
+                    let mut push = |s: &str| file_refs.push((step_id.clone(), s.to_string()));
+                    match node {
+                        Some(serde_json::Value::String(s)) => push(s),
+                        Some(serde_json::Value::Array(items)) => {
+                            for item in items.iter().filter_map(|i| i.as_str()) {
+                                push(item);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            for (step_id, p) in file_refs {
+                if p.contains("{{") || p.contains("${") {
+                    continue; // templated — resolves at replay
+                }
+                let abs = Path::new(&p).is_absolute();
+                let resolved = if abs {
+                    Path::new(&p).to_path_buf()
+                } else {
+                    scenario_dir.join(&p)
+                };
+                if !resolved.is_file() {
+                    findings.push(Finding {
+                        severity: "warning",
+                        code: "upload-file-missing",
+                        message: format!(
+                            "step {step_id:?} references file {p:?} — not found at {}; replay fails at this step",
+                            resolved.display()
+                        ),
+                    });
+                } else if abs {
+                    findings.push(Finding {
+                        severity: "warning",
+                        code: "upload-file-absolute",
+                        message: format!(
+                            "step {step_id:?} references absolute path {p:?} — replays on this machine only; package under files/ and reference files/<name>"
+                        ),
+                    });
                 }
             }
         }
@@ -4492,6 +4564,74 @@ mod tests {
         fs::create_dir_all(dir.join("baselines")).unwrap();
         fs::write(dir.join("baselines/s0.png"), b"png").unwrap();
         assert_eq!(lint(&p, LintFormat::Text, false, None, None).unwrap(), 0);
+    }
+
+    #[test]
+    fn lint_upload_file_refs() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("demo");
+        fs::create_dir_all(dir.join("files")).unwrap();
+        let p = dir.join("scenario.json");
+        fs::write(
+            &p,
+            r#"{
+              "schema": "scenario/2", "id": "demo", "intent": "x",
+              "steps": [
+                { "id": "s0", "intent": "up", "kind": "do", "verb": "upload",
+                  "on": "css:input[type=file]",
+                  "value": { "from": "literal", "literal": "files/avatar.png" } },
+                { "id": "s1", "intent": "pick", "kind": "do", "verb": "fileChooser",
+                  "params": { "files": ["missing.zip", "files/avatar.png", "{{vars.p}}"] } }
+              ]
+            }"#,
+        )
+        .unwrap();
+        // files/avatar.png + missing.zip don't exist yet → 3 missing
+        // findings (s0 + both s1 entries); {{vars.p}} skips as templated.
+        let (findings, _) = lint_findings(&p).unwrap();
+        let missing: Vec<_> = findings
+            .iter()
+            .filter(|f| f.code == "upload-file-missing")
+            .collect();
+        assert_eq!(missing.len(), 3);
+        fs::write(dir.join("files/avatar.png"), b"png").unwrap();
+        // Packaged refs resolve now; only missing.zip still flags.
+        let (findings, _) = lint_findings(&p).unwrap();
+        let missing: Vec<_> = findings
+            .iter()
+            .filter(|f| f.code == "upload-file-missing")
+            .collect();
+        assert_eq!(missing.len(), 1);
+        assert!(missing[0].message.contains("missing.zip"));
+    }
+
+    #[test]
+    fn lint_upload_absolute_path_flags_portability() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("demo");
+        fs::create_dir_all(&dir).unwrap();
+        let abs = tmp.path().join("upload.bin");
+        fs::write(&abs, b"x").unwrap();
+        let p = dir.join("scenario.json");
+        fs::write(
+            &p,
+            format!(
+                r#"{{
+              "schema": "scenario/2", "id": "demo", "intent": "x",
+              "steps": [
+                {{ "id": "s0", "intent": "up", "kind": "do", "verb": "upload",
+                  "on": "css:input[type=file]",
+                  "value": {{ "from": "literal", "literal": "{}" }} }}
+              ]
+            }}"#,
+                abs.display()
+            ),
+        )
+        .unwrap();
+        // File exists → upload-file-absolute (portability), not missing.
+        let (findings, _) = lint_findings(&p).unwrap();
+        assert!(findings.iter().any(|f| f.code == "upload-file-absolute"));
+        assert!(!findings.iter().any(|f| f.code == "upload-file-missing"));
     }
 
     #[test]
