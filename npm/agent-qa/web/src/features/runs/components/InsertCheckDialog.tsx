@@ -26,8 +26,15 @@ import {
 } from '@/components/ui/select'
 import { insertStep } from '@/lib/runs-api'
 
-type SubjectKind = 'element' | 'url' | 'shot' | 'domshot' | 'console' | 'network' | 'dialog'
-type SubjectKind = 'element' | 'elementCount' | 'url' | 'shot' | 'console' | 'network' | 'dialog'
+type SubjectKind =
+  | 'element'
+  | 'elementCount'
+  | 'url'
+  | 'shot'
+  | 'domshot'
+  | 'console'
+  | 'network'
+  | 'dialog'
 
 const PREDICATES = [
   'isVisible',
@@ -94,6 +101,8 @@ export interface CheckDraft {
   useCss: boolean
   shotStep: string
   shotTolerance: string
+  domshotStep: string
+  domshotSkip: string
   consoleType: string
   consoleText: string
   netUrl: string
@@ -116,6 +125,16 @@ export function buildCheckClaim(d: CheckDraft): Record<string, unknown> {
     case 'shot':
       subject = { shot: d.shotStep.trim() }
       break
+    case 'domshot': {
+      const sub: Record<string, unknown> = { domshot: d.domshotStep.trim() }
+      const skip = d.domshotSkip
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+      if (skip.length) sub.skip = skip
+      subject = sub
+      break
+    }
     case 'console': {
       const m: Record<string, unknown> = {}
       if (d.consoleType && d.consoleType !== 'any') m.type = d.consoleType
@@ -167,6 +186,8 @@ export function checkDraftValid(d: CheckDraft): boolean {
       return true
     case 'shot':
       return !!d.shotStep.trim()
+    case 'domshot':
+      return !!d.domshotStep.trim()
     case 'network':
       return (
         (!!d.netUrl.trim() || (!!d.netMethod && d.netMethod !== 'any')) &&
@@ -239,41 +260,6 @@ export function InsertCheckDialog({
     setPredicate(defaults[v])
   }
 
-  const subject = (): Record<string, unknown> => {
-    switch (subjectKind) {
-      case 'url':
-        return { url: true }
-      case 'dialog':
-        return { dialog: true }
-      case 'shot':
-        return { shot: shotStep.trim() }
-      case 'domshot': {
-        const sub: Record<string, unknown> = { domshot: domshotStep.trim() }
-        const skip = domshotSkip
-          .split(',')
-          .map((s) => s.trim())
-          .filter(Boolean)
-        if (skip.length) sub.skip = skip
-        return sub
-      }
-      case 'console': {
-        const m: Record<string, unknown> = {}
-        if (consoleType && consoleType !== 'any') m.type = consoleType
-        if (consoleText.trim()) m.text = consoleText.trim()
-        return { console: Object.keys(m).length ? m : true }
-      }
-      case 'network': {
-        const m: Record<string, unknown> = {}
-        if (netUrl.trim()) m.urlMatches = netUrl.trim()
-        if (netMethod && netMethod !== 'any') m.method = netMethod
-        const sub: Record<string, unknown> = { network: m }
-        if (netKind !== 'fired') sub.ofKind = netKind
-        if (netKind === 'responseJsonPath' && netPath.trim()) sub.path = netPath.trim()
-        return sub
-      }
-      default:
-        return elementSubject(role, name, css, useCss)
-    }
   const draft: CheckDraft = {
     subjectKind,
     role,
@@ -282,6 +268,8 @@ export function InsertCheckDialog({
     useCss,
     shotStep,
     shotTolerance,
+    domshotStep,
+    domshotSkip,
     consoleType,
     consoleText,
     netUrl,
@@ -292,17 +280,6 @@ export function InsertCheckDialog({
     value,
   }
 
-  const valid =
-    !!intent.trim() &&
-    (subjectKind === 'url' ||
-      subjectKind === 'dialog' ||
-      (subjectKind === 'shot' && !!shotStep.trim()) ||
-      (subjectKind === 'domshot' && !!domshotStep.trim()) ||
-      subjectKind === 'console' ||
-      (subjectKind === 'network' &&
-        (!!netUrl.trim() || (!!netMethod && netMethod !== 'any')) &&
-        (netKind !== 'responseJsonPath' || !!netPath.trim())) ||
-      (subjectKind === 'element' && (useCss ? !!css.trim() : !!role.trim())))
   const valid = !!intent.trim() && checkDraftValid(draft)
 
   const submit = async () => {
