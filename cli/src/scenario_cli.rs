@@ -1202,6 +1202,14 @@ fn redact(
     }
     let token = format!("{{{{vars.{name}}}}}");
     let mut sc = load_scenario(path)?;
+    if !dry_run {
+        if let Some(steps) = bound_recording_steps(&sc.id)? {
+            eprintln!(
+                "warning: {:?} is bound to the active recording ({steps} step(s)) — `buffer load` again after editing, or the next flush will overwrite this change",
+                sc.id
+            );
+        }
+    }
     let mut upgraded = 0usize;
     let mut swept = 0usize;
     for step in sc.steps.iter_mut() {
@@ -1692,6 +1700,12 @@ fn tag(sid: &str, add: &[String], remove: &[String], json_out: bool) -> Result<u
         return Ok(0);
     }
 
+    if let Some(steps) = bound_recording_steps(sid)? {
+        eprintln!(
+            "warning: {sid:?} is bound to the active recording ({steps} step(s)) — `buffer load` again after editing, or the next flush will overwrite this change"
+        );
+    }
+
     for t in add {
         if !tags.contains(t) {
             tags.push(t.clone());
@@ -1733,19 +1747,10 @@ fn tag(sid: &str, add: &[String], remove: &[String], json_out: bool) -> Result<u
     Ok(0)
 }
 
-/// Step count of the active recording bound to `sid` (its own sid or the
-/// scenario it loaded via `buffer load` / `record continue`), if any.
-/// Mutating a bound scenario risks being overwritten by the next flush —
-/// or orphaning the live buffer entirely.
+/// Shorthand for the bound-recording check shared by the scenario
+/// mutators (delete/rename refuse; in-place edits warn).
 fn bound_recording_steps(sid: &str) -> Result<Option<usize>> {
-    Ok(
-        match crate::recorder_state::RecorderState::try_load_active()? {
-            Some(state) if state.sid == sid || state.source_ref.as_deref() == Some(sid) => {
-                Some(state.steps.len())
-            }
-            _ => None,
-        },
-    )
+    crate::recorder_state::RecorderState::bound_steps(sid)
 }
 
 fn delete(sid: &str, confirmed: bool) -> Result<u8> {
