@@ -40,12 +40,15 @@ pub fn run(args: &[String]) -> Result<u8> {
     } else {
         render_text(&opts, &entries);
     }
+    if opts.apply {
+        return apply_entries(&entries);
+    }
     Ok(0)
 }
 
 fn print_help() {
     println!(
-        "agent-qa heal-chronic \u{2014} flag steps that self-heal run after run\n\nUsage:\n  agent-qa heal-chronic <sid | --all> [--min-runs N] [--json] [--issue]\n\nWalks <sid>/replays/*/heal.jsonl and reports steps that auto-healed in\nat least --min-runs distinct runs (default 2). --all scans every scenario\nunder the root and prints one cross-scenario board. Chronic steps are\nstable locator bugs wearing a flaky costume \u{2014} absorb the patch\npermanently with the printed heal-promote command. --issue renders the\nboard as a paste-ready markdown issue body instead of the table.\n\nExit code is always 0 on success; a non-empty list means debt exists."
+        "agent-qa heal-chronic \u{2014} flag steps that self-heal run after run\n\nUsage:\n  agent-qa heal-chronic <sid | --all> [--min-runs N] [--json] [--issue]\n                                        [--apply]\n\nWalks <sid>/replays/*/heal.jsonl and reports steps that auto-healed in\nat least --min-runs distinct runs (default 2). --all scans every scenario\nunder the root and prints one cross-scenario board. Chronic steps are\nstable locator bugs wearing a flaky costume \u{2014} absorb the patch\npermanently with the printed heal-promote command, or pass --apply to\npromote each row's latest patch into scenario.json in one shot (same\ncontent-hash rebase guard as heal-promote; a stale patch skips its row,\nnever rewrites blindly). --issue renders the board as a paste-ready\nmarkdown issue body instead of the table.\n\nExit code is 0 on success; --apply returns 1 when any row fails to apply."
     );
 }
 
@@ -57,6 +60,7 @@ struct Opts {
     min_runs: usize,
     json: bool,
     issue: bool,
+    apply: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -85,6 +89,7 @@ fn parse_args(args: &[String]) -> Result<Opts> {
     let mut min_runs = 2usize;
     let mut json = false;
     let mut issue = false;
+    let mut apply = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -94,6 +99,7 @@ fn parse_args(args: &[String]) -> Result<Opts> {
             }
             "--json" => json = true,
             "--issue" => issue = true,
+            "--apply" => apply = true,
             "--all" => all = true,
             "--min-runs" => {
                 min_runs = it
@@ -124,12 +130,16 @@ fn parse_args(args: &[String]) -> Result<Opts> {
     if json && issue {
         bail!("--json and --issue are mutually exclusive");
     }
+    if apply && (json || issue) {
+        bail!("--apply is a text-mode action; drop --json/--issue");
+    }
     Ok(Opts {
         sid,
         all,
         min_runs,
         json,
         issue,
+        apply,
     })
 }
 
@@ -234,6 +244,52 @@ pub(crate) fn collect_dir(
             .then(a.step_id.cmp(&b.step_id))
     });
     out
+}
+
+/// `--apply`: promote every chronic row's latest patch into its scenario.
+/// Each row is independent — one stale hash (hand-edited scenario since the
+/// patch was written) skips that row, never blocks the batch. Prints a
+/// per-row outcome; exit 1 when any row fails.
+fn apply_entries(entries: &[Chronic]) -> Result<u8> {
+    if entries.is_empty() {
+        return Ok(0);
+    }
+    let mut applied = 0usize;
+    let mut skipped = 0usize;
+    let mut failed = 0usize;
+    for e in entries {
+        let scenario_file = match paths::scenario_dir(&e.sid) {
+            Ok(d) => d.join("scenario.json"),
+            Err(err) => {
+                eprintln!("  {} {}: SKIP ({err:#})", e.sid, e.step_id);
+                failed += 1;
+                continue;
+            }
+        };
+        match crate::heal_promote::promote_run_steps(
+            &scenario_file,
+            &e.last_run_id,
+            std::slice::from_ref(&e.step_id),
+        ) {
+            Ok(0) => {
+                println!(
+                    "  {} {}: no patch in run {}",
+                    e.sid, e.step_id, e.last_run_id
+                );
+                skipped += 1;
+            }
+            Ok(n) => {
+                println!("  {} {}: applied {n} patch(es)", e.sid, e.step_id);
+                applied += n;
+            }
+            Err(err) => {
+                eprintln!("  {} {}: SKIP ({err:#})", e.sid, e.step_id);
+                failed += 1;
+            }
+        }
+    }
+    println!("\n--apply: {applied} patch(es) promoted, {skipped} without a patch, {failed} failed");
+    Ok(u8::from(failed > 0))
 }
 
 fn render_text(opts: &Opts, entries: &[Chronic]) {
@@ -367,6 +423,7 @@ mod tests {
             min_runs,
             json: false,
             issue: false,
+            apply: false,
         }
     }
 
@@ -391,6 +448,7 @@ mod tests {
             min_runs: 2,
             json: false,
             issue: false,
+            apply: false,
         };
         let entries = collect(&opts).unwrap();
         assert_eq!(entries.len(), 2);
@@ -498,6 +556,83 @@ mod tests {
         setup(tmp.path());
         fs::create_dir_all(tmp.path().join("j1/replays/rA")).unwrap();
         assert!(collect(&opts("j1", 2)).unwrap().is_empty());
+        teardown();
+    }
+
+    fn write_scenario(jdir: &Path, sid: &str) -> Vec<u8> {
+        fs::create_dir_all(jdir).unwrap();
+        let body = format!(
+            r#"{{"schema":"scenario/2","id":{id_q},"intent":"t",
+               "steps":[{{"id":"s1","intent":"c","kind":"do","verb":"click",
+                          "on":{{"role":"button","name":"Save"}}}}]}}"#,
+            id_q = serde_json::to_string(sid).unwrap()
+        );
+        fs::write(jdir.join("scenario.json"), &body).unwrap();
+        body.into_bytes()
+    }
+
+    fn write_patch(jdir: &Path, run: &str, step: &str, hash: Option<&str>, loc: Json) {
+        let dir = jdir.join("replays").join(run).join("diffs");
+        fs::create_dir_all(&dir).unwrap();
+        let mut o = serde_json::Map::new();
+        o.insert("schema".into(), json!("heal-patch/v1"));
+        o.insert("stepId".into(), json!(step));
+        if let Some(h) = hash {
+            o.insert("scenarioContentHash".into(), json!(h));
+        }
+        o.insert("newLocator".into(), loc);
+        fs::write(
+            dir.join(format!("{step}.patch.json")),
+            serde_json::to_vec(&Json::Object(o)).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn apply_promotes_each_chronic_row() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        setup(tmp.path());
+        let jdir = tmp.path().join("j1");
+        let pre = write_scenario(&jdir, "j1");
+        write_heal_row(&jdir, "rA", "s1", "locator-correction");
+        write_heal_row(&jdir, "rB", "s1", "locator-correction");
+        write_patch(
+            &jdir,
+            "rB",
+            "s1",
+            Some(&crate::sidecar::hash_scenario_bytes(&pre)),
+            json!({"role":"button","name":"Save changes"}),
+        );
+
+        let entries = collect(&opts("j1", 2)).unwrap();
+        assert_eq!(apply_entries(&entries).unwrap(), 0);
+        let post: Json =
+            serde_json::from_slice(&fs::read(jdir.join("scenario.json")).unwrap()).unwrap();
+        assert_eq!(post["steps"][0]["on"]["name"], "Save changes");
+        teardown();
+    }
+
+    #[test]
+    fn apply_skips_stale_patch_and_reports_failure() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        setup(tmp.path());
+        let jdir = tmp.path().join("j1");
+        write_scenario(&jdir, "j1");
+        write_heal_row(&jdir, "rA", "s1", "locator-correction");
+        write_heal_row(&jdir, "rB", "s1", "locator-correction");
+        // Hash recorded against different scenario bytes — hand-edited since.
+        write_patch(
+            &jdir,
+            "rB",
+            "s1",
+            Some("stale"),
+            json!({"role":"button","name":"x"}),
+        );
+
+        let entries = collect(&opts("j1", 2)).unwrap();
+        assert_eq!(apply_entries(&entries).unwrap(), 1);
         teardown();
     }
 
