@@ -1755,6 +1755,19 @@ function badRequest(res, msg) {
   sendJson(res, 400, { error: msg || 'bad request' });
 }
 
+// Pipe a file to the response after headers went out. pipe() does NOT
+// forward read-stream errors — an open/read failure (file pruned between
+// stat() and open, permissions flipped) would leave the socket open and
+// the client waiting forever on the promised content-length. On error we
+// destroy the response so the fetch fails fast instead of hanging.
+function streamFile(res, full) {
+  const s = createReadStream(full);
+  s.on('error', () => {
+    if (!res.destroyed) res.destroy();
+  });
+  s.pipe(res);
+}
+
 async function serveStatic(res, relName) {
   // relName is from a fixed allowlist (no user input), but resolve+clamp
   // anyway to keep the static handler honest.
@@ -1776,7 +1789,7 @@ async function serveStatic(res, relName) {
     ? 'no-cache'
     : 'public, max-age=31536000, immutable';
   res.writeHead(200, { 'content-type': type, 'content-length': stat.size, 'cache-control': cacheControl });
-  createReadStream(full).pipe(res);
+  streamFile(res, full);
 }
 
 // The React app (`web/`) builds into lib/public/ (the canonical UI) and is
@@ -1815,7 +1828,7 @@ async function serveArtifact(res, root, sid, runId, kind, stepId) {
     'content-length': stat.size,
     'cache-control': 'no-store',
   });
-  createReadStream(full).pipe(res);
+  streamFile(res, full);
 }
 
 async function fileExists(p) {
@@ -1850,7 +1863,7 @@ async function serveRunFile(res, root, sid, runId, name) {
     'content-length': stat.size,
     'cache-control': 'no-store',
   });
-  createReadStream(full).pipe(res);
+  streamFile(res, full);
 }
 
 // -------- run compare (agent-qa compare <sid> <a> <b>) --------
@@ -1954,7 +1967,7 @@ async function serveCompareShot(res, root, sid, folder, stepId) {
     'content-length': stat.size,
     'cache-control': 'no-store',
   });
-  createReadStream(full).pipe(res);
+  streamFile(res, full);
 }
 
 // -------- editor — write surface via the Rust CLI --------
@@ -2850,7 +2863,7 @@ async function serveRecordingArtifact(res, entry, scenariosRoot, stepId, kind) {
     'content-length': stat.size,
     'cache-control': 'no-store',
   });
-  createReadStream(full).pipe(res);
+  streamFile(res, full);
 }
 
 // Owns the open chats. Each chat is an independent conversation with its own
@@ -4297,6 +4310,13 @@ function createRequestHandler(root, deps, chat) {
 
       return notFound(res, 'not found');
     } catch (err) {
+      // Headers already sent (a stream mid-flight, an SSE socket) — a 500
+      // can't replace them and sendJson would throw ERR_HTTP_HEADERS_SENT
+      // inside this very catch. Close the socket so the client fails fast.
+      if (res.headersSent) {
+        res.destroy(err instanceof Error ? err : undefined);
+        return;
+      }
       sendJson(res, 500, { error: String((err && err.message) || err) });
     }
   };
