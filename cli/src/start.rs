@@ -167,20 +167,32 @@ fn start(opts: &Opts) -> Result<StartSummary> {
     // second start would silently orphan the in-flight one — its buffer still
     // fills but flush/record can no longer reach it, and its browser session
     // leaks. Refuse unless --force abandons it on purpose.
-    if let Some(active) = RecorderState::try_load_active()? {
-        if !opts.force {
-            bail!(
-                "recording '{}' (sid {}) is already active — run `agent-qa flush {}` to finish it, or `start --force` to abandon it",
-                active.intent,
-                active.sid,
-                active.sid,
+    match RecorderState::try_load_active() {
+        Ok(Some(active)) => {
+            if !opts.force {
+                bail!(
+                    "recording '{}' (sid {}) is already active — run `agent-qa flush {}` to finish it, or `start --force` to abandon it",
+                    active.intent,
+                    active.sid,
+                    active.sid,
+                );
+            }
+            eprintln!(
+                "[v2-record] abandoning active recording {} (--force)",
+                active.sid
             );
+            RecorderState::clear()?;
         }
-        eprintln!(
-            "[v2-record] abandoning active recording {} (--force)",
-            active.sid
-        );
-        RecorderState::clear()?;
+        Ok(None) => {}
+        Err(e) => {
+            if !opts.force {
+                return Err(e).context(
+                    "recording state file is unreadable — `record start --force` discards it, or repair/remove the file by hand",
+                );
+            }
+            eprintln!("[v2-record] --force: discarding unreadable recording state ({e})");
+            RecorderState::clear()?;
+        }
     }
     // A live replay holds this session's lock — recording on it would
     // drive the same browser mid-run.
@@ -491,6 +503,43 @@ mod tests {
         assert!(err.contains(&first.sid), "names the live sid: {err}");
         let second = start(&base(true)).unwrap();
         assert_ne!(first.sid, second.sid, "force mints a fresh sid");
+        std::env::remove_var(paths::SCENARIOS_DIR_ENV);
+        std::env::remove_var(paths::RECORD_DIR_ENV);
+        std::env::remove_var(browser::BIN_ENV);
+        browser::_reset_bin_cache_for_tests();
+    }
+
+    #[test]
+    fn start_force_discards_an_unreadable_state_file() {
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var(paths::SCENARIOS_DIR_ENV, tmp.path());
+        std::env::set_var(paths::RECORD_DIR_ENV, tmp.path().join("record"));
+        install_fake_browser(tmp.path(), &tmp.path().join("browser.log"));
+
+        // A truncated/half-written state file used to brick `record start`
+        // entirely — even --force died on the parse error before reaching
+        // the abandon path, leaving manual deletion as the only recovery.
+        fs::create_dir_all(tmp.path().join("record")).unwrap();
+        fs::write(paths::record_state_file(), "{\"sid\":\"corrupt\",").unwrap();
+
+        let base = |force: bool| Opts {
+            intent: "p".into(),
+            session_name: "default".into(),
+            open_url: None,
+            profile: None,
+            keep_session: false,
+            headed: false,
+            browser_profile: None,
+            source_ref: None,
+            mock_from: None,
+            offline: false,
+            force,
+        };
+        let err = start(&base(false)).unwrap_err().to_string();
+        assert!(err.contains("unreadable"), "names recovery: {err}");
+        let fresh = start(&base(true)).unwrap();
+        assert_eq!(RecorderState::load_active().unwrap().sid, fresh.sid);
         std::env::remove_var(paths::SCENARIOS_DIR_ENV);
         std::env::remove_var(paths::RECORD_DIR_ENV);
         std::env::remove_var(browser::BIN_ENV);
