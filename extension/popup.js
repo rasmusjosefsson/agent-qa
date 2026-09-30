@@ -16,7 +16,11 @@ const status = async () => {
   if (!r) return;
   recording = r.recording;
   paint();
-  if (recording) meta.textContent = `${r.steps} steps · ${r.requests} requests`;
+  if (recording) {
+    meta.textContent = r.captureDead
+      ? `${r.steps} steps · paused — this page can't be captured`
+      : `${r.steps} steps · ${r.requests} requests`;
+  }
 };
 
 const boot = async () => {

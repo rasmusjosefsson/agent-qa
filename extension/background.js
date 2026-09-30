@@ -111,6 +111,15 @@ async function handle(msg, sender) {
       steps: s.steps,
       network: s.network,
     };
+    if (s.captureGaps) {
+      bundle.warnings = [
+        `capture paused for ${s.captureGaps} non-http navigation(s) — ` +
+          `interactions on those pages are not in this bundle`,
+      ];
+      if (s.captureDead) {
+        bundle.warnings.push("capture was still dead at stop — the tail is missing");
+      }
+    }
     const host = safeHost(s.url) || "page";
     const stamp = s.startedAt.replace(/[:.]/g, "-").slice(0, 19);
     download(`agent-qa-${host}-${stamp}.json`, JSON.stringify(bundle, null, 2));
@@ -127,6 +136,7 @@ async function handle(msg, sender) {
       recording: !!s,
       steps: s ? s.steps.length : 0,
       requests: s ? s.network.length : 0,
+      captureDead: !!(s && s.captureDead),
     };
   }
 
@@ -177,6 +187,22 @@ async function recordNav(tabId, url) {
       value: { from: "literal", literal: url },
     },
   });
+  // A nav to a page the content script can't run on (file://, chrome://,
+  // extension store, pdf viewer) kills capture while the recording stays
+  // armed — every interaction there lands nowhere. Flag it on the badge
+  // NOW and count the gap so the exported bundle can name it.
+  if (/^https?:/.test(url)) {
+    if (s.captureDead) {
+      s.captureDead = false;
+      chrome.action.setBadgeText({ tabId, text: "REC" });
+      chrome.action.setBadgeBackgroundColor({ tabId, color: "#d33" });
+    }
+  } else if (!s.captureDead) {
+    s.captureDead = true;
+    s.captureGaps = (s.captureGaps || 0) + 1;
+    chrome.action.setBadgeText({ tabId, text: "!" });
+    chrome.action.setBadgeBackgroundColor({ tabId, color: "#e80" });
+  }
   persist(tabId);
 }
 
