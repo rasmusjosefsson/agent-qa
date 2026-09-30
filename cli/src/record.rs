@@ -65,7 +65,9 @@ fn continue_scenario(args: &[String]) -> Result<u8> {
             "--session".into(),
             session.clone(),
             "--quiet".into(),
-        ])?;
+        ]);
+        std::env::remove_var(crate::runner::RUN_ON_RECORDED_SESSION_ENV);
+        let code = code?;
         if code != 0 {
             bail!(
                 "replay of {sid:?} failed (exit {code}) — the browser isn't at the scenario's end state; fix the scenario or pass --skip-replay to hand-drive"
