@@ -172,6 +172,11 @@ pub struct RunOptions {
     /// this is the full hermetic guarantee: only recorded traffic replays.
     /// Alone it stubs every request (UI-only replays on static pages).
     pub offline: bool,
+    /// `--fresh-browser` — close the session's browser before the run so a
+    /// reused session can't carry daemon-side `set` state (viewport, device,
+    /// geo, credentials, media) into this replay. The browser relaunches
+    /// lazily on first use; costs one cold start.
+    pub fresh_browser: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -391,7 +396,8 @@ fn render_failure_block(p: &FailurePointer) -> String {
 /// wrong. Reset the toggles that have a documented off state at run start,
 /// before `--offline`/`--mock-from` and `do/emulate` steps re-apply what
 /// *this* run wants. `viewport`, `device`, `geo`, `credentials`, and
-/// `media` have no `set`-level clear — they still carry over.
+/// `media` have no `set`-level clear and can't be cleared from another
+/// CDP session — `--fresh-browser` is the escape hatch for those.
 fn reset_persistent_emulation(session: &str) {
     for args in [["set", "offline", "off"], ["set", "headers", "{}"]] {
         if let Err(e) = crate::browser::run(
@@ -407,6 +413,7 @@ fn reset_persistent_emulation(session: &str) {
     }
 }
 
+/// `media` have no `set`-level clear — they still carry over.
 /// Make a path absolute + copy-pasteable for display. Prefers the
 /// canonical form when the file exists (capture succeeded); otherwise
 /// joins the cwd so the printed path is still absolute.
@@ -443,13 +450,33 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     // {"console"} claims) see only its own activity. Best-effort — a
     // session that doesn't exist yet just warns.
     if !opts.dry_run {
+        if opts.fresh_browser {
+            // Daemon-side `set` toggles (viewport/device/geo/credentials/
+            // media) have no off state and can't be cleared from another
+            // CDP session — the only reliable reset is relaunching the
+            // session's browser, which also drops cookies, permission
+            // grants, service workers, and tabs.
+            let r = crate::browser::run(
+                &opts.session_name,
+                ["close"],
+                crate::browser::RunOpts::new().lenient().capture(),
+            );
+            match r {
+                Ok(o) if o.exit_code == 0 => {
+                    eprintln!("[v2-replay] --fresh-browser: closed session browser (relaunches on first use)")
+                }
+                _ => {
+                    eprintln!("[v2-replay] --fresh-browser: no live browser to close (continuing)")
+                }
+            }
+        }
         if let Err(e) = crate::browser::network_clear(&opts.session_name) {
             eprintln!("[v2-replay] network log clear skipped: {e}");
         }
+        reset_persistent_emulation(&opts.session_name);
         if let Err(e) = crate::browser::console_clear(&opts.session_name) {
             eprintln!("[v2-replay] console log clear skipped: {e}");
         }
-        reset_persistent_emulation(&opts.session_name);
         // Own Network.* event capture — redirect-hop statuses and
         // in-flight tracking the daemon's netlog doesn't expose. A fresh
         // store per run; silently skipped without a CDP endpoint.
@@ -2712,6 +2739,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut har = false;
     let mut mock_from: Option<String> = None;
     let mut offline = false;
+    let mut fresh_browser = false;
     let mut input_overrides: BTreeMap<String, String> = BTreeMap::new();
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
@@ -2777,6 +2805,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             s if s.starts_with("--freeze=") => freeze = Some(s["--freeze=".len()..].to_string()),
             "--har" => har = true,
             "--offline" => offline = true,
+            "--fresh-browser" => fresh_browser = true,
             "--mock-from" => mock_from = it.next().cloned().or_else(|| bail_missing("--mock-from")),
             s if s.starts_with("--mock-from=") => {
                 mock_from = Some(s["--mock-from=".len()..].to_string())
@@ -2846,6 +2875,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         har,
         mock_from,
         offline,
+        fresh_browser,
     })
 }
 
@@ -3071,7 +3101,13 @@ replays/latest.txt.
 --offline                Reject every fetch/XHR that matches no mock rule
                          instead of reaching the real backend. With
                          --mock-from that's the full hermetic guarantee;
-                         alone it stubs everything (static-page replays)."
+                         alone it stubs everything (static-page replays).
+--fresh-browser          Close the session's browser before the run —
+                         the only reliable reset for daemon-side `set`
+                         state (viewport/device/geo/credentials/media)
+                         that has no off-switch, plus cookies, permission
+                         grants, service workers, and tabs. Costs one
+                         cold launch; reuses the same session name."
 }
 
 #[cfg(all(test, unix))]
@@ -3223,6 +3259,7 @@ mod tests {
             har: false,
             mock_from: None,
             offline: false,
+            fresh_browser: false,
         };
         let summary = run(&opts).unwrap();
         assert_eq!(summary.total, 1);
@@ -3293,6 +3330,7 @@ mod tests {
             har: false,
             mock_from: None,
             offline: false,
+            fresh_browser: false,
         };
         run(&opts).unwrap();
 
@@ -3366,6 +3404,7 @@ mod tests {
             har: false,
             mock_from: None,
             offline: false,
+            fresh_browser: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3434,6 +3473,7 @@ mod tests {
             har: false,
             mock_from: None,
             offline: false,
+            fresh_browser: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3505,6 +3545,7 @@ mod tests {
             har: false,
             mock_from: None,
             offline: false,
+            fresh_browser: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -3569,12 +3610,78 @@ mod tests {
             har: false,
             mock_from: None,
             offline: false,
+            fresh_browser: false,
         };
         let err = run(&opts).unwrap_err();
         assert!(
             err.to_string().contains("unknown emulate key"),
             "got: {err}"
         );
+        clear_fake_browser();
+    }
+
+    #[test]
+    fn replay_fresh_browser_closes_the_session_first() {
+        let _g = lock_env();
+        let work = TempDir::new().unwrap();
+        let log = work.path().join("ab.log");
+        install_fake_browser(work.path(), &log);
+
+        let jdir = work.path().join("sid");
+        fs::create_dir_all(&jdir).unwrap();
+        let jfile = jdir.join("scenario.json");
+        fs::write(
+            &jfile,
+            r#"{
+            "schema": "scenario/2",
+            "id": "fresh-browser-smoke",
+            "intent": "close first",
+            "env": {
+                "open": [
+                    { "kind": "nav", "url": "https://example.com/", "intent": "land" }
+                ]
+            },
+            "steps": []
+        }"#,
+        )
+        .unwrap();
+        let opts = RunOptions {
+            source: ScenarioSource::Path(jfile),
+            profile: None,
+            session_name: "fb".into(),
+            persona: None,
+            environment: None,
+            heal_from_run: None,
+            headed: false,
+            input_overrides: BTreeMap::new(),
+            dry_run: false,
+            no_sidecars: true,
+            quiet: false,
+            plain: false,
+            tag: None,
+            output_audit: None,
+            from_step: None,
+            until_step: None,
+            update_baselines: false,
+            keep_going: false,
+            record_video: None,
+            junit: None,
+            base_url: None,
+            auto_promote: false,
+            freeze: None,
+            har: false,
+            mock_from: None,
+            offline: false,
+            fresh_browser: true,
+        };
+        let _ = run(&opts);
+        let ab = fs::read_to_string(&log).unwrap();
+        let close_at = ab.find("--session fb close");
+        let nav_at = ab.find("goto");
+        assert!(close_at.is_some(), "expected a close call, got: {ab}");
+        if let (Some(c), Some(n)) = (close_at, nav_at) {
+            assert!(c < n, "close should precede the first goto: {ab}");
+        }
         clear_fake_browser();
     }
 
@@ -3616,6 +3723,7 @@ mod tests {
             har: false,
             mock_from: None,
             offline: false,
+            fresh_browser: false,
         };
         let err = format!("{:#}", run(&opts).unwrap_err());
         assert!(err.contains("schema error"), "got: {err}");
@@ -3690,6 +3798,7 @@ esac\nexit 0\n",
             har: false,
             mock_from: None,
             offline: false,
+            fresh_browser: false,
         }
     }
 
@@ -3952,6 +4061,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             har: false,
             mock_from: None,
             offline: false,
+            fresh_browser: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -4024,6 +4134,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             har: false,
             mock_from: None,
             offline: false,
+            fresh_browser: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -4862,6 +4973,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             har: false,
             mock_from: None,
             offline: false,
+            fresh_browser: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -4958,6 +5070,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             har: false,
             mock_from: None,
             offline: false,
+            fresh_browser: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -5212,6 +5325,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             har: false,
             mock_from: None,
             offline: false,
+            fresh_browser: false,
         };
         let summary = run(&opts).unwrap();
         assert!(summary.ok);
@@ -5310,6 +5424,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             har: false,
             mock_from: None,
             offline: false,
+            fresh_browser: false,
         };
         // The run bails at the failing step; events/status are written
         // before the bail.
@@ -5387,6 +5502,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             har: false,
             mock_from: None,
             offline: false,
+            fresh_browser: false,
         };
         run(&opts).unwrap();
 
@@ -5442,6 +5558,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             har: false,
             mock_from: None,
             offline: false,
+            fresh_browser: false,
         };
         run(&opts).unwrap();
         let run_dir = run_dir_for(&jdir);
@@ -5634,6 +5751,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             har: false,
             mock_from: None,
             offline: false,
+            fresh_browser: false,
         };
         assert_eq!(resolve_progress_mode(&mk(true, false)), ProgressMode::Quiet);
         // quiet wins over plain.

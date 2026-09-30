@@ -367,6 +367,11 @@ fn page_links(page: &Value, seen: &mut std::collections::BTreeSet<String>) -> Ve
         .unwrap_or_default()
 }
 
+/// One `fired` claim per distinct XHR/fetch/websocket/eventsource the
+/// entry page made (deduped by method+URL, capped so a chatty page
+/// doesn't drown the draft). `urlMatches` is a regex — the literal URL
+/// is escaped. `cdpws-*` socket/stream entries flow in through the same
+/// captured list, so crawls of real-time pages get socket coverage too.
 /// Analytics/telemetry collectors — fire-and-forget beacons the page is
 /// not guaranteed to resend on replay (and whose URLs carry per-visitor
 /// nonces). Claiming them produces drafts that flake on the second run.
@@ -456,9 +461,6 @@ fn claim_url_pattern(url: &str) -> String {
     format!("{}\\?{}", regex_escape(head), parts.join("&"))
 }
 
-/// One `fired` claim per distinct XHR/fetch/websocket/eventsource the
-/// entry page made (deduped by method+URL, capped so a chatty page
-/// doesn't drown the draft). `urlMatches` is a regex — the literal URL
 /// is escaped, with volatile query values wildcarded. `cdpws-*`
 /// socket/stream entries flow in through the same captured list, so
 /// crawls of real-time pages get socket coverage too.
@@ -586,9 +588,9 @@ mod tests {
             req("https://x/api/u?a=(1)", "GET", Some("xhr")),
             req("https://x/api/u?a=(1)", "GET", Some("fetch")), // dup
             req("https://x/api/save", "POST", Some("fetch")),
-            req("https://x/app;jsessionid=v0latile", "POST", Some("xhr")),
             req("wss://x/live", "WS", Some("websocket")),
             req("https://x/events", "GET", Some("eventsource")),
+            req("https://x/app;jsessionid=v0latile", "POST", Some("xhr")),
         ];
         let mut idx = 0;
         let steps = network_claim_steps(&reqs, &mut idx);
@@ -605,19 +607,19 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("POST https://x/api/save"));
+        // sockets + streams claim their own fired presence
+        let ws = &steps[2]["claim"]["subject"]["network"];
+        assert_eq!(ws["urlMatches"].as_str().unwrap(), "wss://x/live");
+        assert_eq!(ws["method"].as_str().unwrap(), "WS");
+        let sse = &steps[3]["claim"]["subject"]["network"];
+        assert_eq!(sse["urlMatches"].as_str().unwrap(), "https://x/events");
         // matrix params are volatile — the matcher drops `;jsessionid=…`
         assert_eq!(
-            steps[2]["claim"]["subject"]["network"]["urlMatches"]
+            steps[4]["claim"]["subject"]["network"]["urlMatches"]
                 .as_str()
                 .unwrap(),
             "https://x/app"
         );
-        // sockets + streams claim their own fired presence
-        let ws = &steps[3]["claim"]["subject"]["network"];
-        assert_eq!(ws["urlMatches"].as_str().unwrap(), "wss://x/live");
-        assert_eq!(ws["method"].as_str().unwrap(), "WS");
-        let sse = &steps[4]["claim"]["subject"]["network"];
-        assert_eq!(sse["urlMatches"].as_str().unwrap(), "https://x/events");
     }
 
     #[test]

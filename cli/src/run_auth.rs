@@ -330,6 +330,7 @@ mod tests {
             har: false,
             mock_from: None,
             offline: false,
+            fresh_browser: false,
         }
     }
 

@@ -65,6 +65,7 @@ export interface EdgeGolden extends GoldenContext {
   scrollBottom(intent: string): Promise<void>;
   downloadBySelector(selector: string, scenarioRelPath: string, intent: string): Promise<void>;
   dragSelector(from: string, to: string, intent: string): Promise<void>;
+  dragSelectorMouse(from: string, to: string, intent: string): Promise<void>;
   tabCommand(tail: string, intent: string): Promise<void>;
   reload(intent: string): Promise<void>;
   upload(selector: string, repoRelFixture: string, intent: string): Promise<void>;
@@ -79,10 +80,12 @@ export interface EdgeGolden extends GoldenContext {
   waitMs(ms: number, intent: string): Promise<void>;
   clickSelectorForce(selector: string, intent: string): Promise<void>;
   seedCookie(name: string, value: string, intent: string): Promise<void>;
+  seedStorage(scope: "local" | "session", key: string, value: string, intent: string): Promise<void>;
   gotoUrl(url: string, intent: string): Promise<void>;
   waitSelector(selector: string, intent: string): Promise<void>;
   waitSelectorAbsent(selector: string, intent: string): Promise<void>;
   waitSelectorText(selector: string, text: string, intent: string): Promise<void>;
+  waitText(text: string, intent: string): Promise<void>;
   waitLoad(state: string, intent: string): Promise<void>;
   enterFrame(selector: string, intent: string): Promise<void>;
   exitFrame(intent: string): Promise<void>;
@@ -471,6 +474,29 @@ export async function runEdgeGolden(
         ctx.agentBrowser, "--session", ctx.session, "drag", from, to,
       ]);
       await record(ctx, "action", { method: "dragBySelector", args: [from, to], intent: stepIntent });
+    },
+    async dragSelectorMouse(from, to, stepIntent) {
+      // do/drag replays with trusted mouse input — drive the live run the
+      // same way so libraries that listen for mouse (not DragEvent)
+      // sequences, like jQuery UI draggable, actually move.
+      await run(ctx, `mousedrag ${from} → ${to}`, [
+        ctx.agentBrowser,
+        "--session",
+        ctx.session,
+        "eval",
+        `(() => { const f = document.querySelector(${JSON.stringify(from)}); const t = document.querySelector(${JSON.stringify(to)}); if (!f || !t) throw new Error('drag endpoint missing'); ${""} const fb = f.getBoundingClientRect(); const tb = t.getBoundingClientRect(); const cx = fb.x + fb.width / 2; const cy = fb.y + fb.height / 2; const tx = tb.x + tb.width / 2; const ty = tb.y + tb.height / 2; f.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0 })); document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true, clientX: cx + 10, clientY: cy + 10, button: 0 })); document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true, clientX: tx, clientY: ty, button: 0 })); document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, clientX: tx, clientY: ty, button: 0 })); return 'done'; })()`,
+      ]);
+      await record(ctx, "action", { method: "dragBySelector", args: [from, to], intent: stepIntent });
+    },
+    async seedStorage(scope, key, value, stepIntent) {
+      const store = scope === "local" ? "localStorage" : "sessionStorage";
+      await run(ctx, `seedStorage ${store}.${key}`, [ctx.agentBrowser, "--session", ctx.session, "eval", `${store}.setItem(${JSON.stringify(key)}, ${JSON.stringify(value)})`]);
+      await record(ctx, "action", { method: "seedState", args: [{ [store]: { [key]: value } }], intent: stepIntent });
+    },
+    async waitText(text, stepIntent) {
+      // Text assertions resolve via the a11y snapshot, which pierces open
+      // shadow roots — a css wait could never see this text.
+      await record(ctx, "wait", { condition: { kind: "text", text }, intent: stepIntent });
     },
     async tabCommand(tail, stepIntent) {
       await run(ctx, `tab ${tail}`, [ctx.agentBrowser, "--session", ctx.session, "tab", ...tail.split(" ")]);

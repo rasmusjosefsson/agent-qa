@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Timezone + locale fixture</title>
+  </head>
+  <body>
+    <!-- Read on demand (button) so the page reflects whatever overrides
+         are live at click time rather than load time. /headers echoes the
+         request's Accept-Language so the wire-level surface is visible too. -->
+    <h1>Where/when am I?</h1>
+    <button id="read" data-testid="read">Read environment</button>
+    <div id="tz" data-testid="tz">-</div>
+    <div id="lang" data-testid="lang">-</div>
+    <div id="loc" data-testid="loc">-</div>
+    <div id="offset" data-testid="offset">-</div>
+    <div id="alang" data-testid="alang">-</div>
+    <script>
+      document.getElementById("read").addEventListener("click", async () => {
+        const i = Intl.DateTimeFormat().resolvedOptions();
+        document.getElementById("tz").textContent = i.timeZone || "unset";
+        document.getElementById("lang").textContent = navigator.language;
+        document.getElementById("loc").textContent = i.locale;
+        document.getElementById("offset").textContent =
+          String(new Date().getTimezoneOffset());
+        const h = await (await fetch("/headers")).json();
+        document.getElementById("alang").textContent = h.acceptLanguage || "-";
+      });
+    </script>
+  </body>
+</html>

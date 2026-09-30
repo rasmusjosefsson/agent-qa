@@ -321,7 +321,18 @@
     "golden:gestures:tc03": "bun run golden/gestures-tc03.ts",
     "golden:timing:tc01": "bun golden/timing-tc01.ts",
     "golden:pst:tc01": "bun golden/pst-tc01.ts",
-    "golden:domshot:tc01": "bun golden/domshot-tc01.ts"
+    "golden:domshot:tc01": "bun golden/domshot-tc01.ts",
+    "golden:tap:tc01": "bun golden/tap-tc01.ts",
+    "golden:tap:tc02": "bun golden/tap-tc02.ts",
+    "golden:tap:tc03": "bun golden/tap-tc03.ts",
+    "golden:tap:tc04": "bun golden/tap-tc04.ts",
+    "golden:bonigarcia:tc01": "bun golden/bonigarcia-tc01.ts",
+    "golden:bonigarcia:tc02": "bun golden/bonigarcia-tc02.ts",
+    "golden:bonigarcia:tc03": "bun golden/bonigarcia-tc03.ts",
+    "golden:bonigarcia:tc04": "bun golden/bonigarcia-tc04.ts",
+    "golden:bonigarcia:tc05": "bun golden/bonigarcia-tc05.ts",
+    "golden:emulate:tc03": "bun golden/emulate-tc03.ts",
+    "golden:clip:tc01": "bun golden/clip-tc01.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"

@@ -115,7 +115,7 @@ fn rule_for(verb: &Verb) -> VerbRule {
         },
         // `params` carries the emulate spec; at least one known key must be
         // present (device/geo/offline/colorScheme/reducedMotion/headers/
-        // credentials) — validated in dispatch.
+        // credentials/permissions/timezone/locale) — validated in dispatch.
         Verb::Emulate => VerbRule {
             required: &[DoField::Params],
             forbidden: &[DoField::On, DoField::Value],
