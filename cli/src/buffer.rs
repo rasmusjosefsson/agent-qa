@@ -393,13 +393,20 @@ fn cmd_load(args: &[String]) -> Result<u8> {
 /// Returns the number of seeded steps. Reused by `record continue`.
 pub(crate) fn load_into_buffer(sid: &str, session: &str, force: bool) -> Result<usize> {
     if let Some(existing) = RecorderState::try_load_active()? {
-        if !existing.steps.is_empty() && !force {
+        if !force {
+            // Any active recording — even an empty buffer — owns the state
+            // file: replacing it silently re-binds the sid/session so the
+            // first tab's record-step calls append into the wrong scenario
+            // and the mid-recording guards lose track of the busy session.
             bail!(
-                "buffer already holds {} step(s) for sid {:?} — flush or discard first (or --force)",
-                existing.steps.len(),
+                "a recording is already active (sid {:?}, {} step(s)) — `flush` it first, or `start --force` to abandon it",
                 existing.sid,
+                existing.steps.len(),
             );
         }
+        // --force abandons the live recording: removing the state file is
+        // the only way the fresh state's CAS save (a first claim) is legal.
+        RecorderState::clear()?;
     }
     let scenario_file = crate::paths::scenario_dir(sid)?.join("scenario.json");
     let bytes = std::fs::read(&scenario_file)
@@ -626,6 +633,42 @@ mod tests {
             "url now"
         );
         std::env::remove_var(crate::paths::RECORD_DIR_ENV);
+    }
+
+    /// An empty-but-active recording still owns the state file — loading a
+    /// saved scenario over it would silently re-bind the sid + session so
+    /// the live tab's record-step calls append into the wrong scenario.
+    /// `--force` is the explicit abandon.
+    #[test]
+    fn load_refuses_to_replace_any_active_recording() {
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var(crate::paths::RECORD_DIR_ENV, tmp.path().join("rec"));
+        std::env::set_var(crate::paths::SCENARIOS_DIR_ENV, tmp.path().join("scen"));
+        let mut live = RecorderState::new(
+            "live".into(),
+            "record".into(),
+            "rec1".into(),
+            RecorderBaseline::Fresh,
+            None,
+            BrowserConnection::default(),
+        );
+        live.save().unwrap();
+        let dir = crate::paths::scenario_dir("saved").unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("scenario.json"),
+            r#"{"schema":"scenario/2","id":"saved","intent":"x","steps":[]}"#,
+        )
+        .unwrap();
+        let err = load_into_buffer("saved", "default", false)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("already active"), "got: {err}");
+        load_into_buffer("saved", "default", true).unwrap();
+        assert_eq!(RecorderState::load_active().unwrap().sid, "saved");
+        std::env::remove_var(crate::paths::RECORD_DIR_ENV);
+        std::env::remove_var(crate::paths::SCENARIOS_DIR_ENV);
     }
 
     /// `--help` after a subverb prints usage instead of being parsed as a
