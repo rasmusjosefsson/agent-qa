@@ -31,7 +31,56 @@ use crate::browser;
 use crate::scenario::{EnvOp, EnvOpPolicy, OnFailureContinue, Value};
 use crate::value::{resolve_value, substitute_scenario_vars, ValueScope};
 
+/// Indices of ops that write origin-bound state before any `nav` op —
+/// on about:blank those writes are silently dropped (document.cookie)
+/// or throw (localStorage). A warm session already on an origin counts
+/// as covered.
+fn ops_without_origin(ops: &[EnvOp], starts_on_origin: bool) -> Vec<usize> {
+    let mut has_origin = starts_on_origin;
+    let mut out = Vec::new();
+    for (idx, op) in ops.iter().enumerate() {
+        match op {
+            EnvOp::Nav { .. } => has_origin = true,
+            EnvOp::LocalStorage { .. }
+            | EnvOp::Cookie { .. }
+            | EnvOp::Flag { .. }
+            | EnvOp::Gql { .. }
+                if !has_origin =>
+            {
+                out.push(idx);
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn op_kind(op: &EnvOp) -> &'static str {
+    match op {
+        EnvOp::Fresh { .. } => "fresh",
+        EnvOp::UseProfile { .. } => "useProfile",
+        EnvOp::Nav { .. } => "nav",
+        EnvOp::Cookie { .. } => "cookie",
+        EnvOp::LocalStorage { .. } => "localStorage",
+        EnvOp::Gql { .. } => "gql",
+        EnvOp::Flag { .. } => "flag",
+    }
+}
+
 pub fn run_phase(phase: &str, ops: &[EnvOp], session: &str, scope: &mut ValueScope) -> Result<()> {
+    // Origin-bound env.open ops before the first nav write into
+    // about:blank — document.cookie is silently dropped, localStorage
+    // throws a DOMException. A warm-reused session already on a page
+    // supplies the origin, so probe once rather than warning blindly.
+    if phase == "env.open" {
+        let on_origin = crate::browser::current_url(session).is_some();
+        for idx in ops_without_origin(ops, on_origin) {
+            eprintln!(
+                "[v2-replay] {phase}#{idx}: {} runs with no page origin — the write is dropped or throws on about:blank; add a `nav` op first",
+                op_kind(&ops[idx])
+            );
+        }
+    }
     for (idx, op) in ops.iter().enumerate() {
         let policy = policy_of(op);
         let result = run_one(phase, idx, op, session, scope);
@@ -595,5 +644,20 @@ mod tests {
         let mut scope = ValueScope::default();
         run_phase("env.open", &[op], "s", &mut scope).unwrap_err();
         clear_fake();
+    }
+
+    #[test]
+    fn ops_without_origin_flags_bound_ops_before_first_nav() {
+        let ops = vec![
+            parse_op(json!({ "kind": "localStorage", "key": "k", "value": "v" })),
+            parse_op(json!({ "kind": "fresh" })),
+            parse_op(json!({ "kind": "cookie", "name": "c", "value": "v" })),
+            parse_op(json!({ "kind": "nav", "url": "https://x/" })),
+            parse_op(json!({ "kind": "localStorage", "key": "k2", "value": "v" })),
+        ];
+        // 0 + 2 run before the nav at 3; 4 is covered.
+        assert_eq!(ops_without_origin(&ops, false), vec![0, 2]);
+        // A warm session already on an origin covers all of them.
+        assert!(ops_without_origin(&ops, true).is_empty());
     }
 }
