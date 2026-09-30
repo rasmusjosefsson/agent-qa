@@ -327,6 +327,23 @@ export function ChatPage() {
           />
           </Suspense>
         </div>
+      ) : chatsReady ? (
+        // Boot finished with zero chats — either listChats returned an
+        // empty list or the report-server is unreachable. A spinner would
+        // sit here forever, so say what happened and offer a retry.
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+          <p>
+            No chats — the report-server may be down. Start it with{' '}
+            <code className="rounded bg-muted px-1 py-0.5">agent-qa web</code> and retry.
+          </p>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="rounded-md border px-3 py-1.5 text-foreground transition-colors hover:bg-muted/50"
+          >
+            Retry
+          </button>
+        </div>
       ) : (
         <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
           <Loader2Icon className="mr-2 size-4 animate-spin" /> Loading chats…

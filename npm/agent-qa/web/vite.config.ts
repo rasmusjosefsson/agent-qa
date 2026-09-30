@@ -38,6 +38,35 @@ export default defineConfig({
   },
   server: {
     // `npm run dev` (HMR) proxies the API to a running `agent-qa web`.
-    proxy: { "/api": "http://127.0.0.1:7878" },
+    // String-shorthand proxying leaves /api/* hanging until the socket
+    // dies when the report-server is down — the UI sat on "loading…"
+    // forever. Fail fast with a JSON 502 so callers hit their error path
+    // immediately. No socket timeout: the chat browser-stream SSE is
+    // long-lived and a timeout would kill healthy streams.
+    proxy: {
+      "/api": {
+        target: "http://127.0.0.1:7878",
+        configure: (proxy) => {
+          proxy.on("error", (_err, _req, res) => {
+            const w = res as unknown as {
+              headersSent?: boolean;
+              writeHead?: (code: number, h: Record<string, string>) => void;
+              end?: (body?: string) => void;
+            };
+            if (typeof w.writeHead === "function" && !w.headersSent) {
+              w.writeHead(502, { "content-type": "application/json" });
+              w.end?.(
+                JSON.stringify({
+                  error:
+                    "report-server unreachable — start it with `agent-qa web` (or check the port)",
+                })
+              );
+            } else {
+              w.end?.();
+            }
+          });
+        },
+      },
+    },
   },
 })
