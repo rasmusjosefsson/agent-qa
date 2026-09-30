@@ -4268,6 +4268,13 @@ function createServer(root, deps) {
           if (r.spawnError) throw new Error(String(r.spawnError.message || r.spawnError));
           if (r.code !== 0) throw new Error((r.stderr || 'record-step failed').trim());
         },
+        // Gesture mode performs the gesture on the page before recording it —
+        // run-step dispatches the draft against the same live session.
+        runStep: async (payload) => {
+          const r = await runCli(['run-step', 'do', JSON.stringify(payload)]);
+          if (r.spawnError) throw new Error(String(r.spawnError.message || r.spawnError));
+          if (r.code !== 0) throw new Error((r.stderr || 'run-step failed').trim());
+        },
         logger: (m) => console.error(`  [live] ${m}`),
       }),
       // Lazily-created, cached screencast bridges for replay sessions, so the
