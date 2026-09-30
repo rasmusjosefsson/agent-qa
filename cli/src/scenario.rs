@@ -205,6 +205,20 @@ pub enum Verb {
     /// center. Dispatches the touch event chain plus pointer/mouse events
     /// so both touch- and pointer-driven handlers fire.
     Swipe,
+    /// Two-finger pinch: `params.direction` = "in" (fingers together →
+    /// zoom out) or "out" (fingers apart → zoom in); `params.distance` px
+    /// (default 150) is each finger's travel. `on` centers the gesture on
+    /// an element; absent `on` centers the viewport. Dispatches a
+    /// two-touch TouchEvent chain plus a ctrlKey wheel event so both
+    /// native pinch handlers and desktop trackpad-zoom conventions fire.
+    Pinch,
+    /// Two-finger rotate: `params.degrees` (required, signed — positive is
+    /// clockwise) and `params.radius` px (optional, default 120 — each
+    /// finger's orbit radius). `on` centers the gesture on an element;
+    /// absent `on` centers the viewport. Dispatches a two-touch TouchEvent
+    /// chain; browsers without Touch/TouchEvent fail with `no-touch`
+    /// (there is no desktop fallback convention for rotate).
+    Rotate,
     /// Switch the session's frame context: `params.selector` = a CSS
     /// selector for the iframe to enter, or `params.main = true` to return
     /// to the top document. Locators on later steps resolve inside the
@@ -245,7 +259,7 @@ pub enum NameMatch {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LocatorTolerance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digits: Option<bool>,
@@ -257,7 +271,7 @@ pub struct LocatorTolerance {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LocatorRole {
     pub role: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -269,12 +283,14 @@ pub struct LocatorRole {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LocatorRawSpec {
     pub kind: RawLocatorKind,
     pub value: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LocatorRaw {
     pub raw: LocatorRawSpec,
     pub reason: String,
