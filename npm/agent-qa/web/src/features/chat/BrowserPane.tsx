@@ -171,6 +171,16 @@ export function BrowserPane({ available, chatId, navigate, initialSession }: Bro
         /* ignore */
       }
     })
+    // The socket is open but the renderer stopped repainting — the last
+    // frame stays up, just flagged so it isn't mistaken for live.
+    es.addEventListener('stale', () => {
+      connected = true
+      window.clearTimeout(connectingTimer)
+      setStatus({ text: 'stalled', tone: 'err' })
+    })
+    es.addEventListener('fresh', () => {
+      setStatus({ text: 'live', tone: 'ok' })
+    })
     es.addEventListener('bridge-error', () => {
       settled = true
       window.clearTimeout(connectingTimer)
