@@ -918,6 +918,7 @@ fn decode_eval_string(raw: &str) -> String {
 
 /// `agent-browser --json network request <id>` — full record for one
 /// exchange, including `responseBody`. `cdpws-*` ids are answered from
+/// our own capture (the daemon never saw the socket).
 /// our own capture (the daemon never saw the socket); `mock-*` ids come
 /// from the in-page stub's `__aqMockLog` instead — the request never hit
 /// the wire.
