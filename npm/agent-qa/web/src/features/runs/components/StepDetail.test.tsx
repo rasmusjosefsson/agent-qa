@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { RunTraffic, ShotDiffCard } from './StepDetail'
+import { DomshotDiffCard, RunTraffic, ShotDiffCard } from './StepDetail'
 
 describe('ShotDiffCard', () => {
   it('renders the diff map via the shots-diff artifact route', () => {
@@ -9,6 +9,16 @@ describe('ShotDiffCard', () => {
     )
     expect(html).toContain('/api/scenarios/s1/runs/r9/artifact/shots-diff/openDialog')
     expect(html).toContain('Visual diff')
+    expect(html).toContain('Re-mint baseline')
+  })
+})
+
+describe('DomshotDiffCard', () => {
+  it('renders the structural-diff header + re-mint affordance', () => {
+    const html = renderToStaticMarkup(
+      <DomshotDiffCard sid="s1" runId="r9" domshotStep="openDialog" />
+    )
+    expect(html).toContain('Structural diff')
     expect(html).toContain('Re-mint baseline')
   })
 })

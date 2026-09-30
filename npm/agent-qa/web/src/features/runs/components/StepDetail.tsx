@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { BugIcon, WrenchIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { acceptShot, artifactUrl, fetchArtifactText, getScenarioDef, promoteHeal } from '@/lib/runs-api'
+import { acceptDomshot, acceptShot, artifactUrl, fetchArtifactText, getScenarioDef, promoteHeal } from '@/lib/runs-api'
 import { collapseEvents, fmtMs, icon } from '../rows'
 import type { DetailTab, HealRow, RunDetail, RunEvent, ScenarioDef, ScenarioStep } from '../types'
 import type { RunsApi as Api } from '../useRuns'
@@ -77,6 +77,9 @@ export function StepDetail({ runs, onLightbox }: { runs: Api; onLightbox: (url: 
   // drifted; the delta map is keyed by that referenced id.
   const shotRef = (defStep?.claim as { subject?: { shot?: string } } | undefined)?.subject?.shot
   const shotDiff = shotRef && (detail.shotDiffs || []).includes(shotRef) ? shotRef : null
+  // Same for {"domshot":"x"}: the unified diff is keyed by the referenced id.
+  const domshotRef = (defStep?.claim as { subject?: { domshot?: string } } | undefined)?.subject?.domshot
+  const domshotDiff = domshotRef && (detail.domshotDiffs || []).includes(domshotRef) ? domshotRef : null
 
   // Open a NEW chat seeded with the failure context so the agent can triage
   // flake-vs-real. ChatPage consumes the ?ask= param on load.
@@ -145,6 +148,7 @@ export function StepDetail({ runs, onLightbox }: { runs: Api; onLightbox: (url: 
         {shotDiff && (
           <ShotDiffCard sid={sid} runId={runId} shotStep={shotDiff} onLightbox={onLightbox} />
         )}
+        {domshotDiff && <DomshotDiffCard sid={sid} runId={runId} domshotStep={domshotDiff} />}
         {step.error && (
           <pre className="mb-3 whitespace-pre-wrap rounded-md border border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">
             {step.error}
@@ -462,6 +466,83 @@ export function ShotDiffCard({
                 onClick={remint}
                 disabled={accept === 'busy'}
                 className="rounded border border-sky-500/40 px-1.5 py-0.5 font-medium text-sky-300 transition-colors hover:bg-sky-500/20 disabled:opacity-50"
+              >
+                {accept === 'busy' ? 'Re-minting…' : 'Re-mint baseline'}
+              </button>
+            </span>
+            {accept === 'error' && <span className="text-destructive">re-mint failed</span>}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// The unified text diff a {"domshot"} claim wrote when the step's ARIA
+// snapshot drifted from baselines/<stepId>.snap.txt. Rendered as text —
+// red deletions, green additions — with a re-mint affordance for the
+// legitimate-change path.
+export function DomshotDiffCard({
+  sid,
+  runId,
+  domshotStep,
+}: {
+  sid: string
+  runId: string
+  domshotStep: string
+}) {
+  const [diffText, setDiffText] = useState<string | null>(null)
+  const [accept, setAccept] = useState<'idle' | 'busy' | 'done' | 'error'>('idle')
+  useEffect(() => {
+    let alive = true
+    fetchArtifactText(sid, runId, 'domshots-diff', domshotStep, false)
+      .then((t) => alive && setDiffText(t))
+      .catch(() => alive && setDiffText(null))
+    return () => {
+      alive = false
+    }
+  }, [sid, runId, domshotStep])
+  const remint = async () => {
+    setAccept('busy')
+    const r = await acceptDomshot(sid, runId, domshotStep)
+    setAccept(r.ok ? 'done' : 'error')
+  }
+  return (
+    <div className="mb-3 rounded-md border border-violet-500/30 bg-violet-500/10 p-2.5 text-xs">
+      <div className="mb-1.5 flex items-center gap-1.5 font-medium text-violet-300">
+        <WrenchIcon className="size-3.5 shrink-0" />
+        Structural diff — domshot “{domshotStep}” changed vs baseline
+      </div>
+      {diffText != null && (
+        <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded border border-border bg-muted/20 p-2 font-mono leading-relaxed">
+          {diffText.split('\n').map((line, i) => (
+            <span
+              key={i}
+              className={cn(
+                'block',
+                line.startsWith('+') && !line.startsWith('+++') && 'text-emerald-400',
+                line.startsWith('-') && !line.startsWith('---') && 'text-destructive',
+                (line.startsWith('@@') || line.startsWith('---') || line.startsWith('+++')) &&
+                  'text-muted-foreground'
+              )}
+            >
+              {line}
+            </span>
+          ))}
+        </pre>
+      )}
+      <div className="mt-1.5 flex items-center gap-2 text-muted-foreground">
+        {accept === 'done' ? (
+          <span className="text-emerald-400">Baseline re-minted — re-run to confirm.</span>
+        ) : (
+          <>
+            <span>
+              Legitimate change?{' '}
+              <button
+                type="button"
+                onClick={remint}
+                disabled={accept === 'busy'}
+                className="rounded border border-violet-500/40 px-1.5 py-0.5 font-medium text-violet-300 transition-colors hover:bg-violet-500/20 disabled:opacity-50"
               >
                 {accept === 'busy' ? 'Re-minting…' : 'Re-mint baseline'}
               </button>

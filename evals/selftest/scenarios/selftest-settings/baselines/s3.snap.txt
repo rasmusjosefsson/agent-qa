@@ -1,0 +1,87 @@
+- generic [ref=e1] clickable [onclick]
+  - list
+    - listitem [level=1]
+      - link "agent-qa QA workbench · v0.1.0" [ref=e23]
+        - StaticText "agent-qa"
+        - StaticText "QA workbench"
+        - StaticText " · v0.1.0"
+  - list
+    - listitem [level=1]
+      - link "Chat" [ref=e25]
+        - StaticText "Chat"
+    - listitem [level=1]
+      - link "Editor" [ref=e26]
+        - StaticText "Editor"
+  - generic
+    - StaticText "Tests"
+    - list
+      - listitem [level=1]
+        - link "Cases" [ref=e27]
+          - StaticText "Cases"
+      - listitem [level=1]
+        - link "Sets" [ref=e28]
+          - StaticText "Sets"
+      - listitem [level=1]
+        - link "Plans" [ref=e29]
+          - StaticText "Plans"
+      - listitem [level=1]
+        - link "Runs" [ref=e30]
+          - StaticText "Runs"
+  - generic
+    - StaticText "Setup"
+    - list
+      - listitem [level=1]
+        - link "Personas" [ref=e31]
+          - StaticText "Personas"
+      - listitem [level=1]
+        - link "Environments" [ref=e32]
+          - StaticText "Environments"
+      - listitem [level=1]
+        - link "Knowledge" [ref=e33]
+          - StaticText "Knowledge"
+      - listitem [level=1]
+        - link "Extensions" [ref=e34]
+          - StaticText "Extensions"
+  - list
+    - listitem [level=1]
+      - link "Settings" [ref=e24]
+        - StaticText "Settings"
+  - button "Toggle Sidebar" [ref=e22]
+  - main
+    - sectionheader
+      - button "Toggle Sidebar" [ref=e5]
+        - image
+        - StaticText "Toggle Sidebar"
+      - StaticText "Settings"
+      - StaticText "/"
+      - StaticText "QA workbench"
+      - button "Theme" [expanded=false, ref=e10]
+    - heading "Settings" [level=1, ref=e3]
+    - paragraph
+      - StaticText "Workbench preferences, stored in _config/settings.json next to your scenarios. Environment variables override stored values."
+    - button "Refresh" [ref=e4]
+    - generic
+      - StaticText "CHAT"
+      - LabelText
+        - StaticText "Agent backend"
+      - paragraph
+        - StaticText "Which agent the Chat tab talks to. auto picks whichever backend is installed."
+      - combobox "Agent backend" [expanded=false, ref=e6]: auto
+        - generic [ref=e11] clickable [onclick]
+          - StaticText "auto"
+    - generic
+      - StaticText "REPLAY"
+      - LabelText
+        - StaticText "Headed browser by default"
+      - paragraph
+        - StaticText "New replays and persona connects start with a visible browser window instead of headless. Per-run toggles still win."
+      - checkbox "Headed browser by default" [checked=false, ref=e7]
+    - generic
+      - StaticText "PATHS"
+      - DescriptionList
+        - term "Scenario root"
+        - definition
+          - StaticText "/tmp/wt-domshot-selftest/evals/selftest/scenarios"
+        - term "Settings file"
+        - definition
+          - StaticText "/tmp/wt-domshot-selftest/evals/selftest/scenarios/_config/settings.json"

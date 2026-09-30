@@ -172,6 +172,9 @@ pub fn dispatch_check(
             ctx,
             scope,
         ),
+        ClaimSubject::Domshot { domshot, skip } => {
+            check_domshot(domshot, skip, &claim.predicate, ctx)
+        }
 
         ClaimSubject::Dialog { dialog } => {
             if !*dialog {
@@ -1052,6 +1055,94 @@ fn check_shot(
         tol * 100.0,
         diff_path.display()
     )
+}
+
+/// `{"domshot": "<stepId>"}` — compare the run's ARIA snapshot for that
+/// do-step (`<run>/snapshots/<stepId>.txt`) against `<scenario>/baselines/
+/// <stepId>.snap.txt`. Only `matches` is supported: pass when the two
+/// texts are identical after normalization — `@eN` refs collapse to `@e`
+/// (ref numbering shifts across runs) and lines matching a `skip` regex
+/// are dropped from both sides. On a miss a unified diff writes to
+/// `<run>/domshots-diff/<stepId>.diff.txt` before the claim fails, so the
+/// structural drift is inspectable in the run artifacts and pastes
+/// cleanly into an LLM prompt. A missing baseline bails with the
+/// `domshot-accept` mint command.
+fn check_domshot(
+    domshot: &str,
+    skip: &[String],
+    predicate: &Predicate,
+    ctx: &CheckContext,
+) -> Result<()> {
+    if *predicate != Predicate::Matches {
+        bail!("domshot subject only supports predicate 'matches', got '{predicate:?}'");
+    }
+    let run_dir = ctx
+        .run_dir
+        .ok_or_else(|| anyhow!("domshot claim needs a replay run (not available via run-step)"))?;
+    let baseline = ctx
+        .scenario_dir
+        .join("baselines")
+        .join(format!("{domshot}.snap.txt"));
+    if !baseline.is_file() {
+        bail!(
+            "no baseline for domshot '{domshot}' at {} — mint one with: agent-qa domshot-accept <sid> --steps {domshot}",
+            baseline.display()
+        );
+    }
+    let current = run_dir.join("snapshots").join(format!("{domshot}.txt"));
+    if !current.is_file() {
+        bail!(
+            "no snapshot for step '{domshot}' in this run ({}) — check the step id and that sidecars are on",
+            current.display()
+        );
+    }
+    let a = normalize_snapshot(&std::fs::read_to_string(&baseline)?, skip)?;
+    let b = normalize_snapshot(&std::fs::read_to_string(&current)?, skip)?;
+    if a == b {
+        return Ok(());
+    }
+    let diff = similar::TextDiff::from_lines(&a, &b)
+        .unified_diff()
+        .missing_newline_hint(true)
+        .header(
+            &format!("baselines/{domshot}.snap.txt"),
+            &format!("snapshots/{domshot}.txt"),
+        )
+        .to_string();
+    let changed = diff
+        .lines()
+        .filter(|l| l.starts_with('+') || l.starts_with('-'))
+        .filter(|l| !l.starts_with("+++") && !l.starts_with("---"))
+        .count();
+    let diff_dir = run_dir.join("domshots-diff");
+    std::fs::create_dir_all(&diff_dir).ok();
+    let diff_path = diff_dir.join(format!("{domshot}.diff.txt"));
+    let _ = std::fs::write(&diff_path, &diff);
+    bail!(
+        "domshot '{domshot}' differs from baseline ({changed} changed lines) — diff at {} ; re-mint with domshot-accept if the change is intentional",
+        diff_path.display()
+    )
+}
+
+/// Normalize an ARIA snapshot for comparison: drop lines matching any
+/// `skip` regex, strip `@eN` element refs (numbering shifts across runs),
+/// and trim trailing whitespace.
+fn normalize_snapshot(text: &str, skip: &[String]) -> Result<String> {
+    let ref_re = regex::Regex::new(r"@{1,2}e\d+")?;
+    let skip_res: Vec<regex::Regex> = skip
+        .iter()
+        .map(|p| regex::Regex::new(p).map_err(|e| anyhow!("domshot skip pattern {p:?}: {e}")))
+        .collect::<Result<_>>()?;
+    let mut out = String::new();
+    for line in text.lines() {
+        let line = line.trim_end();
+        if skip_res.iter().any(|r| r.is_match(line)) {
+            continue;
+        }
+        out.push_str(&ref_re.replace_all(line, "@e"));
+        out.push('\n');
+    }
+    Ok(out)
 }
 
 /// A pixel-space rectangle `(x, y, w, h)` in the screenshot's own
@@ -3477,6 +3568,121 @@ mod tests {
         assert_eq!(c2.dimensions(), (2, 2));
         // Empty rect → hard error.
         assert!(crop_to_rect(&img, (0, 0, 0, 5)).is_err());
+    }
+
+    // ---------- domshot claims ----------
+
+    #[test]
+    fn domshot_passes_when_normalized_snapshots_match() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let sid_dir = tmp.path().join("scenario");
+        let run_dir = tmp.path().join("run");
+        fs::create_dir_all(sid_dir.join("baselines")).unwrap();
+        fs::create_dir_all(run_dir.join("snapshots")).unwrap();
+
+        fs::write(
+            sid_dir.join("baselines/s1.snap.txt"),
+            "- heading \"Login\" [ref=@e1]\n- textbox \"User\" [ref=@e2]\n- button \"Go\" [ref=@e3]\n",
+        )
+        .unwrap();
+        // Same tree, refs renumbered → normalized match.
+        fs::write(
+            run_dir.join("snapshots/s1.txt"),
+            "- heading \"Login\" [ref=@e9]\n- textbox \"User\" [ref=@e7]\n- button \"Go\" [ref=@e4]\n",
+        )
+        .unwrap();
+
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "domshot": "s1" },
+            "predicate": "matches"
+        }))
+        .unwrap();
+        let mut scope = ValueScope::default();
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: &sid_dir,
+            run_dir: Some(&run_dir),
+        };
+        dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+    }
+
+    #[test]
+    fn domshot_fails_with_unified_diff_and_skip_drops_volatile_lines() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let sid_dir = tmp.path().join("scenario");
+        let run_dir = tmp.path().join("run");
+        fs::create_dir_all(sid_dir.join("baselines")).unwrap();
+        fs::create_dir_all(run_dir.join("snapshots")).unwrap();
+
+        fs::write(
+            sid_dir.join("baselines/s1.snap.txt"),
+            "- heading \"Dash\" [ref=@e1]\n- text \"generated 12:00\" [ref=@e2]\n- button \"Go\" [ref=@e3]\n",
+        )
+        .unwrap();
+        fs::write(
+            run_dir.join("snapshots/s1.txt"),
+            "- heading \"Dash\" [ref=@e1]\n- text \"generated 13:37\" [ref=@e9]\n- button \"Go\" [ref=@e3]\n",
+        )
+        .unwrap();
+
+        let mut scope = ValueScope::default();
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: &sid_dir,
+            run_dir: Some(&run_dir),
+        };
+        // Without skip: the volatile line diffs → fail + diff artifact.
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "domshot": "s1" },
+            "predicate": "matches"
+        }))
+        .unwrap();
+        let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
+        assert!(
+            err.to_string().contains("differs from baseline"),
+            "got: {err}"
+        );
+        let diff = fs::read_to_string(run_dir.join("domshots-diff/s1.diff.txt")).unwrap();
+        assert!(diff.contains("-- text \"generated 12:00\""), "{diff}");
+        assert!(diff.contains("+- text \"generated 13:37\""), "{diff}");
+
+        // With a skip regex on the volatile row: pass.
+        let claim2: Claim = serde_json::from_value(json!({
+            "subject": { "domshot": "s1", "skip": ["generated \\d+:\\d+"] },
+            "predicate": "matches"
+        }))
+        .unwrap();
+        dispatch_check(&claim2, &ctx, &mut scope, None).unwrap();
+    }
+
+    #[test]
+    fn domshot_bails_without_baseline_or_run_dir() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let sid_dir = tmp.path().join("scenario");
+        fs::create_dir_all(&sid_dir).unwrap();
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "domshot": "s1" },
+            "predicate": "matches"
+        }))
+        .unwrap();
+        let mut scope = ValueScope::default();
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: &sid_dir,
+            run_dir: None,
+        };
+        let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
+        assert!(err.to_string().contains("run-step"), "got: {err}");
+        let ctx2 = CheckContext {
+            session: "s",
+            scenario_dir: &sid_dir,
+            run_dir: Some(tmp.path()),
+        };
+        let err2 = dispatch_check(&claim, &ctx2, &mut scope, None).unwrap_err();
+        assert!(err2.to_string().contains("domshot-accept"), "got: {err2}");
     }
 
     // ---------- network claims ----------

@@ -595,6 +595,23 @@ pub enum ClaimSubject {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         mask: Vec<String>,
     },
+    /// `{"domshot": "<stepId>"}` — compare this run's ARIA snapshot for the
+    /// named do-step against the checked-in text baseline at `<scenario>/
+    /// baselines/<stepId>.snap.txt` (snapshots are written per-step into
+    /// the run's `snapshots/` sidecar already). The structural counterpart
+    /// to `shot`: stable across font/AA noise, readable as a text diff,
+    /// and directly consumable by an LLM. `@eN` refs are normalized to
+    /// `@e` before comparing since ref numbering shifts across runs.
+    /// `skip` lists regexes — lines matching any are dropped from BOTH
+    /// sides first (volatile rows: timestamps, session ids, counters).
+    /// Only predicate is `matches` — identical after normalization. On
+    /// mismatch a unified diff lands at `<run>/domshots-diff/<stepId>.diff.txt`
+    /// and the claim fails. Baselines are minted with `domshot-accept`.
+    Domshot {
+        domshot: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        skip: Vec<String>,
+    },
     /// `{"storage": "key"}` or `{"storage": {"key": "k", "scope":
     /// "local"|"session"}}` — assert on a web-storage entry. `exists`/
     /// `notExists` check key presence; string predicates compare the
