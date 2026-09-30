@@ -209,6 +209,7 @@ describe("toRecordDraft — every shipped verb is reachable or triaged", () => {
       ["action", { method: "downloadBySelector", args: ["#d", "out"] }],
     ],
     ["dblclick", ["action", { method: "dblclickBySelector", args: ["#d"] }]],
+    ["dismiss", ["action", { method: "dismissBySelector", args: [".wall"] }]],
     ["rightclick", ["action", { method: "rightClickBySelector", args: ["#d"] }]],
     ["tab", ["action", { method: "tabCommand", args: ["list"] }]],
     ["drag", ["action", { method: "dragBySelector", args: ["#a", "#b"] }]],
