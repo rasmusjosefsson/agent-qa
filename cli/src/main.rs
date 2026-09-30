@@ -37,6 +37,7 @@ mod heal_promote;
 mod heal_respond;
 mod i18n;
 mod info;
+mod ingest;
 mod init;
 mod io;
 mod junit;
@@ -147,9 +148,10 @@ fn main() -> ExitCode {
         "shot-accept" => shot_accept::run(rest),
         "domshot-accept" => domshot_accept::run(rest),
         "init" => init::cli(rest),
+        "ingest" => ingest::run(rest),
         _ => {
             eprintln!(
-                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, smart-fill, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, domshot-accept, run-report, init."
+                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, smart-fill, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, domshot-accept, run-report, init, ingest."
             );
             eprintln!("Run `agent-qa --help` for usage.");
             Ok(2)
@@ -246,6 +248,10 @@ Verbs:
   design verdict <sid> --step <id> (--ok | --accepted --reason <t> | --fail --reason <t> | --ask)
                                 Record a design decision in designs/verdicts.json
   init [dir] [--force] [--ci]   Bootstrap a dir: toml + scenarios/hello + .gitignore (+ --ci PR gate)
+  ingest <bundle.json> [--sid <name>]
+                                Turn a browser-extension capture bundle
+                                (steps + traffic) into scenario.json +
+                                replays/recorded/network.har
 
   start \"<intent>\"             Begin a new recording session
   browser <args...>             Passthrough exec of the pinned agent-browser

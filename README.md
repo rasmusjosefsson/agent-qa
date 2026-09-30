@@ -175,6 +175,7 @@ Single Rust crate in `cli/`. Cross-compile + npm packaging in
 | --- | --- |
 | `cli/` | Rust crate — produces the `agent-qa` binary |
 | `cli/src/` | One module per verb plus shared infrastructure |
+| `extension/` | Chrome MV3 recorder — one-button capture → `agent-qa ingest` |
 | `npm/agent-qa/` | Umbrella npm package (Node launcher + shim) |
 | `schema/` | `scenario-schema.json` — the contract |
 | `skill-data/` | Embedded agent runbooks (markdown), served by `agent-qa skills get` |

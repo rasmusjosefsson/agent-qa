@@ -1,0 +1,106 @@
+# Browser extension — one-click capture → ingest → replay
+
+A Chrome (MV3) extension that records a web flow with a single button
+press and exports everything — the steps you performed *and* the
+traffic the page produced — as a single file. The CLI's `ingest` verb
+turns that file into a runnable scenario plus a `network.har` sidecar
+for hermetic replay.
+
+This is the "user sends us their bug" loop:
+
+1. They click **Record**, navigate the broken flow, click **Stop &
+   export** — one file downloads.
+2. You run `agent-qa ingest their-capture.json`.
+3. `agent-qa replay <sid>` replays their flow live;
+   `agent-qa replay <sid> --mock-from recorded --offline` replays it
+   pinned to exactly the backend responses their browser saw.
+
+## Install (dev / unpacked)
+
+```
+chrome://extensions → Developer mode → Load unpacked → extension/
+```
+
+Pin it to the toolbar for the one-button UX.
+
+## Use
+
+- Click the toolbar button → **Record** (badge shows `REC`).
+- Navigate, click, type, select, check, press Enter — steps accrue in
+  the popup counter.
+- Click the button again → **Stop & export** → the save dialog writes
+  `agent-qa-<host>-<timestamp>.json`.
+
+What it captures per interaction:
+
+| Event | Draft produced |
+| --- | --- |
+| click on link/button/submit | `do/click` on a stable css locator (`#id` → `[data-qa]` → class path, hash-noise classes skipped) |
+| change on input/textarea | `do/type` with the committed value |
+| change on select | `do/select` with the option value |
+| checkbox/radio toggle | `do/check` / `do/uncheck` |
+| Enter inside an input | `do/press` `Enter` |
+| every fetch/XHR | `{url, method, status, body, postData, startedAt, durationMs}` (bodies capped at 256KB) |
+
+**Not captured (v1):** native file pickers, `alert()`/`confirm()`/
+`prompt()`, iframe internals, canvas drawing, real multi-touch,
+hover-only gestures, scrolling. Record those flows with
+`agent-qa record` instead.
+
+## Ingest
+
+```
+agent-qa ingest <bundle.json> [--sid <name>]
+```
+
+writes:
+
+```
+<scenarios_root>/<sid>/scenario.json
+<scenarios_root>/<sid>/replays/recorded/network.har
+```
+
+Every step goes through the same validation `record-step` applies —
+malformed captures fail at ingest with the same errors, not at replay.
+The scenario's `env.open` is `[fresh, nav <recorded url>]`, matching
+what `agent-qa record` seals.
+
+## Replay
+
+```
+agent-qa replay <sid>                                  # against the live app
+agent-qa replay <sid> --mock-from recorded --offline   # pinned backend
+```
+
+The hermetic variant is the debugging combo: the app replays against
+the captured responses while `--offline` rejects anything the user's
+browser didn't see — divergences point at the bug.
+
+## Bundle shape
+
+```json
+{
+  "version": 1,
+  "url": "https://app.example.com/login",
+  "startedAt": "2026-09-30T08:00:00.000Z",
+  "intent": "recorded via agent-qa extension on app.example.com",
+  "steps": [
+    {"kind": "do", "draft": {"intent": "click \"Go\"", "verb": "click", "on": "css:#go"}}
+  ],
+  "network": [
+    {"url": "https://api.x/login", "method": "POST", "status": 200,
+     "body": "{...}", "postData": "{...}", "startedAt": "...", "durationMs": 88}
+  ]
+}
+```
+
+Step drafts use the `record-step` draft shape; `on` accepts locator
+shorthand (`css:`, `xpath:`, `testId:`, `text:`) and values are typed
+(`{"from": "literal", "literal": "..."}`).
+
+## How the network capture works
+
+The content script injects a small page-world patch over `fetch` and
+`XMLHttpRequest` — response bodies included, no debugger banner, no
+devtools window needed. It's inert until recording starts and resumes
+automatically after full-page navigations.
