@@ -305,7 +305,11 @@
     "golden:let3:tc01": "bun golden/let3-tc01.ts",
     "golden:let3:tc02": "bun golden/let3-tc02.ts",
     "golden:let3:tc03": "bun golden/let3-tc03.ts",
-    "golden:let3:tc04": "bun golden/let3-tc04.ts"
+    "golden:let3:tc04": "bun golden/let3-tc04.ts",
+    "golden:expand-login:tc01": "bun golden/expand-login-tc01.ts",
+    "golden:expand-login:tc02": "bun golden/expand-login-tc02.ts",
+    "golden:expand-pages:tc01": "bun golden/expand-pages-tc01.ts",
+    "golden:demoqa:tc01": "bun golden/demoqa-tc01.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"
