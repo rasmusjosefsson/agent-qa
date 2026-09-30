@@ -96,7 +96,11 @@ browser didn't see — divergences point at the bug.
 
 Step drafts use the `record-step` draft shape; `on` accepts locator
 shorthand (`css:`, `xpath:`, `testId:`, `text:`) and values are typed
-(`{"from": "literal", "literal": "..."}`).
+(`{"from": "literal", "literal": "..."}`). Targets inside **open
+shadow roots** emit a role locator instead (`{"role": {"role": ...,
+"name": ...}}`) — a `css:` path can't pierce the boundary on replay,
+where the a11y tree can. Closed roots record nothing resolvable (same
+hard limit as everywhere).
 
 ## How the network capture works
 

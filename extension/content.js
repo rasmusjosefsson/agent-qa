@@ -97,6 +97,57 @@
     return JSON.stringify(t);
   }
 
+  // A `css:` path stops at shadow boundaries — selectors can't pierce
+  // them on replay either, so a click inside a shadow root would record
+  // a locator that can never resolve. Emit a role locator instead: it
+  // resolves through the a11y tree, which crosses *open* roots.
+  const IMPLICIT_ROLE = {
+    button: "button",
+    summary: "button",
+    a: "link",
+    select: "combobox",
+    textarea: "textbox",
+    img: "img",
+    option: "option",
+    li: "listitem",
+  };
+  const INPUT_ROLE = {
+    checkbox: "checkbox",
+    radio: "radio",
+    submit: "button",
+    button: "button",
+    image: "button",
+    reset: "button",
+    range: "slider",
+    search: "searchbox",
+  };
+
+  function implicitRole(el) {
+    const explicit = el.getAttribute && el.getAttribute("role");
+    if (explicit) return explicit;
+    if (el.localName === "input") {
+      const t = (el.getAttribute("type") || "text").toLowerCase();
+      return INPUT_ROLE[t] || "textbox";
+    }
+    if (/^h[1-6]$/.test(el.localName)) return "heading";
+    return IMPLICIT_ROLE[el.localName] || "generic";
+  }
+
+  function locator(el) {
+    if (el.getRootNode && el.getRootNode() instanceof ShadowRoot) {
+      const raw = (
+        (el.getAttribute && el.getAttribute("aria-label")) ||
+        (el.innerText || "").trim().slice(0, 40) ||
+        el.getAttribute?.("name") ||
+        ""
+      );
+      const role = { role: implicitRole(el) };
+      if (raw) role.name = raw;
+      return { role };
+    }
+    return `css:${cssPath(el)}`;
+  }
+
   const doDraft = (intent, verb, extra) => ({
     kind: "do",
     draft: { intent, verb, ...extra },
@@ -109,14 +160,17 @@
     "click",
     (e) => {
       if (!active || !e.isTrusted) return;
+      // e.target retargets to the shadow host at document level —
+      // composedPath()[0] is the real element the click landed on.
+      const real = e.composedPath?.()[0] || e.target;
       const el =
-        e.target.closest?.(
+        real.closest?.(
           "a[href],button,[role=button],[role=link],input[type=submit],input[type=button],summary,[onclick]"
-        ) || e.target;
+        ) || real;
       send({
         t: "step",
         item: doDraft(`click ${label(el)}`, "click", {
-          on: `css:${cssPath(el)}`,
+          on: locator(el),
         }),
       });
     },
@@ -127,13 +181,13 @@
     "change",
     (e) => {
       if (!active || !e.isTrusted) return;
-      const el = e.target;
+      const el = e.composedPath?.()[0] || e.target;
       const name = el.localName;
       if (name === "select") {
         send({
           t: "step",
           item: doDraft(`select ${label(el)}`, "select", {
-            on: `css:${cssPath(el)}`,
+            on: locator(el),
             value: literal(el.value),
           }),
         });
@@ -147,7 +201,7 @@
           item: doDraft(
             `${el.checked ? "check" : "uncheck"} ${label(el)}`,
             el.checked ? "check" : "uncheck",
-            { on: `css:${cssPath(el)}` }
+            { on: locator(el) }
           ),
         });
         return;
@@ -157,7 +211,7 @@
       send({
         t: "step",
         item: doDraft(`type into ${label(el)}`, "type", {
-          on: `css:${cssPath(el)}`,
+          on: locator(el),
           value: literal(el.value),
         }),
       });
@@ -170,7 +224,7 @@
     (e) => {
       if (!active || !e.isTrusted) return;
       if (e.key !== "Enter") return;
-      const el = e.target;
+      const el = e.composedPath?.()[0] || e.target;
       if (!el || (el.localName !== "input" && el.localName !== "textarea"))
         return;
       send({
