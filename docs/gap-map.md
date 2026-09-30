@@ -144,14 +144,14 @@ the picture shifts materially.
     and focus emulation over the pooled CDP connection — both required
     headless; `file://` pages have no grantable origin. Empty clipboard
     maps to `null` so `exists` means "holds text".
-16. ~~Service-worker-served responses~~ — probed: a page-origin
-    `fetch()` answered by a service worker's `respondWith` (no real
-    network hit) still emits `Network.*` on the page target, and a
-    `network` claim sees the synthetic 200 (fixture: page registers a
-    SW, reloads once for `clients.claim`, fetches a SW-only URL). What
-    stays blind: fetches the SW itself originates (cache-fill,
-    background sync) — those live on the worker target and would need
-    `Target.setAutoAttach` to worker-type targets.
+16. ~~Service-worker-originated fetches~~ — closed. `cdp_net` now arms
+    `Target.setAutoAttach` on its capture socket; every worker-class
+    target (service/dedicated/shared worker, plus pages) gets
+    `Network.enable` on its own session, and worker-sourced requests
+    merge into `network_requests` tagged `resource_type: "worker"` —
+    `{"network"}` claims and `wait url` cover cache-fill and
+    background-sync traffic the page never touched. requestIds are
+    keyed `session:id` since they're only unique per target.
 17. **Closed shadow roots are unreachable** — role locators pierce *open*
     roots via the a11y tree; closed roots hide everything by design.
     **Hard limit, not a gap**: no CDP/JS surface can see inside a closed

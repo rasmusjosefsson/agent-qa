@@ -92,6 +92,18 @@ impl CdpConnection {
         self.send_and_wait(method, params, Some(session_id))
     }
 
+    /// Send a session-scoped command WITHOUT waiting for its response —
+    /// for event-reader sockets (cdp_net) where `call_on`'s reply wait
+    /// would strand interleaved events in `self.events`. The response
+    /// frame arrives later and is ignored by the reader.
+    pub fn send_on(&mut self, method: &str, params: Json, session_id: &str) -> Result<()> {
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let msg = json!({ "id": id, "method": method, "params": params, "sessionId": session_id });
+        self.ws
+            .send(Message::Text(msg.to_string().into()))
+            .map_err(|e| anyhow!("[transport] cdp send: {e}"))
+    }
+
     fn send_and_wait(
         &mut self,
         method: &str,
