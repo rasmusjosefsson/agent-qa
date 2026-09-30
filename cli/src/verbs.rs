@@ -1701,6 +1701,7 @@ fn resolve_upload_file(file: &str, scenario_dir: &Path) -> Result<String> {
         }
         out
     };
+    let tried: Vec<String> = candidates.iter().map(|c| c.display().to_string()).collect();
     for candidate in candidates {
         if candidate.is_file() {
             return Ok(candidate
@@ -1710,7 +1711,12 @@ fn resolve_upload_file(file: &str, scenario_dir: &Path) -> Result<String> {
                 .to_string());
         }
     }
-    bail!("upload file not found: {file}")
+    bail!(
+        "upload file not found: {file} (looked in {}); \
+         commit it under the scenario's files/ dir and reference it as \
+         `files/<name>` so the scenario replays on any machine",
+        tried.join(", ")
+    )
 }
 
 /// Resolve a download destination: absolute paths pass through, relative paths
