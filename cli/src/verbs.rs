@@ -2506,6 +2506,21 @@ fn act_on_locator(
             }
             let name = resolve_name_match(role.name.as_ref(), scope, scenario_dir)?;
             let name_str = name.as_deref().unwrap_or("");
+            // A nameless role locator dispatches to agent-browser's
+            // first-match — {"role": "button"} silently clicks the first
+            // button on the page. When several candidates exist, warn so
+            // the ambiguity is visible instead of a silent wrong-target.
+            if name_str.is_empty() {
+                if let Ok(snap) = browser::snapshot_full(session) {
+                    let n = browser::snapshot_named_lines(&snap, &role.role).len();
+                    if n > 1 {
+                        eprintln!(
+                            "[v2-replay] role='{}' has no name and matches {n} nodes — first wins; add a name or scope to disambiguate",
+                            role.role
+                        );
+                    }
+                }
+            }
             // Hover/fill on a role locator dispatch through agent-browser's
             // coordinate path with no post-check — hit-test the resolved
             // element first so a covered/offscreen target warns instead of
