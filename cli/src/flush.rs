@@ -240,13 +240,47 @@ fn merge_local_inputs(dir: &std::path::Path, secrets: &[(String, String)]) -> Re
     atomic_write_file(&p, &bytes)
 }
 
-/// Insert a {\"shot\": \"<doStepId>\"} check after every do-step; renumber
-/// afterwards so ids stay dense and the new refs get rewritten correctly.
+/// Verbs whose step produces no *newly* viewable page state — a shot
+/// minted after a navigation catches a transition frame and goes flaky,
+/// and a shot after a non-visual step just duplicates the previous one.
+/// Interaction + wait verbs keep theirs: those are the settled states
+/// worth pinning.
+fn auto_shot_worthy(verb: &crate::scenario::Verb) -> bool {
+    use crate::scenario::Verb as V;
+    !matches!(
+        verb,
+        V::Goto
+            | V::Reload
+            | V::Back
+            | V::Forward
+            | V::Tab
+            | V::Frame
+            | V::State
+            | V::Mock
+            | V::Unmock
+            | V::Dialog
+            | V::Read
+            | V::CallGql
+            | V::Loop
+            | V::Group
+            | V::UseTemplate
+    )
+}
+
+/// Insert a {\"shot\": \"<doStepId>\"} check after every shot-worthy
+/// do-step; renumber afterwards so ids stay dense and the new refs get
+/// rewritten correctly.
 fn insert_auto_shot_claims(steps: &mut Vec<crate::scenario::Step>) {
     let mut out: Vec<crate::scenario::Step> = Vec::with_capacity(steps.len() * 2);
     for step in steps.drain(..) {
-        if let crate::scenario::Step::Do { id, intent, .. } = &step {
+        if let crate::scenario::Step::Do {
+            id, intent, verb, ..
+        } = &step
+        {
             out.push(step.clone());
+            if !auto_shot_worthy(verb) {
+                continue;
+            }
             out.push(crate::scenario::Step::Check {
                 id: String::new(),
                 intent: format!("visual: {}", intent),
@@ -661,7 +695,7 @@ mod tests {
         record_draft(
             &mut state,
             StepKind::Do,
-            &json!({"intent":"hit save","verb":"reload"}),
+            &json!({"intent":"hit save","verb":"click","on":"css:#save"}),
             "default",
         )
         .unwrap();
@@ -670,15 +704,14 @@ mod tests {
         let scenario: serde_json::Value =
             serde_json::from_slice(&fs::read(&summary.scenario_file).unwrap()).unwrap();
         let steps = scenario["steps"].as_array().unwrap();
-        // do, shot, check, do, shot — dense ids, shot refs point at the
-        // renumbered do-step they follow.
-        assert_eq!(steps.len(), 5);
-        assert_eq!(steps[1]["claim"]["subject"]["shot"], "s0");
-        assert_eq!(steps[1]["id"], "s1");
-        assert_eq!(steps[2]["claim"]["subject"]["url"], true);
-        assert_eq!(steps[3]["id"], "s3");
-        assert_eq!(steps[4]["claim"]["subject"]["shot"], "s3");
-        assert_eq!(steps[4]["claim"]["tolerance"]["pixels"], json!(0.05));
+        // do(goto — skipped: transition frames go flaky), check,
+        // do(click), shot — dense ids, the shot ref points at the
+        // renumbered do-step it follows.
+        assert_eq!(steps.len(), 4);
+        assert_eq!(steps[1]["claim"]["subject"]["url"], true);
+        assert_eq!(steps[2]["id"], "s2");
+        assert_eq!(steps[3]["claim"]["subject"]["shot"], "s2");
+        assert_eq!(steps[3]["claim"]["tolerance"]["pixels"], json!(0.05));
         std::env::remove_var(paths::SCENARIOS_DIR_ENV);
         std::env::remove_var(paths::RECORD_DIR_ENV);
         std::env::remove_var("AGENT_QA_RECORD_SKIP_SIDECARS");
