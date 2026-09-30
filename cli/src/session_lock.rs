@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
+use sha2::{Digest, Sha256};
 
 use crate::paths;
 
@@ -38,9 +39,31 @@ pub struct Holder {
 }
 
 fn lock_path(session: &str) -> PathBuf {
+    // The session name is free-form for agent-browser — slug it for the
+    // filename so `../`-style or `/`-containing names can't escape the
+    // locks dir, and append a digest so names that slugify alike stay
+    // distinct locks.
+    let slug: String = session
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(48)
+        .collect();
+    let slug = if slug.is_empty() || slug == "." || slug == ".." {
+        "session".to_string()
+    } else {
+        slug
+    };
+    let digest = Sha256::digest(session.as_bytes());
+    let short: String = digest[..4].iter().map(|b| format!("{b:02x}")).collect();
     paths::record_root()
         .join("locks")
-        .join(format!("{session}.lock"))
+        .join(format!("{slug}__{short}.lock"))
 }
 
 /// Take the lock for `session`. Refuses when another live process holds
@@ -163,7 +186,7 @@ mod tests {
 
     #[test]
     fn a_dead_holders_lock_is_stolen() {
-        with_record_root(|t| {
+        with_record_root(|_t| {
             // Mint a real-but-dead pid by spawning a trivial child.
             let mut spawned = std::process::Command::new(std::env::current_exe().unwrap())
                 .arg("--version")
@@ -171,28 +194,48 @@ mod tests {
                 .unwrap();
             let pid = spawned.id();
             spawned.wait().unwrap();
-            let dir = t.path().join("locks");
-            fs::create_dir_all(&dir).unwrap();
+            let path = lock_path("demo");
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(
-                dir.join("demo.lock"),
+                &path,
                 serde_json::json!({"pid": pid, "started": 1}).to_string(),
             )
             .unwrap();
             assert!(held_by_live_process("demo").is_none());
             let _lock = acquire("demo").unwrap();
-            assert!(dir.join("demo.lock").is_file());
+            // The dead holder's file was stolen — same path, our pid now.
+            let h = read_holder(&path).unwrap();
+            assert_eq!(h.pid, std::process::id());
         });
     }
 
     #[test]
     fn drop_removes_the_lock_file() {
-        with_record_root(|t| {
-            let path = t.path().join("locks").join("demo.lock");
+        with_record_root(|_t| {
+            let path = lock_path("demo");
             {
                 let _lock = acquire("demo").unwrap();
                 assert!(path.is_file());
             }
             assert!(!path.exists());
+        });
+    }
+
+    #[test]
+    fn unsafe_session_names_stay_inside_the_locks_dir() {
+        with_record_root(|t| {
+            for name in ["../../etc/cfg", "a/b", "..", "c:\\x", "a b"] {
+                let p = lock_path(name);
+                assert!(
+                    p.starts_with(t.path().join("locks")),
+                    "{name} → {}",
+                    p.display()
+                );
+                assert!(p.file_name().unwrap().to_str().unwrap().ends_with(".lock"));
+            }
+            // Different names never share a lock file.
+            assert_ne!(lock_path("a/b"), lock_path("a_b"));
+            assert_ne!(lock_path(".."), lock_path("."));
         });
     }
 
