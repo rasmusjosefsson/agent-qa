@@ -247,7 +247,22 @@ pub fn build_role_hit_test(role: &str, name: &str) -> String {
     || (digitTol && __aqPrefer(vis.filter(digitTol), root)[0])
     || (digitTol && __aqPrefer(cands.filter(digitTol), root)[0]);
   if (!el) return 'missing';
-  const hitState = () => {{
+{tail}
+}})()"#,
+        prelude = activation_prelude(),
+        name_lit = json_str(name),
+        role_lit = json_str(role),
+        map = role_candidate_map_js(),
+        tail = hit_state_tail_js(),
+    )
+}
+
+/// The elementFromPoint hit-test tail shared by every hit-test builder —
+/// expects `el` bound in scope, returns 'empty'|'offscreen'|'covered:<tag>'|
+/// 'ok' with one scrollIntoView retry. `ensure_click_target`'s resolver JS
+/// and the role builders above/below all emit this identical tail.
+fn hit_state_tail_js() -> &'static str {
+    r#"  const hitState = () => {
     const r = el.getBoundingClientRect();
     if (r.width === 0 && r.height === 0) return 'empty';
     const cx = r.left + r.width / 2;
@@ -257,18 +272,30 @@ pub fn build_role_hit_test(role: &str, name: &str) -> String {
     return (hit === el || el.contains(hit) || hit.contains(el))
       ? 'ok'
       : 'covered:' + hit.tagName.toLowerCase();
-  }};
+  };
   let s = hitState();
-  if (s === 'offscreen' || s.startsWith('covered')) {{
-    el.scrollIntoView({{ block: 'center', inline: 'center' }});
+  if (s === 'offscreen' || s.startsWith('covered')) {
+    el.scrollIntoView({ block: 'center', inline: 'center' });
     s = hitState();
-  }}
-  return s;
-}})()"#,
+  }
+  return s;"#
+}
+
+/// Scoped variant of [`build_role_hit_test`] — narrows through the scope
+/// chain (same `__aqScopedFind` resolution + `scope-miss:<i>` early return as
+/// `build_scoped_role_act`), then hit-tests the resolved element. Callers
+/// warn on unhittable states; a `scope-miss` result reaches the same
+/// `warn_unhittable` filter and stays silent — the act's own ScopeMiss bail
+/// reports the level.
+pub fn build_scoped_role_hit_test(role: &str, name: &str, scope: &[ScopeStep]) -> String {
+    format!(
+        "(() => {{{prelude}\n{find}\n{chain}const el = __aqScopedFind({role}, {name}, __aqOuter);\nif (!el) return 'missing';\n{tail}\n}})()",
         prelude = activation_prelude(),
-        name_lit = json_str(name),
-        role_lit = json_str(role),
-        map = role_candidate_map_js(),
+        find = scoped_find_helper_js(),
+        chain = build_scope_chain(scope),
+        role = json_str(role),
+        name = json_str(name),
+        tail = hit_state_tail_js(),
     )
 }
 

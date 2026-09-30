@@ -2339,6 +2339,29 @@ fn act_on_scoped_role(
 ) -> Result<()> {
     let steps = scope_steps(role.scope.as_deref().unwrap_or(&[]), scope, scenario_dir)?;
     let name = resolve_name_match(role.name.as_ref(), scope, scenario_dir)?.unwrap_or_default();
+    // Same pre-flight as the unscoped Role branch: hover/fill dispatch
+    // through agent-browser's coordinate path with no post-check — probe the
+    // resolved element inside the scope chain first. Skipped for empty
+    // names (the "first match" probe can't distinguish a real target).
+    if matches!(act, RoleAct::Hover | RoleAct::Fill) && !name.is_empty() {
+        let state = browser::eval_expression(
+            session,
+            &crate::dom_activate::build_scoped_role_hit_test(&role.role, &name, &steps),
+        )
+        .map(|out| {
+            serde_json::from_str::<String>(out.trim()).unwrap_or_else(|_| out.trim().to_string())
+        })
+        .unwrap_or_else(|_| "eval-error".to_string());
+        warn_unhittable(
+            act.as_str(),
+            &format!(
+                "role='{}' name='{name}' ({} scope level(s))",
+                role.role,
+                steps.len()
+            ),
+            &state,
+        );
+    }
     match crate::dom_activate::act_scoped(session, &role.role, &name, &steps, act, value)? {
         crate::dom_activate::ScopedOutcome::Done => {
             eprintln!(
@@ -3951,6 +3974,43 @@ mod tests {
         let hit_evals = out.matches("elementFromPoint").count();
         assert_eq!(hit_evals, 2, "both verbs should probe the target: {out}");
         assert!(out.contains("Save"), "probe carries the name: {out}");
+    }
+
+    #[test]
+    fn hover_on_scoped_role_runs_hit_test_eval() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake_eval_true(tmp.path(), &log);
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(
+            &parse(json!({
+                "id": "s1", "intent": "x", "kind": "do", "verb": "hover",
+                "on": {
+                    "role": "button", "name": "Save",
+                    "scope": [{"raw": {"kind": "css", "value": "nav"}, "reason": "t"}]
+                }
+            })),
+            &ctx,
+            &mut scope,
+        )
+        .unwrap();
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        assert!(
+            out.contains("elementFromPoint"),
+            "scoped hover probes: {out}"
+        );
+        assert!(
+            out.contains("__aqScopedFind"),
+            "probe resolves inside the scope chain: {out}"
+        );
     }
 
     #[test]

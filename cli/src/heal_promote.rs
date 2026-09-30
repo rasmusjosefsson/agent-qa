@@ -188,6 +188,34 @@ pub(crate) fn promote_run(scenario_file: &std::path::Path, run_id: &str) -> Resu
     Ok(plan.patches.len())
 }
 
+/// `heal-chronic --apply` facing entry: apply one run's patches restricted
+/// to specific step ids. Same content-hash rebase guard as `promote_run`.
+/// Returns the number of patches applied (0 when none exist for the steps).
+pub(crate) fn promote_run_steps(
+    scenario_file: &std::path::Path,
+    run_id: &str,
+    step_ids: &[String],
+) -> Result<usize> {
+    let plan = build_plan_at(
+        scenario_file,
+        Some(run_id.to_string()),
+        Some(step_ids.to_vec()),
+    )?;
+    if plan.patches.is_empty() {
+        return Ok(0);
+    }
+    if let Some(stale) = plan.patches.iter().find(|p| p.hash_mismatch) {
+        bail!(
+            "patch for {} carries scenarioContentHash {} but live scenario is {}",
+            stale.step_id,
+            stale.recorded_hash.as_deref().unwrap_or("(missing)"),
+            plan.live_hash
+        );
+    }
+    apply_plan(&plan)?;
+    Ok(plan.patches.len())
+}
+
 fn build_plan(opts: &Opts) -> Result<Plan> {
     let scenario_dir = paths::scenario_dir(&opts.sid)?;
     let scenario_file = scenario_dir.join("scenario.json");
