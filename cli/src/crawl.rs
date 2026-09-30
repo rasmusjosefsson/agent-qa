@@ -98,6 +98,12 @@ pub fn run(args: &[String]) -> Result<u8> {
     let sid = sid_override.unwrap_or_else(|| format!("crawl-{}", sanitize(&host)));
     let dir = out_dir.unwrap_or_else(|| paths::scenarios_root().join(&sid));
 
+    // A crawl on a session mid-recording fights the recorder for the
+    // browser; a concurrent replay/crawl on it fights us. Same guards
+    // as `replay`.
+    crate::runner::refuse_if_recording_active(&session)?;
+    let _session_lock = crate::session_lock::acquire(&session)?;
+
     // Baseline count before navigation — a warm session's log already holds
     // earlier traffic; only requests arriving after `open` become claims.
     let baseline = browser::network_requests(&session)

@@ -120,6 +120,26 @@ impl RecorderState {
         })
     }
 
+    /// The session name of the in-flight recording, if any — without the
+    /// `set_connection` env side effect `try_load_active` performs. For
+    /// guards that only need to know *which* session is busy.
+    pub(crate) fn peek_active_session() -> Result<Option<String>> {
+        #[derive(Deserialize)]
+        struct SessionOnly {
+            session: String,
+        }
+        let path = paths::record_state_file();
+        match fs::read_to_string(&path) {
+            Ok(body) => Ok(Some(
+                serde_json::from_str::<SessionOnly>(&body)
+                    .with_context(|| format!("parse {}", path.display()))?
+                    .session,
+            )),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e).with_context(|| format!("read {}", path.display())),
+        }
+    }
+
     pub(crate) fn try_load_active() -> Result<Option<Self>> {
         let path = paths::record_state_file();
         let state: Self = match fs::read_to_string(&path) {

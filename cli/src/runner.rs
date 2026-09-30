@@ -439,6 +439,27 @@ fn abs_display(p: &Path) -> String {
 
 // ---------- entry point ----------
 
+/// `record continue` replaying to its scenario's end state on the
+/// recording's own session sets this — the only caller that may drive a
+/// session while its recording is active.
+pub(crate) const RUN_ON_RECORDED_SESSION_ENV: &str = "AGENT_QA_RUN_ON_RECORDED_SESSION";
+
+/// Refuse a replay on a session that is mid-recording — the run and the
+/// recorder would fight over the same browser.
+pub(crate) fn refuse_if_recording_active(session: &str) -> Result<()> {
+    if std::env::var_os(RUN_ON_RECORDED_SESSION_ENV).is_some() {
+        return Ok(());
+    }
+    if let Some(rec) = crate::recorder_state::RecorderState::peek_active_session()? {
+        if rec == session {
+            bail!(
+                "session {session:?} is mid-recording — `record flush` or `record stop` it first, or run with a different --session"
+            );
+        }
+    }
+    Ok(())
+}
+
 pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     // 0. Browser launch mode (headless by default; --headed shows the window)
     // and persistent profile. Set before any agent-browser child is spawned
@@ -447,6 +468,9 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     crate::browser::set_browser_profile(opts.browser_profile.as_deref());
     let connection = crate::browser::BrowserConnection::resolve()?;
     crate::browser::set_connection(&connection);
+    if !opts.dry_run {
+        refuse_if_recording_active(&opts.session_name)?;
+    }
     // Two concurrent runs on one session name would drive the same
     // browser — hold a per-session lock for the run's lifetime. A dead
     // holder's lock is stolen; --dry-run never launches so it skips it.
@@ -5883,5 +5907,29 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             Some(v) => env::set_var(crate::paths::SCENARIOS_DIR_ENV, v),
             None => env::remove_var(crate::paths::SCENARIOS_DIR_ENV),
         }
+    }
+
+    #[test]
+    fn replay_refuses_a_session_mid_recording() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        env::set_var(crate::paths::RECORD_DIR_ENV, tmp.path());
+        fs::write(
+            crate::paths::record_state_file(),
+            "{\"sid\":\"s1\",\"intent\":\"record\",\"session\":\"rec1\",\"baseline\":\"fresh\",\"envOpen\":[],\"startedAt\":\"t\",\"browser\":{},\"steps\":[]}",
+        )
+        .unwrap();
+        let err = refuse_if_recording_active("rec1").unwrap_err().to_string();
+        assert!(err.contains("mid-recording"), "{err}");
+        // A different session is untouched.
+        refuse_if_recording_active("other").unwrap();
+        // record continue's bypass opts out.
+        env::set_var(RUN_ON_RECORDED_SESSION_ENV, "1");
+        refuse_if_recording_active("rec1").unwrap();
+        env::remove_var(RUN_ON_RECORDED_SESSION_ENV);
+        // Once the recording ends the session is free again.
+        crate::recorder_state::RecorderState::clear().unwrap();
+        refuse_if_recording_active("rec1").unwrap();
+        env::remove_var(crate::paths::RECORD_DIR_ENV);
     }
 }
