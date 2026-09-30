@@ -68,6 +68,7 @@ mod skills;
 mod smart_click;
 mod smart_fill;
 mod start;
+mod telemetry;
 mod test_util;
 mod time;
 mod truncate;

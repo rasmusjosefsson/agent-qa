@@ -243,6 +243,13 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           });
         case "reloadPage":
           return doStep(intent, { verb: "reload" });
+        case "frame":
+          // args[0] = css selector of the iframe to enter; no args returns to
+          // the top document.
+          return doStep(intent, {
+            verb: "frame",
+            params: args[0] === undefined ? { main: true } : { selector: args[0] },
+          });
         case "tabCommand":
           // args[0] is the full `tab` subcommand tail: "new <url>", "list",
           // "close <ref>", or "<ref>" to switch.
@@ -250,6 +257,13 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
         case "seedState":
           // do/state seeding: args[0] = params ({cookies:[...], localStorage:{...}, ...})
           return doStep(intent, { verb: "state", params: args[0] });
+        case "dismissBySelector":
+          // args[0] = css selector of an overlay/banner to remove now AND
+          // keep removing before every later interactive step.
+          return doStep(intent, {
+            verb: "dismiss",
+            on: css(args[0]),
+          });
         case "clickNthOption":
           // args[0] = scoped listbox css, args[1] = 1-based option index
           return doStep(intent, {
