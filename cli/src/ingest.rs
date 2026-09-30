@@ -29,6 +29,7 @@ use std::path::PathBuf;
 
 use crate::record_step::{parse_draft, StepKind};
 use crate::scenario::{Env, EnvOp, Producer, Provenance, Scenario};
+use crate::sidecar::atomic_write_file;
 
 struct Opts {
     bundle: PathBuf,
@@ -139,8 +140,10 @@ pub fn run(args: &[String]) -> Result<u8> {
         );
     }
     fs::create_dir_all(&dir).with_context(|| format!("ingest: create {}", dir.display()))?;
-    fs::write(&scenario_path, serde_json::to_string_pretty(&doc)? + "\n")
-        .with_context(|| format!("ingest: write {}", scenario_path.display()))?;
+    atomic_write_file(
+        &scenario_path,
+        (serde_json::to_string_pretty(&doc)? + "\n").as_bytes(),
+    )?;
 
     let step_count = scenario.steps.len();
     let mut har_note = String::new();
@@ -149,11 +152,10 @@ pub fn run(args: &[String]) -> Result<u8> {
         fs::create_dir_all(&har_dir)
             .with_context(|| format!("ingest: create {}", har_dir.display()))?;
         let har_path = har_dir.join("network.har");
-        fs::write(
+        atomic_write_file(
             &har_path,
-            serde_json::to_string_pretty(&build_har(network, url.as_deref()))? + "\n",
-        )
-        .with_context(|| format!("ingest: write {}", har_path.display()))?;
+            (serde_json::to_string_pretty(&build_har(network, url.as_deref()))? + "\n").as_bytes(),
+        )?;
         har_note = format!(
             " + {} captured requests → replays/recorded/network.har",
             network.len()
