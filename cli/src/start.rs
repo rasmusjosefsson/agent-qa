@@ -35,6 +35,7 @@ struct Opts {
     source_ref: Option<String>,
     mock_from: Option<String>,
     offline: bool,
+    force: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -55,6 +56,7 @@ fn parse_args(args: &[String]) -> Result<Opts> {
     let mut source_ref = None;
     let mut mock_from = None;
     let mut offline = false;
+    let mut force = false;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -90,6 +92,7 @@ fn parse_args(args: &[String]) -> Result<Opts> {
                 mock_from = Some(value["--mock-from=".len()..].to_string())
             }
             "--offline" => offline = true,
+            "--force" => force = true,
             value if value.starts_with("--") => bail!("unknown flag {value:?}"),
             value => {
                 if intent.is_some() {
@@ -124,6 +127,7 @@ fn parse_args(args: &[String]) -> Result<Opts> {
         source_ref,
         mock_from,
         offline,
+        force,
     })
 }
 
@@ -136,9 +140,13 @@ Usage:
                               [--profile <name> | --keep-session]
                               [--browser-profile <name|path>] [--headed]
                               [--source-ref <opaque-reference>]
-                              [--mock-from <network.har>] [--offline]
+                              [--mock-from <network.har>] [--offline] [--force]
 
 Writes one local recorder-state.json file. The sealed scenario never includes browser connection settings.
+
+Only one recording can be active: `start` refuses while one is in flight —
+finish it with `agent-qa flush <sid>` first, or pass --force to abandon it
+(a stale recorder-state.json left by a killed process clears the same way).
 
 --browser-profile launches Chrome under a persistent profile (a profile
 name like \"Default\", or a directory path): cookies and history survive
@@ -155,6 +163,25 @@ record hermetically against a dead backend."
 }
 
 fn start(opts: &Opts) -> Result<StartSummary> {
+    // One recording at a time: `RecorderState` is a single global file, so a
+    // second start would silently orphan the in-flight one — its buffer still
+    // fills but flush/record can no longer reach it, and its browser session
+    // leaks. Refuse unless --force abandons it on purpose.
+    if let Some(active) = RecorderState::try_load_active()? {
+        if !opts.force {
+            bail!(
+                "recording '{}' (sid {}) is already active — run `agent-qa flush {}` to finish it, or `start --force` to abandon it",
+                active.intent,
+                active.sid,
+                active.sid,
+            );
+        }
+        eprintln!(
+            "[v2-record] abandoning active recording {} (--force)",
+            active.sid
+        );
+        RecorderState::clear()?;
+    }
     browser::set_headed_mode(opts.headed);
     browser::set_browser_profile(opts.browser_profile.as_deref());
     let connection = browser::BrowserConnection::resolve()?;
@@ -292,6 +319,7 @@ mod tests {
             source_ref: None,
             mock_from: None,
             offline: false,
+            force: false,
         })
         .unwrap();
         assert_eq!(RecorderState::load_active().unwrap().sid, summary.sid);
@@ -319,6 +347,7 @@ mod tests {
             source_ref: None,
             mock_from: None,
             offline: false,
+            force: false,
         })
         .unwrap();
         let state = RecorderState::load_active().unwrap();
@@ -364,6 +393,7 @@ mod tests {
             source_ref: None,
             mock_from: Some(har.display().to_string()),
             offline: true,
+            force: false,
         })
         .unwrap();
         let init = scenario_dir_of(&summary).join("mock-init.js");
@@ -406,14 +436,49 @@ mod tests {
             source_ref: None,
             mock_from: None,
             offline: false,
+            force: false,
         };
         start(&base(Some("/tmp/qa-prof".into()))).unwrap();
         assert_eq!(
             std::env::var(browser::BROWSER_PROFILE_ENV).unwrap(),
             "/tmp/qa-prof"
         );
+        RecorderState::clear().unwrap();
         start(&base(None)).unwrap();
         assert!(std::env::var(browser::BROWSER_PROFILE_ENV).is_err());
+        std::env::remove_var(paths::SCENARIOS_DIR_ENV);
+        std::env::remove_var(paths::RECORD_DIR_ENV);
+        std::env::remove_var(browser::BIN_ENV);
+        browser::_reset_bin_cache_for_tests();
+    }
+
+    #[test]
+    fn start_refuses_while_a_recording_is_active_and_force_abandons() {
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var(paths::SCENARIOS_DIR_ENV, tmp.path());
+        std::env::set_var(paths::RECORD_DIR_ENV, tmp.path().join("record"));
+        install_fake_browser(tmp.path(), &tmp.path().join("browser.log"));
+
+        let base = |force: bool| Opts {
+            intent: "p".into(),
+            session_name: "default".into(),
+            open_url: None,
+            profile: None,
+            keep_session: false,
+            headed: false,
+            browser_profile: None,
+            source_ref: None,
+            mock_from: None,
+            offline: false,
+            force,
+        };
+        let first = start(&base(false)).unwrap();
+        let err = start(&base(false)).unwrap_err().to_string();
+        assert!(err.contains("already active"), "got: {err}");
+        assert!(err.contains(&first.sid), "names the live sid: {err}");
+        let second = start(&base(true)).unwrap();
+        assert_ne!(first.sid, second.sid, "force mints a fresh sid");
         std::env::remove_var(paths::SCENARIOS_DIR_ENV);
         std::env::remove_var(paths::RECORD_DIR_ENV);
         std::env::remove_var(browser::BIN_ENV);
