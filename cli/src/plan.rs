@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -117,6 +117,26 @@ fn read_json_file<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
     serde_json::from_slice(&bytes).ok()
 }
 
+/// List-loaders skip unreadable entries but say so — a corrupt set/case
+/// file silently vanishing from every plan's scope is the kind of silent
+/// wrong-answer these warnings exist to surface.
+fn load_json_list<T: for<'de> Deserialize<'de>>(dir: &Path, file_name: &str) -> Vec<T> {
+    list_ids(dir)
+        .into_iter()
+        .filter_map(|id| {
+            let file = dir.join(&id).join(file_name);
+            match read_json_file(&file) {
+                Some(v) => Some(v),
+                None if file.exists() => {
+                    eprintln!("[plan] warning: unreadable {} — skipped", file.display());
+                    None
+                }
+                None => None,
+            }
+        })
+        .collect()
+}
+
 /// Sorted, safe-segmented subdir ids under `dir` (missing dir → empty).
 fn list_ids(dir: &Path) -> Vec<String> {
     let rd = match fs::read_dir(dir) {
@@ -138,21 +158,19 @@ fn load_plan(root: &Path, id: &str) -> Result<PlanFile> {
         .then_some(())
         .ok_or_else(|| anyhow!("plan id must be a safe path segment, got {id:?}"))?;
     let file = plans_dir(root).join(id).join("plan.json");
-    read_json_file(&file).ok_or_else(|| anyhow!("plan: no such plan {id:?} ({})", file.display()))
+    let bytes =
+        fs::read(&file).map_err(|_| anyhow!("plan: no such plan {id:?} ({})", file.display()))?;
+    // A present-but-broken plan file is not "no such plan" — say it plainly.
+    serde_json::from_slice(&bytes)
+        .with_context(|| format!("plan {id:?}: unparseable {}", file.display()))
 }
 
 fn load_sets(root: &Path) -> Vec<SetFile> {
-    list_ids(&sets_dir(root))
-        .into_iter()
-        .filter_map(|id| read_json_file(&sets_dir(root).join(&id).join("set.json")))
-        .collect()
+    load_json_list(&sets_dir(root), "set.json")
 }
 
 fn load_cases(root: &Path) -> Vec<CaseFile> {
-    list_ids(&cases_dir(root))
-        .into_iter()
-        .filter_map(|id| read_json_file(&cases_dir(root).join(&id).join("case.json")))
-        .collect()
+    load_json_list(&cases_dir(root), "case.json")
 }
 
 /// Members of one set: tag mode matches any case carrying ≥1 of the set's
@@ -191,16 +209,30 @@ fn resolve_plan_case_ids(plan: &PlanFile, sets: &[SetFile], cases: &[CaseFile]) 
     };
     let set_by_id: BTreeMap<&str, &SetFile> = sets.iter().map(|s| (s.id.as_str(), s)).collect();
     for sid in &plan.scope.set_ids {
-        if let Some(set) = set_by_id.get(sid.as_str()) {
-            for cid in resolve_set_case_ids(set, cases) {
-                add(cid);
+        match set_by_id.get(sid.as_str()) {
+            Some(set) => {
+                for cid in resolve_set_case_ids(set, cases) {
+                    add(cid);
+                }
             }
+            // A scope entry that resolves to nothing used to shrink the run
+            // silently — a typo'd setId is indistinguishable from an empty
+            // set. Name it.
+            None => eprintln!(
+                "[plan] warning: plan {:?} references unknown set {sid:?}",
+                plan.id
+            ),
         }
     }
     let case_ids: BTreeSet<&str> = cases.iter().map(|c| c.id.as_str()).collect();
     for cid in &plan.scope.case_ids {
         if case_ids.contains(cid.as_str()) {
             add(cid.clone());
+        } else {
+            eprintln!(
+                "[plan] warning: plan {:?} references unknown case {cid:?}",
+                plan.id
+            );
         }
     }
     order
@@ -211,13 +243,17 @@ fn list_plan_rows(root: &Path) -> Vec<PlanRow> {
     let sets = load_sets(root);
     let mut out = Vec::new();
     for id in list_ids(&plans_dir(root)) {
-        if let Some(plan) = read_json_file::<PlanFile>(&plans_dir(root).join(&id).join("plan.json"))
-        {
-            out.push(PlanRow {
+        let file = plans_dir(root).join(&id).join("plan.json");
+        match read_json_file::<PlanFile>(&file) {
+            Some(plan) => out.push(PlanRow {
                 name: plan.name.clone().unwrap_or_else(|| plan.id.clone()),
                 case_count: resolve_plan_case_ids(&plan, &sets, &cases).len(),
                 id: plan.id,
-            });
+            }),
+            None if file.exists() => {
+                eprintln!("[plan] warning: unreadable {} — skipped", file.display());
+            }
+            None => {}
         }
     }
     out
@@ -614,6 +650,17 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         assert!(load_plan(tmp.path(), "nope").is_err());
         assert!(load_plan(tmp.path(), "../x").is_err());
+    }
+
+    #[test]
+    fn load_plan_names_unparseable_instead_of_no_such_plan() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("_plans").join("broken");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("plan.json"), b"{corrupt!!!").unwrap();
+        let err = load_plan(tmp.path(), "broken").unwrap_err().to_string();
+        assert!(err.contains("unparseable"), "{err}");
+        assert!(!err.contains("no such plan"), "{err}");
     }
 
     #[test]
