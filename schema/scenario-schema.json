@@ -556,6 +556,8 @@
             "state",
             "hold",
             "swipe",
+            "pinch",
+            "rotate",
             "frame",
             "emulate",
             "loop",

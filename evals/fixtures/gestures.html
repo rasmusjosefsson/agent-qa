@@ -6,6 +6,8 @@
 <style>
   #holdBtn { padding: 24px; background: #446; color: #fff; user-select: none; }
   #swipeZone { margin-top: 16px; height: 120px; background: #eee; }
+  #pinchZone { margin-top: 16px; height: 160px; background: #dfe; }
+  #rotateZone { margin-top: 16px; height: 160px; background: #edf; }
 </style>
 </head>
 <body>
@@ -13,6 +15,11 @@
 <div id="holdState">idle</div>
 <div id="swipeZone">swipe here</div>
 <div id="swipeState">none</div>
+<div id="pinchZone">pinch here</div>
+<div id="pinchState">none</div>
+<div id="pinchWheel">none</div>
+<div id="rotateZone">rotate here</div>
+<div id="rotateState">none</div>
 <script>
   const holdBtn = document.getElementById('holdBtn');
   const holdState = document.getElementById('holdState');
@@ -42,6 +49,55 @@
   let ptrDown = false;
   zone.addEventListener('pointerdown', e => { if (state.textContent !== 'none') return; ptrDown = true; sx = e.clientX; sy = e.clientY; });
   zone.addEventListener('pointerup', e => { if (!ptrDown) return; ptrDown = false; end(e.clientX, e.clientY); });
+
+  const pinchZone = document.getElementById('pinchZone');
+  const pinchState = document.getElementById('pinchState');
+  const pinchWheel = document.getElementById('pinchWheel');
+  function span(touches) {
+    const a = touches[0], b = touches[1];
+    return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+  }
+  let pStart = 0;
+  pinchZone.addEventListener('touchstart', e => {
+    if (e.touches.length === 2) pStart = span(e.touches);
+  });
+  pinchZone.addEventListener('touchend', e => {
+    if (!pStart || e.changedTouches.length < 2) return;
+    const end = span(e.touches.length >= 2 ? e.touches : e.changedTouches);
+    const delta = end - pStart;
+    pinchState.textContent = (delta < 0 ? 'in:' : 'out:') + Math.round(Math.abs(delta));
+    pStart = 0;
+  });
+  // desktop trackpad pinch convention: ctrl + wheel
+  pinchZone.addEventListener('wheel', e => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    pinchWheel.textContent = e.deltaY > 0 ? 'wheel-in' : 'wheel-out';
+  });
+
+  const rotateZone = document.getElementById('rotateZone');
+  const rotateState = document.getElementById('rotateState');
+  // Angle of the two-touch line (the segment joining the fingers); the
+  // gesture's rotation is the delta between start and end angles.
+  function lineAngle(touches) {
+    const a = touches[0], b = touches[1];
+    return Math.atan2(b.clientY - a.clientY, b.clientX - a.clientX);
+  }
+  let rStart = null;
+  rotateZone.addEventListener('touchstart', e => {
+    if (e.touches.length === 2) rStart = lineAngle(e.touches);
+  });
+  rotateZone.addEventListener('touchend', e => {
+    if (rStart === null) return;
+    const end = e.touches.length >= 2 ? e.touches : e.changedTouches;
+    if (end.length < 2) { rStart = null; return; }
+    // Normalize the delta into (-180, 180].
+    let deg = (lineAngle(end) - rStart) * 180 / Math.PI;
+    while (deg > 180) deg -= 360;
+    while (deg <= -180) deg += 360;
+    rotateState.textContent = (deg >= 0 ? 'cw:' : 'ccw:') + Math.round(Math.abs(deg));
+    rStart = null;
+  });
 </script>
 </body>
 </html>

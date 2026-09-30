@@ -159,6 +159,46 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
               ...(args[1] != null ? { distance: args[1] } : {}),
             },
           });
+        case "pinchBySelector":
+          // args[0] = css, args[1] = direction ("in"|"out"), args[2] =
+          // optional per-finger distance px.
+          return doStep(intent, {
+            verb: "pinch",
+            on: css(args[0]),
+            params: {
+              direction: args[1],
+              ...(args[2] != null ? { distance: args[2] } : {}),
+            },
+          });
+        case "pinchPage":
+          // args[0] = direction, args[1] = optional distance px — no `on`.
+          return doStep(intent, {
+            verb: "pinch",
+            params: {
+              direction: args[0],
+              ...(args[1] != null ? { distance: args[1] } : {}),
+            },
+          });
+        case "rotateBySelector":
+          // args[0] = css, args[1] = signed degrees (+ cw), args[2] =
+          // optional orbit radius px.
+          return doStep(intent, {
+            verb: "rotate",
+            on: css(args[0]),
+            params: {
+              degrees: args[1],
+              ...(args[2] != null ? { radius: args[2] } : {}),
+            },
+          });
+        case "rotatePage":
+          // args[0] = signed degrees, args[1] = optional radius px — no `on`.
+          return doStep(intent, {
+            verb: "rotate",
+            params: {
+              degrees: args[0],
+              ...(args[1] != null ? { radius: args[1] } : {}),
+            },
+          });
         case "rightClickBySelector":
           return doStep(intent, { verb: "rightclick", on: css(args[0]) });
         case "scrollToBySelector":
