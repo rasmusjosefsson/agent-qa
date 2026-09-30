@@ -1,6 +1,8 @@
 //! `flush` seals the active recorder state as `scenario.json`.
 
+use std::collections::HashMap;
 use std::fs;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
@@ -242,6 +244,103 @@ fn merge_local_inputs(dir: &std::path::Path, secrets: &[(String, String)]) -> Re
 
 /// Insert a {\"shot\": \"<doStepId>\"} check after every do-step; renumber
 /// afterwards so ids stay dense and the new refs get rewritten correctly.
+/// Copy absolute-path file literals on `upload`/`fileChooser` steps into
+/// `<scenario_dir>/files/` and rewrite them to scenario-relative paths —
+/// a recording made on one machine replays on another only when its
+/// uploads travel with the scenario. Returns the relative paths written.
+fn package_file_literals(doc: &mut serde_json::Value, scenario_dir: &Path) -> Vec<String> {
+    let mut packaged = Vec::new();
+    let mut by_src: HashMap<String, String> = HashMap::new();
+    let Some(steps) = doc.get_mut("steps").and_then(|s| s.as_array_mut()) else {
+        return packaged;
+    };
+    for step in steps.iter_mut() {
+        if step.get("kind").and_then(|k| k.as_str()) != Some("do") {
+            continue;
+        }
+        let node = match step.get("verb").and_then(|v| v.as_str()) {
+            Some("upload") => step.get_mut("value").and_then(|v| v.get_mut("literal")),
+            Some("fileChooser") => step.get_mut("params").and_then(|p| p.get_mut("files")),
+            _ => None,
+        };
+        if let Some(node) = node {
+            package_node_paths(node, scenario_dir, &mut by_src, &mut packaged);
+        }
+    }
+    packaged
+}
+
+/// Rewrite each absolute existing path inside a Json string|string[]
+/// node to its packaged `files/<name>` relative path.
+fn package_node_paths(
+    node: &mut serde_json::Value,
+    scenario_dir: &Path,
+    by_src: &mut HashMap<String, String>,
+    packaged: &mut Vec<String>,
+) {
+    match node {
+        serde_json::Value::String(s) => {
+            if let Some(rel) = package_one_path(s, scenario_dir, by_src) {
+                *node = serde_json::Value::String(rel.clone());
+                packaged.push(rel);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items.iter_mut() {
+                if let Some(rel) = item
+                    .as_str()
+                    .and_then(|s| package_one_path(s, scenario_dir, by_src))
+                {
+                    *item = serde_json::Value::String(rel.clone());
+                    packaged.push(rel);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Absolute path that exists → copy under `<dir>/files/` (deduped per
+/// flush) and return the scenario-relative path; anything else → None,
+/// left untouched (relative paths already resolve like uploads do).
+fn package_one_path(
+    raw: &str,
+    scenario_dir: &Path,
+    by_src: &mut HashMap<String, String>,
+) -> Option<String> {
+    if let Some(cached) = by_src.get(raw) {
+        return Some(cached.clone());
+    }
+    let src = PathBuf::from(raw);
+    if !src.is_absolute() || !src.is_file() {
+        return None;
+    }
+    let base = src.file_name()?.to_str()?.to_string();
+    let files_dir = scenario_dir.join("files");
+    let stem = Path::new(&base)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("file")
+        .to_string();
+    let ext = Path::new(&base)
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|e| format!(".{e}"))
+        .unwrap_or_default();
+    let mut name = base.clone();
+    let mut n = 2u32;
+    while files_dir.join(&name).exists() {
+        name = format!("{stem}-{n}{ext}");
+        n += 1;
+    }
+    let dest = files_dir.join(&name);
+    fs::create_dir_all(&files_dir).ok()?;
+    fs::copy(&src, &dest).ok()?;
+    let rel = format!("files/{name}");
+    by_src.insert(raw.to_string(), rel.clone());
+    Some(rel)
+}
+
 fn insert_auto_shot_claims(steps: &mut Vec<crate::scenario::Step>) {
     let mut out: Vec<crate::scenario::Step> = Vec::with_capacity(steps.len() * 2);
     for step in steps.drain(..) {
@@ -418,6 +517,13 @@ fn flush(
     let scenario_dir = paths::scenario_dir(&state.sid)?;
     fs::create_dir_all(&scenario_dir)
         .with_context(|| format!("mkdir -p {}", scenario_dir.display()))?;
+    let packaged = package_file_literals(&mut scenario_json, &scenario_dir);
+    if !packaged.is_empty() {
+        eprintln!(
+            "[v2-record] {} upload file(s) → files/ — recording replays on any machine",
+            packaged.len()
+        );
+    }
     let scenario_file = scenario_dir.join("scenario.json");
     let mut bytes = serde_json::to_string_pretty(&scenario_json)?.into_bytes();
     bytes.push(b'\n');
@@ -879,5 +985,88 @@ mod tests {
         assert_eq!(json["claim"]["subject"]["pageError"], true);
         assert_eq!(json["claim"]["predicate"], "notExists");
         assert_eq!(json["id"], "s0");
+    }
+
+    #[test]
+    fn package_file_literals_copies_and_rewrites_absolute_paths() {
+        let tmp = TempDir::new().unwrap();
+        let upload = tmp.path().join("avatar.png");
+        fs::write(&upload, b"png-bytes").unwrap();
+        let scenario_dir = tmp.path().join("scn");
+        fs::create_dir_all(&scenario_dir).unwrap();
+        let abs = upload.display().to_string();
+        let mut doc = json!({
+            "steps": [
+                {"kind":"do","id":"s0","intent":"up","verb":"upload",
+                 "value":{"from":"literal","literal": abs}},
+                {"kind":"do","id":"s1","intent":"pick","verb":"fileChooser",
+                 "params":{"files":[abs]}},
+                {"kind":"do","id":"s2","intent":"rel","verb":"upload",
+                 "value":{"from":"literal","literal":"files/already.png"}},
+                {"kind":"do","id":"s3","intent":"miss","verb":"upload",
+                 "value":{"from":"literal","literal":"/nonexistent/x.png"}},
+                {"kind":"check","id":"s4","intent":"noop",
+                 "claim":{"subject":{"url":true},"predicate":"exists"}}
+            ]
+        });
+        let packaged = package_file_literals(&mut doc, &scenario_dir);
+        // Same source dedupes to one copy under files/; relative and
+        // missing literals stay untouched.
+        assert_eq!(
+            packaged,
+            vec![
+                "files/avatar.png".to_string(),
+                "files/avatar.png".to_string()
+            ]
+        );
+        assert_eq!(doc["steps"][0]["value"]["literal"], "files/avatar.png");
+        assert_eq!(doc["steps"][1]["params"]["files"][0], "files/avatar.png");
+        assert_eq!(doc["steps"][2]["value"]["literal"], "files/already.png");
+        assert_eq!(doc["steps"][3]["value"]["literal"], "/nonexistent/x.png");
+        assert_eq!(
+            fs::read(scenario_dir.join("files/avatar.png"))
+                .unwrap()
+                .as_slice(),
+            b"png-bytes"
+        );
+        assert!(!scenario_dir.join("files/avatar-2.png").exists());
+    }
+
+    #[test]
+    fn package_one_path_suffixes_same_named_different_files() {
+        let tmp = TempDir::new().unwrap();
+        let a = tmp.path().join("a");
+        let b = tmp.path().join("b");
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(&b).unwrap();
+        fs::write(a.join("logo.png"), b"a").unwrap();
+        fs::write(b.join("logo.png"), b"b").unwrap();
+        let scenario_dir = tmp.path().join("scn");
+        fs::create_dir_all(&scenario_dir).unwrap();
+        let mut by_src = HashMap::new();
+        let first = package_one_path(
+            a.join("logo.png").to_str().unwrap(),
+            &scenario_dir,
+            &mut by_src,
+        );
+        let second = package_one_path(
+            b.join("logo.png").to_str().unwrap(),
+            &scenario_dir,
+            &mut by_src,
+        );
+        assert_eq!(first.as_deref(), Some("files/logo.png"));
+        assert_eq!(second.as_deref(), Some("files/logo-2.png"));
+        assert_eq!(
+            fs::read(scenario_dir.join("files/logo.png"))
+                .unwrap()
+                .as_slice(),
+            b"a"
+        );
+        assert_eq!(
+            fs::read(scenario_dir.join("files/logo-2.png"))
+                .unwrap()
+                .as_slice(),
+            b"b"
+        );
     }
 }
