@@ -131,8 +131,14 @@ pub fn run(args: &[String]) -> Result<u8> {
         .context("ingest: assembled scenario failed schema validation")?;
 
     let dir = crate::paths::scenario_dir(&sid)?;
-    fs::create_dir_all(&dir).with_context(|| format!("ingest: create {}", dir.display()))?;
     let scenario_path = dir.join("scenario.json");
+    if scenario_path.exists() {
+        bail!(
+            "ingest: destination already exists at {} (refusing to overwrite) — pick a different --sid, or `scenario delete {sid}` first",
+            scenario_path.display()
+        );
+    }
+    fs::create_dir_all(&dir).with_context(|| format!("ingest: create {}", dir.display()))?;
     fs::write(&scenario_path, serde_json::to_string_pretty(&doc)? + "\n")
         .with_context(|| format!("ingest: write {}", scenario_path.display()))?;
 
@@ -427,6 +433,33 @@ mod tests {
             let step = parse_draft(kind, &item["draft"], "s1").unwrap();
             assert_eq!(step.id(), "s1");
         }
+    }
+
+    #[test]
+    fn ingest_refuses_to_overwrite_an_existing_scenario() {
+        let _guard = crate::test_util::lock_env();
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var(crate::paths::SCENARIOS_DIR_ENV, tmp.path());
+        let bundle_file = tmp.path().join("bundle.json");
+        fs::write(
+            &bundle_file,
+            serde_json::to_string(&bundle(vec![click_draft()], vec![])).unwrap(),
+        )
+        .unwrap();
+        let args = |sid: &str| {
+            vec![
+                bundle_file.display().to_string(),
+                "--sid".to_string(),
+                sid.to_string(),
+            ]
+        };
+        assert_eq!(run(&args("mine")).unwrap(), 0, "first ingest lands");
+        let err = run(&args("mine")).unwrap_err().to_string();
+        assert!(err.contains("refusing to overwrite"), "got: {err}");
+        // And the original scenario survived — not a partial overwrite.
+        let written = fs::read_to_string(tmp.path().join("mine").join("scenario.json")).unwrap();
+        assert!(written.contains("\"mine\""), "original scenario intact");
+        std::env::remove_var(crate::paths::SCENARIOS_DIR_ENV);
     }
 
     #[test]
