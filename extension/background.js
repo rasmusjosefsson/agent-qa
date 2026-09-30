@@ -59,7 +59,33 @@ async function handle(msg, sender) {
   if (msg.t === "step" && tabId != null) {
     const s = await getSession(tabId);
     if (s) {
-      s.steps.push(msg.item);
+      // `frame` is the content script's iframe-selector chain ([] = top
+      // document). A step whose frame differs from the last one needs
+      // `do/frame` transition drafts or replay runs it against the
+      // wrong document. `frame main` exits ALL the way to the top —
+      // there's no one-level-up — so a diverging chain re-enters frame
+      // by frame. A cross-origin hop can't name its iframe element;
+      // those steps are skipped + counted for the bundle warning
+      // rather than recorded against the wrong document.
+      const frame = msg.frame || [];
+      if (frame === "cross-origin") {
+        s.frameSkips = (s.frameSkips || 0) + 1;
+      } else {
+        const cur = s.currentFrame || [];
+        if (JSON.stringify(cur) !== JSON.stringify(frame)) {
+          const staysInside =
+            cur.length <= frame.length &&
+            cur.every((sel, i) => sel === frame[i]);
+          if (!staysInside) {
+            s.steps.push(frameDraft("return to the main document", { main: true }));
+          }
+          for (const sel of frame.slice(staysInside ? cur.length : 0)) {
+            s.steps.push(frameDraft(`into iframe ${sel}`, { selector: sel }));
+          }
+          s.currentFrame = frame;
+        }
+        s.steps.push(msg.item);
+      }
       persist(tabId);
     }
     return undefined;
@@ -138,6 +164,12 @@ async function handle(msg, sender) {
           "steps recorded, but no HAR data; --mock-from replay is unavailable",
       );
     }
+    if (s.frameSkips) {
+      (bundle.warnings ||= []).push(
+        `${s.frameSkips} interaction(s) inside a cross-origin iframe were skipped — ` +
+          "the iframe element can't be located from inside it",
+      );
+    }
     const host = safeHost(s.url) || "page";
     const stamp = s.startedAt.replace(/[:.]/g, "-").slice(0, 19);
     download(`agent-qa-${host}-${stamp}.json`, JSON.stringify(bundle, null, 2));
@@ -159,6 +191,10 @@ async function handle(msg, sender) {
   }
 
   return undefined;
+}
+
+function frameDraft(intent, params) {
+  return { kind: "do", draft: { intent, verb: "frame", params } };
 }
 
 function safeHost(url) {
@@ -197,6 +233,9 @@ async function recordNav(tabId, url) {
   // one transition, and the landing URL is already the bundle's `url`.
   if (!url || url === s.lastUrl) return;
   s.lastUrl = url;
+  // A fresh document clears every frame context — the next step starts
+  // from the top document again.
+  s.currentFrame = [];
   s.steps.push({
     kind: "do",
     draft: {
