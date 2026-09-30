@@ -4613,19 +4613,19 @@ mod tests {
         let abs = tmp.path().join("upload.bin");
         fs::write(&abs, b"x").unwrap();
         let p = dir.join("scenario.json");
+        // serde escapes the path — a Windows temp dir would splice
+        // raw `C:\…` backslashes into the JSON literal and fail to parse.
         fs::write(
             &p,
-            format!(
-                r#"{{
-              "schema": "scenario/2", "id": "demo", "intent": "x",
-              "steps": [
-                {{ "id": "s0", "intent": "up", "kind": "do", "verb": "upload",
-                  "on": "css:input[type=file]",
-                  "value": {{ "from": "literal", "literal": "{}" }} }}
-              ]
-            }}"#,
-                abs.display()
-            ),
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema": "scenario/2", "id": "demo", "intent": "x",
+                "steps": [
+                    { "id": "s0", "intent": "up", "kind": "do", "verb": "upload",
+                      "on": "css:input[type=file]",
+                      "value": { "from": "literal", "literal": abs.display().to_string() } }
+                ]
+            }))
+            .unwrap(),
         )
         .unwrap();
         // File exists → upload-file-absolute (portability), not missing.
