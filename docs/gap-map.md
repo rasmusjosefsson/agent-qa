@@ -773,3 +773,49 @@ page-level api modules throw on `!res.ok` and every page catches;
 `record status` bounds its liveness probe at 3s; all `events.jsonl`
 readers tolerate missing/truncated files; `run_plan`/`member_rows`
 bail on zero resolved members.
+
+## Dogfood pass XVI — capture-surface honesty (#428)
+
+Fifth wave — the silent-capture class in the browser extension plus a
+re-audit of the surfaces the last wave didn't touch:
+
+- **CSP-blocked injection exports `network: []` silently** (#428): the
+  extension's network patch (`inject.js`) rides a
+  `<script src=chrome-extension://>` element a strict page CSP can
+  block — steps kept recording while the bundle exported an empty
+  network array, so `--mock-from`/`--offline` replay failed for a
+  reason nobody could see. `inject.js` now posts a `__aqNetReady`
+  beacon; `content.js` forwards `netReady` on `record:start`, on
+  mid-recording document re-arms, and live when the beacon arrives
+  while active; any delivered entry also marks capture armed. On stop,
+  a bundle with steps but no beacon gains a `warnings[]` entry naming
+  the gap (echoed by `ingest`). Sticky-conservative: only warns when
+  capture *never* armed anywhere.
+
+### Verified-not-broken in this sweep (no change needed)
+
+- **Role-locator select/check/uncheck do not need hit-tests** — the
+  residual item from pass XIII closes as a non-issue: `select` drives
+  `select_via_combobox` (opener activation → popup-count probe →
+  ArrowDown keyboard fallback → named option errors), and check/uncheck
+  dispatch through the click path that already has the ClickProbe
+  post-check + named-control/text/snapshot fallbacks. No coordinate
+  click exists on these paths to silently miss.
+- **live-bridge reconnect is bounded** — retries only while a
+  subscriber is present, broadcasts `bridge-error` to subscribers,
+  flushes a held click before dropping the socket, and unsubref'd
+  timers can't keep the worker alive.
+- **Launcher binary honesty** — `agent-qa web` without the platform
+  package prints `editor: (unavailable)` at startup AND every
+  runCli-backed API call returns 503 `agent-qa CLI not resolved`
+  (connect, compare, recording verbs).
+- **record-step on a dead session is honest** — drafts are authored
+  steps, not browser state, so appending without a live browser is
+  correct; dead-session sidecar failures warn per-step.
+- **truncate ref safety** — `{{steps.sN.*}}` refs only point backward
+  at executed steps, so dropping the tail can't dangle a survivor.
+- **Extension on non-http pages** — `popup:start` refuses `file:`/
+  `chrome:`/store URLs with "can't record on this page".
+- **`record-step` validation depth** — raw-draft schema pass catches
+  misplaced keys before serde drops them; stdin JSONL names the bad
+  line; TTY `-` bails instead of blocking on read.
