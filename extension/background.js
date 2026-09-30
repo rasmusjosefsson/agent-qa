@@ -114,7 +114,7 @@ async function handle(msg, sender) {
     if (s.captureGaps) {
       bundle.warnings = [
         `capture paused for ${s.captureGaps} non-http navigation(s) — ` +
-          `interactions on those pages are not in this bundle`,
+          `interactions and network traffic on those pages are not in this bundle`,
       ];
       if (s.captureDead) {
         bundle.warnings.push("capture was still dead at stop — the tail is missing");
