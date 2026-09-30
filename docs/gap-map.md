@@ -68,6 +68,17 @@ the picture shifts materially.
 
 ### P4 — upstream capture limits
 
+9. **Mobile/touch**: `do/viewport` + `emulate` give layout; `hold`,
+   `swipe`, and `pinch` verbs synthesize touch gestures (gestures-tc01/02
+   goldens). Remaining: real mobile-emulation contexts (Emulation.setTouchEmulationEnabled)
+   and multi-touch beyond two-finger pinch.
+10. **Geolocation/timezone**: #242 ships `geo`/`device` (device presets
+    bundle timezone+locale), but geolocation is *blocked on a permission
+    grant* — see P1 #3's finding. Timezone has no `set` subcommand in
+    agent-browser at all (documented gap in #242).
+11. **WebSocket/SSE**: the network layer is request/response only —
+    `ws://` frames aren't captured; a `network` ofKind would need daemon
+    support first.
 10. ~~**Navigation-redirect statuses are uncapturable**~~ — #317 adds an
     own-CDP `Network.*` capture client (`cdp_net.rs`): per-request
     `NetEvent` records keep redirect hops, `redirect_entries()` mints

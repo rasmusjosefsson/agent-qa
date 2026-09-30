@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+  <body>
+    <button id="fast">fast</button>
+    <button id="slow">slow</button>
+    <div id="out">idle</div>
+    <script>
+      document.getElementById("fast").addEventListener("click", () => {
+        document.getElementById("out").textContent = "fast";
+      });
+      document.getElementById("slow").addEventListener("click", () => {
+        document.getElementById("out").textContent = "loading";
+        fetch("api/slow.json")
+          .then((r) => r.json())
+          .then(() => {
+            document.getElementById("out").textContent = "slow done";
+          });
+      });
+    </script>
+  </body>
+</html>
