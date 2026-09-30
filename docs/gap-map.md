@@ -716,3 +716,60 @@ on empty navs; audit.json corruption degrades to null fields in
 listings, not crashes; `record status`/`continue`/`record-step` paused
 paths all report honestly; `crawl` propagates open failures and prunes
 dead links with a warn.
+
+## Dogfood pass XV — dead-end honesty + durability sweep (#420–#426)
+
+Fourth wave — the classes where a tool call hangs forever, a dead
+server looks like a dead button, a corrupt file pretends to be absent,
+or a fresh write stomps someone else's artifact:
+
+- **Stream-read errors hang the client** (#421): `createReadStream`
+  errors don't propagate through `pipe()` — a file pruned between
+  stat() and open() (or a permission flip) left the HTTP socket open
+  forever after `Content-Length` headers went out. All five stream
+  sites share `streamFile`, which destroys the response on read error
+  so the fetch fails fast; the catch-all handler now guards
+  `headersSent` before attempting a 500.
+- **Chat calls die silently on a dead server** (#422): `postPrompt`
+  dispatched `add_user` then threw unhandled — the message appeared
+  sent but never left the browser. Write calls now return a 503-shaped
+  `{ok:false}`; `abort` clears the streaming flag in `finally` so the
+  spinner can't stick.
+- **Editor calls die silently too** (#425): same class on the other
+  api module — `getJson`/`postJson` now degrade rejections to the same
+  503 shape, so `flush`/`cancel`/move/edit flash errors instead of
+  looking dead; reads degrade to their empty shapes.
+- **Corrupt plan/set/case vanishes** (#423): `load_plan` collapsed
+  missing+unparseable into "no such plan"; it now names the corrupt
+  path. `load_json_list` warn-and-skips unreadable entries, and
+  `resolve_plan_case_ids` warns per dangling scope ref instead of
+  silently dropping them.
+- **Flush clobbers an unrelated scenario** (#424): a fresh
+  `record start <sid>` + flush overwrote an existing scenario for the
+  same sid (the buffer's `source_ref` wasn't checked). Flush now
+  refuses unless the recording actually continues that scenario.
+- **Zero-step replay + validate ordering** (#420): `runner::run` did
+  browser setup before loading the scenario — a zero-step or invalid
+  scenario burned a browser session and a lock before erroring. Load
+  + validate now run first; zero steps bails with "nothing to replay",
+  and the `empty-steps` lint escalated to an error (a 0/0 PASS
+  verifies nothing).
+- **Non-atomic scenario writes** (#426): the eight `scenario.json`
+  writes (new/from-har/insert/redact/copy/extract/rename/tag) used
+  bare `fs::write` — a mid-write kill left a truncated file that
+  corrupt-loads forever. All now go through `atomic_write_file`
+  (.tmp + rename), matching `flush`/`heal-promote`.
+
+### Verified-not-broken in this sweep (no change needed)
+
+Stale session locks steal cleanly when the holder's pid is dead;
+`--from`/`--until` name the missing step id plus every valid id;
+`--mock-from` names the missing HAR and how to mint one;
+`agent-qa web` explains EADDRINUSE with the port flag; corrupt
+`audit.json`/record-state files bail with the path in the message;
+buffer delete/move/edit/insert bounds-check before mutating; the
+page-level api modules throw on `!res.ok` and every page catches;
+`scenario extract` refuses to overwrite an existing destination;
+`record status` bounds its liveness probe at 3s; all `events.jsonl`
+readers tolerate missing/truncated files; `run_plan`/`member_rows`
+bail on zero resolved members.
