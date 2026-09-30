@@ -83,17 +83,6 @@ the picture shifts materially.
     matcher; SSE arrives as `resourceType: "EventSource"` GETs). The
     daemon is untouched — a pooled CDP flat session on the active page
     target does the listening.
-9. **Mobile/touch**: `do/viewport` + `emulate` give layout; `hold`,
-   `swipe`, and `pinch` verbs synthesize touch gestures (gestures-tc01/02
-   goldens). Remaining: real mobile-emulation contexts (Emulation.setTouchEmulationEnabled)
-   and multi-touch beyond two-finger pinch.
-10. **Geolocation/timezone**: #242 ships `geo`/`device` (device presets
-    bundle timezone+locale), but geolocation is *blocked on a permission
-    grant* — see P1 #3's finding. Timezone has no `set` subcommand in
-    agent-browser at all (documented gap in #242).
-11. **WebSocket/SSE**: the network layer is request/response only —
-    `ws://` frames aren't captured; a `network` ofKind would need daemon
-    support first.
 10. ~~**Navigation-redirect statuses are uncapturable**~~ — #317 adds an
     own-CDP `Network.*` capture client (`cdp_net.rs`): per-request
     `NetEvent` records keep redirect hops, `redirect_entries()` mints
@@ -211,8 +200,9 @@ so the file-based verbs and their defaults were never exercised:
 - **Where authoring friction remains**: `record-step` still requires the
   caller to know step-shape (`intent`, claim subject spelling). The
   batch half closed — `record-step -`/`record-setup -` read JSONL
-  drafts from stdin (#338/#341). `scenario new --from-har` remains
-  deliberately unbuilt until a dogfood wave proves it earns it.
+  drafts from stdin (#338/#341), and `scenario new --from-har` (#395)
+  mints a nav skeleton from a captured HAR for the send-us-your-bug
+  flow.
 
 ## Dogfood pass II — flag consistency + claim authoring
 
@@ -674,3 +664,55 @@ silent capture gaps:
 - **`buffer load` refuses ANY active recording** (#404): the
   empty-buffer loophole — a fresh recording's state file could be
   silently replaced, re-binding sid/session under a live tab.
+
+## Dogfood pass XIV — the silent-green + vanishing-artifact sweep (#405–#418)
+
+Third wave of the never-stuck audit — the classes where a command exits 0
+having verified nothing, or an artifact disappears without a trace:
+
+- **TTY-blocked stdin reads** (#406): `record-step -`/`record-setup -`
+  bail with "expects piped JSONL" instead of hanging on Ctrl+D.
+- **Destructive verbs vs in-flight runs** (#407/#410): `scenario delete`
+  refuses the active recording's source; delete/rename refuse while a
+  run holds the scenario's audit open.
+- **Dead report-server UI stalls** (#411): the vite proxy answers JSON
+  502s (SSE-safe — no proxy timeout) and ChatPage renders an honest
+  empty state instead of an infinite spinner.
+- **Unreadable state file** (#412): `record start` propagates the parse
+  error naming the escape hatch; `start --force` discards it.
+- **Silent-green plans** (#413): `plan run` bails "0 of N members ran —
+  all skipped" instead of exiting 0 on an unrecorded suite.
+- **Extension dblclick split** (#414): click drafts debounce 350ms —
+  a dblclick collapses the two click drafts into one `do/dblclick`
+  (previously replayed as two clicks, diverging on double-click-only
+  handlers).
+- **Resume-on-dead-session** (#415): `record resume` flips the paused
+  flag (a newer recording may capture later) but warns that capture
+  can't restart — the honest middle ground.
+- **Replay-button no-show** (#416): `useRuns.replay` awaited the spawn
+  but let the run-registration poll die silently — a replay dying
+  before its first audit write now returns an error naming the cause.
+- **Template cycles** (#417): `flatten_steps` had no depth cap — a
+  schema-valid self-referencing `useTemplate` stack-overflowed the
+  replay with no error at all. Expansion bails past depth 64 with a
+  cycle-hinting message.
+- **Corrupt scenario.json vanishes from the sidebar** (#418): the
+  listing collapsed missing and unparseable into the same null and
+  filtered the row — a corrupted recording showed nothing. The server
+  now distinguishes: missing → hidden; unparseable → `scenarioError`
+  on the row + a red `unreadable` badge; plan-run skip reasons name
+  "missing or unreadable".
+
+### Verified-not-broken in this sweep (no change needed)
+
+`--shard` bounds reject `0/2`/`5/2`; `check-all`/`validate-all`/`lint-all`
+tolerate an empty root deliberately (`init --ci` CI runs before scenarios
+exist); vault-ref resolution names unresolvable keys; the npm launcher's
+missing-binary paths name the platform package to install; `record-step`
+binds the recording's own session (no redirect flag to mis-set);
+`scenario rename` guards same-sid/unsafe/missing-source/in-flight/
+existing-dest/bound-recording in order; `scenario new --from-har` bails
+on empty navs; audit.json corruption degrades to null fields in
+listings, not crashes; `record status`/`continue`/`record-step` paused
+paths all report honestly; `crawl` propagates open failures and prunes
+dead links with a warn.
