@@ -54,6 +54,11 @@ pub fn run(args: &[String]) -> Result<u8> {
     }
 
     let url = bundle["url"].as_str().map(str::to_string);
+    for warning in bundle["warnings"].as_array().into_iter().flatten() {
+        if let Some(w) = warning.as_str() {
+            eprintln!("ingest: bundle warning: {w}");
+        }
+    }
     let intent = bundle["intent"]
         .as_str()
         .map(str::to_string)
