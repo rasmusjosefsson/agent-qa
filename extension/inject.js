@@ -14,6 +14,19 @@
   };
   const clip = (s) =>
     typeof s === "string" && s.length > BODY_CAP ? s.slice(0, BODY_CAP) : s;
+  // Login/CRUD flows POST URLSearchParams or FormData — serialize them
+  // or postData claims can never match the request. Files contribute
+  // their name only (contents can't be captured).
+  const bodyToStr = (b) =>
+    typeof b === "string"
+      ? b
+      : b instanceof URLSearchParams
+        ? b.toString()
+        : b instanceof FormData
+          ? [...b.entries()]
+              .map(([k, v]) => `${k}=${v instanceof File ? v.name : v}`)
+              .join("&")
+          : undefined;
 
   const origFetch = window.fetch;
   window.fetch = function (...args) {
@@ -29,7 +42,7 @@
       method = String(
         init.method || (typeof input !== "string" ? input.method : "GET") || "GET"
       ).toUpperCase();
-      postData = typeof init.body === "string" ? init.body : undefined;
+      postData = bodyToStr(init.body);
     } catch {}
     return origFetch.apply(this, args).then(
       (resp) => {
@@ -74,6 +87,8 @@
       try {
         if (this.responseType === "" || this.responseType === "text") {
           respBody = this.responseText;
+        } else if (this.responseType === "json") {
+          respBody = JSON.stringify(this.response);
         }
       } catch {}
       post({
@@ -81,7 +96,7 @@
         method: meta.method || "GET",
         status: this.status,
         body: clip(respBody),
-        postData: clip(typeof body === "string" ? body : undefined),
+        postData: clip(bodyToStr(body)),
         startedAt,
         durationMs: Date.now() - started,
       });
