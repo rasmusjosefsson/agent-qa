@@ -3684,93 +3684,6 @@ mod tests {
         clear_fake();
         assert!(err.contains("i18n.json"), "got: {err}");
     }
-<<<<<<< HEAD
-
-    #[test]
-    fn dismiss_expr_rejects_non_reappliable_locators() {
-        let mut scope = ValueScope::default();
-        let dir = Path::new("/tmp");
-        let role: Locator =
-            serde_json::from_value(json!({ "role": "button", "name": "x" })).unwrap();
-        let err = dismiss_expr(&role, &mut scope, dir)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("raw locator"), "got: {err}");
-        let text: Locator = serde_json::from_value(
-            json!({ "raw": { "kind": "text", "value": "OK" }, "reason": "r" }),
-        )
-        .unwrap();
-        let err = dismiss_expr(&text, &mut scope, dir)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("css/testId/xpath"), "got: {err}");
-    }
-
-    #[test]
-    fn dismiss_expr_lowers_raw_kinds_to_removals() {
-        let mut scope = ValueScope::default();
-        let dir = Path::new("/tmp");
-        let css: Locator = serde_json::from_value(
-            json!({ "raw": { "kind": "css", "value": ".wall" }, "reason": "r" }),
-        )
-        .unwrap();
-        let expr = dismiss_expr(&css, &mut scope, dir).unwrap();
-        assert!(expr.contains("querySelectorAll(\".wall\")"), "got: {expr}");
-        let xp: Locator = serde_json::from_value(
-            json!({ "raw": { "kind": "xpath", "value": "//div" }, "reason": "r" }),
-        )
-        .unwrap();
-        let expr = dismiss_expr(&xp, &mut scope, dir).unwrap();
-        assert!(expr.contains("document.evaluate"), "got: {expr}");
-    }
-
-    #[test]
-    fn dismissed_selectors_reapply_before_interactive_steps() {
-        let _g = lock_env();
-        clear_dismissed();
-        let tmp = TempDir::new().unwrap();
-        let log = tmp.path().join("ab.log");
-        install_fake(tmp.path(), &log);
-        let ctx = DoContext {
-            session: "sess",
-            scenario_dir: tmp.path(),
-            visual_checks: false,
-            uses_dialog: false,
-        };
-        let mut scope = ValueScope::default();
-        let d = parse(json!({
-            "id": "s1", "intent": "x", "kind": "do", "verb": "dismiss",
-            "on": { "raw": { "kind": "css", "value": ".wall" }, "reason": "r" }
-        }));
-        dispatch_do(&d, &ctx, &mut scope).unwrap();
-        let c = parse(json!({
-            "id": "s2", "intent": "x", "kind": "do", "verb": "click",
-            "on": { "raw": { "kind": "css", "value": "#btn" }, "reason": "r" }
-        }));
-        dispatch_do(&c, &ctx, &mut scope).unwrap();
-        let out = fs::read_to_string(&log).unwrap();
-        assert_eq!(
-            out.matches("querySelectorAll(\".wall\")").count(),
-            2,
-            "got: {out}"
-        );
-        // non-interactive verbs don't re-apply the list
-        let w = parse(json!({
-            "id": "s3", "intent": "x", "kind": "do", "verb": "wait",
-            "params": { "ms": 1 }
-        }));
-        dispatch_do(&w, &ctx, &mut scope).unwrap();
-        let out = fs::read_to_string(&log).unwrap();
-        clear_fake();
-        assert_eq!(
-            out.matches("querySelectorAll(\".wall\")").count(),
-            2,
-            "got: {out}"
-        );
-        clear_dismissed();
-    }
-||||||| a3445eb
-=======
 
     #[test]
     fn dismiss_expr_rejects_non_reappliable_locators() {
@@ -3909,5 +3822,4 @@ mod tests {
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         assert!(err.contains("db is required"), "got: {err}");
     }
->>>>>>> origin/main
 }

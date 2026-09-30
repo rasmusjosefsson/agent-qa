@@ -108,12 +108,6 @@ export interface EdgeGolden extends GoldenContext {
   assertStorage(keyOrMatcher: string | { key: string; scope?: string }, expectPresent: boolean, intent: string): Promise<void>;
   assertStyle(selector: string, cssProperty: string, expected: string, intent: string): Promise<void>;
   a11yAudit(matcher: true | Record<string, unknown>, predicate: string, value: number | undefined, intent: string): Promise<void>;
-<<<<<<< HEAD
-  frameInto(selector: string, intent: string): Promise<void>;
-  frameMain(intent: string): Promise<void>;
-  fillInFrame(frameSelector: string, selector: string, value: string, intent: string): Promise<void>;
-||||||| a3445eb
-=======
   frameInto(selector: string, intent: string): Promise<void>;
   frameMain(intent: string): Promise<void>;
   fillInFrame(frameSelector: string, selector: string, value: string, intent: string): Promise<void>;
@@ -122,7 +116,6 @@ export interface EdgeGolden extends GoldenContext {
   typeRole(role: string, name: string, value: string, intent: string): Promise<void>;
   clickRoleLocator(role: string, name: string, intent: string): Promise<void>;
   assertRoleAttribute(role: string, name: string, attribute: string, expected: string, intent: string): Promise<void>;
->>>>>>> origin/main
 }
 
 function createContext(tc: string, intent: string, keepDialogs: boolean, label = "edge"): GoldenContext {
