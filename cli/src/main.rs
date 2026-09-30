@@ -64,6 +64,7 @@ mod runner;
 mod scenario;
 mod scenario_cli;
 mod schema;
+mod session_lock;
 mod shot_accept;
 mod sidecar;
 mod skills;
