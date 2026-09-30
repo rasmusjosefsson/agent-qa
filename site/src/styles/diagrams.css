@@ -244,3 +244,107 @@
     transform: none;
   }
 }
+
+.d-activation {
+  fill: color-mix(in oklab, var(--aqa-brand) 35%, var(--aqa-card));
+  stroke: var(--aqa-brand);
+  stroke-width: 1;
+}
+
+/* File trees (├── blocks in docs/, rendered by fileTree()). */
+.aqa-tree {
+  margin: 1.75rem 0;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--aqa-border);
+  border-radius: 16px;
+  background:
+    radial-gradient(60% 90% at 100% 0%, color-mix(in oklab, var(--aqa-brand-2) 7%, transparent), transparent 70%),
+    color-mix(in oklab, var(--aqa-card) 55%, transparent);
+  font: 0.8rem/1.2 var(--aqa-font-mono);
+  overflow-x: auto;
+}
+.aqa-tree ul {
+  margin: 0 0 0 0.9rem;
+  padding: 0 0 0 0.85rem;
+  list-style: none;
+  border-left: 1px solid var(--aqa-border-strong);
+}
+.aqa-tree li {
+  position: relative;
+  margin: 0;
+}
+.aqa-tree li::before {
+  content: "";
+  position: absolute;
+  left: -0.85rem;
+  top: 0.95rem;
+  width: 0.6rem;
+  border-top: 1px solid var(--aqa-border-strong);
+}
+/* Last child: stop the guide line at its row. */
+.aqa-tree li:last-child::after {
+  content: "";
+  position: absolute;
+  left: calc(-0.85rem - 1px);
+  top: calc(0.95rem + 1px);
+  bottom: 0;
+  width: 1px;
+  background: color-mix(in oklab, var(--aqa-card) 55%, var(--aqa-bg));
+}
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 1.9rem;
+  padding: 0 0.5rem;
+  border-radius: 8px;
+  white-space: nowrap;
+  transition: background-color 120ms;
+}
+.tree-row:hover {
+  background: color-mix(in oklab, var(--aqa-brand) 9%, transparent);
+}
+.tree-row svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  fill: color-mix(in oklab, var(--aqa-muted-fg) 35%, transparent);
+  stroke: var(--aqa-muted-fg);
+  stroke-width: 1;
+}
+.tree-row.t-dir svg {
+  fill: color-mix(in oklab, var(--aqa-brand) 30%, transparent);
+  stroke: var(--aqa-brand);
+}
+.tree-row.t-json svg {
+  fill: color-mix(in oklab, var(--aqa-brand-2) 25%, transparent);
+  stroke: var(--aqa-brand-2);
+}
+.tree-row.t-img svg {
+  fill: color-mix(in oklab, var(--aqa-brand-3) 25%, transparent);
+  stroke: var(--aqa-brand-3);
+}
+.tree-row.t-diff svg {
+  fill: color-mix(in oklab, var(--aqa-warning) 25%, transparent);
+  stroke: var(--aqa-warning);
+}
+.tree-row.t-doc svg {
+  fill: color-mix(in oklab, var(--aqa-success) 25%, transparent);
+  stroke: var(--aqa-success);
+}
+.tree-name {
+  color: var(--aqa-fg);
+}
+.t-dir > .tree-name {
+  font-weight: 600;
+}
+.tree-name .ph {
+  color: color-mix(in oklab, var(--aqa-brand) 70%, var(--aqa-fg));
+  font-style: italic;
+}
+.tree-note {
+  margin-left: auto;
+  padding-left: 2rem;
+  font: 0.76rem var(--aqa-font-sans);
+  color: var(--aqa-muted-fg);
+}

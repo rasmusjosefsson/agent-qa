@@ -6,7 +6,7 @@
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { dirname, join, posix } from "node:path"
 import { fileURLToPath } from "node:url"
-import { DIAGRAMS } from "./diagrams.mjs"
+import { DIAGRAMS, fileTree, isAsciiTree } from "./diagrams.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repo = join(here, "..", "..")
@@ -49,11 +49,14 @@ function transform(src, description) {
   const title = h1 ? h1[1].trim().replace(/`/g, "") : "Untitled"
   if (h1) body = body.replace(h1[0], "")
 
-  // Designed diagram when one matches; themed client-side mermaid otherwise.
-  body = body.replace(/```mermaid\n([\s\S]*?)```/g, (_, graph) => {
-    const designed = DIAGRAMS.find((d) => graph.includes(d.match))
+  // Designed diagram when one matches, a visual file tree for ├── blocks,
+  // themed client-side mermaid for any other mermaid block.
+  body = body.replace(/```(\w*)\n([\s\S]*?)```/g, (block, lang, src) => {
+    const designed = DIAGRAMS.find((d) => src.includes(d.match))
     if (designed) return designed.render()
-    const escaped = graph.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    if (isAsciiTree(src)) return fileTree(src)
+    if (lang !== "mermaid") return block
+    const escaped = src.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     return `<pre class="mermaid not-content">${escaped}</pre>`
   })
 

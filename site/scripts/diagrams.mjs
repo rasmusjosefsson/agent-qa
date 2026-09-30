@@ -194,4 +194,63 @@ export const DIAGRAMS = [
   { match: "recorder-state.json", render: record },
   { match: "ReplayDir[", render: replay },
   { match: 'Respond["agent-qa heal-respond', render: heal },
+  { match: "──stdin JSON──▶", render: pluginStdio },
 ]
+
+// ── docs/plugins.md: stdio protocol as a sequence diagram ───────────────
+export function pluginStdio() {
+  const a = 150
+  const p = 590
+  const msg = (y, from, to, text, kind = "flow") =>
+    edge(`M${from + (to > from ? 8 : -8)} ${y}H${to + (to > from ? -10 : 10)}`, kind) + label(370, y - 9, text)
+  return svg(760, 236, "agent-qa spawns the plugin binary, writes a JSON request on stdin, and reads one JSON response from stdout", [
+    node({ x: a - 90, y: 8, w: 180, h: 52, title: "agent-qa", sub: "host", kind: "core", mono: true }),
+    node({ x: p - 130, y: 8, w: 260, h: 52, title: "<plugin-binary> <kind> [<op>]", sub: "any language", mono: true }),
+    `<path class="d-edge d-soft" d="M${a} 62V226"/><path class="d-edge d-soft" d="M${p} 62V226"/>`,
+    `<rect class="d-activation" x="${p - 5}" y="92" width="10" height="112" rx="3"/>`,
+    msg(100, a, p, "spawn with positional args"),
+    msg(146, a, p, "request · JSON on stdin"),
+    msg(196, p, a, "response · one JSON object on stdout", ""),
+  ])
+}
+
+// ── Any ├── / └── block: a visual file tree ─────────────────────────────
+const FILE_TINT = { json: "json", jsonl: "json", png: "img", txt: "text", md: "doc", diff: "diff" }
+const ICON_DIR = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 4.25c0-.97.78-1.75 1.75-1.75h2.9c.46 0 .9.18 1.23.51l.87.87c.14.14.33.22.53.22h4c.97 0 1.72.78 1.72 1.75v5.9c0 .97-.78 1.75-1.75 1.75H3.25c-.97 0-1.75-.78-1.75-1.75z"/></svg>`
+const ICON_FILE = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 1.5h5.1c.33 0 .65.13.88.37l2.65 2.65c.24.23.37.55.37.88v8.35c0 .69-.56 1.25-1.25 1.25H4c-.69 0-1.25-.56-1.25-1.25V2.75c0-.69.56-1.25 1.25-1.25z"/></svg>`
+
+const fmtName = (s) => esc(s).replace(/&lt;([^&]+?)&gt;/g, `<span class="ph">&lt;$1&gt;</span>`)
+
+export function isAsciiTree(src) {
+  return /^[│\s]*[├└]──/m.test(src)
+}
+
+export function fileTree(src) {
+  const lines = src.replace(/\n+$/, "").split("\n")
+  const root = { name: lines[0].trim(), children: [], depth: 0 }
+  const stack = [root]
+  for (const raw of lines.slice(1)) {
+    const m = raw.match(/^([│ \t]*)[├└]──\s?(.*)$/)
+    if (!m) continue
+    const depth = Math.round(m[1].replace(/\t/g, "    ").length / 4) + 1
+    // "name   note" (2+ spaces) or "name (note)"
+    let [, name, note = ""] = m[2].match(/^(\S+)(?:\s{2,}(.+)|\s+(\(.+\)))?$/) ?? [null, m[2].trim()]
+    if (!note) note = (m[2].match(/^\S+\s+(\(.+\))$/) ?? [])[1] ?? ""
+    const item = { name, note: note.trim(), children: [], depth }
+    while (stack.length > depth) stack.pop()
+    stack[stack.length - 1].children.push(item)
+    stack.push(item)
+  }
+  const render = (n) => {
+    const dir = n.name.endsWith("/") || n.children.length > 0
+    const ext = dir ? "dir" : (FILE_TINT[n.name.split(".").pop()] ?? "file")
+    const row =
+      `<div class="tree-row t-${ext}">${dir ? ICON_DIR : ICON_FILE}` +
+      `<span class="tree-name">${fmtName(n.name)}</span>` +
+      (n.note ? `<span class="tree-note">${esc(n.note.replace(/^\((.*)\)$/, "$1"))}</span>` : "") +
+      `</div>`
+    const kids = n.children.length ? `<ul>${n.children.map((c) => `<li>${render(c)}</li>`).join("")}</ul>` : ""
+    return row + kids
+  }
+  return `<figure class="aqa-tree not-content" aria-label="Directory layout">${render(root)}</figure>`
+}
