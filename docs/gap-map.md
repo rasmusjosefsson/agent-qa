@@ -635,3 +635,42 @@ A sweep over the "agent silently does the wrong thing or stalls" class
   selections name the flags, not the root.
 - **`record status` liveness probe** (#390): reports a dead recording
   session (lost HAR capture) before flush discovers it.
+
+## Dogfood pass XIII — cross-process races + capture honesty (#393–#404)
+
+The second never-stuck wave, aimed at races between processes and
+silent capture gaps:
+
+- **Per-session run lock** (#393): `runner::run` holds a create_new
+  lockfile for the run's lifetime — a second replay/crawl on the same
+  session name bails instead of fighting for one browser; dead
+  holders' locks are stolen via `kill(pid,0)`.
+- **Paused-flush warning** (#394): `flush` while `record pause` is
+  armed warns instead of silently sealing a partial scenario.
+- **`scenario new --from-har`** (#395): mints an env.open nav skeleton
+  from a captured HAR — the "user sent us a bug" on-ramp, named
+  errors for malformed/empty HARs.
+- **Origin-bound env ops warning** (#396): cookie/localStorage/flag/gql
+  ops before any `nav` in env.open warn — they silently no-op'd on
+  about:blank.
+- **Atomic recording claim** (#397): `record start` claims the state
+  file with create_new — two racing starts can no longer overwrite
+  each other's sid+session binding.
+- **CAS saves** (#398): `RecorderState::save` compare-and-swaps on
+  seq/loaded_seq — concurrent `record-step` appends bail loudly
+  ("changed on disk — retry") instead of last-writer-wins drops.
+- **Mid-recording run guards** (#399): `replay`/`crawl` refuse on a
+  session whose state file says it's mid-recording; `record continue`
+  bypasses via env internally (and now clears it after the replay).
+- **Unbound `{{vars.*}}` warning** (#400): an unresolved token warns
+  once per name instead of passing the literal into the field.
+- **Workbench paused-drop surfacing** (#401): a step dropped because
+  the recording is paused throws through `record-skip` instead of
+  looking captured.
+- **Extension dead-capture visibility** (#403): navigating to a
+  non-http page flips the badge to `!`, the popup says capture is
+  paused, and the export bundle carries `warnings[]` that `ingest`
+  echoes.
+- **`buffer load` refuses ANY active recording** (#404): the
+  empty-buffer loophole — a fresh recording's state file could be
+  silently replaced, re-binding sid/session under a live tab.
