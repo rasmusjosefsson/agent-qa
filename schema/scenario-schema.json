@@ -84,6 +84,11 @@
             "reason": { "type": "string", "minLength": 1 }
           },
           "$comment": "Named-and-shamed escape hatch. `reason` is required so PR review sees why we fell off the accessible-name + role rails."
+        },
+        {
+          "type": "string",
+          "pattern": "^(css|xpath|testId|text):\\S+$",
+          "$comment": "Shorthand for the named raw locator — \"css:sel\", \"xpath:expr\", \"testId:key\", \"text:txt\". Lowers to {\"raw\":{kind,value},\"reason\":\"locator shorthand\"}."
         }
       ]
     },
@@ -203,13 +208,15 @@
       "properties": {
         "urlMatches": { "type": "string" },
         "operationName": { "type": "string" },
-        "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"] },
-        "postDataContains": { "type": "string" }
+        "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "WS"] },
+        "postDataContains": { "type": "string" },
+        "wsPayloadContains": { "type": "string" }
       },
       "anyOf": [
         { "required": ["urlMatches"] },
         { "required": ["operationName"] },
-        { "required": ["postDataContains"] }
+        { "required": ["postDataContains"] },
+        { "required": ["wsPayloadContains"] }
       ]
     },
     "ClaimSubject": {
@@ -222,7 +229,8 @@
             "element": { "$ref": "#/$defs/Locator" },
             "attribute": { "type": "string" },
             "ofKind": { "enum": ["text", "value", "count", "attribute"] }
-          }
+          },
+          "$comment": "attribute reads: raw css/testId locators hit the DOM (text/value/checked/focused/style:<prop>/getAttribute); role locators read the a11y snapshot's state tokens (checked/disabled/required/expanded/pressed/selected/readonly/current/level/orientation/valuemin/valuemax/valuenow, value tail, text = accessible name)."
         },
         {
           "type": "object",
@@ -343,6 +351,25 @@
         },
         {
           "type": "object",
+          "required": ["indexeddb"],
+          "additionalProperties": false,
+          "properties": {
+            "indexeddb": {
+              "type": "object",
+              "required": ["db", "store"],
+              "additionalProperties": false,
+              "properties": {
+                "db": { "type": "string", "minLength": 1 },
+                "store": { "type": "string", "minLength": 1 },
+                "key": { "type": "string" }
+              }
+            },
+            "path": { "type": "string" }
+          },
+          "$comment": "indexeddb claim subject — assert on an IndexedDB record. exists/notExists for record presence (store presence when key is omitted); string predicates compare the stored value; 'path' walks a JSON-structured value."
+        },
+        {
+          "type": "object",
           "required": ["console"],
           "additionalProperties": false,
           "properties": {
@@ -427,25 +454,38 @@
       "properties": {
         "subject": { "$ref": "#/$defs/ClaimSubject" },
         "predicate": {
-          "enum": [
-            "isVisible",
-            "isHidden",
-            "isEnabled",
-            "isDisabled",
-            "isChecked",
-            "isUnchecked",
-            "exists",
-            "notExists",
-            "equals",
-            "contains",
-            "matches",
-            "startsWith",
-            "endsWith",
-            "gt",
-            "gte",
-            "lt",
-            "lte",
-            "countEquals"
+          "oneOf": [
+            {
+              "enum": [
+                "isVisible",
+                "isHidden",
+                "isEnabled",
+                "isDisabled",
+                "isChecked",
+                "isUnchecked",
+                "exists",
+                "notExists",
+                "equals",
+                "contains",
+                "matches",
+                "startsWith",
+                "endsWith",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "countEquals"
+              ]
+            },
+            {
+              "type": "object",
+              "minProperties": 1,
+              "maxProperties": 1,
+              "propertyNames": {
+                "enum": ["equals", "contains", "matches", "startsWith", "endsWith", "gt", "gte", "lt", "lte", "countEquals"]
+              },
+              "$comment": "Sugar: {\"predicate\": {\"contains\": \"x\"}} lowers to predicate:\"contains\" + value:\"x\"."
+            }
           ]
         },
         "value": {},
@@ -512,6 +552,7 @@
             "dialog",
             "download",
             "dblclick",
+            "dismiss",
             "rightclick",
             "tab",
             "viewport",
@@ -520,6 +561,8 @@
             "mock",
             "unmock",
             "state",
+            "hold",
+            "swipe",
             "frame",
             "emulate",
             "loop",

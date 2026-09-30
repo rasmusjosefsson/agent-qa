@@ -275,7 +275,7 @@ pub fn build_scope_chain(scope: &[ScopeStep]) -> String {
     for (i, step) in scope.iter().enumerate() {
         let inner = match step {
             ScopeStep::Css(sel) => format!(
-                "return r.querySelector({});",
+                "const els = Array.from(r.querySelectorAll({})); return els.find(__aqVisible) || els[0] || null;",
                 json_str(sel)
             ),
             ScopeStep::Xpath(xp) => format!(
@@ -350,6 +350,9 @@ pub fn build_scoped_role_act(
             "el.scrollIntoView({{block:'center',inline:'nearest'}}); el.focus(); el.value = {}; el.dispatchEvent(new Event('input', {{ bubbles: true }})); el.dispatchEvent(new Event('change', {{ bubbles: true }})); return \"true\";",
             json_str(value.unwrap_or(""))
         ),
+        // Presence-probe act: touching textContent reads the element
+        // without mutating it.
+        browser::RoleAct::Text => "el.textContent; return \"true\";".to_string(),
     };
     format!(
         "(() => {{{prelude}\n{find}\n{chain}{act}\n}})()",
@@ -485,19 +488,45 @@ fn endpoint_finder_js() -> String {
     let root = document;
     for (const s of (d.scope || [])) {
       if (!root || !root.querySelectorAll) return null;
-      if (s.css != null) root = root.querySelector(s.css);
+      if (s.css != null) { const els = Array.from(root.querySelectorAll(s.css)); root = els.find(__aqVisible) || els[0] || null; }
       else if (s.xpath != null) { const r = document.evaluate(s.xpath, root, null, 9, null); root = r && r.singleNodeValue; }
       else if (s.role != null) root = __aqScopedFind(s.role, s.name || '', root);
       else if (s.text != null) { const want = __aqText(s.text); const hits = Array.from(root.querySelectorAll('*')).filter((n) => __aqVisible(n) && __aqName(n).some((c) => __aqText(c).includes(want))); const inter = hits.filter(__aqIsInteractive); root = inter[0] || hits.sort((a, b) => (a.textContent || '').length - (b.textContent || '').length)[0] || null; }
       if (!root) return null;
     }
     if (d.kind === 'role') return __aqScopedFind(d.role, d.name || '', root);
-    if (d.kind === 'css') return root.querySelector(d.value);
+    if (d.kind === 'css') { const els = Array.from(root.querySelectorAll(d.value)); return els.find(__aqVisible) || els[0] || null; }
     if (d.kind === 'xpath') { const r = document.evaluate(d.value, root, null, 9, null); return r && r.singleNodeValue; }
     if (d.kind === 'text') { const want = __aqText(d.value); const hits = Array.from(root.querySelectorAll('*')).filter((n) => __aqVisible(n) && __aqName(n).some((c) => __aqText(c).includes(want))); const inter = hits.filter(__aqIsInteractive); return inter[0] || hits.sort((a, b) => (a.textContent || '').length - (b.textContent || '').length)[0] || null; }
     return null;
   };"#
         .to_string()
+}
+
+/// Resolve one endpoint and report where it stands in the DOM: `"detached"`
+/// when nothing resolves, `"visible"`, or `"hidden"` (in the DOM but with no
+/// layout box or `display:none`/`visibility:hidden`). The `wait` verb polls
+/// this to implement `params.locator` + `params.state`.
+/// `__aqWaitState` marker for test doubles.
+pub fn build_element_state_js(ep: &DragEndpoint) -> String {
+    format!(
+        r#"(() => {{ const __aqWaitState = true;
+{prelude}
+{find}
+{finder}
+  const el = __aqDragFind({ep});
+  if (!el) return "detached";
+  try {{
+    const cs = getComputedStyle(el);
+    if (cs.display === "none" || cs.visibility === "hidden" || cs.visibility === "collapse") return "hidden";
+  }} catch (e) {{}}
+  return __aqVisible(el) ? "visible" : "hidden";
+}})()"#,
+        prelude = activation_prelude(),
+        find = scoped_find_helper_js(),
+        finder = endpoint_finder_js(),
+        ep = drag_endpoint_json(ep),
+    )
 }
 
 /// JS resolving one endpoint and dispatching a secondary-button click on it:
@@ -794,6 +823,139 @@ pub fn popup_count(session: &str) -> u32 {
     }
 }
 
+/// Shared element finder for the gesture verbs — same descriptor-driven
+/// resolution as [`build_drag_js`] (css/xpath/text/role+scope).
+/// `__aqGestureFind` marker for test doubles.
+fn gesture_finder_js() -> &'static str {
+    r#"
+  const __aqGestureFind = (d) => {
+    let root = document;
+    for (const s of (d.scope || [])) {
+      if (!root || !root.querySelectorAll) return null;
+      if (s.css != null) root = root.querySelector(s.css);
+      else if (s.xpath != null) { const r = document.evaluate(s.xpath, root, null, 9, null); root = r && r.singleNodeValue; }
+      else if (s.role != null) root = __aqScopedFind(s.role, s.name || '', root);
+      else if (s.text != null) { const want = __aqText(s.text); const hits = Array.from(root.querySelectorAll('*')).filter((n) => __aqVisible(n) && __aqName(n).some((c) => __aqText(c).includes(want))); const inter = hits.filter(__aqIsInteractive); root = inter[0] || hits.sort((a, b) => (a.textContent || '').length - (b.textContent || '').length)[0] || null; }
+      if (!root) return null;
+    }
+    if (d.kind === 'role') return __aqScopedFind(d.role, d.name || '', root);
+    if (d.kind === 'css') return root.querySelector(d.value);
+    if (d.kind === 'xpath') { const r = document.evaluate(d.value, root, null, 9, null); return r && r.singleNodeValue; }
+    if (d.kind === 'text') { const want = __aqText(d.value); const hits = Array.from(root.querySelectorAll('*')).filter((n) => __aqVisible(n) && __aqName(n).some((c) => __aqText(c).includes(want))); const inter = hits.filter(__aqIsInteractive); return inter[0] || hits.sort((a, b) => (a.textContent || '').length - (b.textContent || '').length)[0] || null; }
+    return null;
+  };
+"#
+}
+
+/// Hold an element pressed: dispatches pointerdown + mousedown at the
+/// element's center and leaves the button held — the release is a second
+/// eval ([`build_hold_up_js`]) after the caller's sleep. Element handles
+/// that arm on `pointerdown`/`mousedown` (long-press menus, press-and-hold
+/// buttons) see a real gesture. Returns `"true"`/`"el-miss"`.
+/// `__aqHold` marker for test doubles.
+pub fn build_hold_down_js(ep: &DragEndpoint) -> String {
+    format!(
+        r#"(() => {{ const __aqHold = true;
+{prelude}
+{find}
+{finder}
+  const el = __aqGestureFind({ep});
+  if (!el) return "el-miss";
+  try {{ el.scrollIntoView({{ block: 'center', inline: 'center' }}); }} catch (e) {{}}
+  const r = el.getBoundingClientRect();
+  const o = {{ bubbles: true, cancelable: true, composed: true, view: window, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0, buttons: 1 }};
+  el.dispatchEvent(new PointerEvent('pointerdown', o));
+  el.dispatchEvent(new MouseEvent('mousedown', o));
+  if (typeof TouchEvent === 'function' && typeof Touch === 'function') {{
+    const t = new Touch({{ identifier: 1, target: el, clientX: o.clientX, clientY: o.clientY }});
+    el.dispatchEvent(new TouchEvent('touchstart', Object.assign({{}}, o, {{ touches: [t], targetTouches: [t], changedTouches: [t] }})));
+  }}
+  window.__aqHoldEl = el;
+  return "true";
+}})()"#,
+        prelude = activation_prelude(),
+        find = scoped_find_helper_js(),
+        finder = gesture_finder_js(),
+        ep = drag_endpoint_json(ep),
+    )
+}
+
+/// Release a [`build_hold_down_js`] hold: pointerup + mouseup + touchend
+/// on the same element (and a plain `click` is deliberately NOT sent —
+/// a hold is not a tap). Returns `"true"` or `"no-hold"`.
+/// `__aqHoldUp` marker for test doubles.
+pub fn build_hold_up_js() -> String {
+    r#"(() => { const __aqHoldUp = true;
+  const el = window.__aqHoldEl;
+  delete window.__aqHoldEl;
+  if (!el || !el.isConnected) return "no-hold";
+  const r = el.getBoundingClientRect();
+  const o = { bubbles: true, cancelable: true, composed: true, view: window, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0, buttons: 0 };
+  el.dispatchEvent(new PointerEvent('pointerup', o));
+  el.dispatchEvent(new MouseEvent('mouseup', o));
+  if (typeof TouchEvent === 'function' && typeof Touch === 'function') {
+    const t = new Touch({ identifier: 1, target: el, clientX: o.clientX, clientY: o.clientY });
+    el.dispatchEvent(new TouchEvent('touchend', Object.assign({}, o, { touches: [], targetTouches: [], changedTouches: [t] })));
+  }
+  return "true";
+})()"#
+        .to_string()
+}
+
+/// Swipe on an element (or the viewport when `ep` is `None`): dispatches
+/// touchstart → 8 touchmove steps → touchend *and* the pointer/mouse
+/// sequence pointer-driven carousels listen for. `direction` is the
+/// direction the finger travels — `up` moves the point up (content
+/// scrolls down). Returns `"true"`/`"el-miss"`/`"bad-dir"`.
+/// `__aqSwipe` marker for test doubles.
+pub fn build_swipe_js(ep: Option<&DragEndpoint>, direction: &str, distance: f64) -> String {
+    let find_src = match ep {
+        Some(ep) => format!(
+            "  const el = __aqGestureFind({ep});\n  if (!el) return \"el-miss\";\n  try {{ el.scrollIntoView({{ block: 'center', inline: 'center' }}); }} catch (e) {{}}\n  const r = el.getBoundingClientRect();\n  const sx = r.left + r.width / 2, sy = r.top + r.height / 2;\n  const target = el;",
+            ep = drag_endpoint_json(ep)
+        ),
+        None => "  const sx = innerWidth / 2, sy = innerHeight / 2;\n  const target = document.elementFromPoint(sx, sy) || document.body;".to_string(),
+    };
+    format!(
+        r#"(() => {{ const __aqSwipe = true;
+{prelude}
+{find}
+{finder}
+{find_src}
+  const D = {distance};
+  let dx = 0, dy = 0;
+  if ({dir} === 'up') dy = -D;
+  else if ({dir} === 'down') dy = D;
+  else if ({dir} === 'left') dx = -D;
+  else if ({dir} === 'right') dx = D;
+  else return "bad-dir";
+  const ev = (x, y, buttons) => ({{ bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y, button: 0, buttons }});
+  const hasTouch = typeof TouchEvent === 'function' && typeof Touch === 'function';
+  const mkTouch = (x, y) => hasTouch ? new Touch({{ identifier: 7, target, clientX: x, clientY: y }}) : null;
+  target.dispatchEvent(new PointerEvent('pointerdown', ev(sx, sy, 1)));
+  target.dispatchEvent(new MouseEvent('mousedown', ev(sx, sy, 1)));
+  if (hasTouch) {{ const t = mkTouch(sx, sy); target.dispatchEvent(new TouchEvent('touchstart', Object.assign({{}}, ev(sx, sy, 1), {{ touches: [t], targetTouches: [t], changedTouches: [t] }}))); }}
+  const STEPS = 8;
+  for (let i = 1; i <= STEPS; i++) {{
+    const x = sx + dx * i / STEPS, y = sy + dy * i / STEPS;
+    document.dispatchEvent(new PointerEvent('pointermove', ev(x, y, 1)));
+    document.dispatchEvent(new MouseEvent('mousemove', ev(x, y, 1)));
+    if (hasTouch) {{ const t = mkTouch(x, y); target.dispatchEvent(new TouchEvent('touchmove', Object.assign({{}}, ev(x, y, 1), {{ touches: [t], targetTouches: [t], changedTouches: [t] }}))); }}
+  }}
+  target.dispatchEvent(new PointerEvent('pointerup', ev(sx + dx, sy + dy, 0)));
+  document.dispatchEvent(new MouseEvent('mouseup', ev(sx + dx, sy + dy, 0)));
+  if (hasTouch) {{ const t = mkTouch(sx + dx, sy + dy); target.dispatchEvent(new TouchEvent('touchend', Object.assign({{}}, ev(sx + dx, sy + dy, 0), {{ touches: [], targetTouches: [], changedTouches: [t] }}))); }}
+  return "true";
+}})()"#,
+        prelude = activation_prelude(),
+        find = scoped_find_helper_js(),
+        finder = gesture_finder_js(),
+        find_src = find_src,
+        distance = distance,
+        dir = json_str(direction),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -878,9 +1040,13 @@ mod tests {
             ScopeStep::Xpath("//div[@id='x']".into()),
         ]);
         assert!(
-            js.contains("querySelector(\"[data-testid=\\\"card-a\\\"]\")"),
+            js.contains("querySelectorAll(\"[data-testid=\\\"card-a\\\"]\")"),
             "{js}"
         );
+        // Css scope steps resolve to the first *visible* match — sites that
+        // render hidden duplicate controls (responsive twins, sticky bars)
+        // must not absorb interactions meant for the visible one.
+        assert!(js.contains("els.find(__aqVisible)"), "{js}");
         assert!(js.contains("scope-miss:0"), "{js}");
         assert!(js.contains("scope-miss:1"), "{js}");
         assert!(js.contains("scope-miss:2"), "{js}");
@@ -1000,5 +1166,57 @@ mod tests {
         assert!(js.contains("\"kind\":\"xpath\""), "{js}");
         assert!(js.contains("\"kind\":\"text\""), "{js}");
         assert!(js.contains("//li[1]") && js.contains("Archive"), "{js}");
+    }
+
+    #[test]
+    fn element_state_js_reports_detached_hidden_visible() {
+        let js = build_element_state_js(&DragEndpoint::Css("#probe".into()));
+        assert!(js.contains("\"#probe\""), "{js}");
+        assert!(js.contains("__aqWaitState"), "{js}");
+        assert!(
+            js.contains("\"detached\"") && js.contains("\"hidden\"") && js.contains("\"visible\""),
+            "{js}"
+        );
+        assert!(js.contains("getComputedStyle"), "{js}");
+    }
+
+    #[test]
+    fn hold_js_emits_down_events_without_click() {
+        let js = build_hold_down_js(&DragEndpoint::Css("#btn".into()));
+        assert!(js.contains("__aqHold"), "{js}");
+        assert!(js.contains("\"#btn\""), "{js}");
+        for evt in ["pointerdown", "mousedown", "touchstart"] {
+            assert!(js.contains(evt), "{js}");
+        }
+        // the shared prelude carries a click helper (__aqPick) — hold must never invoke it
+        assert!(!js.contains("__aqPick("), "{js}");
+        let up = build_hold_up_js();
+        assert!(up.contains("__aqHoldUp"), "{up}");
+        assert!(up.contains("pointerup") && up.contains("touchend"), "{up}");
+        assert!(!up.contains("__aqPick("), "{up}");
+    }
+
+    #[test]
+    fn swipe_js_directions_and_viewport_default() {
+        let el = build_swipe_js(Some(&DragEndpoint::Css(".card".into())), "left", 150.0);
+        assert!(el.contains("__aqSwipe"), "{el}");
+        assert!(el.contains("\".card\""), "{el}");
+        assert!(el.contains("=== 'left'"), "{el}");
+        assert!(el.contains("const D = 150"), "{el}");
+        for evt in [
+            "touchstart",
+            "touchmove",
+            "touchend",
+            "pointerdown",
+            "pointermove",
+            "pointerup",
+        ] {
+            assert!(el.contains(evt), "{el}");
+        }
+        // viewport-origin swipe when `on` is absent
+        let page = build_swipe_js(None, "up", 300.0);
+        assert!(page.contains("elementFromPoint"), "{page}");
+        assert!(!page.contains("el-miss"), "{page}");
+        assert!(build_swipe_js(None, "diagonal", 100.0).contains("bad-dir"));
     }
 }

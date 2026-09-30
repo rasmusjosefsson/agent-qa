@@ -14,7 +14,11 @@
 //!
 //! CLI shape:
 //!
-//!   agent-qa heal-chronic <sid> [--min-runs N] [--json]
+//!   agent-qa heal-chronic <sid | --all> [--min-runs N] [--json] [--issue]
+//!
+//! `--issue` renders the board as a paste-ready markdown issue body — the
+//! handoff path when the debt belongs to a human rather than the operator
+//! running the audit.
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -31,6 +35,8 @@ pub fn run(args: &[String]) -> Result<u8> {
     let entries = collect(&opts)?;
     if opts.json {
         println!("{}", serde_json::to_string_pretty(&entries)?);
+    } else if opts.issue {
+        print!("{}", render_issue(&opts, &entries));
     } else {
         render_text(&opts, &entries);
     }
@@ -39,7 +45,7 @@ pub fn run(args: &[String]) -> Result<u8> {
 
 fn print_help() {
     println!(
-        "agent-qa heal-chronic \u{2014} flag steps that self-heal run after run\n\nUsage:\n  agent-qa heal-chronic <sid | --all> [--min-runs N] [--json]\n\nWalks <sid>/replays/*/heal.jsonl and reports steps that auto-healed in\nat least --min-runs distinct runs (default 2). --all scans every scenario\nunder the root and prints one cross-scenario board. Chronic steps are\nstable locator bugs wearing a flaky costume \u{2014} absorb the patch\npermanently with the printed heal-promote command.\n\nExit code is always 0 on success; a non-empty list means debt exists."
+        "agent-qa heal-chronic \u{2014} flag steps that self-heal run after run\n\nUsage:\n  agent-qa heal-chronic <sid | --all> [--min-runs N] [--json] [--issue]\n\nWalks <sid>/replays/*/heal.jsonl and reports steps that auto-healed in\nat least --min-runs distinct runs (default 2). --all scans every scenario\nunder the root and prints one cross-scenario board. Chronic steps are\nstable locator bugs wearing a flaky costume \u{2014} absorb the patch\npermanently with the printed heal-promote command. --issue renders the\nboard as a paste-ready markdown issue body instead of the table.\n\nExit code is always 0 on success; a non-empty list means debt exists."
     );
 }
 
@@ -50,6 +56,7 @@ struct Opts {
     all: bool,
     min_runs: usize,
     json: bool,
+    issue: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -77,6 +84,7 @@ fn parse_args(args: &[String]) -> Result<Opts> {
     let mut all = false;
     let mut min_runs = 2usize;
     let mut json = false;
+    let mut issue = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -85,6 +93,7 @@ fn parse_args(args: &[String]) -> Result<Opts> {
                 std::process::exit(0);
             }
             "--json" => json = true,
+            "--issue" => issue = true,
             "--all" => all = true,
             "--min-runs" => {
                 min_runs = it
@@ -110,13 +119,17 @@ fn parse_args(args: &[String]) -> Result<Opts> {
         }
     }
     if sid.is_some() == all {
-        bail!("usage: heal-chronic <sid | --all> [--min-runs N] [--json]");
+        bail!("usage: heal-chronic <sid | --all> [--min-runs N] [--json] [--issue]");
+    }
+    if json && issue {
+        bail!("--json and --issue are mutually exclusive");
     }
     Ok(Opts {
         sid,
         all,
         min_runs,
         json,
+        issue,
     })
 }
 
@@ -265,6 +278,42 @@ fn render_text(opts: &Opts, entries: &[Chronic]) {
     );
 }
 
+/// Paste-ready markdown issue body for the same board — the handoff path
+/// when the debt belongs to a human, not the operator running the audit.
+fn render_issue(opts: &Opts, entries: &[Chronic]) -> String {
+    let mut out = String::new();
+    let scope = if opts.all {
+        "all scenarios".to_string()
+    } else {
+        format!("`{}`", opts.sid.as_deref().unwrap_or_default())
+    };
+    out.push_str(&format!(
+        "## Self-heal debt — {}\n\n{} step(s) auto-healed in >= {} distinct run(s). Each keeps a stale locator alive: the run passes, but only because auto-heal silently rewrote it. Promote the patches below to make the fix permanent.\n\n",
+        scope,
+        entries.len(),
+        opts.min_runs
+    ));
+    out.push_str(
+        "| scenario | step | runs | modes | last run |\n| --- | --- | --- | --- | --- |\n",
+    );
+    for e in entries {
+        out.push_str(&format!(
+            "| `{}` | `{}` | {} | {} | `{}` |\n",
+            e.sid,
+            e.step_id,
+            e.runs_count,
+            e.modes.join(", "),
+            e.last_run_id
+        ));
+    }
+    out.push_str("\nPromote:\n\n```sh\n");
+    for e in entries {
+        out.push_str(&format!("{}\n", e.promote));
+    }
+    out.push_str("```\n");
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,6 +366,7 @@ mod tests {
             all: false,
             min_runs,
             json: false,
+            issue: false,
         }
     }
 
@@ -340,6 +390,7 @@ mod tests {
             all: true,
             min_runs: 2,
             json: false,
+            issue: false,
         };
         let entries = collect(&opts).unwrap();
         assert_eq!(entries.len(), 2);
@@ -360,6 +411,30 @@ mod tests {
         assert!(o.all && o.sid.is_none());
         parse_args(&["j1".into(), "--all".into()]).unwrap_err();
         parse_args(&Vec::<String>::new()).unwrap_err();
+        teardown();
+    }
+
+    #[test]
+    fn parse_args_json_and_issue_are_exclusive() {
+        parse_args(&["j1".into(), "--json".into(), "--issue".into()]).unwrap_err();
+    }
+
+    #[test]
+    fn render_issue_emits_table_and_promote_block() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        setup(tmp.path());
+        let jdir = tmp.path().join("j1");
+        write_heal_row(&jdir, "rA", "s1", "locator-correction");
+        write_heal_row(&jdir, "rB", "s1", "locator-correction");
+
+        let mut o = opts("j1", 2);
+        o.issue = true;
+        let entries = collect(&o).unwrap();
+        let md = render_issue(&o, &entries);
+        assert!(md.contains("## Self-heal debt — `j1`"));
+        assert!(md.contains("| `j1` | `s1` | 2 | locator-correction | `rB` |"));
+        assert!(md.contains("agent-qa heal-promote j1 --run rB --steps s1"));
         teardown();
     }
 

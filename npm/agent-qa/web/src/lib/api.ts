@@ -213,6 +213,12 @@ export const editChatRecordingStep = (cid: string, index: number, payload: Recor
   postRecording(cid, 'step-edit', { index, payload });
 export const deleteChatRecordingStep = (cid: string, index: number) =>
   postRecording(cid, 'step-delete', { index });
+export const insertChatRecordingStep = (
+  cid: string,
+  index: number,
+  kind: 'do' | 'check',
+  payload: Record<string, unknown>
+) => postRecording(cid, 'step-insert', { index, kind, payload });
 
 // Validate the chat's recording buffer the way `flush` would write it.
 // Unlike the other controls, the report text is the payload: surface

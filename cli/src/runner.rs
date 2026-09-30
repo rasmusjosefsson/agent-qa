@@ -384,6 +384,29 @@ fn render_failure_block(p: &FailurePointer) -> String {
     )
 }
 
+/// Emulation toggles applied via `agent-browser set` (a `do/emulate` step
+/// or `set` CLI call) are daemon-side state: they survive a run and poison
+/// the next replay on the reused session — a stale `offline on` silently
+/// drops every request while a warm `goto` skip hides that anything is
+/// wrong. Reset the toggles that have a documented off state at run start,
+/// before `--offline`/`--mock-from` and `do/emulate` steps re-apply what
+/// *this* run wants. `viewport`, `device`, `geo`, `credentials`, and
+/// `media` have no `set`-level clear — they still carry over.
+fn reset_persistent_emulation(session: &str) {
+    for args in [["set", "offline", "off"], ["set", "headers", "{}"]] {
+        if let Err(e) = crate::browser::run(
+            session,
+            args,
+            crate::browser::RunOpts::new().lenient().capture(),
+        ) {
+            eprintln!(
+                "[v2-replay] emulation reset ({}) skipped: {e}",
+                args.join(" ")
+            );
+        }
+    }
+}
+
 /// Make a path absolute + copy-pasteable for display. Prefers the
 /// canonical form when the file exists (capture succeeded); otherwise
 /// joins the cwd so the printed path is still absolute.
@@ -414,34 +437,23 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     // (`replay --all` suites, workbench runs) — start clean.
     crate::mock::clear(&opts.session_name, None);
 
-    // The browser's request capture is per-session: a replayed session
-    // still holds the previous run's traffic. Clear it so this run's
-    // network.json (and {"network"} claims) sees only its own requests.
-    // Best-effort — a session that doesn't exist yet just warns.
+    // The browser's request + console captures are per-session: a replayed
+    // session still holds the previous run's traffic and messages. Clear
+    // both so this run's network.json / console.json (and {"network"} /
+    // {"console"} claims) see only its own activity. Best-effort — a
+    // session that doesn't exist yet just warns.
     if !opts.dry_run {
         if let Err(e) = crate::browser::network_clear(&opts.session_name) {
             eprintln!("[v2-replay] network log clear skipped: {e}");
         }
-    }
-
-    // The browser's request capture is per-session: a replayed session
-    // still holds the previous run's traffic. Clear it so this run's
-    // network.json (and {"network"} claims) sees only its own requests.
-    // Best-effort — a session that doesn't exist yet just warns.
-    if !opts.dry_run {
-        if let Err(e) = crate::browser::network_clear(&opts.session_name) {
-            eprintln!("[v2-replay] network log clear skipped: {e}");
+        if let Err(e) = crate::browser::console_clear(&opts.session_name) {
+            eprintln!("[v2-replay] console log clear skipped: {e}");
         }
-    }
-
-    // The browser's request capture is per-session: a replayed session
-    // still holds the previous run's traffic. Clear it so this run's
-    // network.json (and {"network"} claims) sees only its own requests.
-    // Best-effort — a session that doesn't exist yet just warns.
-    if !opts.dry_run {
-        if let Err(e) = crate::browser::network_clear(&opts.session_name) {
-            eprintln!("[v2-replay] network log clear skipped: {e}");
-        }
+        reset_persistent_emulation(&opts.session_name);
+        // Own Network.* event capture — redirect-hop statuses and
+        // in-flight tracking the daemon's netlog doesn't expose. A fresh
+        // store per run; silently skipped without a CDP endpoint.
+        crate::cdp_net::start(&opts.session_name);
     }
 
     // 1. Load + validate.
@@ -512,9 +524,14 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     };
     write_run_audit(&run, &audit)?;
 
-    // 4. Resolve inputs (declared defaults + --param overrides).
-    let (resolved_inputs, audit_params) =
-        resolve_inputs(scenario.inputs.as_ref(), &opts.input_overrides)?;
+    // 4. Resolve inputs (declared defaults + --param overrides +
+    //    inputs.local.json beside the scenario).
+    let local_inputs = load_local_inputs(&scenario_dir);
+    let (resolved_inputs, audit_params) = resolve_inputs(
+        scenario.inputs.as_ref(),
+        &opts.input_overrides,
+        &local_inputs,
+    )?;
     audit.parameters = if audit_params.is_empty() {
         None
     } else {
@@ -654,6 +671,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             summary.total
         );
     } else {
+        crate::verbs::clear_dismissed();
         let do_ctx = DoContext {
             session: &opts.session_name,
             scenario_dir: &scenario_dir,
@@ -925,7 +943,15 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                         Err(e) => Err(e),
                     }
                 }
-                Step::Check { claim, .. } => dispatch_check(claim, &check_ctx, &mut scope, None),
+                Step::Check { claim, context, .. } => dispatch_check(
+                    claim,
+                    &check_ctx,
+                    &mut scope,
+                    context
+                        .as_ref()
+                        .and_then(|c| c.timeout_ms)
+                        .map(Duration::from_millis),
+                ),
             };
             // Navigation wipes the page's JS world — reinstall registered
             // network mocks after navigation verbs so stubs survive loads.
@@ -1544,9 +1570,25 @@ fn load_heal_overrides(
 /// Unknown override names are rejected with a clear error.
 /// Sensitive entries store `[REDACTED]` in audit.parameters but
 /// flow the real value into `scope.inputs`.
+/// Read `<scenario_dir>/inputs.local.json` — the gitignored file `flush`
+/// writes recorded secrets into so a committed scenario still replays on
+/// the machine that recorded it. Missing or unparsable → empty map.
+fn load_local_inputs(scenario_dir: &std::path::Path) -> BTreeMap<String, serde_json::Value> {
+    let p = scenario_dir.join("inputs.local.json");
+    match fs::read(&p) {
+        Ok(bytes) => serde_json::from_slice::<BTreeMap<String, serde_json::Value>>(&bytes)
+            .unwrap_or_else(|e| {
+                eprintln!("[v2-replay] {} unparsable, ignoring: {e}", p.display());
+                BTreeMap::new()
+            }),
+        Err(_) => BTreeMap::new(),
+    }
+}
+
 fn resolve_inputs(
     declared: Option<&BTreeMap<String, InputDecl>>,
     overrides: &BTreeMap<String, String>,
+    local: &BTreeMap<String, serde_json::Value>,
 ) -> Result<(
     std::collections::HashMap<String, serde_json::Value>,
     Vec<RunAuditParameter>,
@@ -1583,7 +1625,10 @@ fn resolve_inputs(
             ),
             None => match &decl.default {
                 Some(v) => (v.clone(), ParameterSource::Default),
-                None => continue,
+                None => match local.get(name) {
+                    Some(v) => (v.clone(), ParameterSource::Local),
+                    None => continue,
+                },
             },
         };
         let sensitive = decl.sensitive.unwrap_or(false);
@@ -3210,6 +3255,62 @@ mod tests {
     }
 
     #[test]
+    fn replay_clears_capture_once_and_resets_persistent_emulation() {
+        let _g = lock_env();
+        let work = TempDir::new().unwrap();
+        let log = work.path().join("ab.log");
+        install_fake_browser(work.path(), &log);
+
+        let jdir = work.path().join("sid");
+        fs::create_dir_all(&jdir).unwrap();
+        let jfile = jdir.join("scenario.json");
+        fs::write(&jfile, minimal_scenario()).unwrap();
+
+        let opts = RunOptions {
+            source: ScenarioSource::Path(jfile),
+            profile: None,
+            persona: None,
+            environment: None,
+            session_name: "test".into(),
+            heal_from_run: None,
+            headed: false,
+            input_overrides: BTreeMap::new(),
+            dry_run: false,
+            no_sidecars: false,
+            quiet: false,
+            plain: false,
+            tag: None,
+            output_audit: None,
+            from_step: None,
+            until_step: None,
+            update_baselines: false,
+            keep_going: false,
+            record_video: None,
+            junit: None,
+            base_url: None,
+            auto_promote: false,
+            freeze: None,
+            har: false,
+            mock_from: None,
+            offline: false,
+        };
+        run(&opts).unwrap();
+
+        // The reused-session hygiene at run start: request log cleared once,
+        // and the emulation toggles that outlive a run (offline, headers)
+        // reset so a previous scenario can't poison this one.
+        let ab = fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            ab.matches("network requests --clear").count(),
+            1,
+            "got: {ab}"
+        );
+        assert!(ab.contains("--session test set offline off"), "got: {ab}");
+        assert!(ab.contains("--session test set headers {}"), "got: {ab}");
+        clear_fake_browser();
+    }
+
+    #[test]
     fn replay_viewport_step_invokes_agent_browser_viewport() {
         let _g = lock_env();
         let work = TempDir::new().unwrap();
@@ -4011,7 +4112,8 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         );
         let mut overrides = BTreeMap::new();
         overrides.insert("secret".to_string(), "hunter2".to_string());
-        let (scope, params) = resolve_inputs(Some(&declared), &overrides).unwrap();
+        let (scope, params) =
+            resolve_inputs(Some(&declared), &overrides, &BTreeMap::new()).unwrap();
         assert_eq!(scope.get("name").unwrap(), &serde_json::json!("bob"));
         assert_eq!(scope.get("secret").unwrap(), &serde_json::json!("hunter2"));
         let secret_param = params.iter().find(|p| p.name == "secret").unwrap();
@@ -4023,10 +4125,59 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         let declared: BTreeMap<String, InputDecl> = BTreeMap::new();
         let mut overrides = BTreeMap::new();
         overrides.insert("nope".to_string(), "x".to_string());
-        let err = resolve_inputs(Some(&declared), &overrides)
+        let err = resolve_inputs(Some(&declared), &overrides, &BTreeMap::new())
             .unwrap_err()
             .to_string();
         assert!(err.contains("not declared") || err.contains("no inputs"));
+    }
+
+    #[test]
+    fn resolve_inputs_local_file_is_the_last_resort() {
+        let mut declared = BTreeMap::new();
+        declared.insert(
+            "secret".to_string(),
+            InputDecl {
+                ty: InputType::String,
+                default: None,
+                sensitive: Some(true),
+                items: None,
+                properties: None,
+                description: None,
+            },
+        );
+        declared.insert(
+            "with_default".to_string(),
+            InputDecl {
+                ty: InputType::String,
+                default: Some(serde_json::json!("decl")),
+                sensitive: None,
+                items: None,
+                properties: None,
+                description: None,
+            },
+        );
+        let mut local = BTreeMap::new();
+        local.insert("secret".to_string(), serde_json::json!("hunter2"));
+        local.insert(
+            "with_default".to_string(),
+            serde_json::json!("local-ignored"),
+        );
+        let (scope, params) = resolve_inputs(Some(&declared), &BTreeMap::new(), &local).unwrap();
+        // Declared default still wins over the local file; the file only
+        // covers inputs with no default and no --param.
+        assert_eq!(
+            scope.get("with_default").unwrap(),
+            &serde_json::json!("decl")
+        );
+        assert_eq!(scope.get("secret").unwrap(), &serde_json::json!("hunter2"));
+        let secret_param = params.iter().find(|p| p.name == "secret").unwrap();
+        assert_eq!(secret_param.value, serde_json::json!("[REDACTED]"));
+        assert_eq!(secret_param.source, ParameterSource::Local);
+        // --param still beats the local file
+        let mut overrides = BTreeMap::new();
+        overrides.insert("secret".to_string(), "cli-wins".to_string());
+        let (scope, _) = resolve_inputs(Some(&declared), &overrides, &local).unwrap();
+        assert_eq!(scope.get("secret").unwrap(), &serde_json::json!("cli-wins"));
     }
 
     #[test]

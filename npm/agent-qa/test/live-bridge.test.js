@@ -63,6 +63,7 @@ function makeBridge() {
     WebSocketImpl: FakeWS,
     fetchImpl: fakeFetch,
     captureMs: 100000, // never auto-fire; the immediate first frame is enough
+    downloadHoldMs: 0, // clicks commit immediately — download window covered by its own tests
   });
 }
 
@@ -74,6 +75,7 @@ function makeRecordingBridge(onRecord) {
     fetchImpl: fakeFetch,
     captureMs: 100000,
     onRecord,
+    downloadHoldMs: 0,
   });
 }
 
@@ -696,4 +698,422 @@ test('input drag without record dispatches the DOM gesture on the endpoint nodes
     !sock.sent.some((m) => m.method === 'Accessibility.getPartialAXTree'),
     'no a11y lookup when not recording',
   );
+});
+
+// --- state capture: dump page storage+cookies into a do/state step ---
+
+test('captureState emits a do/state step with storage and cookies', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  assert.equal(bridge.input({ type: 'captureState' }), true);
+  await flush();
+  const evalId = sock.sent.find((m) => m.method === 'Runtime.evaluate' && m.params.expression.includes('localStorage')).id;
+  sock.recv({
+    id: evalId,
+    result: {
+      result: {
+        value: {
+          localStorage: { token: 'abc', theme: 'dark' },
+          sessionStorage: { step: '2' },
+          cookies: [{ name: 'sid', value: 'x%3Dy' }],
+        },
+      },
+    },
+  });
+  await flush();
+  assert.equal(recorded.length, 1);
+  const step = recorded[0].payload;
+  assert.equal(recorded[0].kind, 'do');
+  assert.equal(step.verb, 'state');
+  assert.deepEqual(step.params.localStorage, { token: 'abc', theme: 'dark' });
+  assert.deepEqual(step.params.sessionStorage, { step: '2' });
+  assert.deepEqual(step.params.cookies, [{ name: 'sid', value: 'x%3Dy' }]);
+  assert.match(step.intent, /2 local, 1 session, 1 cookie/);
+});
+
+test('captureState skips empty stores and omits empty maps', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  bridge.input({ type: 'captureState' });
+  await flush();
+  const evalId = sock.sent.find((m) => m.method === 'Runtime.evaluate' && m.params.expression.includes('localStorage')).id;
+  sock.recv({
+    id: evalId,
+    result: { result: { value: { localStorage: { a: '1' }, sessionStorage: {}, cookies: [] } } },
+  });
+  await flush();
+  assert.equal(recorded.length, 1);
+  assert.deepEqual(recorded[0].payload.params, { localStorage: { a: '1' } }, 'empty stores are omitted');
+});
+
+test('captureState on a stateless page reports a record-skip, not an empty step', async () => {
+  const bridge = makeRecordingBridge(async () => {});
+  const events = [];
+  const sock = await connect(bridge, { write: (s) => events.push(s), end() {} });
+  bridge.input({ type: 'captureState' });
+  await flush();
+  const evalId = sock.sent.find((m) => m.method === 'Runtime.evaluate' && m.params.expression.includes('localStorage')).id;
+  sock.recv({ id: evalId, result: { result: { value: { localStorage: {}, sessionStorage: {}, cookies: [] } } } });
+  await flush();
+  assert.ok(events.some((e) => e.includes('event: record-skip') && e.includes('no storage or cookies')));
+});
+
+// --- frame-aware recording: steps inside iframes emit do/frame moves ---
+
+// Answer the CDP calls a frame-crossing record makes: getNodeForLocation →
+// frameId, getFrameTree → parentage, getFrameOwner → iframe element,
+// resolveNode+callFunctionOn → its selector, then the AX/box pick calls.
+async function feedFramePick(sock, { frameId, parentId = 'MAIN', ownerBid = 99, ownerSelector = 'iframe#embed', axNodes }) {
+  const locId = sock.sent.find((m) => m.method === 'DOM.getNodeForLocation').id;
+  sock.recv({ id: locId, result: { backendNodeId: 41, frameId, nodeId: 7 } });
+  await flush();
+  // The pick's AX call runs while the frame walk also starts; answer in
+  // arrival order until all expected calls are satisfied.
+  const answer = () => {
+    const ax = sock.sent.find((m) => m.method === 'Accessibility.getPartialAXTree' && !m.answered);
+    if (ax) { ax.answered = true; sock.recv({ id: ax.id, result: { nodes: axNodes } }); }
+    const ft = sock.sent.find((m) => m.method === 'Page.getFrameTree' && !m.answered);
+    if (ft) {
+      ft.answered = true;
+      sock.recv({
+        id: ft.id,
+        result: {
+          frameTree: {
+            frame: { id: 'MAIN', url: 'https://x/', securityOrigin: 'https://x', mimeType: 'text/html' },
+            childFrames: [{ frame: { id: frameId, parentId, url: 'https://x/f', securityOrigin: 'https://x', mimeType: 'text/html' } }],
+          },
+        },
+      });
+    }
+    const fo = sock.sent.find((m) => m.method === 'DOM.getFrameOwner' && !m.answered);
+    if (fo) { fo.answered = true; sock.recv({ id: fo.id, result: { backendNodeId: ownerBid, nodeId: 8 } }); }
+    const rn = sock.sent.find((m) => m.method === 'DOM.resolveNode' && !m.answered);
+    if (rn) { rn.answered = true; sock.recv({ id: rn.id, result: { object: { objectId: 'o9' } } }); }
+    const cfo = sock.sent.find((m) => m.method === 'Runtime.callFunctionOn' && !m.answered);
+    if (cfo) { cfo.answered = true; sock.recv({ id: cfo.id, result: { result: { value: ownerSelector } } }); }
+    const bm = sock.sent.find((m) => m.method === 'DOM.getBoxModel' && !m.answered);
+    if (bm) { bm.answered = true; sock.recv({ id: bm.id, result: { model: { content: [0, 0, 10, 0, 10, 10, 0, 10] } } }); }
+  };
+  for (let i = 0; i < 10; i++) { answer(); await flush(); }
+}
+
+test('a recorded click inside an iframe emits an enter-frame step first', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  // Answer Page.getFrameTree (sent at connect for mainFrameId) if it arrived.
+  const ft0 = sock.sent.find((m) => m.method === 'Page.getFrameTree');
+  if (ft0) sock.recv({ id: ft0.id, result: { frameTree: { frame: { id: 'MAIN' } } } });
+  const metId = sock.sent.find((m) => m.method === 'Page.getLayoutMetrics').id;
+  sock.recv({ id: metId, result: { cssLayoutViewport: { clientWidth: 800, clientHeight: 600 } } });
+  await flush();
+  bridge.input({ type: 'click', nx: 0.5, ny: 0.5, record: true });
+  await flush();
+  await feedFramePick(sock, {
+    frameId: 'F1',
+    axNodes: [{ nodeId: 'a1', backendDOMNodeId: 41, role: { value: 'button' }, name: { value: 'Buy' }, childIds: [] }],
+  });
+  await flush();
+  assert.equal(recorded.length, 2, 'frame-enter step, then the click');
+  assert.equal(recorded[0].payload.verb, 'frame');
+  assert.deepEqual(recorded[0].payload.params, { selector: 'iframe#embed' });
+  assert.equal(recorded[1].payload.verb, 'click');
+  assert.deepEqual(recorded[1].payload.on, { role: 'button', name: 'Buy' });
+});
+
+test('a listener record in an iframe context emits the frame step first', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  const ft0 = sock.sent.find((m) => m.method === 'Page.getFrameTree');
+  if (ft0) sock.recv({ id: ft0.id, result: { frameTree: { frame: { id: 'MAIN' } } } });
+  await flush();
+  sock.recv({
+    method: 'Runtime.executionContextCreated',
+    params: { context: { id: 9, auxData: { isDefault: true, frameId: 'F1' }, origin: 'https://x' } },
+  });
+  await flush();
+  sock.recv({
+    method: 'Runtime.bindingCalled',
+    params: {
+      name: '__aqRecord',
+      executionContextId: 9,
+      payload: JSON.stringify({ kind: 'check', name: 'Agree', role: 'checkbox' }),
+    },
+  });
+  await flush();
+  const answer = () => {
+    const ft = sock.sent.find((m) => m.method === 'Page.getFrameTree' && !m.answered);
+    if (ft) {
+      ft.answered = true;
+      sock.recv({ id: ft.id, result: { frameTree: { frame: { id: 'MAIN' }, childFrames: [{ frame: { id: 'F1', parentId: 'MAIN' } }] } } });
+    }
+    const fo = sock.sent.find((m) => m.method === 'DOM.getFrameOwner' && !m.answered);
+    if (fo) { fo.answered = true; sock.recv({ id: fo.id, result: { backendNodeId: 77 } }); }
+    const rn = sock.sent.find((m) => m.method === 'DOM.resolveNode' && !m.answered);
+    if (rn) { rn.answered = true; sock.recv({ id: rn.id, result: { object: { objectId: 'o1' } } }); }
+    const cfo = sock.sent.find((m) => m.method === 'Runtime.callFunctionOn' && !m.answered);
+    if (cfo) { cfo.answered = true; sock.recv({ id: cfo.id, result: { result: { value: 'iframe.w' } } }); }
+  };
+  for (let i = 0; i < 10; i++) { answer(); await flush(); }
+  assert.equal(recorded.length, 2);
+  assert.equal(recorded[0].payload.verb, 'frame');
+  assert.deepEqual(recorded[0].payload.params, { selector: 'iframe.w' });
+  assert.equal(recorded[1].payload.verb, 'check');
+});
+
+test('a click back in the main frame emits a frame main step', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  const ft0 = sock.sent.find((m) => m.method === 'Page.getFrameTree');
+  if (ft0) sock.recv({ id: ft0.id, result: { frameTree: { frame: { id: 'MAIN' } } } });
+  const metId = sock.sent.find((m) => m.method === 'Page.getLayoutMetrics').id;
+  sock.recv({ id: metId, result: { cssLayoutViewport: { clientWidth: 800, clientHeight: 600 } } });
+  await flush();
+  // First: a click inside the iframe.
+  bridge.input({ type: 'click', nx: 0.5, ny: 0.5, record: true });
+  await flush();
+  await feedFramePick(sock, {
+    frameId: 'F1',
+    axNodes: [{ nodeId: 'a1', backendDOMNodeId: 41, role: { value: 'button' }, name: { value: 'Buy' }, childIds: [] }],
+  });
+  await flush();
+  assert.equal(recorded.length, 2);
+  // Second: a click in the main frame → frame main step before it.
+  bridge.input({ type: 'click', nx: 0.2, ny: 0.2, record: true });
+  await flush();
+  const locId2 = sock.sent.filter((m) => m.method === 'DOM.getNodeForLocation').at(-1).id;
+  sock.recv({ id: locId2, result: { backendNodeId: 42, frameId: 'MAIN', nodeId: 9 } });
+  await flush();
+  const ax = sock.sent.filter((m) => m.method === 'Accessibility.getPartialAXTree').at(-1);
+  sock.recv({ id: ax.id, result: { nodes: [{ nodeId: 'b1', backendDOMNodeId: 42, role: { value: 'button' }, name: { value: 'Top' }, childIds: [] }] } });
+  await flush();
+  const bm = sock.sent.filter((m) => m.method === 'DOM.getBoxModel').at(-1);
+  if (bm) sock.recv({ id: bm.id, result: { model: { content: [0, 0, 10, 0, 10, 10, 0, 10] } } });
+  await flush();
+  assert.equal(recorded.length, 4);
+  assert.equal(recorded[2].payload.verb, 'frame');
+  assert.deepEqual(recorded[2].payload.params, { main: true });
+  assert.equal(recorded[3].payload.verb, 'click');
+});
+
+test('a window resize records a do/viewport step once', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  const ft0 = sock.sent.find((m) => m.method === 'Page.getFrameTree');
+  if (ft0) sock.recv({ id: ft0.id, result: { frameTree: { frame: { id: 'MAIN' } } } });
+  for (const size of [{ width: 1280, height: 800 }, { width: 1280, height: 800 }, { width: 375, height: 812 }]) {
+    sock.recv({
+      method: 'Runtime.bindingCalled',
+      params: { name: '__aqRecord', payload: JSON.stringify({ kind: 'viewport', ...size }) },
+    });
+    await flush();
+  }
+  assert.equal(recorded.length, 2, 'repeat size dedupes');
+  assert.deepEqual(recorded[0].payload, { intent: 'viewport 1280x800', verb: 'viewport', params: { width: 1280, height: 800 } });
+  assert.deepEqual(recorded[1].payload.params, { width: 375, height: 812 });
+});
+
+test('a resize inside an iframe does not record viewport', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  const ft0 = sock.sent.find((m) => m.method === 'Page.getFrameTree');
+  if (ft0) sock.recv({ id: ft0.id, result: { frameTree: { frame: { id: 'MAIN' } } } });
+  await flush(); // let mainFrameId settle
+  sock.recv({
+    method: 'Runtime.executionContextCreated',
+    params: { context: { id: 9, auxData: { isDefault: true, frameId: 'F1' } } },
+  });
+  sock.recv({
+    method: 'Runtime.bindingCalled',
+    params: { name: '__aqRecord', executionContextId: 9, payload: JSON.stringify({ kind: 'viewport', width: 300, height: 200 }) },
+  });
+  await flush();
+  assert.equal(recorded.length, 0);
+});
+
+test('a javascriptDialogOpening records check+accept and answers the dialog', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  sock.recv({
+    method: 'Page.javascriptDialogOpening',
+    params: { type: 'confirm', message: 'Delete this file?', url: 'https://x/' },
+  });
+  await flush();
+  const answered = sock.sent.find((m) => m.method === 'Page.handleJavaScriptDialog');
+  assert.ok(answered, 'the dialog is answered — the page unfreezes');
+  assert.equal(answered.params.accept, true);
+  await flush();
+  assert.equal(recorded.length, 2, 'check then resolve, in order');
+  const [check, resolve] = recorded;
+  assert.equal(check.kind, 'check');
+  assert.deepEqual(check.payload.claim, {
+    subject: { dialog: true },
+    predicate: 'contains',
+    value: 'Delete this file?',
+  });
+  assert.equal(resolve.kind, 'do');
+  assert.equal(resolve.payload.verb, 'dialog');
+  assert.deepEqual(resolve.payload.params, { action: 'accept' });
+});
+
+test('a prompt dialog records its default as the prompt text', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  sock.recv({
+    method: 'Page.javascriptDialogOpening',
+    params: { type: 'prompt', message: 'Your name?', defaultPrompt: 'ada', url: 'https://x/' },
+  });
+  await flush();
+  const answered = sock.sent.find((m) => m.method === 'Page.handleJavaScriptDialog');
+  assert.equal(answered.params.promptText, 'ada', 'prompt answered with the shown default');
+  await flush();
+  assert.equal(recorded.length, 2);
+  assert.deepEqual(recorded[1].payload.params, { action: 'accept', text: 'ada' });
+});
+
+test('beforeunload dialogs are answered but not recorded', async () => {
+  const recorded = [];
+  const bridge = makeRecordingBridge(async (k, p) => recorded.push({ kind: k, payload: p }));
+  const sock = await connect(bridge, { write() {}, end() {} });
+  sock.recv({
+    method: 'Page.javascriptDialogOpening',
+    params: { type: 'beforeunload', message: 'Leave?', url: 'https://x/' },
+  });
+  await flush();
+  assert.ok(sock.sent.some((m) => m.method === 'Page.handleJavaScriptDialog'));
+  await flush();
+  assert.equal(recorded.length, 0);
+});
+
+// -- download capture -------------------------------------------------------
+
+// Drives a recorded click's whole pick() chain so the click lands held in the
+// download-suppression window (or committed, when the hold is disabled).
+async function driveRecordedClick(sock, bridge) {
+  const metId = sock.sent.find((m) => m.method === 'Page.getLayoutMetrics').id;
+  sock.recv({ id: metId, result: { cssLayoutViewport: { clientWidth: 800, clientHeight: 600 } } });
+  bridge.input({ type: 'click', nx: 0.5, ny: 0.5, record: true });
+  await flush();
+  const loc = sock.sent.find((m) => m.method === 'DOM.getNodeForLocation');
+  sock.recv({ id: loc.id, result: { backendNodeId: 7 } });
+  await flush();
+  const ax = sock.sent.find((m) => m.method === 'Accessibility.getPartialAXTree');
+  sock.recv({
+    id: ax.id,
+    result: { nodes: [{ role: { value: 'link' }, name: { value: 'Get report' } }] },
+  });
+  await flush();
+  const box = sock.sent.find((m) => m.method === 'DOM.getBoxModel');
+  if (box) sock.recv({ id: box.id, result: { model: { content: [0, 0, 10, 0, 10, 10, 0, 10] } } });
+  await flush();
+}
+
+test('recording bridge arms download capture on connect', async () => {
+  const bridge = makeRecordingBridge(async () => {});
+  await connect(bridge, { write() {}, end() {} });
+  const sock = FakeWS.instances.at(-1);
+  const dl = sock.sentMethod('Page.setDownloadBehavior');
+  assert.ok(dl, 'setDownloadBehavior sent');
+  assert.equal(dl.params.behavior, 'allowAndName');
+  assert.ok(dl.params.downloadPath, 'a scratch dir is provided');
+  bridge.stop();
+});
+
+test('a click that starts a download records do/download, not do/click', async () => {
+  const recorded = [];
+  FakeWS.instances = [];
+  const bridge = createLiveBridge({
+    getCdpUrl: async () => 'ws://127.0.0.1:1/devtools/browser/x',
+    WebSocketImpl: FakeWS,
+    fetchImpl: fakeFetch,
+    captureMs: 100000,
+    downloadHoldMs: 5000, // long enough that only the download event resolves it
+    onRecord: async (kind, payload) => recorded.push({ kind, ...payload }),
+  });
+  const sock = await connect(bridge, { write() {}, end() {} });
+  await driveRecordedClick(sock, bridge);
+
+  // Download starts inside the suppression window.
+  sock.recv({
+    method: 'Page.downloadWillBegin',
+    params: { guid: 'g1', url: 'https://x.example/report.pdf', suggestedFilename: 'report.pdf' },
+  });
+  await flush();
+
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0].kind, 'do');
+  assert.equal(recorded[0].verb, 'download');
+  assert.deepEqual(recorded[0].on, { role: 'link', name: 'Get report' });
+  assert.equal(recorded[0].value.literal, 'downloads/report.pdf');
+  bridge.stop();
+});
+
+test('a download with no recorded click inside the window is skipped, not mis-recorded', async () => {
+  const recorded = [];
+  const events = [];
+  FakeWS.instances = [];
+  const bridge = createLiveBridge({
+    getCdpUrl: async () => 'ws://127.0.0.1:1/devtools/browser/x',
+    WebSocketImpl: FakeWS,
+    fetchImpl: fakeFetch,
+    captureMs: 100000,
+    downloadHoldMs: 5000,
+    onRecord: async (kind, payload) => recorded.push({ kind, ...payload }),
+  });
+  const sock = await connect(bridge, { write: (s) => events.push(s), end() {} });
+
+  sock.recv({
+    method: 'Page.downloadWillBegin',
+    params: { guid: 'g2', url: 'https://x.example/x.zip', suggestedFilename: 'x.zip' },
+  });
+  await flush();
+
+  assert.equal(recorded.length, 0, 'no step recorded for an untriggered download');
+  assert.ok(
+    events.some((e) => e.includes('record-skip')),
+    'a record-skip notice explains the skip',
+  );
+  bridge.stop();
+});
+
+test('a late download after the click committed still records the step and flags the duplicate', async () => {
+  const recorded = [];
+  const events = [];
+  FakeWS.instances = [];
+  const bridge = createLiveBridge({
+    getCdpUrl: async () => 'ws://127.0.0.1:1/devtools/browser/x',
+    WebSocketImpl: FakeWS,
+    fetchImpl: fakeFetch,
+    captureMs: 100000,
+    downloadHoldMs: 0, // click commits immediately
+    onRecord: async (kind, payload) => recorded.push({ kind, ...payload }),
+  });
+  const sock = await connect(bridge, { write: (s) => events.push(s), end() {} });
+  await driveRecordedClick(sock, bridge);
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0].verb, 'click', 'the click committed as a plain click');
+
+  // The response head arrives late — inside the 3s orphan window.
+  sock.recv({
+    method: 'Page.downloadWillBegin',
+    params: { guid: 'g3', url: 'https://x.example/r.pdf', suggestedFilename: 'r.pdf' },
+  });
+  await flush();
+
+  assert.equal(recorded.length, 2);
+  assert.equal(recorded[1].verb, 'download');
+  assert.equal(recorded[1].value.literal, 'downloads/r.pdf');
+  assert.ok(
+    events.some((e) => e.includes('record-skip') && e.includes('duplicate')),
+    'the duplicate click trigger is flagged',
+  );
+  bridge.stop();
 });
