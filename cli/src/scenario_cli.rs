@@ -1725,6 +1725,18 @@ fn delete(sid: &str, confirmed: bool) -> Result<u8> {
     if !dir.is_dir() {
         bail!("scenario delete: not found at {}", dir.display());
     }
+    // Deleting the scenario an active recording loaded (or owns) orphans
+    // the live buffer — and flush would then recreate the dir as a
+    // zombie. Refuse while the state file points at this sid.
+    if let Some(state) = crate::recorder_state::RecorderState::try_load_active()? {
+        if state.sid == sid || state.source_ref.as_deref() == Some(sid) {
+            bail!(
+                "scenario delete: {sid:?} is bound to the active recording \
+                 ({} step(s)) — `record stop` or `flush` it first",
+                state.steps.len()
+            );
+        }
+    }
     let replays = crate::paths::run_dirs(&dir.join("replays")).len();
     if !confirmed {
         println!(
@@ -6418,6 +6430,47 @@ mod tests {
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    #[test]
+    fn delete_refuses_the_active_recordings_source() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        let prev_record = std::env::var(crate::paths::RECORD_DIR_ENV).ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        std::env::set_var(crate::paths::RECORD_DIR_ENV, tmp.path().join("record"));
+        let d = tmp.path().join("sid");
+        fs::create_dir_all(&d).unwrap();
+        fs::write(
+            d.join("scenario.json"),
+            r#"{"schema":"scenario/2","id":"sid","intent":"x","steps":[]}"#,
+        )
+        .unwrap();
+        // A recording loaded `sid` into its buffer (source_ref) — deleting
+        // it would orphan the live state and let flush recreate a zombie.
+        crate::recorder_state::RecorderState::new(
+            "live".into(),
+            "record".into(),
+            "session".into(),
+            crate::recorder_state::RecorderBaseline::Fresh,
+            Some("sid".into()),
+            crate::browser::BrowserConnection::default(),
+        )
+        .save()
+        .unwrap();
+        let err = delete("sid", true).unwrap_err().to_string();
+        assert!(err.contains("bound to the active recording"), "{err}");
+        assert!(d.is_dir());
+        crate::recorder_state::RecorderState::clear().unwrap();
+        match prev {
+            Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+        match prev_record {
+            Some(v) => std::env::set_var(crate::paths::RECORD_DIR_ENV, v),
+            None => std::env::remove_var(crate::paths::RECORD_DIR_ENV),
         }
     }
 
