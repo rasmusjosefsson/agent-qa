@@ -35,7 +35,13 @@ pub fn run(args: &[String]) -> Result<u8> {
                     None => skipped += 1,
                 }
             }
-            println!("stdin: {recorded} recorded, {skipped} skipped");
+            if skipped > 0 {
+                println!(
+                    "stdin: {recorded} recorded, {skipped} skipped (recording paused — `record resume` to capture)"
+                );
+            } else {
+                println!("stdin: {recorded} recorded");
+            }
         }
     }
     Ok(0)

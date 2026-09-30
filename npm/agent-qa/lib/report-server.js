@@ -4329,6 +4329,13 @@ function createServer(root, deps) {
           const r = await runCli(['record-step', kind, JSON.stringify(payload)]);
           if (r.spawnError) throw new Error(String(r.spawnError.message || r.spawnError));
           if (r.code !== 0) throw new Error((r.stderr || 'record-step failed').trim());
+          // A paused recorder drops the step but exits 0 with a stdout note —
+          // without this the pane looks like it captured the step while the
+          // buffer stayed silent. Surface it through the same 'record-skip'
+          // channel the bridge uses for failures.
+          if (/skipped \(recording paused/.test(r.stdout || '')) {
+            throw new Error('recording is paused — resume to capture');
+          }
         },
         // Gesture mode performs the gesture on the page before recording it —
         // run-step dispatches the draft against the same live session.
