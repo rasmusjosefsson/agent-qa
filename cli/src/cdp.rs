@@ -327,6 +327,24 @@ fn grant_permissions_in(session: &str, permissions: &[&str], origin: &str) -> Re
     })
 }
 
+/// `emulate permissions off` — reset every grant this session holds via
+/// `Browser.resetPermissions` (browser-domain, no origin scope needed:
+/// a bare call drops all overrides for the context). Lives on the same
+/// pooled connection as the grants so it always sees them.
+pub fn reset_permissions(session: &str) -> Result<bool> {
+    match reset_permissions_in(session) {
+        Err(e) if is_unavailable(&e) => Ok(false),
+        out => out,
+    }
+}
+
+fn reset_permissions_in(session: &str) -> Result<bool> {
+    with_connection(session, |conn| {
+        conn.call("Browser.resetPermissions", json!({}))?;
+        Ok(true)
+    })
+}
+
 /// Apply `Emulation.setGeolocationOverride` on the session's page target.
 /// `agent-browser set geo` scopes the override to whatever target the
 /// daemon session points at — with a leftover `chrome://newtab` page that
@@ -437,6 +455,63 @@ fn set_locale_override_in(session: &str, locale: &str) -> Result<bool> {
             json!({ "userAgent": ua, "acceptLanguage": locale }),
             &sid,
         )?;
+        Ok(true)
+    })
+}
+
+/// `emulate locale off` — undo [`set_locale_override`]: empty `locale`
+/// restores the host default on `Emulation.setLocaleOverride`, and a bare
+/// `userAgent` (no `acceptLanguage`) drops the header half. Returns
+/// Ok(false) when no page target exists.
+pub fn clear_locale_override(session: &str) -> Result<bool> {
+    match clear_locale_override_in(session) {
+        Err(e) if is_unavailable(&e) => Ok(false),
+        out => out,
+    }
+}
+
+fn clear_locale_override_in(session: &str) -> Result<bool> {
+    with_connection(session, |conn| {
+        let page = active_page(conn)?.map(|(id, _)| id);
+        let Some(target_id) = page else {
+            return Ok(false);
+        };
+        let sid = attach_flat(conn, &target_id)?;
+        conn.call_on("Emulation.setLocaleOverride", json!({ "locale": "" }), &sid)?;
+        let version = conn.call("Browser.getVersion", json!({}))?;
+        let ua = version
+            .get("userAgent")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("Browser.getVersion: no userAgent in {version}"))?;
+        conn.call_on(
+            "Network.setUserAgentOverride",
+            json!({ "userAgent": ua }),
+            &sid,
+        )?;
+        Ok(true)
+    })
+}
+
+/// `emulate device off` — undo a `set device` emulation:
+/// `Emulation.clearDeviceMetricsOverride` restores the real viewport and
+/// a bare `Network.setUserAgentOverride` drops the UA spoof. Returns
+/// Ok(false) when no page target exists.
+pub fn clear_device_override(session: &str) -> Result<bool> {
+    match clear_device_override_in(session) {
+        Err(e) if is_unavailable(&e) => Ok(false),
+        out => out,
+    }
+}
+
+fn clear_device_override_in(session: &str) -> Result<bool> {
+    with_connection(session, |conn| {
+        let page = active_page(conn)?.map(|(id, _)| id);
+        let Some(target_id) = page else {
+            return Ok(false);
+        };
+        let sid = attach_flat(conn, &target_id)?;
+        conn.call_on("Emulation.clearDeviceMetricsOverride", json!({}), &sid)?;
+        conn.call_on("Network.setUserAgentOverride", json!({}), &sid)?;
         Ok(true)
     })
 }

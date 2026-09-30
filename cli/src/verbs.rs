@@ -1343,6 +1343,70 @@ fn emulate_apply(
     if params.is_empty() {
         bail!("params has no emulation to apply");
     }
+    // `emulate <key>: "off"` — undo a toggle via CDP clears on the same
+    // pooled connection the overrides live on. A clear with no page target
+    // yet is a quiet no-op (nothing to undo), unlike a set which needs the
+    // page. credentials can't be unset reliably (its auth handler isn't a
+    // header we can clear) — it bails with the --fresh-browser escape.
+    let is_off = |v: &Json| v.as_str() == Some("off");
+    if params.values().any(&is_off) {
+        for (k, v) in params {
+            if !is_off(v) {
+                continue;
+            }
+            let cleared = match k.as_str() {
+                "device" => crate::cdp::clear_device_override(session),
+                "geo" => crate::cdp::emulate_override(
+                    session,
+                    "Emulation.clearGeolocationOverride",
+                    serde_json::json!({}),
+                ),
+                "timezone" => crate::cdp::emulate_override(
+                    session,
+                    "Emulation.setTimezoneOverride",
+                    serde_json::json!({ "timezoneId": "" }),
+                ),
+                "locale" => crate::cdp::clear_locale_override(session),
+                "headers" => crate::cdp::emulate_override(
+                    session,
+                    "Network.setExtraHTTPHeaders",
+                    serde_json::json!({ "headers": {} }),
+                ),
+                "colorScheme" => crate::cdp::emulate_override(
+                    session,
+                    "Emulation.setEmulatedMedia",
+                    serde_json::json!({"features":[{"name":"prefers-color-scheme","value":""}]}),
+                ),
+                "reducedMotion" => crate::cdp::emulate_override(
+                    session,
+                    "Emulation.setEmulatedMedia",
+                    serde_json::json!({"features":[{"name":"prefers-reduced-motion","value":""}]}),
+                ),
+                "permissions" => crate::cdp::reset_permissions(session),
+                "offline" => {
+                    browser::set_emulation(session, &["offline".into(), "off".into()])
+                        .map_err(|e| anyhow!("set offline off: {e}"))?;
+                    Ok(true)
+                }
+                "credentials" => bail!(
+                    "emulate credentials off is unsupported — start a fresh run (--fresh-browser)"
+                ),
+                _ => unreachable!("unknown key rejected above"),
+            }
+            .map_err(|e| anyhow!("emulate {k} off: {e}"))?;
+            if !cleared {
+                eprintln!("[v2-replay] emulate {k} off: no page target yet — nothing to clear");
+            }
+        }
+    }
+    let params: std::collections::BTreeMap<String, Json> = params
+        .iter()
+        .filter(|(_, v)| !is_off(v))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    if params.is_empty() {
+        return Ok(());
+    }
     let subst = |v: &Json, scope: &mut ValueScope| -> Result<String> {
         let s = value_to_string(v);
         Ok(crate::value::substitute_scenario_vars(&s, scope))
@@ -4281,5 +4345,64 @@ mod tests {
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         clear_fake();
         assert!(err.contains("clipboard must be a string"), "got: {err}");
+    }
+
+    #[test]
+    fn emulate_off_clears_and_keeps_the_rest() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake_eval_true(tmp.path(), &log);
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(
+            &parse(json!({
+                "id": "s1", "intent": "x", "kind": "do", "verb": "emulate",
+                "params": {
+                    "geo": "off", "offline": "off", "headers": { "X-T": "1" }
+                }
+            })),
+            &ctx,
+            &mut scope,
+        )
+        .unwrap();
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        assert!(
+            out.contains("set offline off"),
+            "offline off forwards: {out}"
+        );
+        assert!(out.contains("set headers"), "live keys still apply: {out}");
+        assert!(out.contains("X-T"), "got: {out}");
+    }
+
+    #[test]
+    fn emulate_off_credentials_bails_with_escape() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake_eval_true(tmp.path(), &tmp.path().join("ab.log"));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        let err = dispatch_do(
+            &parse(json!({
+                "id": "s1", "intent": "x", "kind": "do", "verb": "emulate",
+                "params": { "credentials": "off" }
+            })),
+            &ctx,
+            &mut scope,
+        )
+        .unwrap_err();
+        clear_fake();
+        assert!(err.to_string().contains("fresh-browser"), "got: {err}");
     }
 }

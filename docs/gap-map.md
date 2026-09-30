@@ -157,13 +157,15 @@ the picture shifts materially.
     **Hard limit, not a gap**: no CDP/JS surface can see inside a closed
     root (its `shadowRoot` is null for everyone). Documented as
     permanent — closed.
-18. **`set` toggles without a clear state** — #349 resets `offline` +
-    `headers` at run start. `viewport`/`device`/`geo`/`credentials`/
-    `media` have no `set`-level off and — verified live — can't be
-    cleared from a second CDP session either (the override is owned by
-    the daemon's session). #355 adds `replay --fresh-browser` as the
-    escape hatch (closes the session's browser → cold relaunch). A real
-    `set … off` surface is upstream work in agent-browser.
+18. **`set` toggles without a clear state** — narrowed, not closed.
+    `do/emulate` now accepts `"<key>": "off"` for every runner-side key
+    (`device`/`geo`/`timezone`/`locale`/`headers`/`colorScheme`/
+    `reducedMotion`/`permissions`/`offline`) — the step issues the CDP
+    clear on the runner's own pooled connection, which is what owns the
+    overrides. Two honest limits: `credentials: "off"` bails (its auth
+    handler isn't a clearable header — use `--fresh-browser`), and an
+    `agent-browser set`-applied toggle can still not be cleared from a
+    second CDP session — `--fresh-browser` remains the escape hatch.
 
 ## Entry-point dogfood pass (`init → start → record-step → buffer → flush → replay → audit`)
 
