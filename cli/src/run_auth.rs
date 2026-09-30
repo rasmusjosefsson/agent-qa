@@ -151,10 +151,34 @@ pub fn apply(opts: &mut RunOptions) -> Result<()> {
 fn load_persona(root: &Path, id: &str) -> Result<Json> {
     safe_record_id(id, "persona")?;
     let file = root.join("_personas").join(id).join("persona.json");
-    let body = fs::read_to_string(&file)
-        .with_context(|| format!("no such persona: {id} ({})", file.display()))?;
+    let body = fs::read_to_string(&file).with_context(|| {
+        format!(
+            "no such persona: {id} — available: {}",
+            available_ids(&root.join("_personas"), "persona.json")
+        )
+    })?;
     serde_json::from_str(&body)
         .with_context(|| format!("unparseable persona record {}", file.display()))
+}
+
+/// Subdirectory ids holding a `<marker>` record, comma-joined — the
+/// available choices for a "no such <record>" error.
+fn available_ids(dir: &Path, marker: &str) -> String {
+    let mut ids: Vec<String> = fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|e| e.path().join(marker).is_file())
+                .filter_map(|e| e.file_name().to_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    ids.sort();
+    if ids.is_empty() {
+        "(none defined)".to_string()
+    } else {
+        ids.join(", ")
+    }
 }
 
 /// Resolve the environment record: the named one, else the default-flagged
@@ -163,8 +187,12 @@ fn load_environment(root: &Path, id: Option<&str>) -> Result<Option<Json>> {
     if let Some(id) = id {
         safe_record_id(id, "environment")?;
         let file = root.join("_environments").join(id).join("environment.json");
-        let body = fs::read_to_string(&file)
-            .with_context(|| format!("no such environment: {id} ({})", file.display()))?;
+        let body = fs::read_to_string(&file).with_context(|| {
+            format!(
+                "no such environment: {id} — available: {}",
+                available_ids(&root.join("_environments"), "environment.json")
+            )
+        })?;
         return serde_json::from_str(&body)
             .with_context(|| format!("unparseable environment record {}", file.display()))
             .map(Some);
@@ -418,6 +446,29 @@ mod tests {
             .to_string()
             .contains("no such persona"));
         std::env::remove_var("AGENT_QA_SCENARIOS_DIR");
+    }
+
+    #[test]
+    fn unknown_persona_names_the_available_ids() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        write_persona(tmp.path(), "admin-user", json!({"schema": "persona/1"}));
+        write_persona(tmp.path(), "viewer", json!({"schema": "persona/1"}));
+        let err = load_persona(tmp.path(), "admni").unwrap_err().to_string();
+        assert!(err.contains("no such persona: admni"), "{err}");
+        assert!(err.contains("admin-user, viewer"), "{err}");
+    }
+
+    #[test]
+    fn unknown_environment_names_the_available_ids() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        write_environment(tmp.path(), "staging", json!({"schema": "env/1"}));
+        let err = load_environment(tmp.path(), Some("prod"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no such environment: prod"), "{err}");
+        assert!(err.contains("staging"), "{err}");
     }
 
     #[test]
