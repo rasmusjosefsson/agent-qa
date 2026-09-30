@@ -329,6 +329,26 @@ native dialog from the contextmenu handler, resolve it with the usual
   "on": { "role": "button", "name": "Actions" } }
 ```
 
+### Dismissing overlays
+
+`do/dismiss` removes every node matching `on` — for consent walls, modal
+backdrops, sticky banners, and CMP dialogs that sit on top of the page and
+swallow clicks. It needs a raw `css`/`testId`/`xpath` locator (role locators
+can't lower to a re-runnable selector):
+
+```json
+{ "id": "s2", "intent": "dismiss the consent wall", "kind": "do", "verb": "dismiss",
+  "on": { "raw": { "kind": "css", "value": ".fc-dialog-overlay, .consent-wall" }, "reason": "CMP overlay" } }
+```
+
+Beyond removing matches at dispatch, the selector stays on a per-run
+dismissal list: before every later interactive step (click, type, select,
+drag, …) the runner removes matching nodes again — so an overlay that mounts
+*after* the dismiss step still can't intercept the hit-test. The list
+persists across navigations (CMP banners re-mount per page until accepted)
+and absent matches are a no-op, so a dismiss step is safe to leave in even
+when the site doesn't always show the wall.
+
 ### Downloads and file claims
 
 `do/download` clicks a trigger (`on` locator) and saves the browser download
