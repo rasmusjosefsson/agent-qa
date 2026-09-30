@@ -2312,6 +2312,7 @@ fn cli_all(
     jobs: u32,
 ) -> Result<u8> {
     let root = crate::paths::scenarios_root();
+    let total = crate::scenario_cli::all_sids(&root, None).len();
     let mut sids = crate::scenario_cli::all_sids(&root, filter);
     if !tags.is_empty() {
         sids.retain(|sid| scenario_has_any_tag(&root, sid, tags));
@@ -2325,7 +2326,16 @@ fn cli_all(
             .collect();
     }
     if sids.is_empty() {
-        bail!("replay --all: no scenarios under {}", root.display());
+        if total == 0 {
+            bail!("replay --all: no scenarios under {}", root.display());
+        }
+        bail!(
+            "replay --all: selection matched 0 of {total} scenario(s) under {} — filter={:?} tags={:?} shard={:?}",
+            root.display(),
+            filter,
+            tags,
+            shard
+        );
     }
     eprintln!(
         "[v2-replay] --all{}: {} scenario(s){}",
@@ -5836,5 +5846,34 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         assert_eq!(opts.browser_profile.as_deref(), Some("/tmp/qa-prof"));
         let opts = parse_args(&["./j.json".into()]).unwrap();
         assert!(opts.browser_profile.is_none());
+    }
+
+    #[test]
+    fn cli_all_names_which_stage_emptied_the_selection() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("scenarios");
+        let prev = env::var(crate::paths::SCENARIOS_DIR_ENV).ok();
+        env::set_var(crate::paths::SCENARIOS_DIR_ENV, &root);
+        for sid in ["aaa", "bbb"] {
+            let d = root.join(sid);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("scenario.json"), "{}").unwrap();
+        }
+        // Scenarios exist but the filter matches none — the error must
+        // point at the selection, not the root.
+        let err = cli_all(&[], 1, None, Some("zzz"), &[], None, 1, 1)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("selection matched 0 of 2"), "{err}");
+        fs::remove_dir_all(&root).unwrap();
+        let err = cli_all(&[], 1, None, None, &[], None, 1, 1)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no scenarios under"), "{err}");
+        match prev {
+            Some(v) => env::set_var(crate::paths::SCENARIOS_DIR_ENV, v),
+            None => env::remove_var(crate::paths::SCENARIOS_DIR_ENV),
+        }
     }
 }
