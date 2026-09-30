@@ -88,4 +88,11 @@
     });
     return origSend.call(this, body);
   };
+
+  // Beacon so the content script (and on record:stop, the export bundle)
+  // can tell capture is armed — a CSP-strict page blocks the <script src>
+  // injection and without this the bundle silently exports network: [].
+  try {
+    window.postMessage({ __aqNetReady: true }, "*");
+  } catch {}
 })();

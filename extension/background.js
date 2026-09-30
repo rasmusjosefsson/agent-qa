@@ -68,6 +68,15 @@ async function handle(msg, sender) {
     const s = await getSession(tabId);
     if (s) {
       s.network.push(msg.entry);
+      s.netReady = true; // a delivered entry implies the patch is armed
+      persist(tabId);
+    }
+    return undefined;
+  }
+  if (msg.t === "netReady" && tabId != null) {
+    const s = await getSession(tabId);
+    if (s && msg.ready !== false) {
+      s.netReady = true;
       persist(tabId);
     }
     return undefined;
@@ -119,6 +128,15 @@ async function handle(msg, sender) {
       if (s.captureDead) {
         bundle.warnings.push("capture was still dead at stop — the tail is missing");
       }
+    }
+    // Steps captured but the page-world network patch never reported —
+    // the <script src=chrome-extension://> injection is blockable by the
+    // page's CSP, so a strict site exports network: [] with no signal.
+    if (s.steps.length && !s.netReady) {
+      (bundle.warnings ||= []).push(
+        "network capture never armed on this page (CSP-blocked injection) — " +
+          "steps recorded, but no HAR data; --mock-from replay is unavailable",
+      );
     }
     const host = safeHost(s.url) || "page";
     const stamp = s.startedAt.replace(/[:.]/g, "-").slice(0, 19);
