@@ -254,3 +254,21 @@ export function fileTree(src) {
   }
   return `<figure class="aqa-tree not-content" aria-label="Directory layout">${render(root)}</figure>`
 }
+
+// ── Single-line "a → b → c" blocks: a numbered step strip ───────────────
+export function isArrowChain(src) {
+  const lines = src.trim().split("\n")
+  return lines.length === 1 && lines[0].split(" → ").length > 2
+}
+
+export function stepStrip(src) {
+  const steps = src.trim().split(" → ")
+  const looksLiteral = (s) => /[:/.]/.test(s) // URLs, paths → mono chip
+  const items = steps
+    .map(
+      (s, i) =>
+        `<li><span class="strip-n">${i + 1}</span><span class="${looksLiteral(s) ? "strip-code" : "strip-text"}">${esc(s)}</span></li>`,
+    )
+    .join("")
+  return `<figure class="aqa-strip not-content" aria-label="${esc(steps.join(", then "))}"><ol>${items}</ol></figure>`
+}

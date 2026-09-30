@@ -348,3 +348,69 @@
   font: 0.76rem var(--aqa-font-sans);
   color: var(--aqa-muted-fg);
 }
+
+/* Step strips ("a → b → c" one-liners, rendered by stepStrip()). */
+.aqa-strip {
+  margin: 1.5rem 0;
+}
+.aqa-strip ol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.aqa-strip li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0.45rem 0.8rem 0.45rem 0.45rem;
+  border-radius: 12px;
+  border: 1px solid var(--aqa-border-strong);
+  background: var(--aqa-card);
+  font-size: 0.85rem;
+  color: var(--aqa-fg);
+}
+.aqa-strip li {
+  position: relative;
+}
+.aqa-strip li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  right: -0.95rem;
+  top: calc(50% - 0.25rem);
+  width: 0.45rem;
+  height: 0.45rem;
+  border-top: 2px solid var(--aqa-brand);
+  border-right: 2px solid var(--aqa-brand);
+  transform: rotate(45deg);
+  flex: none;
+}
+.aqa-strip li:not(:last-child) {
+  margin-right: 0.9rem;
+}
+.aqa-strip li:last-child {
+  border-color: color-mix(in oklab, var(--aqa-brand) 45%, var(--aqa-border-strong));
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--aqa-brand) 12%, transparent);
+}
+.strip-n {
+  display: grid;
+  place-items: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  flex: none;
+  border-radius: 7px;
+  font: 600 0.72rem var(--aqa-font-mono);
+  color: white;
+  background: linear-gradient(135deg, var(--aqa-brand), color-mix(in oklab, var(--aqa-brand) 55%, var(--aqa-brand-3)));
+}
+.strip-code {
+  font: 0.8rem var(--aqa-font-mono);
+  color: color-mix(in oklab, var(--aqa-brand) 65%, var(--aqa-fg));
+}
+.strip-text {
+  font-weight: 550;
+}

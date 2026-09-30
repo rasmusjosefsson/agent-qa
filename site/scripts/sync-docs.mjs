@@ -6,7 +6,7 @@
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { dirname, join, posix } from "node:path"
 import { fileURLToPath } from "node:url"
-import { DIAGRAMS, fileTree, isAsciiTree } from "./diagrams.mjs"
+import { DIAGRAMS, fileTree, isArrowChain, isAsciiTree, stepStrip } from "./diagrams.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repo = join(here, "..", "..")
@@ -55,6 +55,7 @@ function transform(src, description) {
     const designed = DIAGRAMS.find((d) => src.includes(d.match))
     if (designed) return designed.render()
     if (isAsciiTree(src)) return fileTree(src)
+    if (!lang && isArrowChain(src)) return stepStrip(src)
     if (lang !== "mermaid") return block
     const escaped = src.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     return `<pre class="mermaid not-content">${escaped}</pre>`
