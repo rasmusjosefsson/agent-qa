@@ -13,6 +13,7 @@ use anyhow::{anyhow, bail, Context, Result};
 
 use crate::scenario::{InputDecl, InputType, Locator, Scenario, Step, Value};
 use crate::schema;
+use crate::sidecar::atomic_write_file;
 
 pub fn run(args: &[String]) -> Result<u8> {
     // `-h|--help` anywhere wins over positional parsing — otherwise a
@@ -920,7 +921,7 @@ fn new(path: &Path, force: bool, url: &str, intent: &str) -> Result<u8> {
     }
     let mut bytes = serde_json::to_string_pretty(&body)?.into_bytes();
     bytes.push(b'\n');
-    fs::write(path, &bytes).with_context(|| format!("write {}", path.display()))?;
+    atomic_write_file(path, &bytes)?;
     println!("wrote {} ({} bytes)", path.display(), bytes.len());
     Ok(0)
 }
@@ -1051,7 +1052,7 @@ fn new_from_har(path: &Path, har_path: &Path, force: bool, intent: &str) -> Resu
     }
     let mut bytes = serde_json::to_string_pretty(&body)?.into_bytes();
     bytes.push(b'\n');
-    fs::write(path, &bytes).with_context(|| format!("write {}", path.display()))?;
+    atomic_write_file(path, &bytes)?;
     println!(
         "wrote {} ({} bytes) — {} navigation(s); replay it against the captured backend with `replay <sid> --mock-from {} --offline`",
         path.display(),
@@ -1123,7 +1124,7 @@ fn insert(
         .context("scenario with the inserted step failed schema validation")?;
     let mut bytes = serde_json::to_string_pretty(&body)?.into_bytes();
     bytes.push(b'\n');
-    fs::write(path, &bytes).with_context(|| format!("write {}", path.display()))?;
+    atomic_write_file(path, &bytes)?;
     println!(
         "inserted {kind_arg} step at {pos} (id={step_id}); {} step(s)",
         sc.steps.len()
@@ -1316,7 +1317,7 @@ fn redact(
     }
     let mut bytes = serde_json::to_string_pretty(&body)?.into_bytes();
     bytes.push(b'\n');
-    fs::write(path, &bytes).with_context(|| format!("write {}", path.display()))?;
+    atomic_write_file(path, &bytes)?;
     println!(
         "redacted {upgraded} step value(s) → input:{name} + {swept} embedded occurrence(s) → {token}; \
          declared inputs.{name} (sensitive). Supply it at replay: replay --input {name}=…"
@@ -1362,8 +1363,10 @@ fn copy(from_sid: &str, to_sid: &str) -> Result<u8> {
         obj.insert("id".into(), serde_json::Value::String(to_sid.to_string()));
     }
     let patched = serde_json::to_string_pretty(&parsed)?;
-    fs::write(to_dir.join("scenario.json"), format!("{patched}\n"))
-        .with_context(|| format!("write {}", to_dir.join("scenario.json").display()))?;
+    atomic_write_file(
+        &to_dir.join("scenario.json"),
+        format!("{patched}\n").as_bytes(),
+    )?;
     let copied = copy_scenario_assets(&from_dir, &to_dir)?;
     println!(
         "copied: {} → {}\nid: {:?} → {:?}\n(replays not copied; {} asset(s) copied)",
@@ -1560,11 +1563,10 @@ fn extract(
         }
     }
     schema::validate_value(&parsed).context("extracted scenario failed schema validation")?;
-    fs::write(
-        to_dir.join("scenario.json"),
-        format!("{}\n", serde_json::to_string_pretty(&parsed)?),
-    )
-    .with_context(|| format!("write {}", to_dir.join("scenario.json").display()))?;
+    atomic_write_file(
+        &to_dir.join("scenario.json"),
+        format!("{}\n", serde_json::to_string_pretty(&parsed)?).as_bytes(),
+    )?;
     let copied_assets = copy_scenario_assets(&from_dir, &to_dir)?;
 
     if json {
@@ -1652,8 +1654,7 @@ fn rename(from_sid: &str, to_sid: &str) -> Result<u8> {
         .unwrap_or_default();
     obj.insert("id".into(), serde_json::Value::String(to_sid.to_string()));
     let patched = serde_json::to_string_pretty(&parsed)?;
-    fs::write(&scenario_file, format!("{patched}\n"))
-        .with_context(|| format!("write {}", scenario_file.display()))?;
+    atomic_write_file(&scenario_file, format!("{patched}\n").as_bytes())?;
 
     // 2) Move the directory.
     fs::rename(&from_dir, &to_dir)
@@ -1738,8 +1739,7 @@ fn tag(sid: &str, add: &[String], remove: &[String], json_out: bool) -> Result<u
         );
     }
     let patched = serde_json::to_string_pretty(&parsed)?;
-    fs::write(&scenario_file, format!("{patched}\n"))
-        .with_context(|| format!("write {}", scenario_file.display()))?;
+    atomic_write_file(&scenario_file, format!("{patched}\n").as_bytes())?;
 
     if json_out {
         println!("{}", serde_json::to_string(&tags)?);
