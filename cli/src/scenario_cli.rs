@@ -1079,6 +1079,14 @@ fn insert(
         bail!("pass --after or --at, not both");
     }
     let mut sc = load_scenario(path)?;
+    // Editing a scenario a live recording has loaded silently loses this
+    // splice at the next flush — the buffer copy wins.
+    if let Some(steps) = bound_recording_steps(&sc.id)? {
+        eprintln!(
+            "warning: {:?} is bound to the active recording ({steps} step(s)) — `buffer load` again after editing, or the next flush will overwrite this change",
+            sc.id
+        );
+    }
     let kind = crate::record_step::StepKind::parse(kind_arg)?;
     let pos = match (after, at) {
         (Some(id), None) => {
@@ -1194,6 +1202,14 @@ fn redact(
     }
     let token = format!("{{{{vars.{name}}}}}");
     let mut sc = load_scenario(path)?;
+    if !dry_run {
+        if let Some(steps) = bound_recording_steps(&sc.id)? {
+            eprintln!(
+                "warning: {:?} is bound to the active recording ({steps} step(s)) — `buffer load` again after editing, or the next flush will overwrite this change",
+                sc.id
+            );
+        }
+    }
     let mut upgraded = 0usize;
     let mut swept = 0usize;
     for step in sc.steps.iter_mut() {
@@ -1605,6 +1621,14 @@ fn rename(from_sid: &str, to_sid: &str) -> Result<u8> {
             to_dir.display()
         );
     }
+    // Renaming a bound scenario orphans the live buffer's sid — flush
+    // would recreate the old dir as a zombie.
+    if let Some(steps) = bound_recording_steps(from_sid)? {
+        bail!(
+            "scenario rename: {from_sid:?} is bound to the active recording \
+             ({steps} step(s)) — `flush` it, or `start --force` to abandon it",
+        );
+    }
     let scenario_file = from_dir.join("scenario.json");
     if !scenario_file.is_file() {
         bail!(
@@ -1683,6 +1707,12 @@ fn tag(sid: &str, add: &[String], remove: &[String], json_out: bool) -> Result<u
             }
         }
         return Ok(0);
+    }
+
+    if let Some(steps) = bound_recording_steps(sid)? {
+        eprintln!(
+            "warning: {sid:?} is bound to the active recording ({steps} step(s)) — `buffer load` again after editing, or the next flush will overwrite this change"
+        );
     }
 
     for t in add {
@@ -1804,6 +1834,12 @@ fn refuse_if_in_flight(verb: &str, sid: &str) -> Result<()> {
     );
 }
 
+/// Shorthand for the bound-recording check shared by the scenario
+/// mutators (delete/rename refuse; in-place edits warn).
+fn bound_recording_steps(sid: &str) -> Result<Option<usize>> {
+    crate::recorder_state::RecorderState::bound_steps(sid)
+}
+
 fn delete(sid: &str, confirmed: bool) -> Result<u8> {
     if sid.is_empty() || sid.contains('/') || sid.contains('\\') || sid.starts_with('.') {
         bail!("scenario delete: sid {sid:?} must be non-empty, slash-free, non-dotfile");
@@ -1811,6 +1847,15 @@ fn delete(sid: &str, confirmed: bool) -> Result<u8> {
     let dir = crate::paths::scenario_dir(sid)?;
     if !dir.is_dir() {
         bail!("scenario delete: not found at {}", dir.display());
+    }
+    // Deleting the scenario an active recording loaded (or owns) orphans
+    // the live buffer — and flush would then recreate the dir as a
+    // zombie. Refuse while the state file points at this sid.
+    if let Some(steps) = bound_recording_steps(sid)? {
+        bail!(
+            "scenario delete: {sid:?} is bound to the active recording \
+             ({steps} step(s)) — `flush` it, or `start --force` to abandon it",
+        );
     }
     refuse_if_in_flight("delete", sid)?;
     let replays = crate::paths::run_dirs(&dir.join("replays")).len();
@@ -6519,6 +6564,47 @@ mod tests {
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    #[test]
+    fn delete_refuses_the_active_recordings_source() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        let prev_record = std::env::var(crate::paths::RECORD_DIR_ENV).ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        std::env::set_var(crate::paths::RECORD_DIR_ENV, tmp.path().join("record"));
+        let d = tmp.path().join("sid");
+        fs::create_dir_all(&d).unwrap();
+        fs::write(
+            d.join("scenario.json"),
+            r#"{"schema":"scenario/2","id":"sid","intent":"x","steps":[]}"#,
+        )
+        .unwrap();
+        // A recording loaded `sid` into its buffer (source_ref) — deleting
+        // it would orphan the live state and let flush recreate a zombie.
+        crate::recorder_state::RecorderState::new(
+            "live".into(),
+            "record".into(),
+            "session".into(),
+            crate::recorder_state::RecorderBaseline::Fresh,
+            Some("sid".into()),
+            crate::browser::BrowserConnection::default(),
+        )
+        .save()
+        .unwrap();
+        let err = delete("sid", true).unwrap_err().to_string();
+        assert!(err.contains("bound to the active recording"), "{err}");
+        assert!(d.is_dir());
+        crate::recorder_state::RecorderState::clear().unwrap();
+        match prev {
+            Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+        match prev_record {
+            Some(v) => std::env::set_var(crate::paths::RECORD_DIR_ENV, v),
+            None => std::env::remove_var(crate::paths::RECORD_DIR_ENV),
         }
     }
 

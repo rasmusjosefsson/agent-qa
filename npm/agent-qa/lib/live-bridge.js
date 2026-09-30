@@ -129,6 +129,9 @@ function createLiveBridge({
   fetchImpl = globalThis.fetch,
   captureMs = 300,
   reconnectMs = 500,
+  // How long a single captureScreenshot may be outstanding before the
+  // watchdog assumes the response was lost (and counts toward 'stale').
+  captureWatchdogMs = 2000,
   logger = () => {},
   // How long a recorded click waits for a downloadWillBegin before it is
   // committed as a plain `do/click`. 0 disables the suppression window.
@@ -171,6 +174,11 @@ function createLiveBridge({
   // Last viewport size recorded this connection — dedupes the debounced
   // resize stream (a settle burst would otherwise emit repeat steps).
   let lastViewport = null;
+  // Consecutive captures lost to the renderer-side watchdog — an open
+  // socket with a hung renderer otherwise retries forever while the pane
+  // shows a stale frame with no signal.
+  let lostCaptures = 0;
+  let staleAnnounced = false;
 
   // Reads the focused field's accessible label + current value so typing can
   // be recorded as one fillByLabel step instead of per-keystroke noise.
@@ -364,8 +372,14 @@ function createLiveBridge({
     // Watchdog: if a capture has been outstanding too long, assume the
     // response was lost and let polling resume rather than stalling forever.
     if (capturing) {
-      if (Date.now() - captureSentAt > 2000) capturing = false;
-      else return;
+      if (Date.now() - captureSentAt > captureWatchdogMs) {
+        capturing = false;
+        lostCaptures += 1;
+        if (lostCaptures >= 3 && !staleAnnounced) {
+          staleAnnounced = true;
+          broadcastEvent('stale', { lost: lostCaptures });
+        }
+      } else return;
     }
     capturing = true;
     captureSentAt = Date.now();
@@ -407,6 +421,8 @@ function createLiveBridge({
     recordedFrameChain = [];
     ctxFrames.clear();
     lastViewport = null;
+    lostCaptures = 0;
+    staleAnnounced = false;
     for (const { reject } of calls.values()) {
       try {
         reject(new Error('live browser disconnected'));
@@ -491,6 +507,15 @@ function createLiveBridge({
     pending.delete(msg.id);
     if (kind === 'capture') {
       capturing = false;
+      // Any capture response means the renderer is alive — clear the
+      // stale streak and tell the pane the stream recovered.
+      if (lostCaptures || staleAnnounced) {
+        lostCaptures = 0;
+        if (staleAnnounced) {
+          staleAnnounced = false;
+          broadcastEvent('fresh', {});
+        }
+      }
       const data = msg.result && msg.result.data;
       if (data) broadcast(data);
     } else if (kind === 'metrics') {
