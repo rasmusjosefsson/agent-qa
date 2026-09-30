@@ -292,7 +292,19 @@
     "golden:ac:tc03": "bun golden/ac-tc03.ts",
     "golden:ac:tc04": "bun golden/ac-tc04.ts",
     "golden:lambdatest:tc01": "bun golden/lambdatest-tc01.ts",
-    "golden:lambdatest:tc02": "bun golden/lambdatest-tc02.ts"
+    "golden:lambdatest:tc02": "bun golden/lambdatest-tc02.ts",
+    "golden:let:tc01": "bun golden/let-tc01.ts",
+    "golden:let:tc02": "bun golden/let-tc02.ts",
+    "golden:let:tc03": "bun golden/let-tc03.ts",
+    "golden:let:tc04": "bun golden/let-tc04.ts",
+    "golden:let2:tc01": "bun golden/let2-tc01.ts",
+    "golden:let2:tc02": "bun golden/let2-tc02.ts",
+    "golden:let2:tc03": "bun golden/let2-tc03.ts",
+    "golden:let2:tc04": "bun golden/let2-tc04.ts",
+    "golden:let3:tc01": "bun golden/let3-tc01.ts",
+    "golden:let3:tc02": "bun golden/let3-tc02.ts",
+    "golden:let3:tc03": "bun golden/let3-tc03.ts",
+    "golden:let3:tc04": "bun golden/let3-tc04.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"
