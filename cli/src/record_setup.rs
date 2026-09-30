@@ -19,6 +19,7 @@ pub fn run(args: &[String]) -> Result<u8> {
         bail!("usage: record-setup <env-op-json>|-");
     }
     let raws: Vec<Json> = if args[0] == "-" {
+        crate::io::ensure_stdin_piped("env-op drafts")?;
         let stdin = std::io::read_to_string(std::io::stdin()).context("read stdin")?;
         crate::record_step::parse_stdin_drafts(&stdin).context("record-setup stdin")?
     } else {
