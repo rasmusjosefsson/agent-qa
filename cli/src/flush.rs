@@ -492,6 +492,12 @@ fn flush(
     auto_secrets: bool,
 ) -> Result<Summary> {
     let mut state = RecorderState::load_active()?;
+    if state.steps.is_empty() {
+        bail!(
+            "nothing recorded for {:?} — the buffer has 0 steps, so flush would write a scenario that replays nothing. Capture steps first (`record status` shows the buffer); `start --force` abandons the recording if it was a false start.",
+            state.sid
+        );
+    }
     if auto_shots {
         insert_auto_shot_claims(&mut state.steps);
     }
@@ -608,6 +614,34 @@ mod tests {
         assert_eq!(scenario["steps"][1]["kind"], "check");
         assert_eq!(scenario["producedBy"]["sourceRef"], "change:123");
         assert!(!paths::record_state_file().exists());
+        std::env::remove_var(paths::SCENARIOS_DIR_ENV);
+        std::env::remove_var(paths::RECORD_DIR_ENV);
+        std::env::remove_var("AGENT_QA_RECORD_SKIP_SIDECARS");
+    }
+
+    #[test]
+    fn flush_refuses_an_empty_buffer() {
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var(paths::SCENARIOS_DIR_ENV, tmp.path());
+        std::env::set_var(paths::RECORD_DIR_ENV, tmp.path().join("record"));
+        std::env::set_var("AGENT_QA_RECORD_SKIP_SIDECARS", "1");
+        let state = RecorderState::new(
+            "emptysid".into(),
+            "false start".into(),
+            "default".into(),
+            RecorderBaseline::Fresh,
+            None,
+            BrowserConnection::default(),
+        );
+        state.save().unwrap();
+
+        let err = flush(false, false, false, false).unwrap_err().to_string();
+        assert!(err.contains("nothing recorded"), "unexpected error: {err}");
+        // The recording stays active — the operator can still capture or abandon.
+        assert!(paths::record_state_file().exists());
+        // And no scenario directory leaked.
+        assert!(!tmp.path().join("emptysid").exists());
         std::env::remove_var(paths::SCENARIOS_DIR_ENV);
         std::env::remove_var(paths::RECORD_DIR_ENV);
         std::env::remove_var("AGENT_QA_RECORD_SKIP_SIDECARS");
