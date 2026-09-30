@@ -120,6 +120,19 @@ impl RecorderState {
         })
     }
 
+    /// Step count of the active recording bound to `sid` (its own sid or
+    /// the scenario it loaded via `buffer load` / `record continue`), if
+    /// any. Mutating a bound scenario risks being overwritten by the next
+    /// flush — or orphaning the live buffer entirely.
+    pub(crate) fn bound_steps(sid: &str) -> Result<Option<usize>> {
+        Ok(match Self::try_load_active()? {
+            Some(state) if state.sid == sid || state.source_ref.as_deref() == Some(sid) => {
+                Some(state.steps.len())
+            }
+            _ => None,
+        })
+    }
+
     /// The session name of the in-flight recording, if any — without the
     /// `set_connection` env side effect `try_load_active` performs. For
     /// guards that only need to know *which* session is busy.
