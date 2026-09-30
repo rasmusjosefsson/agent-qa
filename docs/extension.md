@@ -41,6 +41,8 @@ What it captures per interaction:
 | change on select | `do/select` with the option value |
 | checkbox/radio toggle | `do/check` / `do/uncheck` |
 | Enter inside an input | `do/press` `Enter` |
+| Escape (dismissal) | `do/press` `Escape` |
+| arrow/Home/End/PageUp/PageDown on a slider/tab/listbox/menu/radio/range widget | `do/press` with the key |
 | every fetch/XHR | `{url, method, status, body, postData, startedAt, durationMs}` (bodies capped at 256KB) |
 
 **Not captured (v1):** native file pickers, `alert()`/`confirm()`/

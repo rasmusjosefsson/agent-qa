@@ -1334,6 +1334,7 @@ fn emulate_apply(
         "permissions",
         "timezone",
         "locale",
+        "touch",
     ];
     for k in params.keys() {
         if !KEYS.contains(&k.as_str()) {
@@ -1388,6 +1389,11 @@ fn emulate_apply(
                         .map_err(|e| anyhow!("set offline off: {e}"))?;
                     Ok(true)
                 }
+                "touch" => crate::cdp::emulate_override(
+                    session,
+                    "Emulation.setTouchEmulationEnabled",
+                    serde_json::json!({ "enabled": false }),
+                ),
                 "credentials" => bail!(
                     "emulate credentials off is unsupported — start a fresh run (--fresh-browser)"
                 ),
@@ -1500,6 +1506,35 @@ fn emulate_apply(
                 .map_err(|e| anyhow!("resolve page origin: {e}"))?;
             crate::cdp::grant_permissions(session, &refs, origin.as_deref())
                 .map_err(|e| anyhow!("grant permissions {names:?}: {e}"))?;
+        }
+    }
+    // Touch rides the same pooled flat-session Emulation.* path:
+    // sites gate on navigator.maxTouchPoints / 'ontouchstart' — a
+    // desktop headless context reports 0 and mobile-only UX never
+    // engages. `touch: true` enables the default 5 points; a number
+    // sets the count; `touch: "off"` clears.
+    if let Some(v) = params.get("touch") {
+        let max: i64 = match v {
+            Json::Bool(true) => 5,
+            Json::Bool(false) => {
+                bail!("params.touch false — use \"off\" to clear the touch override")
+            }
+            Json::Number(n) => n
+                .as_i64()
+                .ok_or_else(|| anyhow!("params.touch must be a whole-number touch count"))?,
+            Json::String(_) => subst(v, scope)?
+                .parse::<i64>()
+                .map_err(|_| anyhow!("params.touch must be true or a whole-number touch count"))?,
+            _ => bail!("params.touch must be true or a whole-number touch count"),
+        };
+        if !crate::cdp::emulate_override(
+            session,
+            "Emulation.setTouchEmulationEnabled",
+            serde_json::json!({ "enabled": true, "maxTouchPoints": max }),
+        )
+        .map_err(|e| anyhow!("set touch override: {e}"))?
+        {
+            bail!("emulate touch needs a page target — place the step after a goto");
         }
     }
     // Timezone + locale have no `set` subcommand in agent-browser —
@@ -4410,5 +4445,54 @@ mod tests {
         .unwrap_err();
         clear_fake();
         assert!(err.to_string().contains("fresh-browser"), "got: {err}");
+    }
+
+    #[test]
+    fn emulate_touch_off_is_quiet_without_a_page() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake_eval_true(tmp.path(), &tmp.path().join("ab.log"));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(
+            &parse(json!({
+                "id": "s1", "intent": "x", "kind": "do", "verb": "emulate",
+                "params": { "touch": "off" }
+            })),
+            &ctx,
+            &mut scope,
+        )
+        .unwrap();
+        clear_fake();
+    }
+
+    #[test]
+    fn emulate_touch_false_points_at_off() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        install_fake_eval_true(tmp.path(), &tmp.path().join("ab.log"));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        let err = dispatch_do(
+            &parse(json!({
+                "id": "s1", "intent": "x", "kind": "do", "verb": "emulate",
+                "params": { "touch": false }
+            })),
+            &ctx,
+            &mut scope,
+        )
+        .unwrap_err();
+        clear_fake();
+        assert!(err.to_string().contains("\"off\""), "got: {err}");
     }
 }
