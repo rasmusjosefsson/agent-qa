@@ -1,0 +1,22 @@
+{
+  "name": "agent-qa-site",
+  "description": "Marketing + docs site for agent-qa",
+  "scripts": {
+    "sync": "node scripts/sync-docs.mjs",
+    "dev": "npm run sync && astro dev",
+    "build": "npm run sync && astro build",
+    "preview": "astro preview"
+  },
+  "type": "module",
+  "dependencies": {
+    "@astrojs/starlight": "^0.42.4",
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
+    "astro": "^7.3.5",
+    "mermaid": "^12.0.0"
+  },
+  "private": true,
+  "devDependencies": {
+    "simple-icons": "^16.33.0"
+  }
+}

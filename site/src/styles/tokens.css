@@ -1,0 +1,46 @@
+/* Shared with the workbench redesign (npm/agent-qa/web/src/index.css): cool
+   near-neutral canvas, one indigo brand, cyan + magenta companions used only
+   in gradients. Keyed on html[data-theme] so the landing page and Starlight
+   read the same toggle. Dark is the :root default, like Starlight. */
+:root {
+  --aqa-brand: oklch(0.68 0.19 277);
+  --aqa-brand-2: oklch(0.78 0.13 205);
+  --aqa-brand-3: oklch(0.7 0.2 330);
+  --aqa-bg: oklch(0.155 0.014 275);
+  --aqa-bg-deep: oklch(0.13 0.014 275);
+  --aqa-fg: oklch(0.965 0.005 275);
+  --aqa-card: oklch(0.19 0.016 275);
+  --aqa-muted: oklch(0.225 0.016 275);
+  --aqa-muted-fg: oklch(0.72 0.02 275);
+  --aqa-accent: oklch(0.27 0.045 277);
+  --aqa-border: oklch(1 0 0 / 8%);
+  --aqa-border-strong: oklch(1 0 0 / 14%);
+  --aqa-success: oklch(0.74 0.15 158);
+  --aqa-warning: oklch(0.8 0.14 75);
+  --aqa-destructive: oklch(0.68 0.19 22);
+  --aqa-shadow: 250 60% 3%;
+  --aqa-font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --aqa-font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --aqa-radius: 0.625rem;
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --aqa-brand: oklch(0.56 0.22 277);
+  --aqa-brand-2: oklch(0.72 0.14 205);
+  --aqa-brand-3: oklch(0.64 0.23 330);
+  --aqa-bg: oklch(0.984 0.004 275);
+  --aqa-bg-deep: oklch(0.97 0.006 275);
+  --aqa-fg: oklch(0.2 0.02 275);
+  --aqa-card: oklch(1 0 0);
+  --aqa-muted: oklch(0.962 0.006 275);
+  --aqa-muted-fg: oklch(0.5 0.02 275);
+  --aqa-accent: oklch(0.952 0.022 277);
+  --aqa-border: oklch(0.918 0.008 275);
+  --aqa-border-strong: oklch(0.86 0.012 275);
+  --aqa-success: oklch(0.58 0.15 158);
+  --aqa-warning: oklch(0.66 0.16 62);
+  --aqa-destructive: oklch(0.58 0.22 25);
+  --aqa-shadow: 250 30% 30%;
+  color-scheme: light;
+}

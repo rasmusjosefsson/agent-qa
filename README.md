@@ -182,4 +182,5 @@ Single Rust crate in `cli/`. Cross-compile + npm packaging in
 | `skills/` | Pi/Claude-Code discovery stubs (installed via `npx skills add`) |
 | `test-fixtures/` | CI browser fixture + scenario corpus layout (corpus is empty) |
 | `docs/` | Architecture, plan, plugin author guide |
+| `site/` | Marketing + docs site (Astro Starlight); pages sync from `docs/`. `cd site && npm i && npm run dev` |
 | `examples/plugins/` | Reference plugins |
