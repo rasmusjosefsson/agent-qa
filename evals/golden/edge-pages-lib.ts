@@ -450,14 +450,11 @@ export async function runEdgeGolden(
       await record(ctx, "assert", { kind: "elementAbsent", args: [selector], intent: stepIntent });
     },
     async dragSelector(from, to, stepIntent) {
-      // do/drag synthesizes the full HTML5 gesture in-page — live-probe the
-      // endpoints exist first, then record.
+      // agent-browser drag performs the gesture via trusted mouse input —
+      // the same path do/drag takes at replay — so mouse-tracking widgets
+      // (jQuery UI droppable, react-dnd, resizables) respond in both passes.
       await run(ctx, `drag ${from} → ${to}`, [
-        ctx.agentBrowser,
-        "--session",
-        ctx.session,
-        "eval",
-        `(() => { const f = document.querySelector(${JSON.stringify(from)}); const t = document.querySelector(${JSON.stringify(to)}); if (!f || !t) throw new Error('drag endpoint missing'); ${""} const r = el => { const b = el.getBoundingClientRect(); return [b.x + b.width / 2, b.y + b.height / 2]; }; const [fx, fy] = r(f); const [tx, ty] = r(t); const dt = new DataTransfer(); for (const [type, ev, x, y] of [['dragstart', f, fx, fy], ['dragenter', t, tx, ty], ['dragover', t, tx, ty], ['drop', t, tx, ty], ['dragend', f, fx, fy]]) { ev.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, dataTransfer: dt })); } return 'done'; })()`,
+        ctx.agentBrowser, "--session", ctx.session, "drag", from, to,
       ]);
       await record(ctx, "action", { method: "dragBySelector", args: [from, to], intent: stepIntent });
     },

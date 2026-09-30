@@ -271,6 +271,18 @@ pub(crate) fn parse_draft(kind: StepKind, payload: &Json, step_id: &str) -> Resu
     }
     draft.insert("id".into(), Json::String(step_id.to_string()));
     draft.insert("kind".into(), Json::String(kind.as_str().to_string()));
+    // Validate the RAW draft before serde: `from_value` drops unknown
+    // keys silently — a misplaced `attribute` inside `element` would
+    // parse away and only fail at replay with a misleading predicate
+    // error. Schema `additionalProperties: false` catches it with the
+    // instance path. serde + verb_shape then add their checks.
+    schema::validate_value(&serde_json::json!({
+        "schema": "scenario/2",
+        "id": "recording-validation",
+        "intent": "validate recorded step",
+        "steps": [&draft],
+    }))
+    .context("recorded step failed scenario schema validation")?;
     let step: Step = serde_json::from_value(Json::Object(draft)).with_context(|| {
         match kind {
             StepKind::Do => {
@@ -291,13 +303,6 @@ pub(crate) fn parse_draft(kind: StepKind, payload: &Json, step_id: &str) -> Resu
             kind.as_str()
         ),
     }
-    schema::validate_value(&serde_json::json!({
-        "schema": "scenario/2",
-        "id": "recording-validation",
-        "intent": "validate recorded step",
-        "steps": [step],
-    }))
-    .context("recorded step failed scenario schema validation")?;
     Ok(step)
 }
 
@@ -463,5 +468,31 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("must not contain id"));
+    }
+
+    #[test]
+    fn parse_draft_rejects_stray_keys_inside_locators() {
+        // `attribute` belongs on the element SUBJECT, not inside the
+        // locator — serde used to drop it silently and replay then
+        // failed with a misleading predicate error. The raw-draft
+        // schema pass now refuses it at record time.
+        let err = parse_draft(
+            StepKind::Check,
+            &json!({
+                "intent": "misplaced attr",
+                "claim": {
+                    "subject": {
+                        "element": {"role": "textbox", "name": "Name", "attribute": "value"},
+                        "attribute": "value"
+                    },
+                    "predicate": "equals",
+                    "value": "x"
+                }
+            }),
+            "s0",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("schema"), "expected schema error, got: {err}");
     }
 }
