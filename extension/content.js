@@ -219,17 +219,50 @@
     true
   );
 
+  // Keyboard-driven widgets fire no change/click events — arrow-key
+  // sliders, tab lists, listboxes, Escape-dismissed modals would record
+  // nothing and replay would diverge from the flow the user performed.
+  const WIDGET_ROLES = new Set([
+    "slider",
+    "spinbutton",
+    "tab",
+    "option",
+    "listbox",
+    "menuitem",
+    "treeitem",
+    "radio",
+  ]);
+  const NAV_KEYS = new Set([
+    "ArrowUp",
+    "ArrowDown",
+    "ArrowLeft",
+    "ArrowRight",
+    "Home",
+    "End",
+    "PageUp",
+    "PageDown",
+  ]);
   document.addEventListener(
     "keydown",
     (e) => {
       if (!active || !e.isTrusted) return;
-      if (e.key !== "Enter") return;
       const el = e.composedPath?.()[0] || e.target;
-      if (!el || (el.localName !== "input" && el.localName !== "textarea"))
-        return;
+      const role = el && el.getAttribute && el.getAttribute("role");
+      const widget =
+        (role && WIDGET_ROLES.has(role)) ||
+        (el &&
+          el.localName === "input" &&
+          (el.getAttribute("type") || "").toLowerCase() === "range");
+      const record =
+        e.key === "Escape" ||
+        (NAV_KEYS.has(e.key) && widget) ||
+        (e.key === "Enter" &&
+          (widget ||
+            (el && (el.localName === "input" || el.localName === "textarea"))));
+      if (!record) return;
       send({
         t: "step",
-        item: doDraft("press Enter", "press", { value: literal("Enter") }),
+        item: doDraft(`press ${e.key}`, "press", { value: literal(e.key) }),
       });
     },
     true
