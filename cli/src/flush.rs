@@ -543,6 +543,15 @@ fn flush(
     if auto_shots {
         insert_auto_shot_claims(&mut state.steps);
     }
+    // A replay/crawl in flight on this session would feed its own traffic
+    // into the auto-network claims and the HAR — the scenario asserts on
+    // requests that were never part of the recording.
+    if crate::session_lock::held_by_live_process(&state.session).is_some() {
+        eprintln!(
+            "[v2-flush] warning: a run is in flight on session {:?} — auto-network claims and the HAR may capture that run's traffic",
+            state.session
+        );
+    }
     if auto_network {
         match crate::browser::network_requests(&state.session) {
             Ok(requests) => insert_auto_network_claims(&mut state.steps, &requests),
