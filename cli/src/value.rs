@@ -22,7 +22,7 @@
 //! module scope until the runner lands.
 #![allow(dead_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 use anyhow::{anyhow, bail, Result};
@@ -45,6 +45,9 @@ pub struct ValueScope {
     /// Cache of mint renders, keyed by `<scope>::<template>` (or by name
     /// for input-mints — see [`substitute_scenario_vars`]).
     pub mint_cache: HashMap<String, String>,
+    /// `{{vars.<name>}}` tokens that had no binding — warned once per
+    /// name per run so a typo'd input doesn't spam every step.
+    pub unresolved_warned: HashSet<String>,
 }
 
 impl ValueScope {
@@ -54,6 +57,7 @@ impl ValueScope {
             saved_steps: HashMap::new(),
             loop_vars: HashMap::new(),
             mint_cache: HashMap::new(),
+            unresolved_warned: HashSet::new(),
         }
     }
 }
@@ -166,7 +170,21 @@ pub fn substitute_scenario_vars(s: &str, scope: &mut ValueScope) -> String {
         let resolved = resolve_var_token(name, tail, scope);
         match resolved {
             Some(v) => out.push_str(&v),
-            None => out.push_str(whole.as_str()),
+            None => {
+                // An unbound token passes through verbatim — typing
+                // "{{vars.password}}" into a field is a silent wrong
+                // thing, so warn once per name. A bound-but-null value
+                // still counts as a binding.
+                let bound = name == "_unique"
+                    || scope.saved_steps.contains_key(name)
+                    || scope.inputs.contains_key(name);
+                if !bound && scope.unresolved_warned.insert(name.to_string()) {
+                    eprintln!(
+                        "[v2-replay] warning: {{{{vars.{name}}}}} has no binding — the literal text is used (declare inputs.{name} or fix the token)"
+                    );
+                }
+                out.push_str(whole.as_str());
+            }
         }
     }
     out.push_str(&s[last..]);
@@ -673,6 +691,19 @@ mod tests {
             substitute_scenario_vars("{{vars.unknown}}", &mut sc),
             "{{vars.unknown}}"
         );
+        // …but the miss is tracked for the once-per-run warning.
+        assert!(sc.unresolved_warned.contains("unknown"));
+        // A second miss doesn't re-warn.
+        substitute_scenario_vars("{{vars.unknown}}", &mut sc);
+        assert_eq!(sc.unresolved_warned.len(), 1);
+    }
+
+    #[test]
+    fn substitute_bound_or_special_names_dont_warn() {
+        let mut sc = ValueScope::default();
+        sc.inputs.insert("pw".into(), Json::String("x".into()));
+        substitute_scenario_vars("{{vars.pw}} {{vars._unique}}", &mut sc);
+        assert!(sc.unresolved_warned.is_empty());
     }
 
     #[test]
