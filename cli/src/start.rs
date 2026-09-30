@@ -218,7 +218,10 @@ fn start(opts: &Opts) -> Result<StartSummary> {
             policy: None,
         });
     }
-    state.save()?;
+    // The atomic claim IS the first state write — a second `start`
+    // racing past the try_load_active check fails create_new here
+    // instead of clobbering our in-flight state.
+    state.claim_active()?;
     fs::write(paths::record_last_sid_file(), format!("{sid}\n"))
         .with_context(|| format!("write {}", paths::record_last_sid_file().display()))?;
     // Hermetic capture: seed stubs + write the page-init script BEFORE the

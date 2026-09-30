@@ -131,6 +131,37 @@ impl RecorderState {
         atomic_write_file(&path, &body)
     }
 
+    /// First write of the active-state file, created atomically — the
+    /// atomic answer to "no recording is active". Two `record start`s
+    /// racing past `try_load_active` both see `None`, but only the first
+    /// `create_new` succeeds; the loser's start refuses instead of
+    /// silently orphaning the winner's in-flight recording.
+    pub(crate) fn claim_active(&self) -> Result<()> {
+        let path = paths::record_state_file();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
+        }
+        let mut body = serde_json::to_vec_pretty(self)?;
+        body.push(b'\n');
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::AlreadyExists {
+                    anyhow!(
+                        "another recording claimed {} just now — `record status` shows which; `start --force` abandons it",
+                        path.display()
+                    )
+                } else {
+                    anyhow!(e).context(format!("create {}", path.display()))
+                }
+            })?;
+        use std::io::Write;
+        f.write_all(&body)
+            .with_context(|| format!("write {}", path.display()))
+    }
+
     pub(crate) fn clear() -> Result<()> {
         let path = paths::record_state_file();
         match fs::remove_file(&path) {
@@ -176,6 +207,32 @@ mod tests {
         assert_eq!(loaded.source_ref.as_deref(), Some("opaque-ref"));
         assert_eq!(loaded.env_open.len(), 1);
         assert_eq!(loaded.steps.len(), 1);
+        std::env::remove_var(paths::RECORD_DIR_ENV);
+        std::env::remove_var("AGENT_BROWSER_CDP");
+        std::env::remove_var("AGENT_BROWSER_PIN_TAB");
+    }
+
+    #[test]
+    fn claim_active_refuses_a_second_claim() {
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var(paths::RECORD_DIR_ENV, tmp.path());
+        let mk = |sid: &str| {
+            RecorderState::new(
+                sid.into(),
+                "record".into(),
+                "session".into(),
+                RecorderBaseline::Fresh,
+                None,
+                BrowserConnection::default(),
+            )
+        };
+        mk("s1").claim_active().unwrap();
+        let err = mk("s2").claim_active().unwrap_err().to_string();
+        assert!(err.contains("another recording claimed"), "{err}");
+        // save() still overwrites freely — only the claim is exclusive.
+        mk("s2").save().unwrap();
+        RecorderState::clear().unwrap();
         std::env::remove_var(paths::RECORD_DIR_ENV);
         std::env::remove_var("AGENT_BROWSER_CDP");
         std::env::remove_var("AGENT_BROWSER_PIN_TAB");
