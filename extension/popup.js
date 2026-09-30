@@ -49,6 +49,14 @@ btn.addEventListener("click", async () => {
     const r = await chrome.runtime
       .sendMessage({ t: "popup:stop", tabId })
       .catch(() => null);
+    if (r && r.error) {
+      // Export failed (or nothing was recording) — keep the button in
+      // the state the background reports so a retry stays possible.
+      recording = !!r.recording;
+      paint();
+      meta.textContent = r.error;
+      return;
+    }
     recording = false;
     paint();
     meta.textContent = r

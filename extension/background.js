@@ -129,15 +129,14 @@ async function handle(msg, sender) {
 
   if (msg.t === "popup:stop") {
     const s = await getSession(msg.tabId);
-    sessions.delete(msg.tabId);
-    try {
-      await chrome.storage.session.remove(keyOf(msg.tabId));
-    } catch {}
-    tell(msg.tabId, { t: "record:stop" });
-    chrome.action.setBadgeText({ tabId: msg.tabId, text: "" });
     if (!s) {
       return { error: "nothing was recording" };
     }
+    // Stop capture up front (listeners off, badge cleared) but keep the
+    // session data until the export is confirmed — a failed download
+    // must not take the recorded bundle down with it.
+    tell(msg.tabId, { t: "record:stop" });
+    chrome.action.setBadgeText({ tabId: msg.tabId, text: "" });
     const bundle = {
       version: 1,
       url: s.url,
@@ -172,7 +171,24 @@ async function handle(msg, sender) {
     }
     const host = safeHost(s.url) || "page";
     const stamp = s.startedAt.replace(/[:.]/g, "-").slice(0, 19);
-    download(`agent-qa-${host}-${stamp}.json`, JSON.stringify(bundle, null, 2));
+    const err = await download(
+      `agent-qa-${host}-${stamp}.json`,
+      JSON.stringify(bundle, null, 2),
+    );
+    if (err) {
+      // The session is still persisted — keep reporting "recording" so
+      // the popup's next click re-enters this handler and re-tries the
+      // export against the same bundle instead of starting a fresh
+      // recording over it.
+      return {
+        recording: true,
+        error: `export failed: ${err} — click stop again to retry`,
+      };
+    }
+    sessions.delete(msg.tabId);
+    try {
+      await chrome.storage.session.remove(keyOf(msg.tabId));
+    } catch {}
     return {
       recording: false,
       steps: s.steps.length,
@@ -205,12 +221,24 @@ function safeHost(url) {
   }
 }
 
+// Returns null on success, an error string when the download is
+// rejected (permission revoked, save-as dialog dismissed, quota) —
+// chrome.downloads resolves the callback with the item id or sets
+// runtime.lastError.
 function download(filename, text) {
   const b64 = btoa(unescape(encodeURIComponent(text)));
-  chrome.downloads.download({
-    url: `data:application/json;base64,${b64}`,
-    filename,
-    saveAs: true,
+  return new Promise((resolve) => {
+    chrome.downloads.download(
+      {
+        url: `data:application/json;base64,${b64}`,
+        filename,
+        saveAs: true,
+      },
+      () => {
+        const e = chrome.runtime.lastError;
+        resolve(e ? String(e.message || e) : null);
+      },
+    );
   });
 }
 
