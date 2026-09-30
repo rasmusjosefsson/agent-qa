@@ -311,6 +311,7 @@ mod tests {
             session_name: "default".into(),
             heal_from_run: None,
             headed: false,
+            browser_profile: None,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: false,
