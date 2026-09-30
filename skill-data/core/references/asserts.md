@@ -47,3 +47,13 @@ Every claim is `{"subject": <one of>, "predicate": <pred>}`.
 Predicates (camelCase): `isVisible`, `isHidden`, `isEnabled`, `isDisabled`,
 `isChecked`, `isUnchecked`, `exists`, `notExists`, `equals`, `contains`,
 `matches`, `startsWith`, `endsWith`, `gt`, `gte`, `lt`, `lte`, `countEquals`.
+
+`"attribute": "<name>"` on an `element` subject reads one attribute per
+poll: on raw css/testId locators `text`/`value`/`checked`/`disabled`/
+`selected`/`readOnly`/`required`/`focused`/`style:<prop>` read the live
+IDL property (or getAttribute otherwise); on `role` locators the a11y
+snapshot carries `checked`/`disabled`/`required`/`expanded`/`pressed`/
+`selected`/`readonly`/`current`/`level`/`orientation`/`valuemin`/
+`valuemax`/`valuenow`, plus `value` (the node's `: tail`) and `text`
+(the accessible name). Attributes the a11y tree doesn't carry (`href`,
+`data-*`, ...) need a raw locator.

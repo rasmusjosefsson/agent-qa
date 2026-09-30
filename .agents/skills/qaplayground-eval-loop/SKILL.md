@@ -129,6 +129,44 @@ Site quirks live in the case file, not the lib: credentialed URLs via
 `keepDialogs`, download asserts via `assertFile*`. New script entries go
 into `evals/package.json` as `"golden:<site>:<tc>"`.
 
+### Framework quirks worth reusing
+
+- **AngularJS (globalsqa banking demo)**: the `select` binds a digest late —
+  wait on the select itself before `selectOption`; the submit stays
+  `ng-hide` until the model sets (`waitSelector('button[type=submit]:not(.ng-hide)')`
+  + a ~400ms settle `waitMs`); use `clickSelectorForce` for form submits —
+  a synthetic click can land before `ng-submit` attaches.
+- **SPAs with in-memory state** (coffee-cart): never `open` the SPA again
+  mid-scenario — navigate via in-app link clicks or the state resets.
+  Watch for hidden duplicate controls (e.g. a `ul.cart-preview` shadowing
+  the real row buttons) — scope selectors to the visible container.
+- **`{{vars._unique}}`**: `fillSelector("...{{vars._unique}}")` records the
+  template; replay mints fresh uniqueness per run (registrations, emails).
+- **Below-fold clicks**: `clickSelector`/`checkSelector` auto-scroll +
+  record a scrollTo step via `ensureHittable` (#321) — a recorded scenario
+  never silently misses an offscreen target.
+
+### Sweep skip list (probed, not goldenable)
+
+Don't re-probe these — verified unreachable, bot-gated, or broken:
+
+- `nopcommerce` demos, `demo.opencart.com`, `webdriveruniversity.com` —
+  Cloudflare/robot challenge.
+- `uitestingplayground.com` — `ERR_CERT_COMMON_NAME_INVALID`.
+- `computer-database.gatling.io`, `computer-database.herokuapp.com`,
+  `olympus.realpython.org` — DNS/TLS dead.
+- `seleniumbase.io/demo_page`, `magento.softwaretestingboard.com` — cert
+  / origin errors.
+- `buggy.justtestit.org` — reachable, but its register POST to the AWS
+  API Gateway backend hangs indefinitely (XHR `loadend` never fires); all
+  dynamic content (register/login/overall) is empty. The register submit
+  sits below the fold — the probe was a real-site repro of the
+  hit-test gap fixed by `ensureHittable` in the golden lib.
+- `demo.realworld.io`, `automationintesting.com`, `openlibrary.org`,
+  `demoblaze /signup`, formy `/autocomplete` (Google Places needs a key),
+  formy `/switch` (404), testpages `attributes-test`, `refresh-page-test`,
+  `key-click-events` (404).
+
 ## Done Criteria
 
 - Target suite reports 100% pass.

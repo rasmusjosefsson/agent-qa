@@ -1,4 +1,5 @@
 import { toRecordDraft } from "./record-translate";
+import { clickTrustedOrVisible } from "./visible";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -219,7 +220,7 @@ export async function runFileUploadGolden(
       await record(ctx, "assert", { kind: "absent", args: [role, name], intent: stepIntent });
     },
     async clickSelector(selector, stepIntent) {
-      await run(ctx, `click ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "click", selector]);
+      await clickTrustedOrVisible(ctx, (n, c) => run(ctx, n, c), selector);
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
     async waitLiveSelector(selector, stepIntent) {
@@ -295,6 +296,7 @@ export async function runFileUploadGolden(
     await steps(golden);    await run(ctx, "verify", [ctx.agentQa, "verify"]);
 
     await run(ctx, "flush", [ctx.agentQa, "flush"]);
+    await run(ctx, "check", [ctx.agentQa, "scenario", "check", resolve(ctx.scenariosRoot, sid, "scenario.json")]);
     await run(ctx, "replay", [ctx.agentQa, "replay", sid, "--session", `${ctx.session}-replay`]);
     pass = true;
   } catch (err) {

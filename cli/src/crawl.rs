@@ -413,21 +413,77 @@ fn claim_url_pattern(url: &str) -> String {
 /// by method+URL, capped so a chatty page doesn't drown the draft).
 /// `urlMatches` is a regex — the literal URL is escaped, with volatile
 /// query values wildcarded.
+/// Analytics/telemetry collectors — fire-and-forget beacons the page is
+/// not guaranteed to resend on replay (and whose URLs carry per-visitor
+/// nonces). Claiming them produces drafts that flake on the second run.
+const TELEMETRY_HOSTS: &[&str] = &[
+    "optimizely.com",
+    "google-analytics.com",
+    "googletagmanager.com",
+    "analytics.google.com",
+    "segment.io",
+    "segment.com",
+    "mixpanel.com",
+    "amplitude.com",
+    "hotjar.com",
+    "datadoghq.com",
+    "sentry.io",
+    "newrelic.com",
+    "nr-data.net",
+    "fullstory.com",
+    "logrocket.com",
+    "pendo.io",
+    "heapanalytics.com",
+    "doubleclick.net",
+    "clarity.ms",
+    "bugsnag.com",
+    "intercom.io",
+    "plausible.io",
+    "mouseflow.com",
+    "crazyegg.com",
+    "luckyorange.com",
+    "criteo.com",
+    "adservice.google.com",
+];
+fn is_telemetry_url(url: &str) -> bool {
+    let host = url
+        .split("://")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("");
+    TELEMETRY_HOSTS
+        .iter()
+        .any(|d| host == *d || host.ends_with(&format!(".{d}")))
+/// One `fired` claim per distinct XHR/fetch/websocket/eventsource the
+/// entry page made (deduped by method+URL, capped so a chatty page
+/// doesn't drown the draft). `urlMatches` is a regex — the literal URL
+/// is escaped, with volatile query values wildcarded. `cdpws-*`
+/// socket/stream entries flow in through the same captured list, so
+/// crawls of real-time pages get socket coverage too.
 fn network_claim_steps(reqs: &[crate::browser::CapturedRequest], idx: &mut usize) -> Vec<Value> {
     use std::collections::BTreeSet;
     const CAP: usize = 10;
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
     for r in reqs {
-        let is_api = r
+        let is_live = r
             .resource_type
             .as_deref()
-            .map(|t| matches!(t.to_ascii_lowercase().as_str(), "xhr" | "fetch"))
+            .map(|t| {
+                matches!(
+                    t.to_ascii_lowercase().as_str(),
+                    "xhr" | "fetch" | "websocket" | "eventsource"
+                )
+            })
             .unwrap_or(false);
         if !is_api
             || crate::telemetry::is_telemetry_url(&r.url)
             || !seen.insert((r.method.clone(), r.url.clone()))
         {
+        if !is_live || is_telemetry_url(&r.url) || !seen.insert((r.method.clone(), r.url.clone())) {
             continue;
         }
         if out.len() >= CAP {
@@ -435,6 +491,10 @@ fn network_claim_steps(reqs: &[crate::browser::CapturedRequest], idx: &mut usize
         }
         *idx += 1;
         let escaped = claim_url_pattern(&r.url);
+        // `;` cuts matrix params — Java containers append a volatile
+        // `;jsessionid=<id>` path segment that can't match a fresh run.
+        let url = r.url.split(';').next().unwrap_or(&r.url);
+        let escaped = claim_url_pattern(url);
         out.push(json!({"id":format!("s{}",*idx),"intent":format!("{} {} fired",r.method,r.url),"kind":"check","claim":{"subject":{"network":{"urlMatches":escaped,"method":r.method}},"predicate":"exists"}}));
     }
     out
@@ -521,6 +581,7 @@ mod tests {
             resource_type: rt.map(str::to_string),
             mime_type: None,
             post_data: None,
+            ws_frames: vec![],
         }
     }
 
@@ -531,10 +592,13 @@ mod tests {
             req("https://x/api/u?a=(1)", "GET", Some("xhr")),
             req("https://x/api/u?a=(1)", "GET", Some("fetch")), // dup
             req("https://x/api/save", "POST", Some("fetch")),
+            req("https://x/app;jsessionid=v0latile", "POST", Some("xhr")),
+            req("wss://x/live", "WS", Some("websocket")),
+            req("https://x/events", "GET", Some("eventsource")),
         ];
         let mut idx = 0;
         let steps = network_claim_steps(&reqs, &mut idx);
-        assert_eq!(steps.len(), 2);
+        assert_eq!(steps.len(), 5);
         let m = &steps[0]["claim"]["subject"]["network"];
         // regex-escaped: the literal '?' and parens can't regex-match wild
         assert_eq!(
@@ -547,6 +611,63 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("POST https://x/api/save"));
+        // matrix params are volatile — the matcher drops `;jsessionid=…`
+        assert_eq!(
+            steps[2]["claim"]["subject"]["network"]["urlMatches"]
+                .as_str()
+                .unwrap(),
+            "https://x/app"
+        );
+        // sockets + streams claim their own fired presence
+        let ws = &steps[3]["claim"]["subject"]["network"];
+        assert_eq!(ws["urlMatches"].as_str().unwrap(), "wss://x/live");
+        assert_eq!(ws["method"].as_str().unwrap(), "WS");
+        let sse = &steps[4]["claim"]["subject"]["network"];
+        assert_eq!(sse["urlMatches"].as_str().unwrap(), "https://x/events");
+    }
+
+    #[test]
+    fn network_claim_steps_skips_telemetry_and_wildcards_nonces() {
+        let reqs = vec![
+            // analytics beacon — never claimable, its URL is per-visitor
+            req(
+                "https://298279967.log.optimizely.com/event?a=298279967&u=oeu1790627587045r0.6147464024099908&t=1790627587048",
+                "GET",
+                Some("xhr"),
+            ),
+            // real API call whose token is a nonce — the call is asserted,
+            // the nonce is wildcarded
+            req(
+                "https://api.example.com/items?token=ab12cd34ef56gh78ij90&type=new",
+                "GET",
+                Some("fetch"),
+            ),
+            // a stable query param stays literal
+            req("https://api.example.com/items?page=2", "GET", Some("xhr")),
+        ];
+        let mut idx = 0;
+        let steps = network_claim_steps(&reqs, &mut idx);
+        assert_eq!(steps.len(), 2, "telemetry beacon must be skipped");
+        let m0 = &steps[0]["claim"]["subject"]["network"];
+        assert_eq!(
+            m0["urlMatches"].as_str().unwrap(),
+            "https://api\\.example\\.com/items\\?token=[^&]*&type=new"
+        );
+        let m1 = &steps[1]["claim"]["subject"]["network"];
+        assert_eq!(
+            m1["urlMatches"].as_str().unwrap(),
+            "https://api\\.example\\.com/items\\?page=2"
+        );
+    }
+
+    #[test]
+    fn telemetry_hosts_match_domain_suffixes_only() {
+        assert!(is_telemetry_url("https://log.optimizely.com/e"));
+        assert!(is_telemetry_url("https://sentry.io/api/1/store/"));
+        assert!(is_telemetry_url("https://www.google-analytics.com/collect"));
+        assert!(!is_telemetry_url("https://api.optimizelyx.com/v1"));
+        assert!(!is_telemetry_url("https://my-sentry.internal/health"));
+        assert!(!is_telemetry_url("https://api.example.com/analytics"));
     }
 
     #[test]

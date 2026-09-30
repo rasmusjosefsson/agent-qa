@@ -180,6 +180,13 @@ fn resolve_bin_uncached() -> Result<PathBuf, AgentBrowserError> {
             if path.is_file() {
                 return Ok(path);
             }
+            // A bare command name (e.g. AGENT_BROWSER_BIN=agent-browser) isn't a
+            // file — resolve it through $PATH instead of erroring.
+            if !p.contains('/') && !p.contains('\\') {
+                if let Ok(found) = which(&p) {
+                    return Ok(found);
+                }
+            }
             return Err(AgentBrowserError::BinaryNotFound { env_value: p });
         }
     }
@@ -774,6 +781,10 @@ pub struct CapturedRequest {
     /// POST body when the capture pipeline surfaces it on the list entry.
     #[serde(default)]
     pub post_data: Option<String>,
+    /// WebSocket frames (`{dir,opcode,payload}`) on `cdpws-*` entries —
+    /// absent on plain HTTP entries. Lets claims match frame payloads.
+    #[serde(default)]
+    pub ws_frames: Vec<serde_json::Value>,
 }
 
 fn json_data(verb: &str, stdout: &str) -> Result<serde_json::Value, AgentBrowserError> {
@@ -791,7 +802,9 @@ fn json_data(verb: &str, stdout: &str) -> Result<serde_json::Value, AgentBrowser
 }
 
 /// `agent-browser --json network requests` — captured exchanges in
-/// chronological order.
+/// chronological order, plus requests the in-page mock stub answered (those
+/// never reach the wire, so CDP capture can't see them — the stub mirrors
+/// them into `window.__aqMockLog`).
 pub fn network_requests(session: &str) -> Result<Vec<CapturedRequest>, AgentBrowserError> {
     let r = run(
         session,
@@ -803,39 +816,170 @@ pub fn network_requests(session: &str) -> Result<Vec<CapturedRequest>, AgentBrow
         .get("requests")
         .cloned()
         .unwrap_or(serde_json::Value::Array(vec![]));
-    serde_json::from_value(list).map_err(|e| AgentBrowserError::NonZero {
-        verb: "network requests".to_string(),
-        exit_code: 0,
-        stderr: format!("unparseable requests array: {e}"),
-        hint: String::new(),
-    })
+    let mut requests: Vec<CapturedRequest> =
+        serde_json::from_value(list).map_err(|e| AgentBrowserError::NonZero {
+            verb: "network requests".to_string(),
+            exit_code: 0,
+            stderr: format!("unparseable requests array: {e}"),
+            hint: String::new(),
+        })?;
+    // Redirect hops the daemon never lists — the own-CDP Network
+    // capture recovers their statuses (see cdp_net). The daemon logs the
+    // hop too but with a null status: drop that stub when a CDP hop entry
+    // for the same url+method exists so the log reads as one 302 row.
+    let hops = crate::cdp_net::redirect_entries(session);
+    for hop in &hops {
+        requests.retain(|r| {
+            !(r.status.is_none() && r.url == hop.url && r.method.eq_ignore_ascii_case(&hop.method))
+        });
+    }
+    requests.extend(hops);
+    // WebSockets are invisible to the daemon's fetch/XHR capture — merge
+    // the entries our own CDP listener saw (`cdpws-*`).
+    if let Ok(ws_entries) = crate::cdp::ws_entries(session) {
+        for e in ws_entries {
+            if let Ok(req) = serde_json::from_value::<CapturedRequest>(e) {
+                requests.push(req);
+            }
+        }
+    }
+    requests.extend(mocked_requests(session));
+    Ok(requests)
+}
+
+/// Requests the in-page mock intercepted (ids `mock-*`). Best-effort — a
+/// dead page or absent buffer yields an empty list, never an error.
+fn mocked_requests(session: &str) -> Vec<CapturedRequest> {
+    let Ok(raw) = eval_expression(session, "JSON.stringify(window.__aqMockLog || [])") else {
+        return vec![];
+    };
+    let parsed: Vec<serde_json::Value> =
+        serde_json::from_str(&decode_eval_string(raw.trim())).unwrap_or_default();
+    parsed
+        .into_iter()
+        .map(|e| CapturedRequest {
+            request_id: e
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("mock-?")
+                .to_string(),
+            url: e
+                .get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            method: e
+                .get("method")
+                .and_then(|v| v.as_str())
+                .unwrap_or("GET")
+                .to_string(),
+            status: e.get("status").and_then(|v| v.as_i64()),
+            resource_type: Some("fetch".to_string()),
+            mime_type: Some("application/json".to_string()),
+            post_data: e
+                .get("postData")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            ws_frames: vec![],
+        })
+        .collect()
 }
 
 /// `agent-browser network requests --clear` — drop the session's captured
 /// request log. Called at run start so a replayed session's network.json
 /// covers this run only (the capture is per-session and otherwise
-/// accumulates across replays sharing a session).
+/// accumulates across replays sharing a session). Also resets the in-page
+/// mock buffer, which survives on `window` until the next navigation.
 pub fn network_clear(session: &str) -> Result<(), AgentBrowserError> {
     run(
         session,
         ["network", "requests", "--clear"],
         RunOpts::new().capture(),
     )?;
+    // Same for the ws capture — fresh per run. Then (re)arm Network.enable
+    // on the page session so sockets opened during this run are seen.
+    crate::cdp::clear_capture(session);
+    let _ = crate::cdp::enable_network_capture(session);
+    let _ = eval_expression(
+        session,
+        "window.__aqMockLog = []; window.__aqMockSeq = 0; 1",
+    );
     Ok(())
 }
 
+/// eval stdout wraps strings one extra level (`"\"[...]\""`) — peel the
+/// outer quotes before parsing the payload.
+fn decode_eval_string(raw: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_else(|| raw.to_string())
+}
+
 /// `agent-browser --json network request <id>` — full record for one
-/// exchange, including `responseBody`.
+/// exchange, including `responseBody`. `cdpws-*` ids are answered from
+/// our own capture (the daemon never saw the socket); `mock-*` ids come
+/// from the in-page stub's `__aqMockLog` instead — the request never hit
+/// the wire.
 pub fn network_request(
     session: &str,
     request_id: &str,
 ) -> Result<serde_json::Value, AgentBrowserError> {
+    if request_id.starts_with("cdpws-") {
+        match crate::cdp::ws_detail(session, request_id) {
+            Ok(Some(detail)) => return Ok(detail),
+            Ok(None) => {
+                return Err(AgentBrowserError::NonZero {
+                    verb: "network request".to_string(),
+                    exit_code: 1,
+                    stderr: format!("no websocket entry {request_id}"),
+                    hint: String::new(),
+                })
+            }
+            Err(e) => {
+                return Err(AgentBrowserError::NonZero {
+                    verb: "network request".to_string(),
+                    exit_code: 1,
+                    stderr: format!("cdp ws detail: {e}"),
+                    hint: String::new(),
+                })
+            }
+        }
+    }
+    if request_id.starts_with("mock-") {
+        if let Ok(raw) = eval_expression(
+            session,
+            &format!(
+                "JSON.stringify((window.__aqMockLog || []).find(e => e.id === {request_id:?}) || null)"
+            ),
+        ) {
+            let entry: serde_json::Value =
+                serde_json::from_str(&decode_eval_string(raw.trim())).unwrap_or_default();
+            return Ok(serde_json::json!({
+                "url": entry.get("url"),
+                "method": entry.get("method"),
+                "status": entry.get("status"),
+                "postData": entry.get("postData"),
+                "responseBody": entry.get("responseBody"),
+                "mocked": true,
+            }));
+        }
+        return Ok(serde_json::json!({ "mocked": true }));
+    }
     let r = run(
         session,
         ["--json", "network", "request", request_id],
         RunOpts::new().capture(),
     )?;
     json_data("network request", &r.stdout)
+}
+
+/// `agent-browser console --clear` — drop the session's captured console
+/// log. Like the request log, it is per-session and otherwise accumulates
+/// across replays sharing a session.
+pub fn console_clear(session: &str) -> Result<(), AgentBrowserError> {
+    run(session, ["console", "--clear"], RunOpts::new().capture())?;
+    Ok(())
 }
 
 /// `agent-browser network har start` — begin a HAR recording on the
@@ -952,6 +1096,14 @@ pub fn eval_expression(session: &str, expression: &str) -> Result<String, AgentB
     Ok(r.stdout)
 }
 
+/// Dump the context's cookie jar via `agent-browser cookies` — CDP-level, so
+/// HttpOnly cookies (session/auth) are included where `document.cookie` is
+/// blind. Returns stdout in `name=value` line form; values may contain `=`.
+pub fn cookies(session: &str) -> Result<String, AgentBrowserError> {
+    let r = run(session, ["cookies"], RunOpts::new().capture())?;
+    Ok(r.stdout)
+}
+
 /// Poll the Resource Timing API until an entry URL matches `pattern`
 /// (substring, `*` = wildcard) — i.e. the request has completed — or
 /// `timeout_ms` elapses (error). For "request fired but still in flight"
@@ -978,11 +1130,19 @@ pub fn wait_for_resource(
         "(function(){{var re=new RegExp({});var es=performance.getEntriesByType('resource');for(var i=0;i<es.length;i++){{if(re.test(es[i].name))return '1';}}return '0';}})()",
         serde_json::to_string(&re).unwrap_or_else(|_| "\"\"".into())
     );
+    let event_re = regex::Regex::new(&re).ok();
     let start = std::time::Instant::now();
     loop {
         let hit = eval_expression(session, &expr)
             .map(|s| s.trim().contains("\"1\"") || s.trim() == "1")
-            .unwrap_or(false);
+            .unwrap_or(false)
+            // The daemon's resource-timing read can't see redirect hops
+            // or a request still flushing to the timing buffer — the own
+            // Network.* capture covers both.
+            || event_re
+                .as_ref()
+                .map(|re| crate::cdp_net::find_completed(session, re))
+                .unwrap_or(false);
         if hit {
             return Ok(());
         }
@@ -1121,15 +1281,20 @@ pub enum RoleAct {
     Hover,
     Focus,
     Fill,
+    /// Read act — returns the element's text. Used as a side-effect-free
+    /// presence probe; `find <sel> focus` is not a valid action on
+    /// agent-browser (focus only exists as a top-level selector verb).
+    Text,
 }
 
 impl RoleAct {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             RoleAct::Click => "click",
             RoleAct::Hover => "hover",
             RoleAct::Focus => "focus",
             RoleAct::Fill => "fill",
+            RoleAct::Text => "text",
         }
     }
 }
@@ -1206,6 +1371,7 @@ pub fn selector_act(
             RunOpts::new(),
         )
         .map(|_| ()),
+        RoleAct::Text => run(session, ["text", selector], RunOpts::new()).map(|_| ()),
     }
 }
 
@@ -1301,7 +1467,33 @@ pub fn click_ref(session: &str, snapshot_ref: &str) -> Result<(), AgentBrowserEr
 /// role+name appears twice we return the first — callers concerned
 /// about ambiguity should narrow the name first.
 pub fn find_ref_in_snapshot(snapshot: &str, role: &str, name: &str) -> Option<String> {
+    find_lines_in_snapshot(snapshot, role, name)
+        .into_iter()
+        .find_map(|line| {
+            // Find ref=eN within this line.
+            line.find("ref=").and_then(|idx| {
+                let rest = &line[idx + 4..];
+                let end = rest
+                    .find(|c: char| !c.is_ascii_alphanumeric())
+                    .unwrap_or(rest.len());
+                let r = &rest[..end];
+                if r.is_empty() {
+                    None
+                } else {
+                    Some(r.to_string())
+                }
+            })
+        })
+}
+
+/// Every snapshot line matching `<role> "<name>"` (word-boundary rule as
+/// `find_ref_in_snapshot`), trimmed. Callers that read per-node state
+/// (`[checked=true]`, `: value` tail, `[disabled]`) need the line, not
+/// just the ref. An empty vec means no a11y node matched; >1 means the
+/// role+name is ambiguous.
+pub fn find_lines_in_snapshot(snapshot: &str, role: &str, name: &str) -> Vec<String> {
     let needle = format!("{role} \"{name}\"");
+    let mut out = Vec::new();
     for line in snapshot.lines() {
         let trimmed = line.trim_start_matches([' ', '-', '\t']);
         if !trimmed.starts_with(&needle) {
@@ -1319,19 +1511,26 @@ pub fn find_ref_in_snapshot(snapshot: &str, role: &str, name: &str) -> Option<St
         {
             continue;
         }
-        // Find ref=eN within this line.
-        if let Some(idx) = line.find("ref=") {
-            let rest = &line[idx + 4..];
-            let end = rest
-                .find(|c: char| !c.is_ascii_alphanumeric())
-                .unwrap_or(rest.len());
-            let r = &rest[..end];
-            if !r.is_empty() {
-                return Some(r.to_string());
-            }
-        }
+        out.push(trimmed.to_string());
     }
-    None
+    out
+}
+
+/// `(accessible name, trimmed line)` for every snapshot line that opens
+/// with `<role> "<name>"`. `find_lines_in_snapshot` hardcodes an exact
+/// name match; callers that honor the locator's contains/regex modes
+/// (e.g. attribute reads) filter these pairs themselves.
+pub fn snapshot_named_lines(snapshot: &str, role: &str) -> Vec<(String, String)> {
+    let prefix = format!("{role} \"");
+    snapshot
+        .lines()
+        .filter_map(|line| {
+            let t = line.trim_start_matches([' ', '-', '\t']);
+            let rest = t.strip_prefix(&prefix)?;
+            let end = rest.find('"')?;
+            Some((rest[..end].to_string(), t.to_string()))
+        })
+        .collect()
 }
 
 /// Upload one or more files to a `<input type="file">`. Mirrors the
@@ -1666,6 +1865,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn named_lines_extract_name_and_line() {
+        let snap = r#"  - checkbox "Sunday" [checked=true, ref=e195]
+    - textbox "Enter Name" [required, ref=e57]: Devin Dogfood
+  - link "Home" [ref=e4]
+"#;
+        let pairs = snapshot_named_lines(snap, "checkbox");
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].0, "Sunday");
+        assert!(pairs[0].1.contains("[checked=true"));
+        assert!(snapshot_named_lines(snap, "textbox")[0]
+            .1
+            .ends_with(": Devin Dogfood"));
+        assert!(snapshot_named_lines(snap, "button").is_empty());
+    }
+
     // Env mutation isn't thread-safe; serialize via the shared lock.
     use crate::test_util::lock_env;
 
@@ -1711,6 +1926,20 @@ mod tests {
         _reset_bin_cache_for_tests();
         let err = resolve_bin().unwrap_err();
         assert!(matches!(err, AgentBrowserError::BinaryNotFound { .. }));
+        clear_bin();
+    }
+
+    #[test]
+    fn bin_env_var_bare_name_resolves_via_path() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        fake_browser(tmp.path(), "#!/bin/sh\nexit 0\n");
+        let orig_path = env::var("PATH").unwrap_or_default();
+        env::set_var("PATH", format!("{}:{}", tmp.path().display(), orig_path));
+        env::set_var(BIN_ENV, "agent-browser");
+        _reset_bin_cache_for_tests();
+        assert_eq!(resolve_bin().unwrap(), tmp.path().join("agent-browser"));
+        env::set_var("PATH", orig_path);
         clear_bin();
     }
 

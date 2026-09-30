@@ -145,6 +145,28 @@ pub fn replay_evidence_channel_dir(sid: &str, replay_id: &str, channel: &str) ->
     Ok(replay_evidence_dir(sid, replay_id)?.join(safe_segment(channel, "channel")?))
 }
 
+/// Directories under `<sid>/replays/` that are actual replay runs —
+/// i.e. they carry `audit.json` (finished) or `events.jsonl`
+/// (in-flight / crashed before the audit write). Anything else —
+/// notably the `recorded/` sidecar dir `flush` writes for the session
+/// HAR — is not a run and must not win "latest" picks or appear in
+/// audit listings. Sorted by directory name (run ids are
+/// timestamp-prefixed, so the sort is chronological).
+pub fn run_dirs(replays_dir: &Path) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = match fs::read_dir(replays_dir) {
+        Ok(it) => it
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.is_dir() && (p.join("audit.json").is_file() || p.join("events.jsonl").is_file())
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    out.sort();
+    out
+}
+
 // ---------- recording tree (sidecar tree spec) ----------
 
 pub fn recording_dir(sid: &str) -> Result<PathBuf> {

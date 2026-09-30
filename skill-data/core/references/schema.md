@@ -41,6 +41,9 @@ and optional provenance.
 Use `record-step do` and `record-step check` to create steps. The recorder assigns
 `id` and `kind`. Do not hand-edit them into drafts.
 
+A check step polls its claim for up to 5s by default; give it
+`"context": {"timeoutMs": 30000}` to wait out slow async UI (capped at 60s).
+
 `env.open` and `env.close` accept the existing generic `EnvOp` kinds. They are
 `fresh`, `useProfile`, `nav`, `cookie`, `localStorage`, `gql`, and `flag`.
 `record-setup` records one schema-valid `env.open` value.
@@ -64,10 +67,15 @@ before a `goto`/`reload`:
 
 Recognized `params` keys: `localStorage`, `sessionStorage`, `cookies`
 (each entry `{"name","value","path"?,"domain"?,"maxAge"?,"secure"?,"sameSite"?}`),
-`clearCookies`, `clearLocalStorage`, `clearSessionStorage`. Cookies go through
-`document.cookie`, so `httpOnly` values cannot be seeded — auth plugins cover
-that. Assert the result with `{"storage": "key"}` / `{"storage": {"key": "k",
-"scope": "session"}, "path": "$.json.path"}` or `{"cookie": "name"}` claims.
+`clearCookies`, `clearLocalStorage`, `clearSessionStorage`, and `indexeddb`
+(an array of `{"db","store","keyPath"?,"clear"?,"put":[…]}` — with `keyPath`
+the `put` entries are full records, without it `{"key","value"}` pairs stored
+under out-of-line keys; missing stores are created via a db version bump).
+Cookies go through `document.cookie`, so `httpOnly` values cannot be seeded —
+auth plugins cover that. Assert the result with `{"storage": "key"}` /
+`{"storage": {"key": "k", "scope": "session"}, "path": "$.json.path"}`,
+`{"cookie": "name"}`, or `{"indexeddb": {"db","store","key"?}, "path"?}`
+claims (without `key` the subject is the object store itself).
 
 ### Iframes
 
@@ -277,6 +285,35 @@ In the workbench, drag an element to its target on the live canvas while
 recording — the gesture is recorded as a `drag` step automatically (both
 endpoints must have an accessible role + name).
 
+### Touch gestures
+
+`do/hold` presses `on` (required locator) for `params.ms` (default 500) without
+releasing: `pointerdown`/`mousedown`/`touchstart` on the element, a wait, then
+`pointerup`/`mouseup`/`touchend`. No `click` event is dispatched, so hold-only
+handlers (long-press menus) trigger while tap handlers do not.
+
+`do/swipe` dispatches a `touchstart → touchmove×8 → touchend` gesture
+(pointer/mouse fallback included): `params.direction` (required, one of
+`up|down|left|right` — the direction the finger travels, so `up` scrolls a page
+down) and `params.distance` (default 300 px). Optional `on` starts the gesture
+at the element's center; omit it for a viewport-centered swipe.
+
+```json
+{ "id": "s4", "intent": "long-press the row", "kind": "do", "verb": "hold",
+  "on": { "raw": { "kind": "css", "value": ".row" }, "reason": "row" },
+  "params": { "ms": 800 } },
+{ "id": "s5", "intent": "swipe the card away", "kind": "do", "verb": "swipe",
+  "on": { "raw": { "kind": "css", "value": ".card" }, "reason": "card" },
+  "params": { "direction": "left", "distance": 200 } },
+{ "id": "s6", "intent": "scroll the feed", "kind": "do", "verb": "swipe",
+  "params": { "direction": "up" } }
+```
+
+Both gestures are synthesized in-page (eval), so they work on desktop
+headless too — no mobile emulation needed. Pages that only listen to
+`click`/`scroll` won't see them; a real `scrollTo`/`click` verb is still the
+right tool there.
+
 ### Secondary click (rightclick)
 
 `do/rightclick` fires a secondary-button pointer+mouse chain on `on`
@@ -431,10 +468,16 @@ subject — matcher fields AND together:
 
 - `urlMatches` — regex on the request URL
 - `operationName` — substring on the URL (GraphQL-style operation names)
-- `method` — `"GET"`/`"POST"`/`"PUT"`/`"PATCH"`/`"DELETE"`/`"HEAD"`
+- `method` — `"GET"`/`"POST"`/`"PUT"`/`"PATCH"`/`"DELETE"`/`"HEAD"`/`"WS"`
+  (`"WS"` selects captured sockets)
 - `postDataContains` — substring on the request's POST body (fetches the
   request detail per candidate — keep a url/method matcher alongside so the
   narrowing runs on a small set)
+- `wsPayloadContains` — substring on any WebSocket frame payload; narrows
+  to `cdpws-*` socket entries. Sockets appear as `method: "WS"`,
+  `status: 101`, `resourceType: "WebSocket"` with `wsFrames[]`
+  (`{dir, opcode, payload}`); `EventSource` streams appear as GETs with
+  `resourceType: "EventSource"`.
 
 `ofKind` picks what the predicate applies to:
 
