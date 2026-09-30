@@ -274,7 +274,29 @@
         );
         return;
       }
-      if (type === "file") return; // native pickers can't be captured
+      if (type === "file") {
+        // File contents can't cross worlds, but the names can — record
+        // an upload step referencing files/<name> so the flow replays
+        // and the bundle can name which files to drop in. A silent skip
+        // here loses the interaction entirely.
+        const names = [...(el.files || [])].map((f) => f.name).filter(Boolean);
+        if (!names.length) return;
+        send(
+          stepMsg(
+            doDraft(`upload ${names.join(", ")}`, "upload", {
+              on: locator(el),
+              value: {
+                from: "literal",
+                literal:
+                  names.length === 1
+                    ? `files/${names[0]}`
+                    : names.map((n) => `files/${n}`),
+              },
+            })
+          )
+        );
+        return;
+      }
       if (el.value === "") return;
       send(
         stepMsg(
