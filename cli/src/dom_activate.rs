@@ -1244,7 +1244,10 @@ mod tests {
         assert!(js.contains("'covered:'"));
         // Never activates — __aqPick is defined by the shared prelude but
         // must not be invoked.
-        assert!(!js.contains("__aqPick(el)"), "hit test must not click: {js}");
+        assert!(
+            !js.contains("__aqPick(el)"),
+            "hit test must not click: {js}"
+        );
     }
 
     #[test]
