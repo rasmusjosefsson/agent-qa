@@ -110,10 +110,13 @@ the picture shifts materially.
     Golden layer: `ensureHittable` (#321). Replay layer: #324 hit-tests
     every raw-locator coordinate action (click/hover/focus/fill/dblclick/
     xpath) — scrolls + warns `[v2-replay] ... is unhittable` so the miss
-    is visible in the step log. Still open: role-locator hover/fill go
-    through `find_role_act` unguarded (resolving role+name in-page needs
-    the role engine), and a daemon-side fix upstream would be the real
-    close.
+    is visible in the step log. Role-locator hover/fill now hit-test
+    the resolved element too (#372) — a covered/offscreen target warns
+    instead of silently missing. A nameless role locator
+    (`{"role":"button"}`) still dispatches first-match, but the
+    ambiguity is now visible: when the snapshot shows >1 candidate the
+    step logs `role='X' has no name and matches N nodes` (#388).
+    Remaining: a daemon-side fix upstream would be the real close.
 13. ~~**Record-side resolution is still first-match**~~ — closed for the
     golden runners by `evals/golden/visible.ts` (#356): `pickVisible`
     makes the same visibility pick replay does, `clickVisibleEval`
@@ -206,10 +209,10 @@ so the file-based verbs and their defaults were never exercised:
   with `record` stopped (or `--offline`) to prove it doesn't rely on
   daemon state.
 - **Where authoring friction remains**: `record-step` still requires the
-  caller to know step-shape (`intent`, claim subject spelling); a
-  `record-step --from-stdin` batch mode or `scenario new --from-har`
-  would shorten the LLM authoring loop further — both are deliberately
-  unbuilt until a second dogfood wave proves which one earns it.
+  caller to know step-shape (`intent`, claim subject spelling). The
+  batch half closed — `record-step -`/`record-setup -` read JSONL
+  drafts from stdin (#338/#341). `scenario new --from-har` remains
+  deliberately unbuilt until a dogfood wave proves it earns it.
 
 ## Dogfood pass II — flag consistency + claim authoring
 
@@ -220,11 +223,11 @@ so the file-based verbs and their defaults were never exercised:
 - **`record-setup` storage ops on a never-navigated session produce an
   unreplayable scenario** — `[fresh, localStorage]` with no `nav` op runs
   `localStorage` on about:blank and dies `SecurityError` at env.open.
-  #329's nav-seal fixes the common case (a `--open` session); still open:
-  a `record-setup` cookie/localStorage on a no-nav recording. Options:
-  warn at setup time ("no nav op precedes this storage op"), or have the
-  replay env-runner skip storage ops on opaque origins with a visible
-  warning. Not fixed — needs a decision on which layer owns it.
+  #329's nav-seal fixes the common case (a `--open` session), and #337
+  added the setup-time warning ("no nav op precedes this storage op").
+  Still open: the replay env-runner could skip storage ops on opaque
+  origins with a visible warning — a residual decision, low priority
+  since the record path now warns up front.
 - **Claim predicate sugar** (#333): `{"predicate":{"contains":"x"}}`
   lowers to predicate+value; unary-in-object and doubled-value are
   explicit errors. Second most-common hand-author miss after locators.
@@ -581,3 +584,54 @@ as the GDPR/cookie-banner tool for any real site.
 Recorded side is identical: `dismissBySelector` in `edge-pages-lib`
 + a `record-translate` arm. tc04's download claim — the one the wall
 broke — now passes 10/10 behind the dismiss step.
+
+## Dogfood pass XII — never-stuck hardening (#372–#390)
+
+A sweep over the "agent silently does the wrong thing or stalls" class
+— every fix makes a previously invisible failure mode loud:
+
+- **Role-locator hover/fill hit-tests** (#372): covered/offscreen
+  targets warn instead of dispatching to nothing (the same guarantee
+  raw-locator clicks got in #324).
+- **heal-chronic --apply** (#373): one command promotes every chronic
+  self-heal row's latest patch — the heal-debt handoff is now an
+  action, not a paste-ready issue.
+- **`--browser-profile`** (#374): a persistent Chrome profile for
+  bot-walled sites (Cloudflare class) where headless sits on a
+  challenge — record the profile once, replay reuses it.
+- **`emulate <key>:"off"`** (#375): every runner-side emulate key can
+  be cleared mid-run; `credentials:"off"` bails honestly.
+- **Subprocess cap** (#376): every `agent-browser` spawn has a default
+  300s timeout (`AGENT_QA_AGENT_BROWSER_TIMEOUT_MS`, `0` disables) —
+  a hung daemon call can't stall a run forever.
+- **`start` collision guard** (#377): refuses while a recording is
+  active; `--force` abandons it explicitly.
+- **Worker-originated fetch capture** (#378): `Target.setAutoAttach` +
+  per-target `Network.enable` — service-worker cache fills and
+  background sync land in `network_requests` tagged `worker`.
+- **Extension shadow locators** (#379): clicks inside open shadow roots
+  record `{role, name}` instead of an unresolvable host-relative css.
+- **flush packages file literals** (#380): absolute upload/fileChooser
+  paths copy under `<scenario>/files/` with `by_src` dedup — a recorded
+  upload replays on any machine.
+- **`--auto-shots` skips nav/non-visual verbs** (#381): shot claims
+  only attach where a screenshot is meaningful.
+- **`emulate touch`** (#382): `Emulation.setTouchEmulationEnabled` for
+  mobile-gated UX.
+- **Extension keyboard coverage** (#383): nav-keys on widget roles,
+  Escape anywhere, Enter on widgets+inputs record as `press` drafts.
+- **`copy`/`extract` carry `files/` + `inputs.local.json`** (#384):
+  cloned scenarios keep packaged uploads and local inputs.
+- **`flush` refuses an empty buffer** (#385): a false start can't seal
+  a schema-valid `steps:[]` scenario that replays trivially green.
+- **Extension records mid-flow navigations** (#386): link nav, typed
+  URLs, SPA pushState and back/forward emit `goto` drafts (deduped via
+  `lastUrl`) — recordings no longer teleport between pages.
+- **Upload-file lint** (#387): `upload-file-missing` +
+  `upload-file-absolute` catch refs that would only break at replay.
+- **Nameless-role ambiguity warning** (#388): `{"role":"button"}` with
+  >1 candidates logs a warning instead of silently first-matching.
+- **`--all` empty-selection message** (#389): filter/tags/shard-emptied
+  selections name the flags, not the root.
+- **`record status` liveness probe** (#390): reports a dead recording
+  session (lost HAR capture) before flush discovers it.
