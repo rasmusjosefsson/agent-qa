@@ -182,6 +182,15 @@ fn start(opts: &Opts) -> Result<StartSummary> {
         );
         RecorderState::clear()?;
     }
+    // A live replay holds this session's lock — recording on it would
+    // drive the same browser mid-run.
+    if let Some(h) = crate::session_lock::held_by_live_process(&opts.session_name) {
+        bail!(
+            "session {:?} is mid-run by pid {} — let the run finish, or start with --session <other>",
+            opts.session_name,
+            h.pid
+        );
+    }
     browser::set_headed_mode(opts.headed);
     browser::set_browser_profile(opts.browser_profile.as_deref());
     let connection = browser::BrowserConnection::resolve()?;
@@ -209,7 +218,10 @@ fn start(opts: &Opts) -> Result<StartSummary> {
             policy: None,
         });
     }
-    state.save()?;
+    // The atomic claim IS the first state write — a second `start`
+    // racing past the try_load_active check fails create_new here
+    // instead of clobbering our in-flight state.
+    state.claim_active()?;
     fs::write(paths::record_last_sid_file(), format!("{sid}\n"))
         .with_context(|| format!("write {}", paths::record_last_sid_file().display()))?;
     // Hermetic capture: seed stubs + write the page-init script BEFORE the

@@ -471,6 +471,14 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     if !opts.dry_run {
         refuse_if_recording_active(&opts.session_name)?;
     }
+    // Two concurrent runs on one session name would drive the same
+    // browser — hold a per-session lock for the run's lifetime. A dead
+    // holder's lock is stolen; --dry-run never launches so it skips it.
+    let _session_lock = if opts.dry_run {
+        None
+    } else {
+        Some(crate::session_lock::acquire(&opts.session_name)?)
+    };
     // A reused session name may carry mock rules from a prior scenario
     // (`replay --all` suites, workbench runs) — start clean.
     crate::mock::clear(&opts.session_name, None);

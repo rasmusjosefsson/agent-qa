@@ -526,6 +526,14 @@ fn flush(
     auto_secrets: bool,
 ) -> Result<Summary> {
     let mut state = RecorderState::load_active()?;
+    if state.paused {
+        // A paused recorder drops page actions AND record-step appends —
+        // flushing now seals a scenario that's silently missing the tail
+        // of the flow. Legit for an intentional prefix, so warn only.
+        eprintln!(
+            "[v2-flush] warning: recording is paused — page actions and record-step appends after `record pause` are NOT in the buffer (`record resume` recaptures)"
+        );
+    }
     if state.steps.is_empty() {
         bail!(
             "nothing recorded for {:?} — the buffer has 0 steps, so flush would write a scenario that replays nothing. Capture steps first (`record status` shows the buffer); `start --force` abandons the recording if it was a false start.",
