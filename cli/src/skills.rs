@@ -514,8 +514,12 @@ fn discover_from(cwd: &Path) -> Vec<Skill> {
     //      b) per-repo agent-qa.toml walked up from cwd
     //    Both contribute extra-dirs; embedded names still win on collision.
     let mut configs: Vec<PathBuf> = crate::global_config::existing_global_config_files();
-    if let Ok(Some((toml_path, _))) = load_config_walking_up(cwd) {
-        configs.push(toml_path);
+    match load_config_walking_up(cwd) {
+        Ok(Some((toml_path, _))) => configs.push(toml_path),
+        Ok(None) => {}
+        // An unreadable repo config used to drop every extra-dir it
+        // declared without a peep — warn so the typo is visible.
+        Err(e) => eprintln!("[skills] skipping repo config walk: {e:#}"),
     }
 
     for toml_path in configs {
@@ -523,9 +527,18 @@ fn discover_from(cwd: &Path) -> Vec<Skill> {
             Ok(b) => b,
             Err(_) => continue,
         };
+        // A typo'd config silently dropped every extra-dir it declared —
+        // the user's skills just weren't there with zero signal. Warn
+        // instead (never fatal: the listing shouldn't die on one bad file).
         let cfg: ConfigFile = match toml::from_str(&bytes) {
             Ok(c) => c,
-            Err(_) => continue,
+            Err(e) => {
+                eprintln!(
+                    "[skills] ignoring {} — TOML parse failed: {e}",
+                    toml_path.display()
+                );
+                continue;
+            }
         };
         let base = toml_path.parent().unwrap_or_else(|| Path::new("."));
         let extra_dirs = cfg.skills.and_then(|s| s.extra_dirs).unwrap_or_default();
@@ -538,7 +551,16 @@ fn discover_from(cwd: &Path) -> Vec<Skill> {
             };
             let entries = match fs::read_dir(&dir) {
                 Ok(it) => it,
-                Err(_) => continue, // silently skip missing dirs
+                Err(_) => {
+                    // A declared dir that doesn't exist is config drift —
+                    // name it so a moved/deleted dir isn't silently inert.
+                    eprintln!(
+                        "[skills] skipping extra-dir {} declared in {} — no such directory",
+                        dir.display(),
+                        toml_path.display()
+                    );
+                    continue;
+                }
             };
             for entry in entries.flatten() {
                 let p = entry.path();
