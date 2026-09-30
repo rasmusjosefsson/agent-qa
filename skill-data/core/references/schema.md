@@ -176,6 +176,12 @@ to observe — emulation set mid-page doesn't retroactively change requests
 already made — except `timezone`/`locale`, which need a live page target
 (place them after a `goto`; they apply immediately via CDP).
 
+Any key except `credentials` also takes the literal `"off"` to clear that
+override mid-run (CDP clear on the same connection that applied it), e.g.
+`{"device": "off", "geo": "off"}` returns to the real viewport and
+location. `credentials: "off"` isn't supported — auth handlers can't be
+unset reliably; start a fresh run (`--fresh-browser`) instead.
+
 ### Waits
 
 `do/wait` picks its semantics from `params`:
