@@ -1,7 +1,15 @@
 // web/src/features/editor/components/LiveCanvas.tsx
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ChevronLeftIcon, ChevronRightIcon, CircleDotIcon, CrosshairIcon, HandIcon, MousePointer2Icon, RotateCwIcon } from 'lucide-react'
-import { ChevronLeftIcon, ChevronRightIcon, CircleDotIcon, CrosshairIcon, DatabaseZapIcon, MousePointer2Icon, RotateCwIcon } from 'lucide-react'
+import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  CircleDotIcon,
+  CrosshairIcon,
+  DatabaseZapIcon,
+  HandIcon,
+  MousePointer2Icon,
+  RotateCwIcon,
+} from 'lucide-react'
 import {
   Select,
   SelectContent,
