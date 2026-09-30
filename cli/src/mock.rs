@@ -99,7 +99,21 @@ pub(crate) fn rule_from_params(params: &BTreeMap<String, Json>) -> Result<MockRu
         .get("url")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("mock: params.url is required (glob, e.g. \"*/api/*\")"))?;
-    let status = params.get("status").and_then(|v| v.as_u64()).unwrap_or(200) as u16;
+    let status = match params.get("status") {
+        None => 200,
+        Some(v) => {
+            let n = v
+                .as_u64()
+                .ok_or_else(|| anyhow::anyhow!("mock: params.status must be a number (got {v})"))?;
+            // u16 field — a wider literal would silently truncate
+            // (99999 → 34463); anything outside the 3-digit HTTP range
+            // is a typo the scenario should fail on, not a mock.
+            u16::try_from(n)
+                .ok()
+                .filter(|s| (100..=999).contains(s))
+                .ok_or_else(|| anyhow::anyhow!("mock: params.status must be 100–999 (got {n})"))?
+        }
+    };
     let body = if let Some(j) = params.get("json") {
         serde_json::to_string(j)?
     } else if let Some(b) = params.get("body") {
@@ -332,10 +346,36 @@ pub(crate) fn apply_mock(session: &str, params: &BTreeMap<String, Json>) -> Resu
 /// `unmock` — `params.url` (optional glob) removes that rule; absent clears
 /// all. Re-installs so the live page sees the shrunken set.
 pub(crate) fn apply_unmock(session: &str, params: Option<&BTreeMap<String, Json>>) -> Result<()> {
-    let url = params.and_then(|p| p.get("url")).and_then(|v| v.as_str());
-    clear(session, url);
+    apply_unmock_without_browser(session, params)?;
     let rs = rules(session);
     crate::browser::eval_expression(session, &install_js(&rs, is_strict(session)))?;
+    Ok(())
+}
+
+/// Registry side of `unmock` — split out so tests exercise it without a
+/// live page. A present-but-non-string `url` must NOT fall through to the
+/// clear-all branch: `{"url": true}` wiping every rule silently is the
+/// worst possible outcome for a typo.
+fn apply_unmock_without_browser(
+    session: &str,
+    params: Option<&BTreeMap<String, Json>>,
+) -> Result<()> {
+    let url = match params.and_then(|p| p.get("url")) {
+        None => None,
+        Some(v) => Some(
+            v.as_str()
+                .ok_or_else(|| anyhow::anyhow!("unmock: params.url must be a string glob"))?,
+        ),
+    };
+    if let Some(g) = url {
+        if !rules(session).iter().any(|r| r.url == g) {
+            eprintln!(
+                "[v2-replay] unmock: no rule matches {g:?} — nothing removed ({} rule(s) active)",
+                rules(session).len()
+            );
+        }
+    }
+    clear(session, url);
     Ok(())
 }
 
@@ -368,6 +408,64 @@ mod tests {
         assert_eq!(r.delay_ms, 40);
 
         assert!(rule_from_params(&p(json!({}))).is_err());
+    }
+
+    #[test]
+    fn rule_parse_rejects_out_of_range_status_instead_of_truncating() {
+        // `as u16` used to silently wrap: 99999 → 34463.
+        assert!(rule_from_params(&p(json!({"url": "*", "status": 99999}))).is_err());
+        assert!(rule_from_params(&p(json!({"url": "*", "status": 0}))).is_err());
+        assert!(rule_from_params(&p(json!({"url": "*", "status": 99}))).is_err());
+        assert!(rule_from_params(&p(json!({"url": "*", "status": "503"}))).is_err());
+        // Non-standard 3-digit codes (nginx 499, CF 5xx) stay legal.
+        assert_eq!(
+            rule_from_params(&p(json!({"url": "*", "status": 499})))
+                .unwrap()
+                .status,
+            499
+        );
+    }
+
+    #[test]
+    fn unmock_with_a_nonstring_url_errors_instead_of_clearing_all() {
+        let s = "unmock-typo-sess";
+        clear(s, None);
+        add(
+            s,
+            MockRule {
+                url: "*/keep".into(),
+                status: 200,
+                body: "{}".into(),
+                delay_ms: 0,
+                abort: false,
+            },
+        );
+        // `{"url": true}` must not wipe the registry.
+        let params = p(json!({"url": true}));
+        let err = apply_unmock_without_browser(s, Some(&params)).unwrap_err();
+        assert!(err.to_string().contains("string glob"));
+        assert_eq!(rules(s).len(), 1);
+        clear(s, None);
+    }
+
+    #[test]
+    fn unmock_with_an_unmatched_glob_warns_but_keeps_rules() {
+        let s = "unmock-miss-sess";
+        clear(s, None);
+        add(
+            s,
+            MockRule {
+                url: "*/keep".into(),
+                status: 200,
+                body: "{}".into(),
+                delay_ms: 0,
+                abort: false,
+            },
+        );
+        let params = p(json!({"url": "*/typo"}));
+        apply_unmock_without_browser(s, Some(&params)).unwrap();
+        assert_eq!(rules(s).len(), 1, "unmatched glob removes nothing");
+        clear(s, None);
     }
 
     #[test]
