@@ -169,6 +169,7 @@ HTTP auth. Keys map onto `agent-browser set …`:
 | `permissions`   | array of CDP permission names granted for the page's origin    |
 | `timezone`      | IANA name — `Emulation.setTimezoneOverride` (place after goto) |
 | `locale`        | BCP-47 tag — `Emulation.setLocaleOverride` (place after goto)  |
+| `touch`         | `true` or a point count — `Emulation.setTouchEmulationEnabled`; enables `maxTouchPoints`/`ontouchstart`-gated UX (place after goto) |
 
 At least one key is required; unknown keys fail at dispatch. Strings go
 through `{{var}}` substitution. Apply BEFORE the `goto`/`reload` you want
