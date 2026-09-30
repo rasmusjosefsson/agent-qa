@@ -75,6 +75,7 @@ pub fn run(args: &[String]) -> Result<u8> {
         };
         let kind = StepKind::parse(&kind_str)
             .with_context(|| format!("ingest: step {} has unknown kind", step_id))?;
+        let draft = normalize_shorthand_locator(draft);
         steps.push(
             parse_draft(kind, &draft, &step_id)
                 .with_context(|| format!("ingest: step {}", step_id))?,
@@ -153,6 +154,25 @@ pub fn run(args: &[String]) -> Result<u8> {
         scenario_path.display()
     );
     Ok(0)
+}
+
+/// Compact `a > b` into `a>b` inside `on` shorthand strings — the
+/// shorthand grammar requires `\S+` after the `kind:` prefix, and a
+/// hand-edited bundle (or an older exporter) may carry spaced
+/// combinators. Applied only to `css:`; other kinds pass through.
+fn normalize_shorthand_locator(mut draft: Json) -> Json {
+    let Some(on) = draft.get("on").and_then(|v| v.as_str()) else {
+        return draft;
+    };
+    let Some(sel) = on.strip_prefix("css:") else {
+        return draft;
+    };
+    if !sel.contains(" > ") {
+        return draft;
+    }
+    let compacted = sel.replace(" > ", ">");
+    draft["on"] = Json::String(format!("css:{compacted}"));
+    draft
 }
 
 /// `capture-2026-01-01` style sid from the recorded host + timestamp; a
@@ -370,6 +390,27 @@ mod tests {
         assert_eq!(o.sid.as_deref(), Some("mine"));
         assert!(parse_args(&["a".into(), "b".into()]).is_err());
         assert!(parse_args(&[]).is_err());
+    }
+
+    #[test]
+    fn spaced_child_combinators_are_compacted() {
+        // Regression for the first real bundle: cssPath emitted "a > b",
+        // which the \S+ shorthand grammar rejects.
+        let d = normalize_shorthand_locator(json!({
+            "intent": "click", "verb": "click",
+            "on": "css:#nav > ul.list > li:nth-of-type(2) > a"
+        }));
+        assert_eq!(d["on"], "css:#nav>ul.list>li:nth-of-type(2)>a");
+        // Non-css kinds and already-compact selectors pass through.
+        let other = normalize_shorthand_locator(json!({
+            "intent": "t", "verb": "type",
+            "on": "text:sign in now", "value": {"from":"literal","literal":"x"}
+        }));
+        assert_eq!(other["on"], "text:sign in now");
+        let compact = normalize_shorthand_locator(json!({
+            "intent": "t", "verb": "click", "on": "css:#a>b"
+        }));
+        assert_eq!(compact["on"], "css:#a>b");
     }
 
     #[test]

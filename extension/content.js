@@ -82,7 +82,9 @@
       if (parts.length >= 4) break;
       node = parent;
     }
-    return parts.join(" > ");
+    // No spaces around `>` — the scenario-schema shorthand requires
+    // `^(css|xpath|testId|text):\S+$`, so "a > b" fails ingest.
+    return parts.join(">");
   }
 
   function label(el) {
