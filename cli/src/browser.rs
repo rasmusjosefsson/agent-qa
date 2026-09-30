@@ -545,6 +545,24 @@ pub fn set_headed_mode(headed: bool) {
     }
 }
 
+/// The env var agent-browser reads to pick a persistent Chrome profile — a
+/// profile name (e.g. "Default") or a directory path for a custom profile.
+/// A persistent profile carries cookies/history across runs and reads as a
+/// real browser to bot walls that refuse a pristine headless context.
+pub const BROWSER_PROFILE_ENV: &str = "AGENT_BROWSER_PROFILE";
+
+/// Set the Chrome profile every agent-browser child this process spawns
+/// launches under. Same determinism rule as [`set_headed_mode`]: `None`
+/// *removes* the var, so an ambient value can never leak cookies or history
+/// into a run that asked for none. The daemon fixes the profile at session
+/// launch; a reused warm session keeps whatever it launched in.
+pub fn set_browser_profile(profile: Option<&str>) {
+    match profile {
+        Some(p) => std::env::set_var(BROWSER_PROFILE_ENV, p),
+        None => std::env::remove_var(BROWSER_PROFILE_ENV),
+    }
+}
+
 /// The env var agent-browser reads to keep `alert`/`beforeunload` dialogs
 /// pending instead of auto-accepting them (`--no-auto-dialog`). Required for
 /// scenarios with `dialog` steps — otherwise a recorded accept has nothing

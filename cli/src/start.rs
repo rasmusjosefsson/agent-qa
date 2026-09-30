@@ -31,6 +31,7 @@ struct Opts {
     profile: Option<String>,
     keep_session: bool,
     headed: bool,
+    browser_profile: Option<String>,
     source_ref: Option<String>,
     mock_from: Option<String>,
     offline: bool,
@@ -50,6 +51,7 @@ fn parse_args(args: &[String]) -> Result<Opts> {
     let mut profile = None;
     let mut keep_session = false;
     let mut headed = false;
+    let mut browser_profile = None;
     let mut source_ref = None;
     let mut mock_from = None;
     let mut offline = false;
@@ -75,6 +77,10 @@ fn parse_args(args: &[String]) -> Result<Opts> {
             "--keep-session" => keep_session = true,
             "--headed" => headed = true,
             "--headless" => headed = false,
+            "--browser-profile" => browser_profile = it.next().cloned(),
+            value if value.starts_with("--browser-profile=") => {
+                browser_profile = Some(value["--browser-profile=".len()..].to_string())
+            }
             "--source-ref" => source_ref = it.next().cloned(),
             value if value.starts_with("--source-ref=") => {
                 source_ref = Some(value["--source-ref=".len()..].to_string())
@@ -114,6 +120,7 @@ fn parse_args(args: &[String]) -> Result<Opts> {
         profile,
         keep_session,
         headed,
+        browser_profile,
         source_ref,
         mock_from,
         offline,
@@ -127,10 +134,17 @@ fn print_help() {
 Usage:
   agent-qa start \"<intent>\" [--session <name>] [--open <url>]
                               [--profile <name> | --keep-session]
+                              [--browser-profile <name|path>] [--headed]
                               [--source-ref <opaque-reference>]
                               [--mock-from <network.har>] [--offline]
 
 Writes one local recorder-state.json file. The sealed scenario never includes browser connection settings.
+
+--browser-profile launches Chrome under a persistent profile (a profile
+name like \"Default\", or a directory path): cookies and history survive
+across sessions, which reads as a real browser to bot walls that refuse a
+pristine headless context. Without it any ambient AGENT_BROWSER_PROFILE
+is stripped so nothing leaks in.
 
 --mock-from stubs the session's fetch/XHR from a recorded HAR (any
 `network.har` a `replay --har` or a previous recording produced); the
@@ -142,6 +156,7 @@ record hermetically against a dead backend."
 
 fn start(opts: &Opts) -> Result<StartSummary> {
     browser::set_headed_mode(opts.headed);
+    browser::set_browser_profile(opts.browser_profile.as_deref());
     let connection = browser::BrowserConnection::resolve()?;
     browser::set_connection(&connection);
     let sid = mint_sid();
@@ -273,6 +288,7 @@ mod tests {
             profile: None,
             keep_session: false,
             headed: false,
+            browser_profile: None,
             source_ref: None,
             mock_from: None,
             offline: false,
@@ -299,6 +315,7 @@ mod tests {
             profile: None,
             keep_session: false,
             headed: false,
+            browser_profile: None,
             source_ref: None,
             mock_from: None,
             offline: false,
@@ -343,6 +360,7 @@ mod tests {
             profile: None,
             keep_session: false,
             headed: false,
+            browser_profile: None,
             source_ref: None,
             mock_from: Some(har.display().to_string()),
             offline: true,
@@ -367,5 +385,38 @@ mod tests {
 
     fn scenario_dir_of(summary: &StartSummary) -> PathBuf {
         summary.scenario_dir.clone().unwrap()
+    }
+
+    #[test]
+    fn browser_profile_sets_the_launch_env_and_none_strips_it() {
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var(paths::SCENARIOS_DIR_ENV, tmp.path());
+        std::env::set_var(paths::RECORD_DIR_ENV, tmp.path().join("record"));
+        install_fake_browser(tmp.path(), &tmp.path().join("browser.log"));
+
+        let base = |browser_profile: Option<String>| Opts {
+            intent: "p".into(),
+            session_name: "default".into(),
+            open_url: None,
+            profile: None,
+            keep_session: false,
+            headed: false,
+            browser_profile,
+            source_ref: None,
+            mock_from: None,
+            offline: false,
+        };
+        start(&base(Some("/tmp/qa-prof".into()))).unwrap();
+        assert_eq!(
+            std::env::var(browser::BROWSER_PROFILE_ENV).unwrap(),
+            "/tmp/qa-prof"
+        );
+        start(&base(None)).unwrap();
+        assert!(std::env::var(browser::BROWSER_PROFILE_ENV).is_err());
+        std::env::remove_var(paths::SCENARIOS_DIR_ENV);
+        std::env::remove_var(paths::RECORD_DIR_ENV);
+        std::env::remove_var(browser::BIN_ENV);
+        browser::_reset_bin_cache_for_tests();
     }
 }

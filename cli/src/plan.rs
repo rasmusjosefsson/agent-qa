@@ -283,6 +283,7 @@ fn run_plan(root: &Path, plan: &PlanFile, opts: &RunOpts) -> Result<(Vec<RunRow>
                 .unwrap_or_else(|| format!("replay-{sid}")),
             heal_from_run: None,
             headed: opts.headed,
+            browser_profile: None,
             input_overrides: opts.params.clone(),
             dry_run: opts.dry_run,
             no_sidecars: opts.no_sidecars,

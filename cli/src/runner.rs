@@ -75,6 +75,12 @@ pub struct RunOptions {
     /// (the default) keeps it hidden. Applied to a freshly-launched session;
     /// a reused warm session keeps whatever mode it launched in.
     pub headed: bool,
+    /// `--browser-profile <name|path>` — launch the session's Chrome under a
+    /// persistent profile (agent-browser's `--profile` / AGENT_BROWSER_PROFILE).
+    /// Cookies and history survive across replays, which reads as a real
+    /// browser to bot walls that refuse a pristine headless context. `None`
+    /// removes any ambient AGENT_BROWSER_PROFILE so it cannot leak state in.
+    pub browser_profile: Option<String>,
     /// `--param name=value` overrides. Resolved + coerced against the
     /// declared input type at runner start; sensitive entries are
     /// recorded as `[REDACTED]` in `audit.parameters[]` but flow
@@ -434,10 +440,11 @@ fn abs_display(p: &Path) -> String {
 // ---------- entry point ----------
 
 pub fn run(opts: &RunOptions) -> Result<RunSummary> {
-    // 0. Browser launch mode (headless by default; --headed shows the window).
-    // Set before any agent-browser child is spawned so a freshly-launched
-    // session picks it up.
+    // 0. Browser launch mode (headless by default; --headed shows the window)
+    // and persistent profile. Set before any agent-browser child is spawned
+    // so a freshly-launched session picks them up.
     crate::browser::set_headed_mode(opts.headed);
+    crate::browser::set_browser_profile(opts.browser_profile.as_deref());
     let connection = crate::browser::BrowserConnection::resolve()?;
     crate::browser::set_connection(&connection);
     // A reused session name may carry mock rules from a prior scenario
@@ -2721,6 +2728,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut session: Option<String> = None;
     let mut heal_from_run: Option<String> = None;
     let mut headed = false;
+    let mut browser_profile: Option<String> = None;
     let mut dry_run = false;
     let mut no_sidecars = false;
     let mut quiet = false;
@@ -2768,6 +2776,15 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             }
             "--headed" => headed = true,
             "--headless" => headed = false,
+            "--browser-profile" => {
+                browser_profile = it
+                    .next()
+                    .cloned()
+                    .or_else(|| bail_missing("--browser-profile"))
+            }
+            s if s.starts_with("--browser-profile=") => {
+                browser_profile = Some(s["--browser-profile=".len()..].to_string())
+            }
             "--dry-run" => dry_run = true,
             "--no-sidecars" => no_sidecars = true,
             "--quiet" | "-q" => quiet = true,
@@ -2856,6 +2873,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         session_name,
         heal_from_run,
         headed,
+        browser_profile,
         input_overrides,
         dry_run,
         no_sidecars,
@@ -2953,6 +2971,7 @@ Usage:
                   [--session <name>]
                   [--param name=value] [-p name=value]
                   [--heal-from-run <runId>] [--dry-run]
+                  [--headed | --headless] [--browser-profile <name|path>]
                   [--no-sidecars] [--quiet | -q] [--plain]
                   [--tag <label>] [--output-audit <path>]
                   [--from <stepId>] [--until <stepId>]
@@ -2969,6 +2988,15 @@ replays/latest.txt.
                          and override step values at dispatch time.
                          The resulting audit.json carries
                          healOverridesApplied[].
+--browser-profile <name|path>
+                         launch the session's Chrome under a persistent
+                         profile — a profile name like \"Default\" or a
+                         directory path for a custom one (agent-browser's
+                         --profile). Cookies/history survive across
+                         replays, which reads as a real browser to bot
+                         walls that refuse a pristine headless context.
+                         Without it any ambient AGENT_BROWSER_PROFILE is
+                         stripped so nothing leaks in.
 --param name=value, -p   Override a declared input value. Coerced to
                          the declared type (string/number/boolean/
                          array/object); JSON for non-string types.
@@ -3240,6 +3268,7 @@ mod tests {
             session_name: "test".into(),
             heal_from_run: None,
             headed: false,
+            browser_profile: None,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: false,
@@ -3311,6 +3340,7 @@ mod tests {
             session_name: "test".into(),
             heal_from_run: None,
             headed: false,
+            browser_profile: None,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: false,
@@ -3385,6 +3415,7 @@ mod tests {
             session_name: "vp".into(),
             heal_from_run: None,
             headed: false,
+            browser_profile: None,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: true,
@@ -3454,6 +3485,7 @@ mod tests {
             session_name: "fc".into(),
             heal_from_run: None,
             headed: false,
+            browser_profile: None,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: true,
@@ -3526,6 +3558,7 @@ mod tests {
             environment: None,
             heal_from_run: None,
             headed: false,
+            browser_profile: None,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: true,
@@ -3591,6 +3624,7 @@ mod tests {
             environment: None,
             heal_from_run: None,
             headed: false,
+            browser_profile: None,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: true,
@@ -3653,6 +3687,7 @@ mod tests {
             environment: None,
             heal_from_run: None,
             headed: false,
+            browser_profile: None,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: true,
@@ -3704,6 +3739,7 @@ mod tests {
             session_name: "x".into(),
             heal_from_run: None,
             headed: false,
+            browser_profile: None,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: false,
@@ -3779,6 +3815,7 @@ esac\nexit 0\n",
             session_name: "sx".into(),
             heal_from_run: None,
             headed: false,
+            browser_profile: None,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: true,
@@ -4042,6 +4079,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             session_name: "sx".into(),
             heal_from_run: None,
             headed: false,
+            browser_profile: None,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: false,
@@ -4115,6 +4153,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             session_name: "x".into(),
             heal_from_run: None,
             headed: false,
+            browser_profile: None,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: false,
@@ -4954,6 +4993,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             session_name: "sx".into(),
             heal_from_run: None,
             headed: false,
+            browser_profile: None,
             input_overrides: BTreeMap::new(),
             dry_run: true,
             no_sidecars: false,
@@ -5051,6 +5091,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             session_name: "sx".into(),
             heal_from_run: Some("rPRIOR".into()),
             headed: false,
+            browser_profile: None,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: false,
@@ -5306,6 +5347,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             session_name: "evt".into(),
             heal_from_run: None,
             headed: false,
+            browser_profile: None,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: false,
@@ -5405,6 +5447,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             session_name: "evtf".into(),
             heal_from_run: None,
             headed: false,
+            browser_profile: None,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: false,
@@ -5483,6 +5526,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             session_name: "evtn".into(),
             heal_from_run: None,
             headed: false,
+            browser_profile: None,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: true,
@@ -5539,6 +5583,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             session_name: "evtd".into(),
             heal_from_run: None,
             headed: false,
+            browser_profile: None,
             input_overrides: BTreeMap::new(),
             dry_run: true,
             no_sidecars: false,
@@ -5732,6 +5777,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             session_name: "s".into(),
             heal_from_run: None,
             headed: false,
+            browser_profile: None,
             input_overrides: BTreeMap::new(),
             dry_run: false,
             no_sidecars: false,
@@ -5774,5 +5820,21 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         assert!(opts.auto_promote);
         let opts = parse_args(&["sid".into()]).unwrap();
         assert!(!opts.auto_promote);
+    }
+
+    #[test]
+    fn parse_args_browser_profile_flag() {
+        let opts = parse_args(&[
+            "./j.json".into(),
+            "--browser-profile".into(),
+            "Default".into(),
+        ])
+        .unwrap();
+        assert_eq!(opts.browser_profile.as_deref(), Some("Default"));
+        let opts =
+            parse_args(&["./j.json".into(), "--browser-profile=/tmp/qa-prof".into()]).unwrap();
+        assert_eq!(opts.browser_profile.as_deref(), Some("/tmp/qa-prof"));
+        let opts = parse_args(&["./j.json".into()]).unwrap();
+        assert!(opts.browser_profile.is_none());
     }
 }
