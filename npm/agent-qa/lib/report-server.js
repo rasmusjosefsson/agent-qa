@@ -1983,23 +1983,41 @@ async function serveCompareShot(res, root, sid, folder, stepId) {
 // Build a function that runs the agent-qa Rust CLI with a fixed binary +
 // child env. Resolves to { code, stdout, stderr, spawnError }. A missing
 // binary surfaces as spawnError (→ 500) rather than a fake exit code.
-function makeCliRunner({ bin, env, cwd }) {
+function makeCliRunner({ bin, env, cwd, timeoutMs = 3 * 60 * 1000 }) {
   // extraEnv: per-call env overrides (e.g. an environment's connection config
   // passed to an auth plugin during bootstrap). Merged over the fixed childEnv.
+  // timeoutMs bounds every call: runCli drives short-lived verbs (buffer,
+  // record-step, flush, cdp-url, plugins) — the slowest legit path is
+  // record-setup's login bootstrap (~120s). A hung child used to wedge the
+  // request forever; now it is killed and reported as a failure.
   return function runCli(args, extraEnv) {
     const callEnv = extraEnv ? { ...env, ...extraEnv } : env;
     return new Promise((resolve) => {
       execFile(
         bin,
         args,
-        { env: callEnv, cwd, maxBuffer: 32 * 1024 * 1024 },
+        { env: callEnv, cwd, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 },
         (err, stdout, stderr) => {
           if (err && typeof err.code === 'string') {
             // Spawn failure (ENOENT, EACCES, …) — not a process exit.
             resolve({ code: null, stdout: '', stderr: '', spawnError: err });
             return;
           }
-          const code = err && typeof err.code === 'number' ? err.code : 0;
+          if (err && err.killed === true) {
+            // Timeout kill: killed:true, code:null — without this branch it
+            // resolved code:0 and a wedged CLI looked like a silent success.
+            resolve({
+              code: 124,
+              stdout: stdout || '',
+              stderr:
+                `${String(stderr || '').trim()}\n` +
+                `agent-qa exceeded the ${Math.round(timeoutMs / 1000)}s host timeout and was killed`,
+              spawnError: null,
+            });
+            return;
+          }
+          // err.code is null on signal death — never map an error to 0.
+          const code = err ? (typeof err.code === 'number' ? err.code : 1) : 0;
           resolve({ code, stdout: stdout || '', stderr: stderr || '', spawnError: null });
         },
       );
@@ -2138,10 +2156,12 @@ function makeBrowserSessionCloser({ bin, env, cwd }) {
       execFile(
         bin || 'agent-browser',
         ['close', '--session', session],
-        { env, cwd, maxBuffer: 1024 * 1024 },
+        { env, cwd, timeout: 30 * 1000, maxBuffer: 1024 * 1024 },
         (err, _stdout, stderr) => {
           if (!err) return resolve();
-          const detail = String(stderr || err.message || err).trim();
+          const detail = err.killed === true
+            ? 'timed out after 30s (daemon unresponsive)'
+            : String(stderr || err.message || err).trim();
           reject(new Error(`could not recycle browser session ${session}: ${detail}`));
         },
       );
