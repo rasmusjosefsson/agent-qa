@@ -1,5 +1,6 @@
 // web/src/features/editor/components/LiveCanvas.tsx
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { ChevronLeftIcon, ChevronRightIcon, CircleDotIcon, CrosshairIcon, HandIcon, MousePointer2Icon, RotateCwIcon } from 'lucide-react'
 import { ChevronLeftIcon, ChevronRightIcon, CircleDotIcon, CrosshairIcon, DatabaseZapIcon, MousePointer2Icon, RotateCwIcon } from 'lucide-react'
 import {
   Select,
@@ -142,6 +143,8 @@ export function LiveCanvas({
     // remote input dispatches press → sweep → release, which the page sees as
     // real HTML5/pointer drag).
     let downAt: { nx: number; ny: number } | null = null
+    let downTime = 0
+    let gestureTrail: { nx: number; ny: number }[] = []
     const DRAG_MIN = 0.01
 
     const onMouseDown = async (ev: MouseEvent) => {
@@ -155,6 +158,10 @@ export function LiveCanvas({
         return
       }
       downAt = c
+      if (mode === 'gesture') {
+        downTime = Date.now()
+        gestureTrail = [c]
+      }
       cv.focus()
     }
 
@@ -167,6 +174,23 @@ export function LiveCanvas({
       const c = norm(ev)
       if (!c) return
       const moved = Math.hypot(c.nx - from.nx, c.ny - from.ny)
+      // Gesture mode is record-always: the remote page has no mouse analogue
+      // for hold/swipe/pinch/rotate, so the bridge both performs the touch
+      // chain and emits the step.
+      if (mode === 'gesture') {
+        bag.current.sendInput({
+          type: 'gesture',
+          nx0: from.nx,
+          ny0: from.ny,
+          nx1: c.nx,
+          ny1: c.ny,
+          durationMs: Date.now() - downTime,
+          trail: gestureTrail,
+          record: true,
+        })
+        gestureTrail = []
+        return
+      }
       const record = mode === 'record'
       if (moved >= DRAG_MIN) {
         bag.current.sendInput({ type: 'drag', nx0: from.nx, ny0: from.ny, nx1: c.nx, ny1: c.ny, ...(record ? { record: true } : {}) })
@@ -201,8 +225,14 @@ export function LiveCanvas({
     let hoverLatest: { nx: number; ny: number } | null = null
     const onMouseMove = (ev: MouseEvent) => {
       const mode = bag.current.clickMode
-      if (mode !== 'pick' && mode !== 'record') return hideHover()
       const c = norm(ev)
+      if (mode === 'gesture' && downAt && c) {
+        const last = gestureTrail[gestureTrail.length - 1]
+        if (!last || Math.hypot(c.nx - last.nx, c.ny - last.ny) > 0.005) gestureTrail.push(c)
+      }
+      // Gesture mode keeps the hover pick — the highlighted element is the
+      // pinch/rotate anchor the gesture will classify around.
+      if (mode !== 'pick' && mode !== 'record' && mode !== 'gesture') return hideHover()
       if (!c) return
       hoverLatest = c
       if (hoverTimer) return
@@ -217,6 +247,7 @@ export function LiveCanvas({
 
     const onMouseLeave = () => {
       downAt = null
+      gestureTrail = []
       hideHover()
     }
 
@@ -294,6 +325,7 @@ export function LiveCanvas({
             <SelectItem value="interact"><span className="flex items-center gap-1.5"><MousePointer2Icon className="size-3.5" /> Browse</span></SelectItem>
             <SelectItem value="record"><span className="flex items-center gap-1.5"><CircleDotIcon className="size-3.5 text-red-400" /> Record</span></SelectItem>
             <SelectItem value="pick"><span className="flex items-center gap-1.5"><CrosshairIcon className="size-3.5" /> Pick element</span></SelectItem>
+            <SelectItem value="gesture"><span className="flex items-center gap-1.5"><HandIcon className="size-3.5 text-amber-400" /> Gesture</span></SelectItem>
           </SelectContent>
         </Select>
       </div>

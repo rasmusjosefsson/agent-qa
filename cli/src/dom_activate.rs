@@ -1013,6 +1013,123 @@ pub fn build_swipe_js(ep: Option<&DragEndpoint>, direction: &str, distance: f64)
     )
 }
 
+/// `build_pinch_js` — two-finger pinch/zoom via a synthesized
+/// TouchEvent chain (two Touches moving toward or away from each other)
+/// plus a ctrlKey WheelEvent (the desktop trackpad pinch convention).
+/// `direction`: "in" = fingers travel toward each other (zoom out),
+/// "out" = apart (zoom in). `distance` = per-finger travel in px.
+/// `__aqPinch` marker for test doubles.
+pub fn build_pinch_js(ep: Option<&DragEndpoint>, direction: &str, distance: f64) -> String {
+    let find_src = match ep {
+        Some(ep) => format!(
+            "  const el = __aqGestureFind({ep});
+  if (!el) return \"el-miss\";
+  try {{ el.scrollIntoView({{ block: 'center', inline: 'center' }}); }} catch (e) {{}}
+  const r = el.getBoundingClientRect();
+  const sx = r.left + r.width / 2, sy = r.top + r.height / 2;
+  const target = el;",
+            ep = drag_endpoint_json(ep)
+        ),
+        None => "  const sx = innerWidth / 2, sy = innerHeight / 2;
+  const target = document.elementFromPoint(sx, sy) || document.body;"
+            .to_string(),
+    };
+    format!(
+        r#"(() => {{ const __aqPinch = true;
+{prelude}
+{find}
+{finder}
+{find_src}
+  const D = {distance};
+  const IN = {dir} === 'in', OUT = {dir} === 'out';
+  if (!IN && !OUT) return "bad-dir";
+  const ev = (x, y) => ({{ bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y }});
+  const hasTouch = typeof TouchEvent === 'function' && typeof Touch === 'function';
+  const mkTouch = (id, x, y) => hasTouch ? new Touch({{ identifier: id, target, clientX: x, clientY: y }}) : null;
+  // Two fingers a fixed radius apart, on the vertical axis through the
+  // center. "in" starts spread and converges; "out" starts together and
+  // spreads. Touches report their position on the shared target.
+  const R0 = IN ? D : 1, R1 = IN ? 1 : D;
+  if (hasTouch) {{
+    const t1 = mkTouch(1, sx, sy - R0), t2 = mkTouch(2, sx, sy + R0);
+    target.dispatchEvent(new TouchEvent('touchstart', Object.assign({{}}, ev(sx, sy), {{ touches: [t1, t2], targetTouches: [t1, t2], changedTouches: [t1, t2] }})));
+    const STEPS = 8;
+    for (let i = 1; i <= STEPS; i++) {{
+      const r = R0 + (R1 - R0) * i / STEPS;
+      const a = mkTouch(1, sx, sy - r), b = mkTouch(2, sx, sy + r);
+      target.dispatchEvent(new TouchEvent('touchmove', Object.assign({{}}, ev(sx, sy), {{ touches: [a, b], targetTouches: [a, b], changedTouches: [a, b] }})));
+    }}
+    const e1 = mkTouch(1, sx, sy - R1), e2 = mkTouch(2, sx, sy + R1);
+    target.dispatchEvent(new TouchEvent('touchend', Object.assign({{}}, ev(sx, sy), {{ touches: [], targetTouches: [], changedTouches: [e1, e2] }})));
+  }}
+  // Also fire the ctrlKey wheel so pages that map trackpad pinch to
+  // wheel+zoom react even without touch support.
+  target.dispatchEvent(new WheelEvent('wheel', Object.assign({{}}, ev(sx, sy), {{ deltaY: IN ? 120 : -120, ctrlKey: true }})));
+  return "true";
+}})()"#,
+        prelude = activation_prelude(),
+        find = scoped_find_helper_js(),
+        finder = gesture_finder_js(),
+        find_src = find_src,
+        distance = distance,
+        dir = json_str(direction),
+    )
+}
+
+/// Two-finger rotate on an element (or the viewport when `ep` is `None`):
+/// two touches on a horizontal line `radius` px either side of the center,
+/// sweeping the line through `degrees` — positive is clockwise (screen
+/// coords put +y down, so a rising atan2 angle reads as a clockwise turn).
+/// touchstart → 8 touchmove steps → touchend. There is no desktop
+/// convention for rotate (ctrl-wheel is pinch), so a browser without
+/// Touch/TouchEvent reports `"no-touch"` instead of faking a fallback.
+/// `__aqRotate` marker for test doubles.
+pub fn build_rotate_js(ep: Option<&DragEndpoint>, degrees: f64, radius: f64) -> String {
+    let find_src = match ep {
+        Some(ep) => format!(
+            "  const el = __aqGestureFind({ep});
+  if (!el) return \"el-miss\";
+  try {{ el.scrollIntoView({{ block: 'center', inline: 'center' }}); }} catch (e) {{}}
+  const r = el.getBoundingClientRect();
+  const sx = r.left + r.width / 2, sy = r.top + r.height / 2;
+  const target = el;",
+            ep = drag_endpoint_json(ep)
+        ),
+        None => "  const sx = innerWidth / 2, sy = innerHeight / 2;
+  const target = document.elementFromPoint(sx, sy) || document.body;"
+            .to_string(),
+    };
+    format!(
+        r#"(() => {{ const __aqRotate = true;
+{prelude}
+{find}
+{finder}
+{find_src}
+  const R = {radius}, RAD = {degrees} * Math.PI / 180;
+  const ev = (x, y) => ({{ bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y }});
+  const hasTouch = typeof TouchEvent === 'function' && typeof Touch === 'function';
+  if (!hasTouch) return "no-touch";
+  const mkTouch = (id, x, y) => new Touch({{ identifier: id, target, clientX: x, clientY: y }});
+  const t1 = (a) => mkTouch(1, sx + R * Math.cos(a), sy + R * Math.sin(a));
+  const t2 = (a) => mkTouch(2, sx - R * Math.cos(a), sy - R * Math.sin(a));
+  target.dispatchEvent(new TouchEvent('touchstart', Object.assign({{}}, ev(sx, sy), {{ touches: [t1(0), t2(0)], targetTouches: [t1(0), t2(0)], changedTouches: [t1(0), t2(0)] }})));
+  const STEPS = 8;
+  for (let i = 1; i <= STEPS; i++) {{
+    const a = RAD * i / STEPS;
+    target.dispatchEvent(new TouchEvent('touchmove', Object.assign({{}}, ev(sx, sy), {{ touches: [t1(a), t2(a)], targetTouches: [t1(a), t2(a)], changedTouches: [t1(a), t2(a)] }})));
+  }}
+  target.dispatchEvent(new TouchEvent('touchend', Object.assign({{}}, ev(sx, sy), {{ touches: [], targetTouches: [], changedTouches: [t1(RAD), t2(RAD)] }})));
+  return "true";
+}})()"#,
+        prelude = activation_prelude(),
+        find = scoped_find_helper_js(),
+        finder = gesture_finder_js(),
+        find_src = find_src,
+        radius = radius,
+        degrees = degrees,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1299,5 +1416,43 @@ mod tests {
         assert!(page.contains("elementFromPoint"), "{page}");
         assert!(!page.contains("el-miss"), "{page}");
         assert!(build_swipe_js(None, "diagonal", 100.0).contains("bad-dir"));
+    }
+
+    #[test]
+    fn pinch_js_directions_and_viewport_default() {
+        let el = build_pinch_js(Some(&DragEndpoint::Css("#map".into())), "in", 200.0);
+        assert!(el.contains("__aqPinch"), "{el}");
+        assert!(el.contains("=== 'in'"), "{el}");
+        assert!(el.contains("const D = 200"), "{el}");
+        assert!(el.contains("touchstart"), "{el}");
+        assert!(el.contains("touchmove"), "{el}");
+        assert!(el.contains("touchend"), "{el}");
+        assert!(el.contains("[t1, t2]"), "{el}");
+        assert!(el.contains("ctrlKey: true"), "{el}");
+        assert!(el.contains("__aqGestureFind"), "{el}");
+
+        let page = build_pinch_js(None, "out", 150.0);
+        assert!(page.contains("elementFromPoint"), "{page}");
+        assert!(page.contains("=== 'out'"), "{page}");
+        assert!(build_pinch_js(None, "diagonal", 100.0).contains("bad-dir"));
+    }
+
+    #[test]
+    fn rotate_js_emits_two_touch_orbit() {
+        let el = build_rotate_js(Some(&DragEndpoint::Css("#dial".into())), 90.0, 60.0);
+        assert!(el.contains("__aqRotate"), "{el}");
+        assert!(el.contains("const R = 60"), "{el}");
+        assert!(el.contains("RAD = 90 * Math.PI / 180"), "{el}");
+        assert!(el.contains("touchstart"), "{el}");
+        assert!(el.contains("touchmove"), "{el}");
+        assert!(el.contains("touchend"), "{el}");
+        assert!(el.contains("__aqGestureFind"), "{el}");
+        assert!(el.contains("\"#dial\""), "{el}");
+
+        let page = build_rotate_js(None, -45.0, 120.0);
+        assert!(page.contains("elementFromPoint"), "{page}");
+        assert!(page.contains("RAD = -45 * Math.PI / 180"), "{page}");
+        // No desktop fallback: a Touch-less browser reports no-touch.
+        assert!(page.contains("\"no-touch\""), "{page}");
     }
 }
