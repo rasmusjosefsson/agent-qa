@@ -250,11 +250,18 @@
       const el = e.composedPath?.()[0] || e.target;
       const name = el.localName;
       if (name === "select") {
+        // el.value is only the FIRST selected option — a multi-select
+        // would silently lose the rest, and a valueless option's value
+        // is "" which matches nothing. Replay matches values OR text
+        // split on ',', so emit the full selection.
+        const picked = el.multiple
+          ? [...el.selectedOptions].map((o) => o.value || o.text)
+          : [el.value || el.options[el.selectedIndex]?.text || ""];
         send(
           stepMsg(
             doDraft(`select ${label(el)}`, "select", {
               on: locator(el),
-              value: literal(el.value),
+              value: literal(picked.join(",")),
             })
           )
         );
