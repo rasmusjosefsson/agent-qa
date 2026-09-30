@@ -3,7 +3,7 @@
   "name": "agent-qa recorder",
   "version": "0.1.0",
   "description": "One-click capture of a web flow + its network traffic, exported as an agent-qa replay bundle.",
-  "permissions": ["downloads", "storage", "tabs"],
+  "permissions": ["downloads", "storage", "tabs", "webNavigation"],
   "host_permissions": ["<all_urls>"],
   "action": {
     "default_popup": "popup.html",
