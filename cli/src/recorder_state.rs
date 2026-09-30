@@ -2,7 +2,7 @@
 
 use std::fs;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::browser::BrowserConnection;
@@ -70,6 +70,16 @@ pub(crate) struct RecorderState {
     /// them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) original: Option<serde_json::Value>,
+    /// Monotonic write counter — `save` compare-and-swaps on it, so a
+    /// process holding a stale copy fails loudly instead of silently
+    /// dropping a concurrent append. Missing on files written before
+    /// this field existed (treated as 0).
+    #[serde(default)]
+    pub(crate) seq: u64,
+    /// The seq this copy was loaded with — the CAS compare side. Never
+    /// persisted; 0 for a state that has not been loaded from disk.
+    #[serde(skip)]
+    pub(crate) loaded_seq: u64,
 }
 
 impl RecorderState {
@@ -96,6 +106,8 @@ impl RecorderState {
             steps: Vec::new(),
             paused: false,
             original: None,
+            seq: 0,
+            loaded_seq: 0,
         }
     }
 
@@ -117,18 +129,52 @@ impl RecorderState {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
         };
+        let mut state = state;
+        state.loaded_seq = state.seq;
         crate::browser::set_connection(&state.browser);
         Ok(Some(state))
     }
 
-    pub(crate) fn save(&self) -> Result<()> {
+    /// Writes the state after compare-and-swapping on `seq`: the file
+    /// must still hold the seq this copy was loaded with, otherwise a
+    /// concurrent `record-step`/`buffer`/pause saved in between and
+    /// overwriting it would silently drop that command's append. Fails
+    /// loudly instead — the caller can retry; the append is never lost
+    /// silently. A missing file is likewise refused once this copy had
+    /// been loaded (`stop`/`flush` deleted the recording under us).
+    pub(crate) fn save(&mut self) -> Result<()> {
         let path = paths::record_state_file();
+        match fs::read_to_string(&path) {
+            Ok(body) => {
+                let on_disk = serde_json::from_str::<Self>(&body)
+                    .map(|s| s.seq)
+                    .unwrap_or(self.loaded_seq);
+                if on_disk != self.loaded_seq {
+                    bail!(
+                        "recording buffer changed on disk (another agent-qa command saved in between) — retry the operation"
+                    );
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                if self.loaded_seq != 0 {
+                    bail!(
+                        "recording state at {} vanished since this was loaded — another command stopped or flushed it",
+                        path.display()
+                    );
+                }
+                // Missing on first save of a fresh (unloaded) state — fine.
+            }
+            Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
+        }
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
         }
+        self.seq = self.loaded_seq + 1;
         let mut body = serde_json::to_vec_pretty(self)?;
         body.push(b'\n');
-        atomic_write_file(&path, &body)
+        atomic_write_file(&path, &body)?;
+        self.loaded_seq = self.seq;
+        Ok(())
     }
 
     /// First write of the active-state file, created atomically — the
@@ -207,6 +253,41 @@ mod tests {
         assert_eq!(loaded.source_ref.as_deref(), Some("opaque-ref"));
         assert_eq!(loaded.env_open.len(), 1);
         assert_eq!(loaded.steps.len(), 1);
+        std::env::remove_var(paths::RECORD_DIR_ENV);
+        std::env::remove_var("AGENT_BROWSER_CDP");
+        std::env::remove_var("AGENT_BROWSER_PIN_TAB");
+    }
+
+    #[test]
+    fn save_refuses_a_stale_copy_and_a_vanished_state() {
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var(paths::RECORD_DIR_ENV, tmp.path());
+        let mk = |sid: &str| {
+            RecorderState::new(
+                sid.into(),
+                "record".into(),
+                "session".into(),
+                RecorderBaseline::Fresh,
+                None,
+                BrowserConnection::default(),
+            )
+        };
+        mk("s1").save().unwrap();
+        // Two processes each load the recording; B saves first.
+        let mut a = RecorderState::load_active().unwrap();
+        let mut b = RecorderState::load_active().unwrap();
+        b.save().unwrap();
+        let err = a.save().unwrap_err().to_string();
+        assert!(err.contains("changed on disk"), "{err}");
+        // Sequential saves on the winning copy keep working.
+        b.save().unwrap();
+        // The file vanishing under a loaded copy is refused too
+        // (stop/flush ran in between) instead of resurrecting state.
+        let mut c = RecorderState::load_active().unwrap();
+        RecorderState::clear().unwrap();
+        let err = c.save().unwrap_err().to_string();
+        assert!(err.contains("vanished"), "{err}");
         std::env::remove_var(paths::RECORD_DIR_ENV);
         std::env::remove_var("AGENT_BROWSER_CDP");
         std::env::remove_var("AGENT_BROWSER_PIN_TAB");

@@ -668,7 +668,7 @@ mod tests {
         std::env::set_var(paths::SCENARIOS_DIR_ENV, tmp.path());
         std::env::set_var(paths::RECORD_DIR_ENV, tmp.path().join("record"));
         std::env::set_var("AGENT_QA_RECORD_SKIP_SIDECARS", "1");
-        let state = RecorderState::new(
+        let mut state = RecorderState::new(
             "emptysid".into(),
             "false start".into(),
             "default".into(),
