@@ -943,7 +943,15 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                         Err(e) => Err(e),
                     }
                 }
-                Step::Check { claim, .. } => dispatch_check(claim, &check_ctx, &mut scope, None),
+                Step::Check { claim, context, .. } => dispatch_check(
+                    claim,
+                    &check_ctx,
+                    &mut scope,
+                    context
+                        .as_ref()
+                        .and_then(|c| c.timeout_ms)
+                        .map(Duration::from_millis),
+                ),
             };
             // Navigation wipes the page's JS world — reinstall registered
             // network mocks after navigation verbs so stubs survive loads.
