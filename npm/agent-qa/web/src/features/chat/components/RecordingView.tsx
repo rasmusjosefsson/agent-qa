@@ -14,8 +14,8 @@ import {
 import { cn } from '@/lib/utils'
 
 const KIND_STYLES: Record<string, string> = {
-  do: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
-  check: 'bg-violet-500/15 text-violet-300 border-violet-500/30',
+  do: 'bg-success/15 text-success border-success/30',
+  check: 'bg-violet-500/12 text-violet-600 dark:text-violet-300 border-violet-500/30',
 }
 
 function summarize(step: RecordingStep): string {
@@ -137,7 +137,7 @@ export function RecordingView({
             {rec.paused ? 'Resume' : 'Pause'}
           </button>
         )}
-        {rec.flushed ? <span className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-300"><CheckCircle2Icon className="size-3" /> saved</span> : rec.paused ? <span className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300"><PauseIcon className="size-3" /> paused</span> : <span className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-red-500/30 bg-red-500/10 px-2 py-0.5 text-[11px] font-medium text-red-300"><CircleDotIcon className="size-3 animate-pulse" /> recording</span>}
+        {rec.flushed ? <span className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-success/30 bg-success/10 px-2 py-0.5 text-[11px] font-medium text-success"><CheckCircle2Icon className="size-3" /> saved</span> : rec.paused ? <span className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-warning/30 bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning"><PauseIcon className="size-3" /> paused</span> : <span className="inline-flex shrink-0 items-center gap-1 rounded-sm border border-destructive/30 bg-destructive/10 px-2 py-0.5 text-[11px] font-medium text-destructive"><CircleDotIcon className="size-3 animate-pulse" /> recording</span>}
       </div>
     </div>
     {error && <div className="border-b border-border bg-destructive/10 px-3 py-1.5 text-[11px] text-destructive">{error}</div>}

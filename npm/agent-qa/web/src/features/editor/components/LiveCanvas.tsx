@@ -305,13 +305,13 @@ export function LiveCanvas({
           }}
           spellCheck={false}
           placeholder="https://example.com/"
-          className="h-7 flex-1 rounded-md border border-border bg-background px-2 text-xs outline-none focus:border-ring"
+          className="h-7 flex-1 rounded-full border border-border bg-muted/50 px-3 font-mono text-[11px] outline-none transition-colors focus:border-primary/50 focus:bg-card focus:ring-3 focus:ring-primary/10"
         />
         <span
           className={cn(
             'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide',
-            tone === 'ok' && 'text-emerald-400',
-            tone === 'busy' && 'text-amber-400',
+            tone === 'ok' && 'text-success',
+            tone === 'busy' && 'text-warning',
             tone === 'err' && 'text-destructive',
             tone === 'idle' && 'text-muted-foreground'
           )}
@@ -331,27 +331,27 @@ export function LiveCanvas({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="interact"><span className="flex items-center gap-1.5"><MousePointer2Icon className="size-3.5" /> Browse</span></SelectItem>
-            <SelectItem value="record"><span className="flex items-center gap-1.5"><CircleDotIcon className="size-3.5 text-red-400" /> Record</span></SelectItem>
+            <SelectItem value="record"><span className="flex items-center gap-1.5"><CircleDotIcon className="size-3.5 text-destructive" /> Record</span></SelectItem>
             <SelectItem value="pick"><span className="flex items-center gap-1.5"><CrosshairIcon className="size-3.5" /> Pick element</span></SelectItem>
-            <SelectItem value="gesture"><span className="flex items-center gap-1.5"><HandIcon className="size-3.5 text-amber-400" /> Gesture</span></SelectItem>
+            <SelectItem value="gesture"><span className="flex items-center gap-1.5"><HandIcon className="size-3.5 text-warning" /> Gesture</span></SelectItem>
           </SelectContent>
         </Select>
       </div>
 
-      <div ref={stageRef} className="relative flex min-h-0 flex-1 items-center justify-center overflow-auto bg-black">
+      <div ref={stageRef} className="aqa-dots relative flex min-h-0 flex-1 items-center justify-center overflow-auto bg-muted/30">
         <canvas ref={canvasRef} width={1280} height={800} className="max-h-full max-w-full object-contain" />
         {!overlay.hidden && (
           <div
             className={cn(
               'pointer-events-none absolute z-10 border-2',
-              overlay.noninteractive ? 'border-amber-400/80' : 'border-sky-400/80'
+              overlay.noninteractive ? 'border-warning/80' : 'border-info/80'
             )}
             style={{ left: overlay.left, top: overlay.top, width: overlay.width, height: overlay.height }}
           >
             <span
               className={cn(
-                'absolute -top-5 left-0 whitespace-nowrap rounded px-1 py-0.5 text-[10px] text-black',
-                overlay.noninteractive ? 'bg-amber-400' : 'bg-sky-400'
+                'absolute -top-5 left-0 whitespace-nowrap rounded px-1 py-0.5 text-[10px] font-medium text-background',
+                overlay.noninteractive ? 'bg-warning' : 'bg-info'
               )}
             >
               {overlay.label}
@@ -359,8 +359,8 @@ export function LiveCanvas({
           </div>
         )}
         {liveHint && (
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6 text-center text-xs text-muted-foreground">
-            {liveHint}
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6">
+            <div className="max-w-sm rounded-xl border border-border bg-card/90 px-4 py-3 shadow-sm backdrop-blur text-center text-xs leading-relaxed text-muted-foreground">{liveHint}</div>
           </div>
         )}
       </div>
@@ -375,7 +375,7 @@ function NavBtn({ icon, title, onClick }: { icon: ReactNode; title: string; onCl
       title={title}
       aria-label={title}
       onClick={onClick}
-      className="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
+      className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
     >
       {icon}
     </button>

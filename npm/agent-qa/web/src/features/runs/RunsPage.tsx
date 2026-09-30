@@ -166,7 +166,7 @@ export function RunsPage() {
           <span
             className={
               'size-1.5 rounded-full ' +
-              (runs.live ? 'bg-emerald-400 animate-pulse' : 'bg-muted-foreground/40')
+              (runs.live ? 'bg-success animate-pulse' : 'bg-muted-foreground/40')
             }
           />
           {runs.live ? 'live' : 'paused'}

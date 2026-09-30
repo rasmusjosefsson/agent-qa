@@ -7,7 +7,25 @@ import {
   useTransition,
   type PointerEvent as ReactPointerEvent,
 } from 'react'
-import { Loader2Icon, PlusIcon, XIcon, PlugZapIcon, CopyIcon, CheckIcon } from 'lucide-react'
+import {
+  Loader2Icon,
+  PlusIcon,
+  XIcon,
+  PlugZapIcon,
+  CopyIcon,
+  CheckIcon,
+  SparklesIcon,
+  LogInIcon,
+  RotateCcwIcon,
+  ListIcon,
+  FormInputIcon,
+  ScanSearchIcon,
+  BugIcon,
+  MessageSquareTextIcon,
+  MonitorPlayIcon,
+  FileCheck2Icon,
+  type LucideIcon,
+} from 'lucide-react'
 import { useChat } from './useChat'
 import type { ChatItem } from '@/lib/types'
 import { WorkingIndicator } from '@/components/working-indicator'
@@ -57,34 +75,52 @@ const SPLIT_KEY = 'aqa-chat-split'
 // Starter prompts that target the qaplayground demo pages we keep goldens for
 // (evals/golden/*), so each one records/replays against a real, stable site.
 // Vendor-neutral: qaplayground.com is a public practice site.
-const SUGGESTIONS: { title: string; prompt: string }[] = [
+const SUGGESTIONS: { title: string; hint: string; icon: LucideIcon; prompt: string }[] = [
   {
     title: 'Record a login flow',
+    hint: 'Sign in and assert the dashboard',
+    icon: LogInIcon,
     prompt:
       'Record a scenario: open https://qaplayground.com/bank, sign in with username "admin" and password "admin123", click the login button, wait for the URL to be /bank/dashboard, assert the page title reads "SecureBank Dashboard", then save it as bank-login.json.',
   },
   {
     title: 'Replay & summarize',
+    hint: 'Re-run the latest scenario',
+    icon: RotateCcwIcon,
     prompt: 'Replay the most recent scenario and summarize what passed and what failed.',
   },
   {
     title: 'List scenarios',
+    hint: 'See everything with its last status',
+    icon: ListIcon,
     prompt: 'List the recorded scenarios in this project with their last run status.',
   },
   {
     title: 'Record a form fill',
+    hint: 'Fill, submit and check success',
+    icon: FormInputIcon,
     prompt:
       'Record a scenario on https://qaplayground.com/practice/forms: fill in the form fields with valid data and submit it, asserting the success state. Save it as forms.json.',
   },
   {
     title: 'Inspect a page',
+    hint: 'ARIA snapshot of the controls',
+    icon: ScanSearchIcon,
     prompt:
       'Open https://qaplayground.com/practice/dropdowns and give me an ARIA snapshot of the page\u2019s main landmarks and controls.',
   },
   {
     title: 'Explain a failure',
+    hint: 'Find the failing step and why',
+    icon: BugIcon,
     prompt: 'Look at the latest replay run and explain why it failed, with the failing step.',
   },
+]
+
+const HOW_IT_WORKS: { icon: LucideIcon; label: string }[] = [
+  { icon: MessageSquareTextIcon, label: 'Describe it' },
+  { icon: MonitorPlayIcon, label: 'Agent drives a browser' },
+  { icon: FileCheck2Icon, label: 'Replayable scenario' },
 ]
 
 // Serialize the conversation to markdown for the clipboard, so the user can
@@ -251,7 +287,7 @@ export function ChatPage() {
                     <span
                       className={cn(
                         'size-1.5 shrink-0 rounded-full',
-                        c.busy ? 'animate-pulse bg-amber-500' : 'bg-emerald-500'
+                        c.busy ? 'animate-pulse bg-warning' : 'bg-success'
                       )}
                     />
                   )}
@@ -494,7 +530,7 @@ function ChatConversation({
 
   const conversationColumn = (
     <div
-      className="flex min-h-0 min-w-0 flex-1 flex-col"
+      className="flex min-h-[80svh] min-w-0 flex-1 flex-col lg:min-h-0"
       style={isDesktop ? { flexBasis: `${leftPct}%`, flexGrow: 0, flexShrink: 0 } : undefined}
     >
           {state.hydrated && !state.available && (
@@ -518,16 +554,35 @@ function ChatConversation({
             className="min-h-0 flex-1 space-y-6 overflow-auto px-5 py-4"
           >
             {empty ? (
-              <div className="mx-auto flex h-full w-full max-w-xl flex-col items-center justify-center gap-5 text-center">
+              <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col items-center justify-center gap-7 py-6 text-center">
+                <div className="grid size-12 place-items-center rounded-2xl bg-primary/10 text-primary">
+                  <SparklesIcon className="size-6" />
+                </div>
                 <div>
-                  <div className="text-[15px] font-semibold tracking-tight">Chat with your agent-qa agent</div>
-                  <p className="mx-auto mt-1.5 max-w-md text-[13px] leading-relaxed text-muted-foreground">
+                  <h2 className="text-foreground text-2xl font-semibold tracking-tight">
+                    Chat with your agent-qa agent
+                  </h2>
+                  <p className="mx-auto mt-2 max-w-md text-[13px] leading-relaxed text-muted-foreground">
                     Same skills, tools, and models as the terminal. Ask it to record a scenario,
                     replay a run, run a command, or explain a failure. When it opens a browser,
                     watch it live on the right.
                   </p>
                 </div>
-                <div className="flex flex-wrap justify-center gap-2">
+                <ol className="flex flex-wrap items-center justify-center gap-x-2 gap-y-2 text-xs text-muted-foreground">
+                  {HOW_IT_WORKS.map((h, i) => (
+                    <li key={h.label} className="flex items-center gap-2">
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1 shadow-xs">
+                        <span className="grid size-4 place-items-center rounded-full bg-primary/12 text-[10px] font-semibold text-primary">
+                          {i + 1}
+                        </span>
+                        <h.icon className="size-3.5 text-foreground/70" />
+                        <span className="font-medium text-foreground/80">{h.label}</span>
+                      </span>
+                      {i < HOW_IT_WORKS.length - 1 && <span className="h-px w-4 bg-border" />}
+                    </li>
+                  ))}
+                </ol>
+                <div className="grid w-full grid-cols-1 gap-2.5 text-left sm:grid-cols-2 xl:grid-cols-3">
                   {SUGGESTIONS.map((s) => (
                     <button
                       key={s.title}
@@ -535,9 +590,15 @@ function ChatConversation({
                       title={s.prompt}
                       disabled={!state.available}
                       onClick={() => sendSuggestion(s.prompt)}
-                      className="rounded-lg border border-border bg-card px-3.5 py-2 text-xs font-medium text-muted-foreground shadow-sm transition-all hover:border-ring/50 hover:text-foreground hover:shadow disabled:opacity-50"
+                      className="group flex items-start gap-3 rounded-xl border text-left border-border bg-card p-3 shadow-xs transition-all hover:border-primary/35 disabled:pointer-events-none disabled:opacity-50"
                     >
-                      {s.title}
+                      <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-accent text-accent-foreground transition-colors group-hover:bg-primary group-hover:text-primary-foreground">
+                        <s.icon className="size-4" />
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block text-[13px] font-medium text-foreground">{s.title}</span>
+                        <span className="block truncate text-xs text-muted-foreground">{s.hint}</span>
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -595,7 +656,7 @@ function ChatConversation({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      <div ref={containerRef} className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row lg:gap-0">
+      <div ref={containerRef} className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto lg:flex-row lg:gap-0 lg:overflow-visible">
         {conversationColumn}
 
         {/* Resizer (desktop only) */}
@@ -613,7 +674,7 @@ function ChatConversation({
         {/* Right column: live browser, with the recording steps stacked
             underneath once a recording exists (the browser letterboxes, so the
             leftover vertical space goes to the steps). */}
-        <div className="flex h-[60vh] min-h-0 min-w-0 flex-col lg:h-auto lg:flex-1">
+        <div className="flex h-[60vh] min-h-0 min-w-0 shrink-0 flex-col lg:h-auto lg:flex-1 lg:shrink">
           <div className={cn('min-h-0', hasRecording ? 'flex-[3]' : 'flex-1')}>{liveBrowserPane}</div>
           {hasRecording && (
             <div className="flex min-h-0 flex-[2] flex-col overflow-hidden border-t border-border">
@@ -624,7 +685,7 @@ function ChatConversation({
       </div>
 
       {savedNotice && (
-        <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300 shadow-lg backdrop-blur">
+        <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-lg border border-success/30 bg-success/10 px-3 py-2 text-sm text-success shadow-lg backdrop-blur">
           <CheckIcon className="size-4 shrink-0" />
           <span>
             Scenario saved — {savedNotice.steps} step{savedNotice.steps === 1 ? '' : 's'}
@@ -804,8 +865,8 @@ function ConnectBar({ cid }: { cid: string }) {
           role="status"
           className={cn(
             'text-[11px]',
-            msg.tone === 'busy' && 'text-amber-400',
-            msg.tone === 'ok' && 'text-emerald-400',
+            msg.tone === 'busy' && 'text-warning',
+            msg.tone === 'ok' && 'text-success',
             msg.tone === 'err' && 'text-destructive'
           )}
         >
@@ -885,7 +946,7 @@ function ChatSelect({
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none focus-visible:border-ring"
+      className="h-7 rounded-lg border border-border bg-card px-2 text-xs font-medium text-foreground shadow-xs outline-none transition-colors hover:border-primary/30 focus-visible:border-primary/50 focus-visible:ring-3 focus-visible:ring-primary/10"
     >
       <option value="">{placeholder}</option>
       {options.map((o) => (

@@ -1,7 +1,8 @@
-import { useEffect, useState, type AnchorHTMLAttributes, type ComponentProps, type ComponentType, type ReactNode, type SVGProps } from "react"
+import { useEffect, useState, type ComponentProps, type ComponentType, type SVGProps } from "react"
 import {
   BookOpenIcon,
   BotIcon,
+  SparklesIcon,
   ClipboardListIcon,
   CirclePlayIcon,
   FolderTreeIcon,
@@ -15,7 +16,7 @@ import {
 } from "lucide-react"
 
 import type { Tab } from "../AppShell"
-import { useSpaLink } from "../router"
+import { SpaLink as SpaAnchor } from "@/components/spa-link"
 import {
   Sidebar,
   SidebarContent,
@@ -66,7 +67,7 @@ const SETUP: NavItem[] = [
 
 const WORKSPACE: NavItem[] = [{ label: "Settings", icon: Settings2Icon, tab: "settings", href: "/settings" }]
 
-function NavRow({ item, tab }: { item: NavItem; tab: Tab }) {
+function NavRow({ item, tab, step }: { item: NavItem; tab: Tab; step?: number }) {
   const Icon = item.icon
   if (item.soon || !item.href) {
     return (
@@ -95,26 +96,18 @@ function NavRow({ item, tab }: { item: NavItem; tab: Tab }) {
           <span>{item.label}</span>
         </SpaAnchor>
       </SidebarMenuButton>
+      {step !== undefined && (
+        <SidebarMenuBadge
+          className={
+            item.tab === tab
+              ? "rounded-md bg-sidebar-primary/12 font-mono text-[10px] text-sidebar-primary"
+              : "rounded-md font-mono text-[10px] text-sidebar-foreground/35"
+          }
+        >
+          {step}
+        </SidebarMenuBadge>
+      )}
     </SidebarMenuItem>
-  )
-}
-
-function SpaAnchor({
-  href,
-  children,
-  ...rest
-}: {
-  href: string
-  children: ReactNode
-} & AnchorHTMLAttributes<HTMLAnchorElement>) {
-  const onClick = useSpaLink(href)
-  // Forward everything Radix Slot merges onto us (className for the active /
-  // hover pill, data attributes, …) — dropping them leaves an unstyled anchor
-  // and Tailwind preflight stacks the icon over the label.
-  return (
-    <a href={href} {...rest} onClick={onClick}>
-      {children}
-    </a>
   )
 }
 
@@ -134,11 +127,11 @@ export function AppSidebar({ tab, ...props }: { tab: Tab } & ComponentProps<type
           <SidebarMenuItem>
             <SidebarMenuButton asChild size="lg" tooltip={version ? `agent-qa v${version}` : 'agent-qa'}>
               <SpaAnchor href="/cases">
-                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
+                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
                   <TestTubeDiagonalIcon className="size-4" />
                 </div>
                 <div className="grid flex-1 text-left text-sm leading-tight">
-                  <span className="truncate font-semibold">agent-qa</span>
+                  <span className="truncate font-semibold tracking-tight text-foreground">agent-qa</span>
                   <span data-qa-volatile className="truncate text-xs text-muted-foreground">
                     QA workbench{version ? ` · v${version}` : ''}
                   </span>
@@ -151,6 +144,7 @@ export function AppSidebar({ tab, ...props }: { tab: Tab } & ComponentProps<type
 
       <SidebarContent>
         <SidebarGroup>
+          <SidebarGroupLabel>Create</SidebarGroupLabel>
           <SidebarMenu>
             {AUTHORING.map((item) => (
               <NavRow key={item.label} item={item} tab={tab} />
@@ -159,10 +153,10 @@ export function AppSidebar({ tab, ...props }: { tab: Tab } & ComponentProps<type
         </SidebarGroup>
 
         <SidebarGroup>
-          <SidebarGroupLabel>Tests</SidebarGroupLabel>
+          <SidebarGroupLabel>Test pipeline</SidebarGroupLabel>
           <SidebarMenu>
-            {TESTS.map((item) => (
-              <NavRow key={item.label} item={item} tab={tab} />
+            {TESTS.map((item, i) => (
+              <NavRow key={item.label} item={item} tab={tab} step={i + 1} />
             ))}
           </SidebarMenu>
         </SidebarGroup>
@@ -178,6 +172,20 @@ export function AppSidebar({ tab, ...props }: { tab: Tab } & ComponentProps<type
       </SidebarContent>
 
       <SidebarFooter>
+        <SpaAnchor
+          href="/chat"
+          className="group/tip mx-1 mb-1 block overflow-hidden rounded-xl border border-sidebar-border bg-card/60 p-3 transition-colors hover:border-primary/30 group-data-[collapsible=icon]:hidden"
+        >
+          <div className="-m-3 mb-0 p-3 pb-2">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+              <SparklesIcon className="size-3.5 text-primary" /> New here?
+            </div>
+          </div>
+          <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+            Describe a test in <span className="font-medium text-foreground">Chat</span>. The agent records it, then you
+            replay it from <span className="font-medium text-foreground">Runs</span>.
+          </p>
+        </SpaAnchor>
         <SidebarMenu>
           {WORKSPACE.map((item) => (
             <NavRow key={item.label} item={item} tab={tab} />

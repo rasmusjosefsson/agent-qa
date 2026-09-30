@@ -55,6 +55,8 @@ import {
   type AppUpdate,
 } from '@/lib/run-config-api'
 import type { PluginInfo } from '@/features/environments/types'
+import { PageHeader, PageError } from '@/components/page-header'
+import { EmptyState, LoadingState } from '@/components/empty-state'
 
 export function PluginsPage() {
   const [plugins, setPlugins] = useState<PluginInfo[] | null>(null)
@@ -166,30 +168,33 @@ export function PluginsPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3">
-        <div>
-          <h1 className="text-base font-semibold tracking-tight">Extensions</h1>
-          <p className="text-xs text-muted-foreground">
+      <PageHeader
+        icon={PlugIcon}
+        title="Extensions"
+        description={
+          <>
             An extension is a <span className="font-medium">package</span> (from npm or git) that
             bundles <span className="font-medium">plugins</span> (auth, session policy, setup hooks)
             plus skills, personas, and environments — installed in one step, no terminal needed.
-          </p>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <Button variant="ghost" size="sm" onClick={() => void doCheckUpdates()} disabled={checking}>
-            {checking ? <Loader2Icon className="animate-spin" /> : <ArrowUpCircleIcon />} Check for updates
-          </Button>
-          <Button variant="ghost" size="sm" onClick={() => void load()}>
-            <RefreshCwIcon /> Refresh
-          </Button>
-          <Button size="sm" onClick={() => setInstalling(true)}>
-            <DownloadIcon /> Install from npm / git
-          </Button>
-        </div>
-      </div>
+          </>
+        }
+        actions={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => void doCheckUpdates()} disabled={checking}>
+              {checking ? <Loader2Icon className="animate-spin" /> : <ArrowUpCircleIcon />} Check for updates
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => void load()}>
+              <RefreshCwIcon /> Refresh
+            </Button>
+            <Button size="sm" onClick={() => setInstalling(true)}>
+              <DownloadIcon /> Install from npm / git
+            </Button>
+          </>
+        }
+      />
 
       {appUpdate?.updateAvailable && (
-        <div className="flex items-center gap-2 border-b border-emerald-500/30 bg-emerald-500/10 px-5 py-1.5 text-xs text-foreground">
+        <div className="flex items-center gap-2 border-b border-success/25 bg-success/10 px-6 py-2 text-xs text-foreground">
           <ArrowUpCircleIcon className="size-3.5 shrink-0" />
           <span>
             agent-qa <span className="font-mono">{appUpdate.latest}</span> is available (you're on{' '}
@@ -200,9 +205,7 @@ export function PluginsPage() {
       )}
 
       {err && (
-        <div className="border-b border-destructive/30 bg-destructive/10 px-5 py-1.5 text-xs text-destructive">
-          {err}
-        </div>
+        <PageError>{err}</PageError>
       )}
       {!available && (
         <div className="border-b border-border bg-muted/20 px-5 py-1.5 text-xs text-muted-foreground">
@@ -212,166 +215,174 @@ export function PluginsPage() {
 
       <div className="min-h-0 flex-1 overflow-auto">
         {packages.length > 0 && (
-          <div className="border-b border-border">
-            <div className="flex items-center gap-2 px-5 pb-1 pt-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              <PackageIcon className="size-3.5" /> Installed packages
+          <div className="px-5 pt-5">
+            <div className="flex items-center gap-2 px-1 pb-2 text-[10.5px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">
+              <PackageIcon className="size-3.5 text-primary" /> Installed packages
             </div>
-            <table className="w-full text-sm">
-              <tbody>
-                {packages.map((pkg) => {
-                  const u = updates[pkg.source]
-                  const busy = updatingSource === pkg.source
-                  const removing = removingSource === pkg.source
-                  const provides =
-                    [
-                      pkg.plugins.length ? `${pkg.plugins.length} plugin` : '',
-                      pkg.skills ? `${pkg.skills} skills` : '',
-                      pkg.personas ? `${pkg.personas} personas` : '',
-                      pkg.environments ? `${pkg.environments} envs` : '',
-                    ]
-                      .filter(Boolean)
-                      .join(' · ') || '—'
-                  return (
-                    <tr key={pkg.source} className="border-b border-border/60">
-                      <td className="px-5 py-2.5">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium text-foreground">{pkg.name}</span>
-                          {u?.updateAvailable && (
-                            <span className="rounded-sm bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-foreground">
-                              update available{u.latest ? ` → ${u.latest}` : ''}
-                            </span>
-                          )}
-                          {u && !u.updateAvailable && (
-                            <span className="rounded-sm bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-foreground">
-                              up to date
-                            </span>
-                          )}
-                        </div>
-                        <div className="truncate font-mono text-[11px] text-muted-foreground" title={pkg.source}>
-                          {pkg.source}
-                        </div>
-                      </td>
-                      <td className="px-3 py-2.5 text-xs text-muted-foreground">{provides}</td>
-                      <td className="px-3 py-2.5 text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7"
-                            disabled={busy || removing}
-                            onClick={() => void doUpdate(pkg.source)}
-                            title="Re-pull this package"
-                          >
-                            {busy ? (
-                              <Loader2Icon className="size-4 animate-spin" />
-                            ) : (
-                              <RefreshCwIcon className="size-4" />
-                            )}{' '}
-                            Update
-                          </Button>
-                          <AlertDialog>
-                            <AlertDialogTrigger asChild>
+            <div>
+              <div className="aqa-table-card aqa-elevated">
+                <table className="aqa-table w-full text-sm">
+                  <tbody>
+                    {packages.map((pkg) => {
+                      const u = updates[pkg.source]
+                      const busy = updatingSource === pkg.source
+                      const removing = removingSource === pkg.source
+                      const provides =
+                        [
+                          pkg.plugins.length ? `${pkg.plugins.length} plugin` : '',
+                          pkg.skills ? `${pkg.skills} skills` : '',
+                          pkg.personas ? `${pkg.personas} personas` : '',
+                          pkg.environments ? `${pkg.environments} envs` : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' · ') || '—'
+                      return (
+                        <tr key={pkg.source} className="border-b border-border/60">
+                          <td className="px-5 py-2.5">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-foreground">{pkg.name}</span>
+                              {u?.updateAvailable && (
+                                <span className="rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning">
+                                  update available{u.latest ? ` → ${u.latest}` : ''}
+                                </span>
+                              )}
+                              {u && !u.updateAvailable && (
+                                <span className="rounded-full border border-success/25 bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success">
+                                  up to date
+                                </span>
+                              )}
+                            </div>
+                            <div className="truncate font-mono text-[11px] text-muted-foreground" title={pkg.source}>
+                              {pkg.source}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2.5 text-xs text-muted-foreground">{provides}</td>
+                          <td className="px-3 py-2.5 text-right">
+                            <div className="flex items-center justify-end gap-1">
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                className="h-7 text-muted-foreground hover:text-destructive"
+                                className="h-7"
                                 disabled={busy || removing}
-                                title="Uninstall this package"
-                                aria-label={`Uninstall ${pkg.name}`}
+                                onClick={() => void doUpdate(pkg.source)}
+                                title="Re-pull this package"
                               >
-                                {removing ? (
+                                {busy ? (
                                   <Loader2Icon className="size-4 animate-spin" />
                                 ) : (
-                                  <Trash2Icon className="size-4" />
-                                )}
+                                  <RefreshCwIcon className="size-4" />
+                                )}{' '}
+                                Update
                               </Button>
-                            </AlertDialogTrigger>
-                            <AlertDialogContent>
-                              <AlertDialogHeader>
-                                <AlertDialogTitle>Uninstall {pkg.name}?</AlertDialogTitle>
-                                <AlertDialogDescription>
-                                  Removes it from your agent-qa config and deletes its downloaded
-                                  files. Its plugins, skills, personas, and environments will no
-                                  longer be available. You can reinstall it from the source any time.
-                                </AlertDialogDescription>
-                              </AlertDialogHeader>
-                              <AlertDialogFooter>
-                                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                <AlertDialogAction
-                                  variant="destructive"
-                                  onClick={() => void doUninstall(pkg.source)}
-                                >
-                                  Uninstall
-                                </AlertDialogAction>
-                              </AlertDialogFooter>
-                            </AlertDialogContent>
-                          </AlertDialog>
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+                              <AlertDialog>
+                                <AlertDialogTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 text-muted-foreground hover:text-destructive"
+                                    disabled={busy || removing}
+                                    title="Uninstall this package"
+                                    aria-label={`Uninstall ${pkg.name}`}
+                                  >
+                                    {removing ? (
+                                      <Loader2Icon className="size-4 animate-spin" />
+                                    ) : (
+                                      <Trash2Icon className="size-4" />
+                                    )}
+                                  </Button>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent>
+                                  <AlertDialogHeader>
+                                    <AlertDialogTitle>Uninstall {pkg.name}?</AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                      Removes it from your agent-qa config and deletes its downloaded
+                                      files. Its plugins, skills, personas, and environments will no
+                                      longer be available. You can reinstall it from the source any time.
+                                    </AlertDialogDescription>
+                                  </AlertDialogHeader>
+                                  <AlertDialogFooter>
+                                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                    <AlertDialogAction
+                                      variant="destructive"
+                                      onClick={() => void doUninstall(pkg.source)}
+                                    >
+                                      Uninstall
+                                    </AlertDialogAction>
+                                  </AlertDialogFooter>
+                                </AlertDialogContent>
+                              </AlertDialog>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         )}
         {plugins === null ? (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            <Loader2Icon className="mr-2 size-4 animate-spin" /> Loading…
-          </div>
+          <LoadingState>Loading…</LoadingState>
         ) : plugins.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-            <PlugIcon className="size-8 text-muted-foreground/50" />
-            <div>
-              <div className="text-sm font-medium">No extensions installed</div>
-              <p className="mx-auto mt-1 max-w-md text-xs text-muted-foreground">
-                Install an extension from npm or git — its plugins, skills, personas, and
-                environments are wired into your agent-qa config automatically.
-              </p>
-            </div>
-            <Button size="sm" onClick={() => setInstalling(true)}>
-              <DownloadIcon /> Install from npm / git
-            </Button>
-          </div>
+          <EmptyState
+            icon={PlugIcon}
+            title="No extensions installed"
+            description="Install an extension from npm or git — its plugins, skills, personas, and environments are wired into your agent-qa config automatically."
+            action={
+              <Button size="sm" onClick={() => setInstalling(true)}>
+                <DownloadIcon /> Install from npm / git
+              </Button>
+            }
+          />
         ) : (
-          <table className="w-full text-sm">
-            <thead className="sticky top-0 z-10 bg-background">
-              <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
-                <th className="px-5 py-2 font-medium">Plugin</th>
-                <th className="px-3 py-2 font-medium">Kinds</th>
-                <th className="px-3 py-2 font-medium">Source</th>
-                <th className="px-3 py-2 font-medium">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {plugins.map((p) => {
-                const base = (p.binary || '').split('/').pop() || '?'
-                return (
-                  <tr key={p.binary || base} className="border-b border-border/60">
-                    <td className="px-5 py-2.5">
-                      <div className="font-medium text-foreground">{base}</div>
-                      <div className="truncate font-mono text-[11px] text-muted-foreground" title={p.binary}>
-                        {p.binary || '—'}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2.5 text-xs">{(p.kinds || []).join(', ') || '—'}</td>
-                    <td className="px-3 py-2.5 text-xs text-muted-foreground">{p.source || '—'}</td>
-                    <td className="px-3 py-2.5 text-xs">
-                      {p.pingFailed ? (
-                        <span className="rounded-sm bg-destructive/15 px-1.5 py-0.5 text-destructive">
-                          ping failed
-                        </span>
-                      ) : (
-                        <span className="rounded-sm bg-emerald-500/15 px-1.5 py-0.5 text-foreground">
-                          ok{p.declared ? ' · declared' : ''}
-                        </span>
-                      )}
-                    </td>
+          <div className="p-5">
+            <div className="flex items-center gap-2 px-1 pb-2 text-[10.5px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">
+              <PlugIcon className="size-3.5 text-primary" /> Plugins
+            </div>
+            <div className="aqa-table-card aqa-elevated">
+              <table className="aqa-table w-full text-sm">
+                <thead className="sticky top-0 z-10 bg-background">
+                  <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                    <th className="px-5 py-2 font-medium">Plugin</th>
+                    <th className="px-3 py-2 font-medium">Kinds</th>
+                    <th className="px-3 py-2 font-medium">Source</th>
+                    <th className="px-3 py-2 font-medium">Status</th>
                   </tr>
-                )
-              })}
-            </tbody>
-          </table>
+                </thead>
+                <tbody>
+                  {plugins.map((p) => {
+                    const base = (p.binary || '').split('/').pop() || '?'
+                    return (
+                      <tr key={p.binary || base} className="border-b border-border/60">
+                        <td className="px-5 py-2.5">
+                          <div className="font-medium text-foreground">{base}</div>
+                          <div className="truncate font-mono text-[11px] text-muted-foreground" title={p.binary}>
+                            {p.binary || '—'}
+                          </div>
+                        </td>
+                        <td className="px-3 py-2.5 text-xs">{(p.kinds || []).join(', ') || '—'}</td>
+                        <td className="px-3 py-2.5 text-xs text-muted-foreground">{p.source || '—'}</td>
+                        <td className="px-3 py-2.5 text-xs">
+                          {p.pingFailed ? (
+                            <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-destructive/25 bg-destructive/10 px-2 py-0.5 font-medium text-destructive">
+                          <span className="size-1.5 rounded-full bg-current" />
+                              ping failed
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-success/25 bg-success/10 px-2 py-0.5 font-medium text-success">
+                          <span className="size-1.5 rounded-full bg-current" />
+                              ok{p.declared ? ' · declared' : ''}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
         )}
       </div>
 
@@ -494,7 +505,7 @@ function InstallDialog({ onClose, onInstalled }: { onClose: () => void; onInstal
             </p>
           </div>
           {result?.ok && (
-            <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs">
+            <div className="rounded-md border border-success/30 bg-success/10 px-3 py-2 text-xs">
               Installed <span className="font-medium">{result.name}</span> —{' '}
               {result.plugins?.length || 0} plugin(s)
               {result.plugins && result.plugins.length > 0 && (

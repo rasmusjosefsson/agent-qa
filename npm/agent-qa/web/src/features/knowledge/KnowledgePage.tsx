@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { DownloadIcon, Loader2Icon } from 'lucide-react'
+import { BookOpenIcon, DownloadIcon, Loader2Icon } from 'lucide-react'
+import { PageHeader } from '@/components/page-header'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -106,27 +107,26 @@ export function KnowledgePage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="border-b border-border px-5 py-3">
-        <h1 className="text-base font-semibold tracking-tight">Knowledge</h1>
-        <p className="text-xs text-muted-foreground">
-          Connect the tools where your tests and product knowledge already live.
-        </p>
-      </div>
+      <PageHeader
+        icon={BookOpenIcon}
+        title="Knowledge"
+        description="Connect the tools where your tests and product knowledge already live."
+      />
 
       <div className="min-h-0 flex-1 space-y-8 overflow-auto px-5 py-5">
         {GROUPS.map((g) => (
           <section key={g.label}>
-            <h2 className="text-sm font-medium text-foreground">{g.label}</h2>
+            <h2 className="text-sm font-semibold tracking-tight text-foreground">{g.label}</h2>
             <p className="mb-3 text-xs text-muted-foreground">{g.hint}</p>
-            <div className="overflow-hidden rounded-lg border border-border">
+            <div className="aqa-table-card aqa-elevated">
               {g.items.map((s) => (
                 <div
                   key={s.key}
-                  className="flex items-center gap-3 border-b border-border/60 px-4 py-3 last:border-0"
+                  className="flex items-center gap-3 border-b border-border/60 px-4 py-3 transition-colors last:border-0 hover:bg-accent/40"
                 >
                   <div
                     className={cn(
-                      'grid size-9 shrink-0 place-items-center rounded-md text-sm font-semibold text-white',
+                      'grid size-9 shrink-0 place-items-center rounded-lg text-sm font-semibold text-white shadow-sm',
                       s.tile
                     )}
                   >

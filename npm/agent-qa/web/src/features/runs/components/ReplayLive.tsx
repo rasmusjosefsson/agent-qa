@@ -22,11 +22,12 @@ export function ReplayLive({ sid, onLightbox }: { sid: string; onLightbox: (url:
   }, [sid])
 
   return (
-    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-card">
-      <div className="flex items-center gap-1.5 border-b border-border px-3 py-2 text-xs text-amber-400">
-        <span>● live browser</span>
+    <section className="flex h-full min-h-0 flex-col overflow-hidden bg-card">
+      <div className="flex h-11 items-center gap-2 border-b border-border px-3 text-xs font-medium text-warning">
+        <span className="aqa-ping size-1.5 rounded-full bg-current" />
+        <span>Live browser</span>
       </div>
-      <div className="grid min-h-0 flex-1 place-items-center overflow-auto bg-black p-2">
+      <div className="aqa-dots grid min-h-0 flex-1 place-items-center overflow-auto bg-muted/40 p-3">
         {src ? (
           <img
             ref={imgRef}
@@ -34,10 +35,10 @@ export function ReplayLive({ sid, onLightbox }: { sid: string; onLightbox: (url:
             alt="live replay browser"
             title="Click to enlarge"
             onClick={() => src && onLightbox(src, 'Live replay browser')}
-            className="max-h-full max-w-full cursor-zoom-in object-contain"
+            className="max-h-full max-w-full cursor-zoom-in rounded-md object-contain shadow-lg ring-1 ring-border"
           />
         ) : (
-          <div className="text-xs text-muted-foreground">connecting to live browser…</div>
+          <div className="rounded-full border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground shadow-sm">Connecting to live browser…</div>
         )}
       </div>
     </section>

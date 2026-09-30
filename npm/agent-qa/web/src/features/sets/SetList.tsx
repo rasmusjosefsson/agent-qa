@@ -14,6 +14,9 @@ import {
 import { getSets, upsertSet } from '@/lib/sets-api'
 import { navigate } from '@/router'
 import type { SetMode, SetWithCount } from './types'
+import { PageHeader, PageError } from '@/components/page-header'
+import { EmptyState, LoadingState } from '@/components/empty-state'
+import { TestFlow } from '@/components/test-flow'
 
 function slugify(s: string): string {
   return (
@@ -70,80 +73,91 @@ export function SetList() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3">
-        <div>
-          <h1 className="text-base font-semibold tracking-tight">Test Sets</h1>
-          <p className="text-xs text-muted-foreground">
+      <PageHeader
+        icon={LayersIcon}
+        title="Test Sets"
+        description={
+          <>
             Curate a reusable collection of cases — by hand, or by matching a label.
-          </p>
-        </div>
-        <Button size="sm" onClick={() => setOpen(true)}>
-          <PlusIcon /> New set
-        </Button>
-      </div>
+          </>
+        }
+        actions={
+          <>
+            <Button size="sm" onClick={() => setOpen(true)}>
+              <PlusIcon /> New set
+            </Button>
+          </>
+        }
+      >
+        <TestFlow current="sets" />
+      </PageHeader>
 
       {err && (
-        <div className="border-b border-destructive/30 bg-destructive/10 px-5 py-1.5 text-xs text-destructive">
-          {err}
-        </div>
+        <PageError>{err}</PageError>
       )}
 
       <div className="min-h-0 flex-1 overflow-auto">
         {sets === null ? (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            <Loader2Icon className="mr-2 size-4 animate-spin" /> Loading sets…
-          </div>
+          <LoadingState>Loading sets…</LoadingState>
         ) : sets.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-            <LayersIcon className="size-8 text-muted-foreground/50" />
-            <div>
-              <div className="text-sm font-medium">No test sets yet</div>
-              <p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">
+          <EmptyState
+            icon={LayersIcon}
+            title="No test sets yet"
+            description={
+              <>
                 Group cases into a reusable set — pick them by hand, or match a label so it stays
                 up to date as cases are added.
-              </p>
-            </div>
-            <Button size="sm" onClick={() => setOpen(true)}>
-              <PlusIcon /> New set
-            </Button>
-          </div>
+              </>
+            }
+            action={
+              <>
+                <Button size="sm" onClick={() => setOpen(true)}>
+                  <PlusIcon /> New set
+                </Button>
+              </>
+            }
+          />
         ) : (
-          <table className="w-full text-sm">
-            <thead className="sticky top-0 z-10 bg-background">
-              <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
-                <th className="px-5 py-2 font-medium">Name</th>
-                <th className="px-3 py-2 font-medium">Membership</th>
-                <th className="px-3 py-2 font-medium">Cases</th>
-                <th className="px-3 py-2 font-medium">Updated</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sets.map((s) => (
-                <tr
-                  key={s.id}
-                  onClick={() => gotoSet(s.id)}
-                  className="cursor-pointer border-b border-border/60 transition-colors hover:bg-muted/40"
-                >
-                  <td className="px-5 py-2.5">
-                    <div className="font-medium text-foreground">{s.name}</div>
-                    <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">{s.id}</div>
-                  </td>
-                  <td className="px-3 py-2.5 text-muted-foreground">
-                    {s.mode === 'tag' ? (
-                      <span>
-                        label:{' '}
-                        {s.tagQuery.length ? s.tagQuery.join(', ') : <span className="italic">none</span>}
-                      </span>
-                    ) : (
-                      'manual'
-                    )}
-                  </td>
-                  <td className="px-3 py-2.5 text-muted-foreground">{s.caseCount}</td>
-                  <td className="px-3 py-2.5 text-muted-foreground">{fmtAgo(s.updatedAt)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="p-5">
+            <div className="aqa-table-card aqa-elevated">
+              <table className="aqa-table w-full text-sm">
+                <thead className="sticky top-0 z-10 bg-background">
+                  <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                    <th className="px-5 py-2 font-medium">Name</th>
+                    <th className="px-3 py-2 font-medium">Membership</th>
+                    <th className="px-3 py-2 font-medium">Cases</th>
+                    <th className="px-3 py-2 font-medium">Updated</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sets.map((s) => (
+                    <tr
+                      key={s.id}
+                      onClick={() => gotoSet(s.id)}
+                      className="cursor-pointer border-b border-border/60 transition-colors hover:bg-muted/40"
+                    >
+                      <td className="px-5 py-2.5">
+                        <div className="font-medium text-foreground">{s.name}</div>
+                        <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">{s.id}</div>
+                      </td>
+                      <td className="px-3 py-2.5 text-muted-foreground">
+                        {s.mode === 'tag' ? (
+                          <span>
+                            label:{' '}
+                            {s.tagQuery.length ? s.tagQuery.join(', ') : <span className="italic">none</span>}
+                          </span>
+                        ) : (
+                          'manual'
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-muted-foreground">{s.caseCount}</td>
+                      <td className="px-3 py-2.5 text-muted-foreground">{fmtAgo(s.updatedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
         )}
       </div>
 

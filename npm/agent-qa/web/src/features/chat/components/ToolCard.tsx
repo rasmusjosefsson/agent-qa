@@ -56,9 +56,9 @@ function iconFor(name?: string): LucideIcon {
 
 function StatusIcon({ status }: { status: ToolItem['status'] }) {
   if (status === 'running')
-    return <Loader2Icon className="size-3.5 shrink-0 animate-spin text-amber-400" />
+    return <Loader2Icon className="size-3.5 shrink-0 animate-spin text-warning" />
   if (status === 'err') return <CircleAlertIcon className="size-3.5 shrink-0 text-destructive" />
-  return <CheckIcon className="size-3.5 shrink-0 text-emerald-500/70" />
+  return <CheckIcon className="size-3.5 shrink-0 text-success/70" />
 }
 
 export function ToolCard({ item }: { item: ToolItem }) {
@@ -85,7 +85,7 @@ export function ToolCard({ item }: { item: ToolItem }) {
     <Collapsible
       open={open && hasDetail}
       onOpenChange={setOpen}
-      className="rounded-lg border border-border bg-card/60 text-card-foreground"
+      className="rounded-xl border border-border bg-card/70 text-card-foreground shadow-xs"
     >
       <CollapsibleTrigger
         disabled={!hasDetail}

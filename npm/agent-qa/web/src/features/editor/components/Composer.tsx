@@ -36,7 +36,7 @@ export function Composer({
 
   return (
     <div className="flex flex-col gap-3 p-3">
-      <div className="text-xs font-medium text-muted-foreground">Add a step</div>
+      <div className="text-[10.5px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">Add a step</div>
 
       <div className="flex flex-col gap-1">
         <Label className="text-xs">Step</Label>
@@ -88,7 +88,7 @@ export function Composer({
           className={cn(
             'flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs',
             runResult.recorded || runResult.ok
-              ? 'bg-emerald-500/15 text-emerald-400'
+              ? 'bg-success/15 text-success'
               : 'bg-destructive/15 text-destructive'
           )}
         >

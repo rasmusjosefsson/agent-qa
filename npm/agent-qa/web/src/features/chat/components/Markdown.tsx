@@ -30,9 +30,12 @@ const TYPOGRAPHY = cn(
   '[&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-4 [&_blockquote]:text-muted-foreground [&_blockquote]:italic',
   '[&_hr]:my-5 [&_hr]:border-border',
   // tables
-  '[&_table]:my-4 [&_table]:w-full [&_table]:border-collapse [&_table]:overflow-hidden [&_table]:rounded-md [&_table]:text-sm',
-  '[&_th]:border [&_th]:border-border [&_th]:bg-muted/50 [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_th]:font-medium',
-  '[&_td]:border [&_td]:border-border [&_td]:px-3 [&_td]:py-2 [&_td]:align-top',
+  // tables: streamdown already frames them in a card with row dividers, so
+  // cells get no borders of their own — just a soft header band + row hover.
+  '[&_table]:w-full [&_table]:text-[13px]',
+  '[&_th]:bg-muted/60 [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_th]:text-[11px] [&_th]:font-semibold [&_th]:uppercase [&_th]:tracking-wide [&_th]:text-muted-foreground',
+  '[&_td]:px-3 [&_td]:py-2 [&_td]:align-top [&_td]:tabular-nums',
+  '[&_tbody_tr]:transition-colors [&_tbody_tr:hover]:bg-accent/40',
   // code blocks: keep streamdown's highlighting, just tidy spacing
   '[&_pre]:my-3 [&_pre]:rounded-lg [&_pre]:text-xs [&_pre]:leading-relaxed',
   // no stray top/bottom margin inside the bubble

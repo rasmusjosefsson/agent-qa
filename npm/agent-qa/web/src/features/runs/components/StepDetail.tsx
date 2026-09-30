@@ -17,9 +17,9 @@ const TABS: { id: DetailTab; label: string }[] = [
 ]
 
 const STATUS_TONE: Record<string, string> = {
-  pass: 'text-emerald-400',
+  pass: 'text-success',
   fail: 'text-destructive',
-  running: 'text-amber-400',
+  running: 'text-warning',
   pending: 'text-muted-foreground',
 }
 
@@ -115,7 +115,7 @@ export function StepDetail({ runs, onLightbox }: { runs: Api; onLightbox: (url: 
             type="button"
             onClick={askAgent}
             title="Open a new chat and ask the agent to debug this failure"
-            className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="flex h-7 shrink-0 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground shadow-xs transition-colors hover:border-primary/30 hover:text-foreground"
           >
             <BugIcon className="size-3.5" /> Ask agent
           </button>
@@ -127,15 +127,17 @@ export function StepDetail({ runs, onLightbox }: { runs: Api; onLightbox: (url: 
         <Shot title="After" sid={sid} runId={runId} step={step} onLightbox={onLightbox} />
       </div>
 
-      <div className="flex shrink-0 gap-1 border-b border-border px-2 py-1">
+      <div className="flex shrink-0 gap-1 border-b border-border px-2 py-1.5">
         {TABS.map((t) => (
           <button
             key={t.id}
             type="button"
             onClick={() => runs.selectTab(t.id)}
             className={cn(
-              'rounded px-2 py-1 text-xs',
-              sel.tab === t.id ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted/50'
+              'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+              sel.tab === t.id
+                ? 'bg-accent text-accent-foreground shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--primary)_18%,transparent)]'
+                : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
             )}
           >
             {t.label}
@@ -176,8 +178,8 @@ function Shot({
   if (!step || !step.screenshot) {
     return (
       <div>
-        <h4 className="mb-1 text-xs text-muted-foreground">{title}</h4>
-        <div className="grid aspect-video place-items-center rounded border border-border bg-muted/30 text-xs text-muted-foreground">
+        <h4 className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">{title}</h4>
+        <div className="aqa-dots grid aspect-video place-items-center rounded-lg border border-dashed border-border bg-muted/30 text-xs text-muted-foreground">
           not captured
         </div>
       </div>
@@ -187,9 +189,9 @@ function Shot({
   const caption = `${title} · ${step.intent || step.id}`
   return (
     <div>
-      <h4 className="mb-1 text-xs text-muted-foreground">{title}</h4>
+      <h4 className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">{title}</h4>
       <button type="button" onClick={() => onLightbox(url, caption)} className="block w-full">
-        <img src={url} alt={title} loading="lazy" className="aspect-video w-full rounded border border-border object-cover object-top" />
+        <img src={url} alt={title} loading="lazy" className="aspect-video w-full rounded-lg border border-border object-cover object-top transition-shadow hover:shadow-md hover:ring-1 hover:ring-primary/30" />
       </button>
     </div>
   )
@@ -377,7 +379,7 @@ function HealCard({
         'mb-3 rounded-md border p-2.5 text-xs',
         isRejection
           ? 'border-destructive/30 bg-destructive/10 text-destructive'
-          : 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+          : 'border-warning/30 bg-warning/10 text-warning'
       )}
     >
       <div className="flex items-center gap-1.5 font-medium">
@@ -403,7 +405,7 @@ function HealCard({
       {heal.patch && !isRejection && (
         <div className="mt-1.5 flex items-center gap-2">
           {promote === 'done' ? (
-            <span className="text-emerald-400">Promoted into scenario.json — re-run to confirm.</span>
+            <span className="text-success">Promoted into scenario.json — re-run to confirm.</span>
           ) : (
             <>
               <span className="text-muted-foreground">Looks right?</span>
@@ -411,7 +413,7 @@ function HealCard({
                 type="button"
                 onClick={apply}
                 disabled={promote === 'busy'}
-                className="rounded border border-amber-500/40 px-1.5 py-0.5 font-medium transition-colors hover:bg-amber-500/20 disabled:opacity-50"
+                className="rounded border border-warning/40 px-1.5 py-0.5 font-medium transition-colors hover:bg-warning/20 disabled:opacity-50"
               >
                 {promote === 'busy' ? 'Promoting…' : 'Promote patch'}
               </button>
@@ -446,8 +448,8 @@ export function ShotDiffCard({
     setAccept(r.ok ? 'done' : 'error')
   }
   return (
-    <div className="mb-3 rounded-md border border-sky-500/30 bg-sky-500/10 p-2.5 text-xs">
-      <div className="mb-1.5 flex items-center gap-1.5 font-medium text-sky-300">
+    <div className="mb-3 rounded-md border border-info/30 bg-info/10 p-2.5 text-xs">
+      <div className="mb-1.5 flex items-center gap-1.5 font-medium text-info">
         <WrenchIcon className="size-3.5 shrink-0" />
         Visual diff — shot “{shotStep}” changed vs baseline
       </div>
@@ -456,7 +458,7 @@ export function ShotDiffCard({
       </button>
       <div className="mt-1.5 flex items-center gap-2 text-muted-foreground">
         {accept === 'done' ? (
-          <span className="text-emerald-400">Baseline re-minted — re-run to confirm.</span>
+          <span className="text-success">Baseline re-minted — re-run to confirm.</span>
         ) : (
           <>
             <span>
@@ -465,7 +467,7 @@ export function ShotDiffCard({
                 type="button"
                 onClick={remint}
                 disabled={accept === 'busy'}
-                className="rounded border border-sky-500/40 px-1.5 py-0.5 font-medium text-sky-300 transition-colors hover:bg-sky-500/20 disabled:opacity-50"
+                className="rounded border border-info/40 px-1.5 py-0.5 font-medium text-info transition-colors hover:bg-info/20 disabled:opacity-50"
               >
                 {accept === 'busy' ? 'Re-minting…' : 'Re-mint baseline'}
               </button>
@@ -509,7 +511,7 @@ export function DomshotDiffCard({
   }
   return (
     <div className="mb-3 rounded-md border border-violet-500/30 bg-violet-500/10 p-2.5 text-xs">
-      <div className="mb-1.5 flex items-center gap-1.5 font-medium text-violet-300">
+      <div className="mb-1.5 flex items-center gap-1.5 font-medium text-violet-600 dark:text-violet-300">
         <WrenchIcon className="size-3.5 shrink-0" />
         Structural diff — domshot “{domshotStep}” changed vs baseline
       </div>
@@ -520,7 +522,7 @@ export function DomshotDiffCard({
               key={i}
               className={cn(
                 'block',
-                line.startsWith('+') && !line.startsWith('+++') && 'text-emerald-400',
+                line.startsWith('+') && !line.startsWith('+++') && 'text-success',
                 line.startsWith('-') && !line.startsWith('---') && 'text-destructive',
                 (line.startsWith('@@') || line.startsWith('---') || line.startsWith('+++')) &&
                   'text-muted-foreground'
@@ -533,7 +535,7 @@ export function DomshotDiffCard({
       )}
       <div className="mt-1.5 flex items-center gap-2 text-muted-foreground">
         {accept === 'done' ? (
-          <span className="text-emerald-400">Baseline re-minted — re-run to confirm.</span>
+          <span className="text-success">Baseline re-minted — re-run to confirm.</span>
         ) : (
           <>
             <span>
@@ -542,7 +544,7 @@ export function DomshotDiffCard({
                 type="button"
                 onClick={remint}
                 disabled={accept === 'busy'}
-                className="rounded border border-violet-500/40 px-1.5 py-0.5 font-medium text-violet-300 transition-colors hover:bg-violet-500/20 disabled:opacity-50"
+                className="rounded border border-violet-500/40 px-1.5 py-0.5 font-medium text-violet-600 transition-colors dark:text-violet-300 hover:bg-violet-500/20 disabled:opacity-50"
               >
                 {accept === 'busy' ? 'Re-minting…' : 'Re-mint baseline'}
               </button>
@@ -557,8 +559,10 @@ export function DomshotDiffCard({
 
 function Empty({ children }: { children: React.ReactNode }) {
   return (
-    <section className="flex h-full min-h-0 flex-col items-center justify-center p-8 text-sm text-muted-foreground">
-      {children}
+    <section className="aqa-dots flex h-full min-h-0 flex-col items-center justify-center bg-muted/30 p-8">
+      <div className="max-w-[14rem] rounded-xl border border-border bg-card/90 px-4 py-3 text-center text-xs leading-relaxed text-muted-foreground shadow-sm backdrop-blur">
+        {children}
+      </div>
     </section>
   )
 }
