@@ -158,6 +158,16 @@ function createLiveBridge({
   let typingDirty = false;
   let typingTimer = null;
   let lastFill = null;
+  // Frame-aware recording: the page's main frame id (Page.getFrameTree /
+  // frameNavigated), the chain of frame selectors the buffer currently sits
+  // inside, and executionContextId → frameId so listener-raised records
+  // (change/select/upload inside an iframe) resolve their frame too.
+  let mainFrameId = null;
+  let recordedFrameChain = [];
+  const ctxFrames = new Map();
+  // Last viewport size recorded this connection — dedupes the debounced
+  // resize stream (a settle burst would otherwise emit repeat steps).
+  let lastViewport = null;
 
   // Reads the focused field's accessible label + current value so typing can
   // be recorded as one fillByLabel step instead of per-keystroke noise.
@@ -214,6 +224,16 @@ function createLiveBridge({
       const rec = { kind: 'rightclick', name: aqName(t), selector: aqSel(t) };
       try { __aqRecord(JSON.stringify(rec)); } catch (e) { /* binding absent */ }
     }, true);
+    // Window resizes settle into a do/viewport step — debounced so a drag
+    // records one size, not every intermediate.
+    let aqResizeT = null;
+    window.addEventListener('resize', () => {
+      clearTimeout(aqResizeT);
+      aqResizeT = setTimeout(() => {
+        const rec = { kind: 'viewport', width: window.innerWidth, height: window.innerHeight };
+        try { __aqRecord(JSON.stringify(rec)); } catch (e) { /* binding absent */ }
+      }, 600);
+    });
     document.addEventListener('change', (ev) => {
       const t = ev.target;
       if (!(t instanceof HTMLElement)) return;
@@ -380,6 +400,10 @@ function createLiveBridge({
       typingTimer = null;
     }
     pending.clear();
+    mainFrameId = null;
+    recordedFrameChain = [];
+    ctxFrames.clear();
+    lastViewport = null;
     for (const { reject } of calls.values()) {
       try {
         reject(new Error('live browser disconnected'));
@@ -397,8 +421,23 @@ function createLiveBridge({
     } catch {
       return;
     }
-    // Main-frame navigations keep the address bar in sync.
+    // Execution-context lifecycle keeps ctxId → frameId current, so a
+    // record event from inside an iframe maps back to its frame.
+    if (msg.method === 'Runtime.executionContextCreated' && msg.params && msg.params.context) {
+      const ctx = msg.params.context;
+      const aux = ctx.auxData;
+      if (aux && aux.isDefault && aux.frameId) ctxFrames.set(ctx.id, aux.frameId);
+      return;
+    }
+    if (msg.method === 'Runtime.executionContextDestroyed' && msg.params) {
+      ctxFrames.delete(msg.params.executionContextId);
+      return;
+    }
+    // Main-frame navigations keep the address bar in sync and reset the
+    // recorded frame context — a fresh document is always the top frame.
     if (msg.method === 'Page.frameNavigated' && msg.params && msg.params.frame && !msg.params.frame.parentId) {
+      mainFrameId = msg.params.frame.id;
+      recordedFrameChain = [];
       setUrl(msg.params.frame.url);
       return;
     }
@@ -427,7 +466,7 @@ function createLiveBridge({
     // Page-side record events (select / check / uncheck) raised by the
     // injected listener via the __aqRecord binding.
     if (msg.method === 'Runtime.bindingCalled' && msg.params && msg.params.name === '__aqRecord') {
-      handlePageRecord(msg.params.payload);
+      handlePageRecord(msg.params.payload, msg.params.executionContextId);
       return;
     }
     // A click that triggers a download must record do/download, not
@@ -479,8 +518,16 @@ function createLiveBridge({
           // Runtime.enable is required for bindingCalled to be delivered.
           send('Runtime.enable');
           send('Runtime.addBinding', { name: '__aqRecord' });
-          send('Page.addScriptToEvaluateOnNewDocument', { source: RECORD_LISTENER_JS });
+          // includeFrame — the record listener must also live inside iframes
+          // or change/select/upload events there never reach the binding.
+          send('Page.addScriptToEvaluateOnNewDocument', { source: RECORD_LISTENER_JS, includeFrame: true });
           send('Runtime.evaluate', { expression: RECORD_LISTENER_JS });
+          void call('Page.getFrameTree')
+            .then((r) => {
+              const f = r && r.frameTree && r.frameTree.frame;
+              if (f && f.id) mainFrameId = f.id;
+            })
+            .catch(() => {});
           // Arm download events + redirect downloads into a scratch dir —
           // only on the recording bridge: the replay-watch bridges must not
           // override the download handling the run's own do/download verbs
@@ -640,11 +687,111 @@ function createLiveBridge({
     });
   }
 
-  // A native dialog opened on the page: answer it (accept; a prompt keeps
-  // the page's own defaultPrompt as its input) and record the same pair a
-  // hand-authored scenario writes — `{"dialog": true}` check asserting the
-  // message, then `do/dialog` resolving it. beforeunload is navigation
-  // noise, not a step — handled but not recorded.
+  // The frame the recorded target lives in, as a chain of iframe-element
+  // selectors from the top document down: [] = main frame, null = a frame
+  // whose owner has no recorded selector (OOP frame, detached, …).
+  async function frameChainFor(frameId) {
+    if (!frameId || (mainFrameId && frameId === mainFrameId)) return [];
+    const chain = [];
+    let f = frameId;
+    for (let depth = 0; depth < 8 && f; depth++) {
+      if (mainFrameId && f === mainFrameId) break;
+      const o = await call('DOM.getFrameOwner', { frameId: f }).catch(() => null);
+      const bid = o && o.backendNodeId;
+      if (!bid) return null;
+      const sel = await selectorForBackendNode(bid);
+      if (!sel) return null;
+      chain.unshift(sel);
+      const parent = await parentFrameId(f);
+      if (!parent || parent === f) break;
+      f = parent;
+    }
+    return chain;
+  }
+
+  // Walk Page.getFrameTree to the node's frame and report its parent —
+  // DOM.describeNode's frameId points at the frame a node *owns* (the
+  // opposite direction), so the tree is the reliable source.
+  async function parentFrameId(frameId) {
+    const r = await call('Page.getFrameTree').catch(() => null);
+    const root = r && r.frameTree;
+    let parent = null;
+    const walk = (n) => {
+      for (const c of n.childFrames || []) {
+        if (c.id === frameId) parent = n.frame.id;
+        walk(c);
+      }
+    };
+    if (root) walk(root);
+    return parent;
+  }
+
+  // A css selector for a node, computed in the node's own document — the
+  // same shape the in-page record listener emits (id, else a short
+  // tag.class ancestor chain).
+  async function selectorForBackendNode(backendNodeId) {
+    try {
+      const r = await call('DOM.resolveNode', { backendNodeId });
+      const oid = r && r.object && r.object.objectId;
+      if (!oid) return null;
+      const res = await call('Runtime.callFunctionOn', {
+        objectId: oid,
+        functionDeclaration: `function () {
+          const t = this;
+          if (t.id) return '#' + CSS.escape(t.id);
+          const parts = [];
+          for (let n = t; n && n !== document.body && parts.length < 4; n = n.parentElement) {
+            if (n.id) { parts.unshift('#' + CSS.escape(n.id)); break; }
+            const cls = Array.from(n.classList || []).slice(0, 2).map((c) => '.' + CSS.escape(c)).join('');
+            parts.unshift(n.tagName.toLowerCase() + cls);
+          }
+          return parts.join(' ');
+        }`,
+        returnByValue: true,
+      });
+      return (res && res.result && res.result.value) || null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Emit do/frame steps that move the recorded context to `chain`'s frame:
+  // back to top (only when currently inside a frame), then an enter step
+  // per level — the same relative moves `browser::switch_frame` replays.
+  async function emitFrameSteps(chain) {
+    const same =
+      chain.length === recordedFrameChain.length &&
+      chain.every((s, i) => s === recordedFrameChain[i]);
+    if (same) return;
+    if (recordedFrameChain.length) {
+      await emitRecord('do', { intent: 'back to the top frame', verb: 'frame', params: { main: true } });
+    }
+    for (const sel of chain) {
+      await emitRecord('do', { intent: `enter frame ${sel}`, verb: 'frame', params: { selector: sel } });
+    }
+    recordedFrameChain = chain;
+  }
+
+  // Emit a recorded step whose target lives in `frameId`, emitting the
+  // do/frame moves first when the frame changed since the last step.
+  // Serialized on a tail promise: two rapid clicks crossing frames must not
+  // interleave their frame steps.
+  let framedTail = Promise.resolve();
+  function emitFramed(frameId, kind, payload) {
+    framedTail = framedTail
+      .then(async () => {
+        const chain = await frameChainFor(frameId);
+        if (chain === null) {
+          broadcastEvent('record-skip', { reason: 'step target sits in a frame with no selector — step may not replay' });
+        } else {
+          await emitFrameSteps(chain);
+        }
+        await emitRecord(kind, payload);
+      })
+      .catch(() => {});
+    return framedTail;
+  }
+
   function handleDialog(p) {
     const type = p.type || 'alert';
     const handle = { accept: true };
@@ -697,14 +844,30 @@ function createLiveBridge({
 
   // Translate a __aqRecord binding payload ({kind, name, value, role}) into a
   // recorded step. name '' → record-skip, same UX as an unnamed click.
-  function handlePageRecord(payload) {
+  function handlePageRecord(payload, ctxId) {
     let rec;
     try {
       rec = JSON.parse(payload);
     } catch {
       return;
     }
+    // The execution context that called the binding resolves the frame the
+    // event fired in — records emitted below move the buffer into it first.
+    const frameId = ctxId != null ? ctxFrames.get(ctxId) : null;
     if (!rec || typeof rec !== 'object') return;
+    if (rec.kind === 'viewport') {
+      // Only the top window's size maps to do/viewport — an iframe's own
+      // innerWidth resizes when its element resizes, not the browser's.
+      if (frameId && mainFrameId && frameId !== mainFrameId) return;
+      const w = Number(rec.width);
+      const h = Number(rec.height);
+      if (!Number.isInteger(w) || w <= 0 || !Number.isInteger(h) || h <= 0) return;
+      const key = `${w}x${h}`;
+      if (key === lastViewport) return;
+      lastViewport = key;
+      void emitFramed(null, 'do', { intent: `viewport ${key}`, verb: 'viewport', params: { width: w, height: h } });
+      return;
+    }
     // rightclick falls back to its css selector — a nameless icon button or
     // canvas region is still recordable.
     if (!rec.name && !(rec.kind === 'rightclick' && rec.selector)) {
@@ -712,7 +875,7 @@ function createLiveBridge({
       return;
     }
     if (rec.kind === 'select') {
-      emitRecord('do', {
+      void emitFramed(frameId, 'do', {
         intent: `select ${rec.value} in ${rec.name}`,
         verb: 'select',
         on: { role: 'combobox', name: rec.name },
@@ -724,7 +887,7 @@ function createLiveBridge({
       const on = rec.selector
         ? { raw: { kind: 'css', value: rec.selector }, reason: 'file input' }
         : { role: 'button', name: rec.name };
-      emitRecord('do', {
+      void emitFramed(frameId, 'do', {
         intent: `upload ${files.join(', ')} to ${rec.name} — place the file(s) next to the scenario`,
         verb: 'upload',
         on,
@@ -735,13 +898,13 @@ function createLiveBridge({
         broadcastEvent('record-skip', { reason: 'rightclick target has no css selector' });
         return;
       }
-      emitRecord('do', {
+      void emitFramed(frameId, 'do', {
         intent: `right-click ${rec.name || rec.selector}`,
         verb: 'rightclick',
         on: { raw: { kind: 'css', value: rec.selector }, reason: 'right-click target' },
       });
     } else if (rec.kind === 'check' || rec.kind === 'uncheck') {
-      emitRecord('do', {
+      void emitFramed(frameId, 'do', {
         intent: `${rec.kind} ${rec.name}`,
         verb: rec.kind,
         on: { role: rec.role, name: rec.name },
@@ -824,7 +987,7 @@ function createLiveBridge({
 
   function emitClick(el) {
     recentClick = { el, ts: Date.now() };
-    emitRecord('do', {
+    emitFramed(el.frameId, 'do', {
       intent: `click ${el.name}`,
       verb: 'click',
       on: { role: el.role, name: el.name },
@@ -975,7 +1138,7 @@ function createLiveBridge({
       });
       return;
     }
-    emitRecord('do', {
+    void emitFramed(src.frameId, 'do', {
       intent: `drag ${src.name} onto ${dst.name}`,
       verb: 'drag',
       on: { role: src.role, name: src.name },
@@ -1182,7 +1345,7 @@ function createLiveBridge({
     } catch {
       /* no box model — highlight just won't draw */
     }
-    return { role, name, x, y, box, interactive: INTERACTIVE_ROLES.has(role), backendNodeId };
+    return { role, name, x, y, box, interactive: INTERACTIVE_ROLES.has(role), backendNodeId, frameId: loc.frameId || null };
   }
 
   // Content-derived name fallback for elements whose accessible name the AX
