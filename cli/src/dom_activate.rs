@@ -1257,7 +1257,11 @@ mod tests {
         assert!(
             js.contains("\"detached\"") && js.contains("\"hidden\"") && js.contains("\"visible\""),
             "{js}"
+        );
         assert!(js.contains("getComputedStyle"), "{js}");
+    }
+
+    #[test]
     fn hold_js_emits_down_events_without_click() {
         let js = build_hold_down_js(&DragEndpoint::Css("#btn".into()));
         assert!(js.contains("__aqHold"), "{js}");
