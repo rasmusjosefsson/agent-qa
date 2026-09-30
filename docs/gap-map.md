@@ -68,6 +68,21 @@ the picture shifts materially.
 
 ### P4 — upstream capture limits
 
+9. ~~**Mobile/touch**~~ — gesture verbs shipped: `hold`/`swipe` (#259),
+   `pinch` (#262), `rotate` (#267); `contextmenu` recording catches real
+   right-clicks (#268). Remaining: no multi-touch *record* path (verbs
+   are authored, not captured).
+10. ~~**Geolocation/timezone**~~ — geo landed in #277 (origin-scoped
+    permission grant + flat-session override); `timezone`/`locale` ride
+    the same path (setTimezoneOverride + setLocaleOverride +
+    UA acceptLanguage — navigator.language, Intl, and the wire header
+    all covered; emulate-tc03 proves all three).
+11. ~~**WebSocket/SSE**~~ **done in #278** — sockets and event-streams
+    fold into the network claims surface as `cdpws-*` entries (method
+    `WS`, status 101, `wsFrames[]` per frame, `wsPayloadContains`
+    matcher; SSE arrives as `resourceType: "EventSource"` GETs). The
+    daemon is untouched — a pooled CDP flat session on the active page
+    target does the listening.
 9. **Mobile/touch**: `do/viewport` + `emulate` give layout; `hold`,
    `swipe`, and `pinch` verbs synthesize touch gestures (gestures-tc01/02
    goldens). Remaining: real mobile-emulation contexts (Emulation.setTouchEmulationEnabled)
@@ -114,6 +129,10 @@ the picture shifts materially.
 
 ### P5 — uncovered surfaces (smaller, real)
 
+12. ~~**`run-report` in CI**~~ — qa-gate renders + uploads per-run
+    `run-report.html` artifacts (#260).
+13. ~~**Skill docs for edge sweeps**~~ — the qaplayground skill documents
+    the edge-pages-lib + fixture-server pattern (#261).
 14. ~~IndexedDB is not assertable~~ — closed by the `{"indexeddb": {"db",
     "store","key"?}}` claim + `do/state` `params.indexeddb` seeding
     (#353). The probe lists `indexedDB.databases()` before opening so
