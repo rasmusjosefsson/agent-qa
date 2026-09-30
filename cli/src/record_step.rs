@@ -120,6 +120,9 @@ fn parse_args(args: &[String]) -> Result<Parsed> {
     }
     let kind = StepKind::parse(&args[0])?;
     if args[1] == "-" {
+        // A bare `-` on a TTY would block on read_to_string until Ctrl+D —
+        // the command looks hung while actually just waiting for drafts.
+        crate::io::ensure_stdin_piped("JSONL drafts")?;
         let stdin = std::io::read_to_string(std::io::stdin()).context("read drafts stdin")?;
         return Ok(Parsed::Stream {
             kind,

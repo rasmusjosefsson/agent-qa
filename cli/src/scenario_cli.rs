@@ -3914,6 +3914,7 @@ pub(crate) fn check(path: &Path, strict: bool, format: LintFormat) -> Result<u8>
 
 fn validate(path: &Path, format: LintFormat) -> Result<u8> {
     let (bytes, label) = if path.as_os_str() == "-" {
+        crate::io::ensure_stdin_piped("a scenario file")?;
         use std::io::Read;
         let mut buf = Vec::new();
         std::io::stdin()

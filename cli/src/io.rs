@@ -10,6 +10,7 @@
 //! let bytes = fs::read(guard.path())?;
 //! ```
 
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -34,6 +35,19 @@ impl<'a> StdinOrPath<'a> {
     }
 }
 
+/// A `-` argument on a TTY would block the read until Ctrl+D and look
+/// hung — bail with the pipe recipe instead. `usage` is a short noun
+/// for the error ("drafts", "a scenario file").
+pub fn ensure_stdin_piped(usage: &str) -> Result<()> {
+    if std::io::stdin().is_terminal() {
+        anyhow::bail!(
+            "`-` reads {usage} from stdin — pipe it in \
+             (e.g. `cat file | agent-qa ... -`), or pass a path"
+        );
+    }
+    Ok(())
+}
+
 /// Wrap a caller-supplied path so a literal `-` is replaced with a
 /// tempfile that holds buffered stdin. Other paths are returned
 /// borrowed, unchanged.
@@ -41,6 +55,7 @@ pub fn stdin_or_path(path: &Path) -> Result<StdinOrPath<'_>> {
     if path.as_os_str() != "-" {
         return Ok(StdinOrPath::Borrowed(path));
     }
+    ensure_stdin_piped("input")?;
     use std::io::{Read, Write};
     let mut buf = Vec::new();
     std::io::stdin()
