@@ -156,6 +156,13 @@
 
   // ---------- interaction capture ----------
 
+  // A double-click fires click,click,dblclick — recording it verbatim
+  // gives two clicks that replay differently than the dblclick the user
+  // performed (row-edit openers, word-select). Defer each click draft
+  // ~350ms; a dblclick clears the queue and records `dblclick` instead.
+  const CLICK_DEBOUNCE_MS = 350;
+  const pendingClicks = [];
+
   document.addEventListener(
     "click",
     (e) => {
@@ -167,9 +174,28 @@
         real.closest?.(
           "a[href],button,[role=button],[role=link],input[type=submit],input[type=button],summary,[onclick]"
         ) || real;
+      const item = doDraft(`click ${label(el)}`, "click", {
+        on: locator(el),
+      });
+      const timer = setTimeout(() => {
+        pendingClicks.splice(pendingClicks.indexOf(timer), 1);
+        send({ t: "step", item });
+      }, CLICK_DEBOUNCE_MS);
+      pendingClicks.push(timer);
+    },
+    true
+  );
+
+  document.addEventListener(
+    "dblclick",
+    (e) => {
+      if (!active || !e.isTrusted) return;
+      while (pendingClicks.length) clearTimeout(pendingClicks.pop());
+      const real = e.composedPath?.()[0] || e.target;
+      const el = real.closest?.("a,button,[role=button],input,summary") || real;
       send({
         t: "step",
-        item: doDraft(`click ${label(el)}`, "click", {
+        item: doDraft(`double-click ${label(el)}`, "dblclick", {
           on: locator(el),
         }),
       });
