@@ -8,7 +8,11 @@ use crate::recorder_state::RecorderState;
 use crate::scenario::{Scenario, Step, StepContext, Value};
 
 pub fn run(args: &[String]) -> Result<u8> {
-    if args.is_empty() || matches!(args[0].as_str(), "-h" | "--help" | "help") {
+    if args.is_empty()
+        || args
+            .iter()
+            .any(|a| matches!(a.as_str(), "-h" | "--help" | "help"))
+    {
         print_help();
         return Ok(0);
     }
@@ -47,7 +51,8 @@ Insert appends a validated draft at <index> (use <len> to append), then
 edit replaces the step at <index> with a re-validated draft (same shape as
 `record-step`, minus id/kind — the step keeps its id and position; its kind
 may not change). Insert, delete, and move reassign dense s0, s1, ... ids; step
-references (from=step stepId, opensFromStepId) are rewired to match. Load
+references (from=step stepId, opensFromStepId) are rewired to match.
+Everywhere <index> appears, the step id s<N> names the same step. Load
 pulls a saved scenario's steps into the buffer for editing (`flush` writes
 them back to the same sid, preserving fields the buffer doesn't model —
 inputs, templates, env.close). Check runs the `scenario check` verifier
@@ -56,10 +61,14 @@ Discard removes the active recording."
     );
 }
 
+/// Positional index or step id: step ids are `s<index>` (normalize_ids keeps
+/// them dense), so `s3` names the same step as `3` — the form scenario.json,
+/// audits, and shot claims use.
 fn parse_index(value: &str, label: &str) -> Result<usize> {
-    value
-        .parse()
-        .map_err(|_| anyhow!("{label} must be a non-negative integer; got {value:?}"))
+    let digits = value.strip_prefix('s').unwrap_or(value);
+    digits.parse().map_err(|_| {
+        anyhow!("{label} must be a non-negative integer or an s<N> step id; got {value:?}")
+    })
 }
 
 pub(crate) fn normalize_ids(steps: &mut [Step]) -> HashMap<String, String> {
@@ -551,6 +560,14 @@ mod tests {
     }
 
     #[test]
+    fn parse_index_accepts_step_id_spelling() {
+        assert_eq!(parse_index("2", "index").unwrap(), 2);
+        assert_eq!(parse_index("s2", "index").unwrap(), 2);
+        assert!(parse_index("sx", "index").is_err());
+        assert!(parse_index("nope", "index").is_err());
+    }
+
+    #[test]
     fn check_runs_schema_and_lint_on_flush_doc() {
         let _guard = lock_env();
         let tmp = TempDir::new().unwrap();
@@ -600,5 +617,18 @@ mod tests {
             "url now"
         );
         std::env::remove_var(crate::paths::RECORD_DIR_ENV);
+    }
+
+    /// `--help` after a subverb prints usage instead of being parsed as a
+    /// flag of that subverb (`buffer load --help` used to fail
+    /// "unknown flag").
+    #[test]
+    fn help_flag_wins_after_a_subverb() {
+        for args in [
+            vec!["load".to_string(), "--help".to_string()],
+            vec!["edit".to_string(), "-h".to_string()],
+        ] {
+            assert_eq!(run(&args).unwrap(), 0, "args {args:?}");
+        }
     }
 }

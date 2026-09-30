@@ -73,6 +73,7 @@ describe("toRecordDraft — emitted verbs are shipped", () => {
     ["action", { method: "clickScopedRole", args: ["#c", "checkbox", "All"] }],
     ["action", { method: "clickNthOption", args: ["#list", 2] }],
     ["action", { method: "fillBySelector", args: ["#i", "x"] }],
+    ["action", { method: "typeByRole", args: ["textbox", "user name field", "x"] }],
     ["action", { method: "selectBySelector", args: ["#s", "v"] }],
     ["action", { method: "uploadBySelector", args: ["#u", "f.txt"] }],
     ["action", { method: "pressSelector", args: ["#i", "Enter"] }],
@@ -119,6 +120,9 @@ describe("toRecordDraft — emitted verbs are shipped", () => {
     ["assert", { kind: "elementAbsent", args: ["#x"] }],
     ["assert", { kind: "elementText", args: ["#x", "hi"] }],
     ["assert", { kind: "elementAttribute", args: ["#x", "href", "equals", "/a"] }],
+    ["assert", { kind: "elementCount", args: [".item", "equals", 30] }],
+    ["assert", { kind: "elementCount", args: [".item", "gte", 1] }],
+    ["assert", { kind: "roleAttribute", args: ["textbox", "user name field", "value", "x"] }],
     ["assert", { kind: "elementChecked", args: ["#c"] }],
     ["assert", { kind: "elementChecked", args: ["#c", false] }],
     ["assert", { kind: "elementFocused", args: ["#i"] }],
@@ -205,6 +209,7 @@ describe("toRecordDraft — every shipped verb is reachable or triaged", () => {
       ["action", { method: "downloadBySelector", args: ["#d", "out"] }],
     ],
     ["dblclick", ["action", { method: "dblclickBySelector", args: ["#d"] }]],
+    ["dismiss", ["action", { method: "dismissBySelector", args: [".wall"] }]],
     ["rightclick", ["action", { method: "rightClickBySelector", args: ["#d"] }]],
     ["tab", ["action", { method: "tabCommand", args: ["list"] }]],
     ["drag", ["action", { method: "dragBySelector", args: ["#a", "#b"] }]],
@@ -213,6 +218,9 @@ describe("toRecordDraft — every shipped verb is reachable or triaged", () => {
       "fileChooser",
       ["action", { method: "fileChooserFiles", args: [["a.txt"]] }],
     ],
+    ["hold", ["action", { method: "holdBySelector", args: ["#h", 800] }]],
+    ["swipe", ["action", { method: "swipeBySelector", args: [".card", "left", 160] }]],
+    ["swipe", ["action", { method: "swipePage", args: ["up"] }]],
   ];
 
   const emitted = new Set<string>();
@@ -246,6 +254,32 @@ describe("toRecordDraft — new mappings land the right fields", () => {
     const [, d] = action("fileChooserFiles", ["one.txt"]);
     expect(d).toMatchObject({ verb: "fileChooser", params: { files: ["one.txt"] } });
   });
+  test("typeByRole emits a type step on a role locator", () => {
+    const [kind, draft] = action("typeByRole", ["textbox", "user name field", "Shadow"]);
+    expect(kind).toBe("do");
+    const d = draft as Record<string, unknown>;
+    expect(d.verb).toBe("type");
+    expect(d.on).toEqual({ role: "textbox", name: "user name field" });
+    expect(d.value).toEqual({ from: "literal", literal: "Shadow" });
+  });
+
+  test("roleAttribute emits an attribute claim on a role locator", () => {
+    const [kind, draft] = assertK("roleAttribute", [
+      "textbox",
+      "user name field",
+      "value",
+      "Shadow",
+    ]);
+    expect(kind).toBe("check");
+    const claim = (draft as { claim: Record<string, unknown> }).claim;
+    expect(claim.subject).toEqual({
+      element: { role: "textbox", name: "user name field" },
+      attribute: "value",
+    });
+    expect(claim.predicate).toBe("equals");
+    expect(claim.value).toBe("Shadow");
+  });
+
   test("readBySelector threads saveAs", () => {
     const [, d] = action("readBySelector", ["#t", "title"]);
     expect(d).toMatchObject({ verb: "read", saveAs: "title" });
@@ -275,6 +309,25 @@ describe("toRecordDraft — new mappings land the right fields", () => {
   test("loadState wait maps to wait params.until", () => {
     const [, d] = wait({ kind: "loadState", state: "networkidle" });
     expect(d).toMatchObject({ verb: "wait", params: { until: "networkidle" } });
+  });
+  test("networkRequest wait maps to wait params.url", () => {
+    const [, d] = wait({ kind: "networkRequest", pattern: "*/api/quotes*" });
+    expect(d).toMatchObject({ verb: "wait", params: { url: "*/api/quotes*" } });
+  });
+  test("networkRequest wait threads timeoutMs", () => {
+    const [, d] = wait({ kind: "networkRequest", pattern: "*/x*", timeoutMs: 3000 });
+    expect(d).toMatchObject({
+      verb: "wait",
+      params: { url: "*/x*", timeoutMs: 3000 },
+    });
+  });
+  test("scrollTop sentinel maps to params.to bottom", () => {
+    const [, d] = action("scrollTop", [999999]);
+    expect(d).toMatchObject({ verb: "scrollTo", params: { to: "bottom" } });
+  });
+  test("scrollTop finite offset maps to params.y", () => {
+    const [, d] = action("scrollTop", [300]);
+    expect(d).toMatchObject({ verb: "scrollTo", params: { y: 300 } });
   });
   test("unknown methods still throw", () => {
     expect(() => action("nopeNever")).toThrow(/unknown action method/);

@@ -138,6 +138,23 @@ impl CdpConnection {
         }
     }
 
+    /// Read one frame and return its parsed JSON — for dedicated event
+    /// sockets (see `cdp_net`) that only consume events after setup.
+    /// Command responses (`{"id": …}`) are returned too; callers filter.
+    pub fn next_event(&mut self) -> Result<Json> {
+        loop {
+            let frame = self
+                .ws
+                .read()
+                .map_err(|e| anyhow!("[transport] cdp read: {e}"))?;
+            match frame {
+                Message::Text(t) => return serde_json::from_str(&t).context("cdp event json"),
+                Message::Close(_) => bail!("[transport] cdp socket closed"),
+                _ => continue,
+            }
+        }
+    }
+
     fn tcp(&self) -> Option<&TcpStream> {
         #[allow(unreachable_patterns)]
         match self.ws.get_ref() {
@@ -192,7 +209,7 @@ fn connections() -> &'static Mutex<HashMap<String, CdpConnection>> {
 /// Whether `e` means "no CDP endpoint reachable" — the fake browsers used
 /// in unit tests and a not-yet-launched session both land here. CDP
 /// helpers degrade to their daemon fallbacks on it rather than failing.
-fn is_unavailable(e: &anyhow::Error) -> bool {
+pub(crate) fn is_unavailable(e: &anyhow::Error) -> bool {
     let s = format!("{e:#}");
     s.contains("[unavailable]")
 }
@@ -229,7 +246,7 @@ pub fn with_connection<T>(
 /// The active page target — last non-chrome page the browser reports
 /// (`chrome://newtab`-style leftovers sort first in practice and must not
 /// win).
-fn active_page(conn: &mut CdpConnection) -> Result<Option<(String, String)>> {
+pub(crate) fn active_page(conn: &mut CdpConnection) -> Result<Option<(String, String)>> {
     let targets = conn.call("Target.getTargets", json!({}))?;
     Ok(targets
         .get("targetInfos")
@@ -326,11 +343,26 @@ pub fn set_geo_override(session: &str, lat: f64, lng: f64, accuracy: f64) -> Res
 }
 
 fn set_geo_override_in(session: &str, lat: f64, lng: f64, accuracy: f64) -> Result<bool> {
-    emulate_override_in(
-        session,
-        "Emulation.setGeolocationOverride",
-        json!({ "latitude": lat, "longitude": lng, "accuracy": accuracy }),
-    )
+    with_connection(session, |conn| {
+        let page = active_page(conn)?.map(|(id, _)| id);
+        let Some(target_id) = page else {
+            return Ok(false);
+        };
+        let attached = conn.call(
+            "Target.attachToTarget",
+            json!({ "targetId": target_id, "flatten": true }),
+        )?;
+        let session_id = attached
+            .get("sessionId")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("Target.attachToTarget: no sessionId in {attached}"))?;
+        conn.call_on(
+            "Emulation.setGeolocationOverride",
+            json!({ "latitude": lat, "longitude": lng, "accuracy": accuracy }),
+            session_id,
+        )?;
+        Ok(true)
+    })
 }
 
 /// Apply a page-target `Emulation.*` command (timezone, locale, …) over a
@@ -433,7 +465,6 @@ pub fn ensure_clipboard_access(session: &str, write: bool) -> Result<()> {
     )?;
     Ok(())
 }
-
 /// Attach to the active page via flat session and switch on
 /// `Network.enable` there, so `webSocketCreated`/`webSocketFrame*`
 /// events start arriving on this connection. Idempotent per connection;

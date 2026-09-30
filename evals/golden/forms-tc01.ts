@@ -102,6 +102,7 @@ async function main(): Promise<void> {
     await waitSelectorText('[data-testid="result-personal"]', "Saved: John Doe", "saved name echo is visible");
     await run("verify", [agentQa, "verify"]);
     await run("flush", [agentQa, "flush"]);
+    await run("check", [agentQa, "scenario", "check", resolve(scenariosRoot, sid, "scenario.json")]);
     await run("replay", [agentQa, "replay", sid, "--session", `${session}-replay`]);
     pass = true;
   } catch (err) {

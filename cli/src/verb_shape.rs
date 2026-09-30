@@ -61,7 +61,7 @@ fn rule_for(verb: &Verb) -> VerbRule {
             required: &[DoField::On, DoField::Value],
             ..VerbRule::default()
         },
-        Verb::DblClick => VerbRule {
+        Verb::DblClick | Verb::Dismiss => VerbRule {
             required: &[DoField::On],
             forbidden: &[DoField::Value],
             ..VerbRule::default()
@@ -156,6 +156,19 @@ fn rule_for(verb: &Verb) -> VerbRule {
             required: &[DoField::Params],
             forbidden: &[DoField::On, DoField::Value],
             params_required: &["action"],
+            ..VerbRule::default()
+        },
+        // `on` is the element to hold; `params.ms` optional (default 500).
+        Verb::Hold => VerbRule {
+            required: &[DoField::On],
+            forbidden: &[DoField::Value],
+            ..VerbRule::default()
+        },
+        // `on` optional (default: viewport center); `params.direction` required.
+        Verb::Swipe => VerbRule {
+            required: &[DoField::Params],
+            forbidden: &[DoField::Value],
+            params_required: &["direction"],
             ..VerbRule::default()
         },
         Verb::Loop => VerbRule {
@@ -584,5 +597,57 @@ mod tests {
             "params": { "to": { "role": "list", "name": "Done" } }
         }));
         assert_verb_shape(&s).unwrap();
+    }
+
+    #[test]
+    fn hold_requires_on_forbids_value() {
+        let s = parse(json!({ "id": "s1", "intent": "x", "kind": "do", "verb": "hold" }));
+        assert!(assert_verb_shape(&s)
+            .unwrap_err()
+            .to_string()
+            .contains("requires 'on'"));
+
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "hold",
+            "on": { "raw": { "kind": "css", "value": "#btn" }, "reason": "r" },
+            "params": { "ms": 800 }
+        }));
+        assert_verb_shape(&s).unwrap();
+    }
+
+    #[test]
+    fn swipe_requires_direction_forbids_value_allows_no_on() {
+        let s = parse(json!({ "id": "s1", "intent": "x", "kind": "do", "verb": "swipe" }));
+        assert!(assert_verb_shape(&s)
+            .unwrap_err()
+            .to_string()
+            .contains("requires 'params'"));
+
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "swipe",
+            "params": { "distance": 200 }
+        }));
+        assert!(assert_verb_shape(&s)
+            .unwrap_err()
+            .to_string()
+            .contains("params requires 'direction'"));
+
+        // no `on` — viewport swipe
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "swipe",
+            "params": { "direction": "up" }
+        }));
+        assert_verb_shape(&s).unwrap();
+
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "swipe",
+            "on": { "raw": { "kind": "css", "value": ".card" }, "reason": "r" },
+            "params": { "direction": "left", "distance": 150 },
+            "value": { "from": "literal", "literal": "x" }
+        }));
+        assert!(assert_verb_shape(&s)
+            .unwrap_err()
+            .to_string()
+            .contains("must not carry 'value'"));
     }
 }
