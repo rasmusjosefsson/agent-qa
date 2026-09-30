@@ -168,6 +168,31 @@
   });
   const literal = (v) => ({ from: "literal", literal: String(v) });
 
+  // The chain of iframe selectors from the top document down to this
+  // one — empty at top level, one selector per same-origin ancestor.
+  // Each frame runs its own copy of this script, so a click inside an
+  // iframe arrives here with its own document scope; the worker pairs
+  // it with `frame` transition drafts so replay can re-enter. A
+  // cross-origin hop anywhere in the chain means the embedding element
+  // is unreachable — the worker drops those steps and warns, since a
+  // locator recorded against the wrong document is worse than none.
+  const frameCtx = (() => {
+    const chain = [];
+    let w = window;
+    while (w !== w.top) {
+      try {
+        if (!w.frameElement) return "cross-origin";
+        chain.unshift(cssPath(w.frameElement));
+        w = w.parent;
+      } catch {
+        return "cross-origin";
+      }
+    }
+    return chain;
+  })();
+
+  const stepMsg = (item) => ({ t: "step", item, frame: frameCtx });
+
   // ---------- interaction capture ----------
 
   // A double-click fires click,click,dblclick — recording it verbatim
@@ -193,7 +218,7 @@
       });
       const timer = setTimeout(() => {
         pendingClicks.splice(pendingClicks.indexOf(timer), 1);
-        send({ t: "step", item });
+        send(stepMsg(item));
       }, CLICK_DEBOUNCE_MS);
       pendingClicks.push(timer);
     },
@@ -207,12 +232,13 @@
       while (pendingClicks.length) clearTimeout(pendingClicks.pop());
       const real = e.composedPath?.()[0] || e.target;
       const el = real.closest?.("a,button,[role=button],input,summary") || real;
-      send({
-        t: "step",
-        item: doDraft(`double-click ${label(el)}`, "dblclick", {
-          on: locator(el),
-        }),
-      });
+      send(
+        stepMsg(
+          doDraft(`double-click ${label(el)}`, "dblclick", {
+            on: locator(el),
+          })
+        )
+      );
     },
     true
   );
@@ -224,37 +250,40 @@
       const el = e.composedPath?.()[0] || e.target;
       const name = el.localName;
       if (name === "select") {
-        send({
-          t: "step",
-          item: doDraft(`select ${label(el)}`, "select", {
-            on: locator(el),
-            value: literal(el.value),
-          }),
-        });
+        send(
+          stepMsg(
+            doDraft(`select ${label(el)}`, "select", {
+              on: locator(el),
+              value: literal(el.value),
+            })
+          )
+        );
         return;
       }
       if (name !== "input" && name !== "textarea") return;
       const type = (el.getAttribute("type") || "text").toLowerCase();
       if (type === "checkbox" || type === "radio") {
-        send({
-          t: "step",
-          item: doDraft(
-            `${el.checked ? "check" : "uncheck"} ${label(el)}`,
-            el.checked ? "check" : "uncheck",
-            { on: locator(el) }
-          ),
-        });
+        send(
+          stepMsg(
+            doDraft(
+              `${el.checked ? "check" : "uncheck"} ${label(el)}`,
+              el.checked ? "check" : "uncheck",
+              { on: locator(el) }
+            )
+          )
+        );
         return;
       }
       if (type === "file") return; // native pickers can't be captured
       if (el.value === "") return;
-      send({
-        t: "step",
-        item: doDraft(`type into ${label(el)}`, "type", {
-          on: locator(el),
-          value: literal(el.value),
-        }),
-      });
+      send(
+        stepMsg(
+          doDraft(`type into ${label(el)}`, "type", {
+            on: locator(el),
+            value: literal(el.value),
+          })
+        )
+      );
     },
     true
   );
@@ -300,10 +329,11 @@
           (widget ||
             (el && (el.localName === "input" || el.localName === "textarea"))));
       if (!record) return;
-      send({
-        t: "step",
-        item: doDraft(`press ${e.key}`, "press", { value: literal(e.key) }),
-      });
+      send(
+        stepMsg(
+          doDraft(`press ${e.key}`, "press", { value: literal(e.key) })
+        )
+      );
     },
     true
   );

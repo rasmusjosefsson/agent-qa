@@ -45,11 +45,13 @@ What it captures per interaction:
 | Escape (dismissal) | `do/press` `Escape` |
 | arrow/Home/End/PageUp/PageDown on a slider/tab/listbox/menu/radio/range widget | `do/press` with the key |
 | every fetch/XHR | `{url, method, status, body, postData, startedAt, durationMs}` (bodies capped at 256KB) |
+| interactions inside **same-origin iframes** | `do/frame` enter/exit drafts wrap the in-frame steps (nested frames handled one level at a time) |
 
 **Not captured (v1):** native file pickers, `alert()`/`confirm()`/
-`prompt()`, iframe internals, canvas drawing, real multi-touch,
-hover-only gestures, scrolling, same-URL reloads. Record those
-flows with `agent-qa record` instead.
+`prompt()`, cross-origin iframe internals (counted as a bundle
+warning — the iframe element can't be located from inside it),
+canvas drawing, real multi-touch, hover-only gestures, scrolling,
+same-URL reloads. Record those flows with `agent-qa record` instead.
 
 ## Ingest
 
