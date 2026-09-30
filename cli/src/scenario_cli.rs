@@ -1860,9 +1860,14 @@ fn list_lint_rules(json_out: bool) -> Result<u8> {
             description: "A {shot: <stepId>} claim has no baselines/<stepId>.png beside scenario.json; replay will fail with a missing-baseline hint. Skipped for stdin input.",
         },
         Rule {
+            code: "domshot-without-baseline",
+            severity: "warning",
+            description: "A {domshot: <stepId>} claim has no baselines/<stepId>.snap.txt beside scenario.json; replay will fail with a missing-baseline hint. Skipped for stdin input.",
+        },
+        Rule {
             code: "orphan-baseline",
             severity: "warning",
-            description: "baselines/<stepId>.png exists but no shot claim references <stepId> — a stale golden left by a deleted or renamed step. Skipped for stdin input.",
+            description: "baselines/<stepId>.png or .snap.txt exists but no shot/domshot claim references <stepId> — a stale golden left by a deleted or renamed step. Skipped for stdin input.",
         },
         Rule {
             code: "brittle-locator",
@@ -2102,26 +2107,28 @@ fn lint_findings(path: &Path) -> Result<(Vec<Finding>, Scenario)> {
         });
     }
 
-    // 3b) no visual coverage — a scenario with do steps but zero shot claims
-    // has no pixel baseline; nudge toward `flush --auto-shots` / editor camera.
+    // 3b) no golden coverage — a scenario with do steps but zero shot/domshot
+    // claims has no baseline at all; nudge toward `flush --auto-shots` /
+    // editor camera (or a domshot claim for a structural golden).
     let has_do = j.steps.iter().any(|s| matches!(s, Step::Do { .. }));
-    let has_shot = j.steps.iter().any(|s| {
+    let has_golden = j.steps.iter().any(|s| {
         matches!(
             s,
             Step::Check {
                 claim: crate::scenario::Claim {
-                    subject: crate::scenario::ClaimSubject::Shot { .. },
+                    subject: crate::scenario::ClaimSubject::Shot { .. }
+                        | crate::scenario::ClaimSubject::Domshot { .. },
                     ..
                 },
                 ..
             }
         )
     });
-    if has_do && !has_shot {
+    if has_do && !has_golden {
         findings.push(Finding {
             severity: "warning",
             code: "no-visual-check",
-            message: "scenario has do steps but no { shot: ... } claim — add one for pixel-diff coverage (`flush --auto-shots` covers every do step)".to_string(),
+            message: "scenario has do steps but no { shot: ... } / { domshot: ... } claim — add one for golden coverage (`flush --auto-shots` covers every do step)".to_string(),
         });
     }
 
@@ -2541,38 +2548,46 @@ fn lint_findings(path: &Path) -> Result<(Vec<Finding>, Scenario)> {
         }
     }
 
-    // 13) a {"shot": <stepId>} claim needs a committed baseline —
-    // replay fails on the missing file anyway; flag it while the author
-    // still has the terminal in hand. Skipped on stdin ('-'): the tempfile
-    // has no scenario dir to resolve baselines/ against. Nested shot claims
-    // (inside group/loop params.steps) count too — same JSON walk the
-    // runner uses to find them.
+    // 13) a {"shot": <stepId>} / {"domshot": <stepId>} claim needs a
+    // committed baseline — replay fails on the missing file anyway; flag
+    // it while the author still has the terminal in hand. Skipped on
+    // stdin ('-'): the tempfile has no scenario dir to resolve baselines/
+    // against. Nested claims (inside group/loop params.steps) count too —
+    // same JSON walk the runner uses to find them.
     let from_stdin = matches!(&_guard, crate::io::StdinOrPath::Stdin { .. });
     if !from_stdin {
         if let Some(scenario_dir) = path.parent() {
             let mut shot_ids: Vec<String> = Vec::new();
-            fn collect_shots(v: &serde_json::Value, out: &mut Vec<String>) {
+            let mut domshot_ids: Vec<String> = Vec::new();
+            fn collect_shots(
+                v: &serde_json::Value,
+                shots: &mut Vec<String>,
+                domshots: &mut Vec<String>,
+            ) {
                 match v {
                     serde_json::Value::Object(map) => {
                         if let Some(subject) = map.get("claim").and_then(|c| c.get("subject")) {
                             if let Some(sid) = subject.get("shot").and_then(|s| s.as_str()) {
-                                out.push(sid.to_string());
+                                shots.push(sid.to_string());
+                            }
+                            if let Some(sid) = subject.get("domshot").and_then(|s| s.as_str()) {
+                                domshots.push(sid.to_string());
                             }
                         }
                         for v in map.values() {
-                            collect_shots(v, out);
+                            collect_shots(v, shots, domshots);
                         }
                     }
                     serde_json::Value::Array(arr) => {
                         for v in arr {
-                            collect_shots(v, out);
+                            collect_shots(v, shots, domshots);
                         }
                     }
                     _ => {}
                 }
             }
             if let Some(steps) = raw.get("steps") {
-                collect_shots(steps, &mut shot_ids);
+                collect_shots(steps, &mut shot_ids, &mut domshot_ids);
             }
             let baselines = scenario_dir.join("baselines");
             for sid in &shot_ids {
@@ -2582,6 +2597,17 @@ fn lint_findings(path: &Path) -> Result<(Vec<Finding>, Scenario)> {
                         code: "shot-without-baseline",
                         message: format!(
                             "check claims shot {sid:?} but baselines/{sid}.png is missing — run `agent-qa shot-accept` after a replay"
+                        ),
+                    });
+                }
+            }
+            for sid in &domshot_ids {
+                if !baselines.join(format!("{sid}.snap.txt")).is_file() {
+                    findings.push(Finding {
+                        severity: "warning",
+                        code: "domshot-without-baseline",
+                        message: format!(
+                            "check claims domshot {sid:?} but baselines/{sid}.snap.txt is missing — run `agent-qa domshot-accept` after a replay"
                         ),
                     });
                 }
@@ -2604,6 +2630,27 @@ fn lint_findings(path: &Path) -> Result<(Vec<Finding>, Scenario)> {
                             code: "orphan-baseline",
                             message: format!(
                                 "baselines/{name} — no shot claim references step {stem:?}; delete it or the claim was renamed"
+                            ),
+                        });
+                    }
+                }
+            }
+            // Same inverse check for domshot text baselines (.snap.txt).
+            if let Ok(rd) = fs::read_dir(&baselines) {
+                let claimed: std::collections::BTreeSet<&str> =
+                    domshot_ids.iter().map(String::as_str).collect();
+                for ent in rd.flatten() {
+                    let name = ent.file_name();
+                    let name = name.to_string_lossy();
+                    let Some(stem) = name.strip_suffix(".snap.txt") else {
+                        continue;
+                    };
+                    if !claimed.contains(stem) {
+                        findings.push(Finding {
+                            severity: "warning",
+                            code: "orphan-baseline",
+                            message: format!(
+                                "baselines/{name} — no domshot claim references step {stem:?}; delete it or the claim was renamed"
                             ),
                         });
                     }
@@ -2744,6 +2791,11 @@ struct CoverageCounts {
     /// do-steps whose following check is a `{"shot": <that do's id>}` claim —
     /// the fraction of the flow covered by a pixel-diffed baseline.
     shot_covered: usize,
+    /// do-steps whose following check is a `shot` OR `domshot` claim on that
+    /// do — the fraction of the flow covered by ANY golden baseline
+    /// (pixel or structural). `shot_covered` stays shot-only for the
+    /// `shotCoverageRatio` JSON field; this is the headline number.
+    golden_covered: usize,
 }
 
 impl CoverageCounts {
@@ -2759,6 +2811,13 @@ impl CoverageCounts {
             1.0
         } else {
             self.shot_covered as f64 / self.do_steps as f64
+        }
+    }
+    fn golden_ratio(&self) -> f64 {
+        if self.do_steps == 0 {
+            1.0
+        } else {
+            self.golden_covered as f64 / self.do_steps as f64
         }
     }
 }
@@ -2785,6 +2844,14 @@ fn coverage_counts(steps: &[crate::scenario::Step]) -> CoverageCounts {
                         if shot == did {
                             c.shot_covered += 1;
                         }
+                    }
+                    let golden_id = match &claim.subject {
+                        ClaimSubject::Shot { shot, .. } => Some(shot.as_str()),
+                        ClaimSubject::Domshot { domshot, .. } => Some(domshot.as_str()),
+                        _ => None,
+                    };
+                    if golden_id == Some(did) {
+                        c.golden_covered += 1;
                     }
                 }
             }
@@ -2839,6 +2906,9 @@ fn coverage(path: &Path, json_out: bool) -> Result<u8> {
             coverage_ratio: f64,
             shot_covered_steps: usize,
             shot_coverage_ratio: f64,
+            /// do steps covered by ANY golden claim (shot or domshot).
+            golden_covered_steps: usize,
+            golden_coverage_ratio: f64,
         }
         let report = Report {
             id: &j.id,
@@ -2850,6 +2920,8 @@ fn coverage(path: &Path, json_out: bool) -> Result<u8> {
             coverage_ratio: ratio,
             shot_covered_steps: c.shot_covered,
             shot_coverage_ratio: c.shot_ratio(),
+            golden_covered_steps: c.golden_covered,
+            golden_coverage_ratio: c.golden_ratio(),
         };
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
@@ -2863,6 +2935,11 @@ fn coverage(path: &Path, json_out: bool) -> Result<u8> {
             "  visual (shot)   : {} covered, {:.0}%",
             c.shot_covered,
             c.shot_ratio() * 100.0
+        );
+        println!(
+            "  golden (any)    : {} covered, {:.0}%",
+            c.golden_covered,
+            c.golden_ratio() * 100.0
         );
     }
     Ok(0)
@@ -2919,6 +2996,7 @@ fn coverage_all(
         agg.do_followed_by_check += c.do_followed_by_check;
         agg.bare_do += c.bare_do;
         agg.shot_covered += c.shot_covered;
+        agg.golden_covered += c.golden_covered;
     }
 
     if json_out {
@@ -2934,6 +3012,8 @@ fn coverage_all(
             coverage_ratio: f64,
             shot_covered_steps: usize,
             shot_coverage_ratio: f64,
+            golden_covered_steps: usize,
+            golden_coverage_ratio: f64,
         }
         #[derive(serde::Serialize)]
         #[serde(rename_all = "camelCase")]
@@ -2948,6 +3028,8 @@ fn coverage_all(
             coverage_ratio: f64,
             shot_covered_steps: usize,
             shot_coverage_ratio: f64,
+            golden_covered_steps: usize,
+            golden_coverage_ratio: f64,
             rows: Vec<Row<'a>>,
         }
         let report = Report {
@@ -2961,6 +3043,8 @@ fn coverage_all(
             coverage_ratio: agg.ratio(),
             shot_covered_steps: agg.shot_covered,
             shot_coverage_ratio: agg.shot_ratio(),
+            golden_covered_steps: agg.golden_covered,
+            golden_coverage_ratio: agg.golden_ratio(),
             rows: rows
                 .iter()
                 .map(|(sid, intent, c)| Row {
@@ -2973,6 +3057,8 @@ fn coverage_all(
                     coverage_ratio: c.ratio(),
                     shot_covered_steps: c.shot_covered,
                     shot_coverage_ratio: c.shot_ratio(),
+                    golden_covered_steps: c.golden_covered,
+                    golden_coverage_ratio: c.golden_ratio(),
                 })
                 .collect(),
         };
@@ -2989,12 +3075,12 @@ fn coverage_all(
         return Ok(0);
     }
     println!(
-        "{:<24} {:>5} {:>5} {:>7} {:>5}  {:<5} {:<6} intent",
-        "sid", "steps", "do", "do→ck", "bare", "ratio", "shot%"
+        "{:<24} {:>5} {:>5} {:>7} {:>5}  {:<5} {:<6} {:<6} intent",
+        "sid", "steps", "do", "do→ck", "bare", "ratio", "shot%", "golden%"
     );
     for (sid, intent, c) in &rows {
         println!(
-            "{:<24} {:>5} {:>5} {:>7} {:>5}  {:>4.0}% {:>4.0}% {}",
+            "{:<24} {:>5} {:>5} {:>7} {:>5}  {:>4.0}% {:>4.0}% {:>4.0}% {}",
             sid,
             c.total,
             c.do_steps,
@@ -3002,17 +3088,19 @@ fn coverage_all(
             c.bare_do,
             c.ratio() * 100.0,
             c.shot_ratio() * 100.0,
+            c.golden_ratio() * 100.0,
             intent.chars().take(40).collect::<String>()
         );
     }
     println!(
-        "\nOVERALL: scenarios={} do={} do→check={} bare={} ratio={:.0}% shot={:.0}%",
+        "\nOVERALL: scenarios={} do={} do→check={} bare={} ratio={:.0}% shot={:.0}% golden={:.0}%",
         rows.len(),
         agg.do_steps,
         agg.do_followed_by_check,
         agg.bare_do,
         agg.ratio() * 100.0,
-        agg.shot_ratio() * 100.0
+        agg.shot_ratio() * 100.0,
+        agg.golden_ratio() * 100.0
     );
     Ok(0)
 }
@@ -4324,6 +4412,60 @@ mod tests {
         assert_eq!(c.bare_do, 1);
         assert_eq!(c.shot_covered, 1);
         assert!((c.shot_ratio() - 0.5).abs() < 1e-9);
+        assert_eq!(c.golden_covered, 1);
+        assert!((c.golden_ratio() - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn coverage_counts_domshot_as_golden_not_shot() {
+        // do,domshot-check(s0) + do,bare → golden_covered=1 but shot_covered=0.
+        let tmp = TempDir::new().unwrap();
+        let p = write(
+            tmp.path(),
+            r#"{
+              "schema": "scenario/2", "id": "x", "intent": "y",
+              "steps": [
+                { "id": "s0", "intent": "a", "kind": "do", "verb": "reload" },
+                { "id": "s1", "intent": "structure holds", "kind": "check",
+                  "claim": { "subject": { "domshot": "s0" }, "predicate": "matches" } },
+                { "id": "s2", "intent": "b", "kind": "do", "verb": "reload" }
+              ]
+            }"#,
+        );
+        let j = load_scenario(&p).unwrap();
+        let c = coverage_counts(&j.steps);
+        assert_eq!(c.shot_covered, 0);
+        assert_eq!(c.golden_covered, 1);
+        assert!((c.golden_ratio() - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn lint_no_visual_check_accepts_domshot() {
+        // A scenario whose only golden is a domshot claim must not warn —
+        // strict mode fails on warnings, so a clean run proves the rule
+        // counts domshot as visual coverage.
+        let tmp = TempDir::new().unwrap();
+        // `<sid>/scenario.json` layout + a minted baseline + env.open so the
+        // only question under test is whether no-visual-check fires.
+        let dir = tmp.path().join("x");
+        fs::create_dir_all(dir.join("baselines")).unwrap();
+        fs::write(dir.join("baselines/s0.snap.txt"), "- heading \"x\"\n").unwrap();
+        let p = dir.join("scenario.json");
+        fs::write(
+            &p,
+            r#"{
+              "schema": "scenario/2", "id": "x", "intent": "y",
+              "env": { "open": [{ "kind": "fresh" }] },
+              "steps": [
+                { "id": "s0", "intent": "a", "kind": "do", "verb": "goto",
+                  "value": { "from": "literal", "literal": "https://example.com/" } },
+                { "id": "s1", "intent": "structure holds", "kind": "check",
+                  "claim": { "subject": { "domshot": "s0" }, "predicate": "matches" } }
+              ]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(lint(&p, LintFormat::Json, true, None, None).unwrap(), 0);
     }
 
     #[test]

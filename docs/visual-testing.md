@@ -128,3 +128,13 @@ pushing the new goldens to the branch so the gate goes green.
   indicators, timestamps).
 - `flush --auto-shots` + one replay + `shot-accept` is the three-command path
   from a recording to a golden suite.
+
+## Structural goldens (domshot)
+
+`{"domshot": "<stepId>"}` diffs the step's ARIA snapshot (the per-step
+`snapshots/` sidecar) against `baselines/<stepId>.snap.txt` instead of
+pixels. It's the LLM-first variant: no font/AA flake risk, and the failure
+artifact is a unified text diff under `domshots-diff/` that reads like a
+code review hunk. Use `skip: ["<regex>", ...]` to drop volatile lines.
+Mint with `domshot-accept <sid>` (defaults to the steps domshot claims
+reference; `--dry-run`/`--steps`/`--json` mirror shot-accept).

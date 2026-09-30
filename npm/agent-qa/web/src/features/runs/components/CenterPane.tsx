@@ -4,7 +4,7 @@ import { BrowserModeToggle } from '@/components/browser-mode-toggle'
 import { TrendChip } from './TrendChip'
 import { cn } from '@/lib/utils'
 import { CameraIcon, GitCompareIcon, Loader2Icon, PlayIcon, PlusIcon, WrenchIcon } from 'lucide-react'
-import { acceptAllShots, runFileUrl } from '@/lib/runs-api'
+import { acceptAllDomshots, acceptAllShots, runFileUrl } from '@/lib/runs-api'
 import { CompareView } from './CompareView'
 import { InsertCheckDialog } from './InsertCheckDialog' 
 import {
@@ -242,8 +242,8 @@ export function CenterPane({
     const heals = detail.heals || []
     const healByStep = new Map(heals.map((h) => [h.stepId, h]))
     const healedCount = heals.filter((h) => h.mode === 'locator-correction').length
-    // Any {"shot":…} claim in the scenario → the run can promote its
-    // screenshots as the new baselines ("apply new goldens").
+    // Any {"shot":…} or {"domshot":…} claim in the scenario → the run can
+    // promote its captures as the new baselines ("apply new goldens").
     const hasShotClaims = !!(
       defSteps &&
       defSteps.some((s) => {
@@ -252,6 +252,15 @@ export function CenterPane({
         return (check && check.shot != null) || (claim && claim.subject && claim.subject.shot != null)
       })
     )
+    const hasDomshotClaims = !!(
+      defSteps &&
+      defSteps.some((s) => {
+        const check = s.check as { domshot?: unknown } | undefined
+        const claim = s.claim as { subject?: { domshot?: unknown } } | undefined
+        return (check && check.domshot != null) || (claim && claim.subject && claim.subject.domshot != null)
+      })
+    )
+    const hasGoldenClaims = hasShotClaims || hasDomshotClaims
     const stepError = stepFail && stepFail.error
       ? stepFail.error.replace(/^.*?exited \d+:\s*/, '').replace(/^[✗✘x]\s*/, '').trim()
       : null
@@ -292,20 +301,24 @@ export function CenterPane({
                 {healedCount} healed
               </span>
             )}
-            {!live && (otherRuns.length > 0 || hasShotClaims) && (
+            {!live && (otherRuns.length > 0 || hasGoldenClaims) && (
               <span className="ml-auto flex items-center gap-1.5">
-                {hasShotClaims && (
+                {hasGoldenClaims && (
                   <button
                     type="button"
                     disabled={acceptAll === 'busy'}
-                    title="Promote every screenshot captured in this run to the checked-in baselines — apply new goldens"
+                    title="Promote every golden captured in this run (screenshots + ARIA snapshots) to the checked-in baselines — apply new goldens"
                     className="flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
                     onClick={() => {
                       if (!sel.sid) return
                       setAcceptAll('busy')
-                      void acceptAllShots(sel.sid, detail.runId).then((r) =>
-                        setAcceptAll(r.ok ? 'done' : 'error')
-                      )
+                      void (async () => {
+                        const jobs: Promise<{ ok: boolean }>[] = []
+                        if (hasShotClaims) jobs.push(acceptAllShots(sel.sid!, detail.runId))
+                        if (hasDomshotClaims) jobs.push(acceptAllDomshots(sel.sid!, detail.runId))
+                        const rs = await Promise.all(jobs)
+                        setAcceptAll(rs.every((r) => r.ok) ? 'done' : 'error')
+                      })()
                     }}
                   >
                     {acceptAll === 'busy' ? (
@@ -313,7 +326,7 @@ export function CenterPane({
                     ) : (
                       <CameraIcon className="size-3" />
                     )}
-                    {acceptAll === 'done' ? 'Goldens accepted' : 'Accept shots'}
+                    {acceptAll === 'done' ? 'Goldens accepted' : 'Accept goldens'}
                   </button>
                 )}
                 {otherRuns.length > 0 && (

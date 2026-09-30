@@ -24,6 +24,7 @@ mod crawl;
 mod design;
 mod doctor;
 mod dom_activate;
+mod domshot_accept;
 mod env_ops;
 mod file_chooser;
 mod fill_unique;
@@ -144,11 +145,11 @@ fn main() -> ExitCode {
         "heal-list" => heal_list::run(rest),
         "heal-chronic" => heal_chronic::run(rest),
         "shot-accept" => shot_accept::run(rest),
+        "domshot-accept" => domshot_accept::run(rest),
         "init" => init::cli(rest),
         _ => {
             eprintln!(
-"agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, smart-fill, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, run-report, init."
-
+                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, smart-fill, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, domshot-accept, run-report, init."
             );
             eprintln!("Run `agent-qa --help` for usage.");
             Ok(2)
@@ -276,6 +277,7 @@ Verbs:
   heal-list <sid> [--run <id>] [--json]    List heal-responses + applied state
   heal-chronic <sid> [--min-runs N] [--json] [--issue]  Flag steps that self-heal across runs
   shot-accept <sid> [--run <id>] [--steps <…>] [--json]   Mint screenshot baselines for shot claims
+  domshot-accept <sid> [--run <id>] [--steps <…>] [--json]   Mint ARIA-snapshot baselines for domshot claims
 
 Step dispatch covers `do` verbs and `check` claims."
     );
