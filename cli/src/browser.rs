@@ -1126,7 +1126,15 @@ pub fn wait_for_load_capped(
 /// (typically a JSON-encoded representation of the in-page value).
 pub fn eval_expression(session: &str, expression: &str) -> Result<String, AgentBrowserError> {
     let wrapped = frame_wrap_eval(session, expression);
-    let r = run(session, ["eval", &wrapped], RunOpts::new().capture())?;
+    // Bounded tighter than the subprocess default: evals resolve in ms on a
+    // healthy page, so a 60s wedge means the page's JS thread is deadlocked
+    // (infinite loop in a handler, a promise that never settles) — surface it
+    // as a failure, don't sit on it until the global cap.
+    let r = run(
+        session,
+        ["eval", &wrapped],
+        RunOpts::new().capture().timeout_ms(60_000),
+    )?;
     Ok(r.stdout)
 }
 
