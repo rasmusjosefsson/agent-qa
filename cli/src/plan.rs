@@ -476,6 +476,15 @@ pub fn run(args: &[String]) -> Result<u8> {
                     plan.id
                 );
             }
+            if started == 0 {
+                // Every member was skipped — an exit-0 "0/0 passed" would read
+                // as a green suite that verified nothing.
+                bail!(
+                    "plan {:?}: 0 of {} members ran — all skipped (unrecorded/missing scenarios); record the scenarios or fix the case links",
+                    plan.id,
+                    rows.len()
+                );
+            }
             Ok(if all_ok { 0 } else { 1 })
         }
         Some(other) => bail!("plan: unknown sub-command {other:?} (list|cases|run)"),
@@ -653,5 +662,27 @@ mod tests {
             .unwrap()
             .next()
             .is_some());
+    }
+
+    #[test]
+    fn plan_run_fails_when_every_member_is_skipped() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        // Both members exist but neither has a scenario link — the run would
+        // print SKIP rows and exit 0 with "0/0 passed" before the guard.
+        write_case(root, "c-a", "A", &[], None);
+        write_case(root, "c-b", "B", &[], None);
+        write_plan(root, "p", &[], &["c-a", "c-b"]);
+
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", root);
+        let out = run(&["run".to_string(), "p".to_string()]);
+        match prev {
+            Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+        let err = out.unwrap_err().to_string();
+        assert!(err.contains("0 of 2 members ran"), "got: {err}");
     }
 }
