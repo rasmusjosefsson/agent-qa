@@ -317,7 +317,9 @@
     "golden:xyz:tc04": "bun golden/xyz-tc04.ts",
     "golden:gestures:tc02": "bun run golden/gestures-tc02.ts",
     "golden:gestures:tc03": "bun run golden/gestures-tc03.ts",
-    "golden:timing:tc01": "bun golden/timing-tc01.ts"
+    "golden:timing:tc01": "bun golden/timing-tc01.ts",
+    "golden:pst:tc01": "bun golden/pst-tc01.ts",
+    "golden:domshot:tc01": "bun golden/domshot-tc01.ts"
   },
   "devDependencies": {
     "bun-types": "^1.3.12"

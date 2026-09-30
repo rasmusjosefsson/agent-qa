@@ -26,6 +26,7 @@ import {
 } from '@/components/ui/select'
 import { insertStep } from '@/lib/runs-api'
 
+type SubjectKind = 'element' | 'url' | 'shot' | 'domshot' | 'console' | 'network' | 'dialog'
 type SubjectKind = 'element' | 'elementCount' | 'url' | 'shot' | 'console' | 'network' | 'dialog'
 
 const PREDICATES = [
@@ -50,6 +51,7 @@ const PREDICATES_BY_KIND: Record<SubjectKind, readonly string[]> = {
   url: PREDICATES,
   dialog: ['exists', 'notExists', 'equals', 'contains', 'matches'],
   shot: ['matches'],
+  domshot: ['matches'],
   console: ['exists', 'notExists', 'equals', 'contains', 'countEquals'],
   network: ['exists', 'notExists', 'equals', 'contains'],
 }
@@ -200,6 +202,8 @@ export function InsertCheckDialog({
   const [css, setCss] = useState('')
   const [shotStep, setShotStep] = useState('')
   const [shotTolerance, setShotTolerance] = useState('')
+  const [domshotStep, setDomshotStep] = useState('')
+  const [domshotSkip, setDomshotSkip] = useState('')
   const [consoleType, setConsoleType] = useState('error')
   const [consoleText, setConsoleText] = useState('')
   const [netUrl, setNetUrl] = useState('')
@@ -215,6 +219,7 @@ export function InsertCheckDialog({
     if (open) {
       setIntent(`check after ${afterStepId}`)
       setShotStep(afterStepId)
+      setDomshotStep(afterStepId)
       setError(null)
     }
   }, [open, afterStepId])
@@ -226,6 +231,7 @@ export function InsertCheckDialog({
       elementCount: 'countEquals',
       url: 'contains',
       shot: 'matches',
+      domshot: 'matches',
       console: 'notExists',
       network: 'exists',
       dialog: 'exists',
@@ -233,6 +239,41 @@ export function InsertCheckDialog({
     setPredicate(defaults[v])
   }
 
+  const subject = (): Record<string, unknown> => {
+    switch (subjectKind) {
+      case 'url':
+        return { url: true }
+      case 'dialog':
+        return { dialog: true }
+      case 'shot':
+        return { shot: shotStep.trim() }
+      case 'domshot': {
+        const sub: Record<string, unknown> = { domshot: domshotStep.trim() }
+        const skip = domshotSkip
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+        if (skip.length) sub.skip = skip
+        return sub
+      }
+      case 'console': {
+        const m: Record<string, unknown> = {}
+        if (consoleType && consoleType !== 'any') m.type = consoleType
+        if (consoleText.trim()) m.text = consoleText.trim()
+        return { console: Object.keys(m).length ? m : true }
+      }
+      case 'network': {
+        const m: Record<string, unknown> = {}
+        if (netUrl.trim()) m.urlMatches = netUrl.trim()
+        if (netMethod && netMethod !== 'any') m.method = netMethod
+        const sub: Record<string, unknown> = { network: m }
+        if (netKind !== 'fired') sub.ofKind = netKind
+        if (netKind === 'responseJsonPath' && netPath.trim()) sub.path = netPath.trim()
+        return sub
+      }
+      default:
+        return elementSubject(role, name, css, useCss)
+    }
   const draft: CheckDraft = {
     subjectKind,
     role,
@@ -250,6 +291,18 @@ export function InsertCheckDialog({
     predicate,
     value,
   }
+
+  const valid =
+    !!intent.trim() &&
+    (subjectKind === 'url' ||
+      subjectKind === 'dialog' ||
+      (subjectKind === 'shot' && !!shotStep.trim()) ||
+      (subjectKind === 'domshot' && !!domshotStep.trim()) ||
+      subjectKind === 'console' ||
+      (subjectKind === 'network' &&
+        (!!netUrl.trim() || (!!netMethod && netMethod !== 'any')) &&
+        (netKind !== 'responseJsonPath' || !!netPath.trim())) ||
+      (subjectKind === 'element' && (useCss ? !!css.trim() : !!role.trim())))
   const valid = !!intent.trim() && checkDraftValid(draft)
 
   const submit = async () => {
@@ -301,6 +354,7 @@ export function InsertCheckDialog({
                   <SelectItem value="elementCount">element count</SelectItem>
                   <SelectItem value="url">url</SelectItem>
                   <SelectItem value="shot">screenshot</SelectItem>
+                  <SelectItem value="domshot">dom snapshot</SelectItem>
                   <SelectItem value="console">console</SelectItem>
                   <SelectItem value="network">network</SelectItem>
                   <SelectItem value="dialog">dialog</SelectItem>
@@ -380,6 +434,27 @@ export function InsertCheckDialog({
               </div>
               <p className="text-[11px] text-muted-foreground">
                 Pixel-diffs that step's screenshot vs baselines/&lt;id&gt;.png (mint with shot-accept).
+              </p>
+            </div>
+          )}
+          {subjectKind === 'domshot' && (
+            <div className="space-y-2">
+              <Label>Snapshot step</Label>
+              <div className="flex gap-2">
+                <Input
+                  value={domshotStep}
+                  onChange={(e) => setDomshotStep(e.target.value)}
+                  placeholder="step id whose ARIA snapshot to compare"
+                />
+                <Input
+                  className="w-40"
+                  value={domshotSkip}
+                  onChange={(e) => setDomshotSkip(e.target.value)}
+                  placeholder="skip regexes, comma-sep"
+                />
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Text-diffs that step's ARIA snapshot vs baselines/&lt;id&gt;.snap.txt (mint with domshot-accept).
               </p>
             </div>
           )}
