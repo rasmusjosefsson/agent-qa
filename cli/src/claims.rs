@@ -41,7 +41,7 @@ use crate::value::{select_json_path, substitute_scenario_vars, value_to_string, 
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
-const MAX_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone)]
 pub struct CheckContext<'a> {
