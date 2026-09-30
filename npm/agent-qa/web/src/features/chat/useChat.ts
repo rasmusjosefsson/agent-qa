@@ -74,8 +74,13 @@ export function useChat(cid: string) {
   }, [cid])
 
   const abort = useCallback(async () => {
-    await postAbort(cid)
-    dispatch({ type: 'set_streaming', on: false })
+    try {
+      await postAbort(cid)
+    } finally {
+      // Clear the spinner even when the abort call can't reach the server —
+      // leaving streaming=true would spin the UI forever on a dead backend.
+      dispatch({ type: 'set_streaming', on: false })
+    }
   }, [cid])
 
   const newChat = useCallback(async () => {

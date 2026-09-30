@@ -73,26 +73,39 @@ export function createChatEventSource(cid: string): EventSource {
   return new EventSource(`${chatBase(cid)}/stream`);
 }
 
+// A dead report server rejects the fetch — without a catch that rejection
+// propagates through the hook and the prompt renders as "sent" but was
+// never delivered. Surface it as an ordinary failed response instead.
+const offline = (label: string): Response =>
+  new Response(JSON.stringify({ error: `unreachable: ${label}` }), {
+    status: 503,
+    headers: { 'content-type': 'application/json' },
+  });
+
 export async function postPrompt(
   cid: string,
   text: string,
   streamingBehavior?: string
 ): Promise<{ ok: boolean; status: number; body: { error?: string } }> {
-  const r = await fetch(`${chatBase(cid)}/prompt`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ text, streamingBehavior }),
-  });
-  const body = await r.json().catch(() => ({}));
-  return { ok: r.ok, status: r.status, body: body as { error?: string } };
+  try {
+    const r = await fetch(`${chatBase(cid)}/prompt`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text, streamingBehavior }),
+    });
+    const body = await r.json().catch(() => ({}));
+    return { ok: r.ok, status: r.status, body: body as { error?: string } };
+  } catch (e) {
+    return { ok: false, status: 503, body: { error: `unreachable: ${(e as Error)?.message || 'report server'}` } };
+  }
 }
 
 export async function postAbort(cid: string): Promise<Response> {
-  return fetch(`${chatBase(cid)}/abort`, { method: 'POST' });
+  return fetch(`${chatBase(cid)}/abort`, { method: 'POST' }).catch(() => offline('report server'));
 }
 
 export async function postNew(cid: string): Promise<Response> {
-  return fetch(`${chatBase(cid)}/new`, { method: 'POST' });
+  return fetch(`${chatBase(cid)}/new`, { method: 'POST' }).catch(() => offline('report server'));
 }
 
 export async function postModel(
@@ -100,26 +113,34 @@ export async function postModel(
   provider?: string,
   id?: string
 ): Promise<{ ok: boolean; body: ChatState & { error?: string } }> {
-  const r = await fetch(`${chatBase(cid)}/model`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ provider, id }),
-  });
-  const body = await r.json().catch(() => ({}));
-  return { ok: r.ok, body: body as ChatState & { error?: string } };
+  try {
+    const r = await fetch(`${chatBase(cid)}/model`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider, id }),
+    });
+    const body = await r.json().catch(() => ({}));
+    return { ok: r.ok, body: body as ChatState & { error?: string } };
+  } catch {
+    return { ok: false, body: { error: 'unreachable: report server' } as ChatState & { error?: string } };
+  }
 }
 
 export async function postThinking(
   cid: string,
   level?: string
 ): Promise<{ ok: boolean; body: ChatState & { error?: string } }> {
-  const r = await fetch(`${chatBase(cid)}/thinking`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ level }),
-  });
-  const body = await r.json().catch(() => ({}));
-  return { ok: r.ok, body: body as ChatState & { error?: string } };
+  try {
+    const r = await fetch(`${chatBase(cid)}/thinking`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ level }),
+    });
+    const body = await r.json().catch(() => ({}));
+    return { ok: r.ok, body: body as ChatState & { error?: string } };
+  } catch {
+    return { ok: false, body: { error: 'unreachable: report server' } as ChatState & { error?: string } };
+  }
 }
 
 export async function browserNavigate(payload: unknown): Promise<Response> {
@@ -127,7 +148,7 @@ export async function browserNavigate(payload: unknown): Promise<Response> {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload || {}),
-  });
+  }).catch(() => offline('report server'));
 }
 
 // ----- live recording view (per-chat) -----
