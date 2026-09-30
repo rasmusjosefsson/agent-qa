@@ -1445,6 +1445,14 @@ fn extract(
             events_path.display()
         );
     }
+    // A mid-flight source run truncates silently at whatever events it
+    // has written — warn so the partial clone isn't mistaken for a
+    // finished run's cut.
+    if active_runs(sid).iter().any(|d| d.ends_with(&run_id)) {
+        eprintln!(
+            "scenario extract: run {run_id:?} is still in flight — the clone reflects only the events written so far"
+        );
+    }
     // Last write wins per idx — a step logs `running` then its outcome.
     let mut outcome: std::collections::BTreeMap<usize, (String, String)> =
         std::collections::BTreeMap::new();
@@ -1605,6 +1613,7 @@ fn rename(from_sid: &str, to_sid: &str) -> Result<u8> {
             from_dir.display()
         );
     }
+    refuse_if_in_flight("rename", from_sid)?;
     let to_dir = crate::paths::scenario_dir(to_sid)?;
     if to_dir.exists() {
         bail!(
@@ -1747,6 +1756,84 @@ fn tag(sid: &str, add: &[String], remove: &[String], json_out: bool) -> Result<u
     Ok(0)
 }
 
+/// Run dirs under `<sid>/replays/` that look actively written: an
+/// audit.json with no `finishedAt` (audit lands at run start, finishedAt
+/// at the end) plus a file touched within the last 60s. A crashed run
+/// leaves the same unfinished audit but its files go stale, so debris
+/// stays prunable/deletable. Destructive verbs refuse on active runs —
+/// moving the tree out from under the runner's artifact writes crashes
+/// them mid-step.
+fn active_runs(sid: &str) -> Vec<PathBuf> {
+    let Ok(dir) = crate::paths::scenario_dir(sid) else {
+        return Vec::new();
+    };
+    crate::paths::run_dirs(&dir.join("replays"))
+        .into_iter()
+        .filter(|run_dir| {
+            let unfinished = std::fs::read(run_dir.join("audit.json"))
+                .ok()
+                .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                .map(|v| v.get("finishedAt").map(|f| f.is_null()).unwrap_or(true))
+                .unwrap_or(false); // no readable audit → not a live run
+            unfinished && dir_touched_within(run_dir, 60)
+        })
+        .collect()
+}
+
+/// Any file under `dir` (capped at 512 entries) modified within `secs`?
+/// Cheap liveness signal — a running replay appends events/screenshots
+/// continuously; a dead one doesn't.
+fn dir_touched_within(dir: &Path, secs: u64) -> bool {
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(secs))
+        .unwrap_or(std::time::UNIX_EPOCH);
+    let mut newest = std::time::UNIX_EPOCH;
+    let mut stack = vec![dir.to_path_buf()];
+    let mut visited = 0usize;
+    while let Some(d) = stack.pop() {
+        if visited >= 512 {
+            break;
+        }
+        visited += 1;
+        if let Ok(it) = std::fs::read_dir(&d) {
+            for e in it.flatten() {
+                if let Ok(md) = e.metadata() {
+                    if let Ok(t) = md.modified() {
+                        if t > newest {
+                            newest = t;
+                        }
+                    }
+                    if md.is_dir() {
+                        stack.push(e.path());
+                    }
+                }
+            }
+        }
+    }
+    newest > cutoff
+}
+
+fn refuse_if_in_flight(verb: &str, sid: &str) -> Result<()> {
+    let live = active_runs(sid);
+    if live.is_empty() {
+        return Ok(());
+    }
+    let names = live
+        .iter()
+        .map(|d| {
+            d.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    bail!(
+        "scenario {verb}: {sid:?} has {} run(s) still in flight ({names}) — let them finish (or `scenario prune-replays` clears a crashed run's debris)",
+        live.len()
+    );
+}
+
 /// Shorthand for the bound-recording check shared by the scenario
 /// mutators (delete/rename refuse; in-place edits warn).
 fn bound_recording_steps(sid: &str) -> Result<Option<usize>> {
@@ -1770,6 +1857,7 @@ fn delete(sid: &str, confirmed: bool) -> Result<u8> {
              ({steps} step(s)) — `flush` it, or `start --force` to abandon it",
         );
     }
+    refuse_if_in_flight("delete", sid)?;
     let replays = crate::paths::run_dirs(&dir.join("replays")).len();
     if !confirmed {
         println!(
@@ -1822,7 +1910,12 @@ fn prune_all(
         // also prints its own per-sid header line which would be very
         // noisy across N scenarios).
         let replays_dir = dir.join("replays");
-        let runs = crate::paths::run_dirs(&replays_dir);
+        let mut runs = crate::paths::run_dirs(&replays_dir);
+        // Never prune a run that is still writing — its audit has no
+        // finishedAt yet (a crashed run's debris looks the same; leaving
+        // it is the safe default).
+        let live: std::collections::HashSet<PathBuf> = active_runs(&sid).into_iter().collect();
+        runs.retain(|d| !live.contains(d));
         if runs.len() <= keep {
             continue;
         }
@@ -1887,7 +1980,14 @@ fn prune_replays(sid: &str, keep: usize, confirmed: bool, keep_failed: bool) -> 
         bail!("scenario prune-replays: not found at {}", dir.display());
     }
     let replays_dir = dir.join("replays");
-    let entries = crate::paths::run_dirs(&replays_dir);
+    // Runs still writing (unfinished audit) are not prunable — the
+    // newest live run can be older than a finished newer one and
+    // dropping it pulls the ground out from under its artifact writes.
+    let live: std::collections::HashSet<PathBuf> = active_runs(sid).into_iter().collect();
+    let entries = crate::paths::run_dirs(&replays_dir)
+        .into_iter()
+        .filter(|d| !live.contains(d))
+        .collect::<Vec<_>>();
     let is_failed = |run_dir: &std::path::Path| -> bool {
         let audit_path = run_dir.join("audit.json");
         let bytes = match std::fs::read(&audit_path) {
@@ -6523,6 +6623,116 @@ mod tests {
         .unwrap();
         assert_eq!(delete("sid", true).unwrap(), 0);
         assert!(!d.exists());
+        match prev {
+            Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    #[test]
+    fn delete_refuses_while_a_run_is_active() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        let d = tmp.path().join("sid");
+        let run = d.join("replays").join("r1");
+        fs::create_dir_all(&run).unwrap();
+        fs::write(
+            d.join("scenario.json"),
+            r#"{"schema":"scenario/2","id":"sid","intent":"x","steps":[]}"#,
+        )
+        .unwrap();
+        // Audit without finishedAt + fresh mtime = the run looks live.
+        fs::write(
+            run.join("audit.json"),
+            r#"{"startedAt":"2026-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        let err = delete("sid", true).unwrap_err().to_string();
+        assert!(err.contains("in flight"), "unexpected: {err}");
+        assert!(d.is_dir(), "active-run sid must survive");
+        // finishedAt marks the run done — delete proceeds again.
+        fs::write(
+            run.join("audit.json"),
+            r#"{"startedAt":"2026-01-01T00:00:00Z","finishedAt":"2026-01-01T00:01:00Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(delete("sid", true).unwrap(), 0);
+        assert!(!d.exists());
+        match prev {
+            Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    #[test]
+    fn rename_refuses_while_a_run_is_active() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        let d = tmp.path().join("sid");
+        let run = d.join("replays").join("r1");
+        fs::create_dir_all(&run).unwrap();
+        fs::write(
+            d.join("scenario.json"),
+            r#"{"schema":"scenario/2","id":"sid","intent":"x","steps":[]}"#,
+        )
+        .unwrap();
+        fs::write(
+            run.join("audit.json"),
+            r#"{"startedAt":"2026-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        let err = rename("sid", "sid2").unwrap_err().to_string();
+        assert!(err.contains("in flight"), "unexpected: {err}");
+        assert!(d.is_dir() && !tmp.path().join("sid2").exists());
+        match prev {
+            Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
+            None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
+        }
+    }
+
+    #[test]
+    fn prune_replays_never_drops_an_active_run() {
+        let _g = crate::test_util::lock_env();
+        let tmp = TempDir::new().unwrap();
+        let prev = std::env::var("AGENT_QA_SCENARIOS_DIR").ok();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        let d = tmp.path().join("sid");
+        for i in 0..4 {
+            let run = d.join("replays").join(format!("2026-01-0{i}__hash{i}"));
+            fs::create_dir_all(&run).unwrap();
+            fs::write(
+                run.join("audit.json"),
+                r#"{"finishedAt":"2026-01-01T00:01:00Z"}"#,
+            )
+            .unwrap();
+        }
+        // Oldest-looking dir is the live one — finishedAt absent. Pruning
+        // to keep=1 must keep it even though it sorts first.
+        let live = d.join("replays").join("2026-01-00__live");
+        fs::create_dir_all(&live).unwrap();
+        fs::write(
+            live.join("audit.json"),
+            r#"{"startedAt":"2026-01-02T00:00:00Z"}"#,
+        )
+        .unwrap();
+        assert_eq!(prune_replays("sid", 1, true, false).unwrap(), 0);
+        let mut kept: Vec<String> = std::fs::read_dir(d.join("replays"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        kept.sort();
+        assert_eq!(
+            kept,
+            vec![
+                "2026-01-00__live".to_string(),
+                "2026-01-03__hash3".to_string()
+            ]
+        );
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
