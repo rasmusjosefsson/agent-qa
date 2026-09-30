@@ -7,20 +7,34 @@ import type { AriaNode, BufferState, EditKind, LiveInput, PickedElement } from '
 
 type Json = Record<string, unknown>;
 
+// A dead report server rejects the fetch — without a catch the rejection
+// propagates past every caller's `!ok` error surface (flash/toast), so a
+// button press looks dead instead of saying why. Surface it as an ordinary
+// failed response and the existing error paths light up.
+const UNREACHABLE = { ok: false, status: 503, body: { error: 'unreachable: report server' } };
+
 async function getJson(url: string): Promise<{ ok: boolean; status: number; body: any }> {
-  const r = await fetch(url, { headers: { accept: 'application/json' } });
-  const body = await r.json().catch(() => ({}));
-  return { ok: r.ok, status: r.status, body };
+  try {
+    const r = await fetch(url, { headers: { accept: 'application/json' } });
+    const body = await r.json().catch(() => ({}));
+    return { ok: r.ok, status: r.status, body };
+  } catch {
+    return UNREACHABLE;
+  }
 }
 
 async function postJson(url: string, payload?: Json): Promise<{ ok: boolean; status: number; body: any }> {
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(payload || {}),
-  });
-  const body = await r.json().catch(() => ({}));
-  return { ok: r.ok, status: r.status, body };
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload || {}),
+    });
+    const body = await r.json().catch(() => ({}));
+    return { ok: r.ok, status: r.status, body };
+  } catch {
+    return UNREACHABLE;
+  }
 }
 
 export async function getBuffer(): Promise<BufferState> {
