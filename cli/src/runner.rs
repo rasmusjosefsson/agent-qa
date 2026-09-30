@@ -468,6 +468,38 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     crate::browser::set_browser_profile(opts.browser_profile.as_deref());
     let connection = crate::browser::BrowserConnection::resolve()?;
     crate::browser::set_connection(&connection);
+
+    // 1. Load + validate FIRST — before the session lock, the browser
+    //    resets, or any subprocess spawn. A missing/corrupt/empty scenario
+    //    must fail instantly with just its error, not after four pages of
+    //    agent-browser warnings it never needed.
+    let (scenario_file, scenario_dir) = resolve_source(&opts.source)?;
+    let bytes =
+        fs::read(&scenario_file).with_context(|| format!("read {}", scenario_file.display()))?;
+    let parsed = schema::validate_bytes(&bytes)
+        .with_context(|| format!("validate {}", scenario_file.display()))?;
+    let mut scenario: Scenario =
+        serde_json::from_value(parsed.clone()).context("parse scenario")?;
+    if scenario.steps.is_empty() {
+        // `SUMMARY: 0/0 (PASS)` would report green having verified
+        // nothing — the same silent-green class as an all-skipped plan.
+        bail!(
+            "{}: scenario has no steps — nothing to replay",
+            scenario_file.display()
+        );
+    }
+    if let Some(to) = &opts.base_url {
+        match crate::scenario::retarget_origin(&mut scenario, to) {
+            Some(from) => {
+                eprintln!("[v2-replay] --base-url: retargeted {from} → {to}");
+            }
+            None => {
+                eprintln!("[v2-replay] --base-url: scenario has no recorded origin — flag ignored")
+            }
+        }
+    }
+    let hash = hash_scenario_bytes(&bytes);
+
     if !opts.dry_run {
         refuse_if_recording_active(&opts.session_name)?;
     }
@@ -522,25 +554,6 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         crate::cdp_net::start(&opts.session_name);
     }
 
-    // 1. Load + validate.
-    let (scenario_file, scenario_dir) = resolve_source(&opts.source)?;
-    let bytes =
-        fs::read(&scenario_file).with_context(|| format!("read {}", scenario_file.display()))?;
-    let parsed = schema::validate_bytes(&bytes)
-        .with_context(|| format!("validate {}", scenario_file.display()))?;
-    let mut scenario: Scenario =
-        serde_json::from_value(parsed.clone()).context("parse scenario")?;
-    if let Some(to) = &opts.base_url {
-        match crate::scenario::retarget_origin(&mut scenario, to) {
-            Some(from) => {
-                eprintln!("[v2-replay] --base-url: retargeted {from} → {to}");
-            }
-            None => {
-                eprintln!("[v2-replay] --base-url: scenario has no recorded origin — flag ignored")
-            }
-        }
-    }
-    let hash = hash_scenario_bytes(&bytes);
     // Union of `mask` selectors across the scenario's shot claims — hidden
     // (visibility:hidden) around every step screenshot so volatile UI
     // (timestamps, live badges) can't flake the visual diff. Precomputed
@@ -3736,7 +3749,10 @@ mod tests {
                     { "kind": "nav", "url": "https://example.com/", "intent": "land" }
                 ]
             },
-            "steps": []
+            "steps": [
+                { "id": "s1", "intent": "noop check", "kind": "check",
+                  "claim": { "subject": { "url": true }, "predicate": "exists" } }
+            ]
         }"#,
         )
         .unwrap();
@@ -4201,7 +4217,10 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             r#"{
                 "schema": "scenario/2", "id": "x", "intent": "y",
                 "env": { "open": [{ "kind": "cookie", "name": "c", "value": "v" }] },
-                "steps": []
+                "steps": [
+                    { "id": "s1", "intent": "noop check", "kind": "check",
+                      "claim": { "subject": { "url": true }, "predicate": "exists" } }
+                ]
             }"#,
         )
         .unwrap();
@@ -5979,5 +5998,76 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         crate::recorder_state::RecorderState::clear().unwrap();
         refuse_if_recording_active("rec1").unwrap();
         env::remove_var(crate::paths::RECORD_DIR_ENV);
+    }
+
+    fn run_opts(source: ScenarioSource) -> RunOptions {
+        RunOptions {
+            source,
+            profile: None,
+            persona: None,
+            environment: None,
+            session_name: "test".into(),
+            heal_from_run: None,
+            headed: false,
+            browser_profile: None,
+            input_overrides: BTreeMap::new(),
+            dry_run: false,
+            no_sidecars: false,
+            quiet: false,
+            plain: false,
+            tag: None,
+            output_audit: None,
+            from_step: None,
+            until_step: None,
+            update_baselines: false,
+            keep_going: false,
+            record_video: None,
+            junit: None,
+            base_url: None,
+            auto_promote: false,
+            freeze: None,
+            har: false,
+            mock_from: None,
+            offline: false,
+            fresh_browser: false,
+        }
+    }
+
+    #[test]
+    fn replay_bails_on_a_zero_step_scenario() {
+        let _g = lock_env();
+        let work = TempDir::new().unwrap();
+        let jdir = work.path().join("sid");
+        fs::create_dir_all(&jdir).unwrap();
+        let jfile = jdir.join("scenario.json");
+        fs::write(
+            &jfile,
+            r#"{"schema":"scenario/2","id":"empty","intent":"nothing","env":{},"templates":{},"inputs":{},"steps":[]}"#,
+        )
+        .unwrap();
+        let err = run(&run_opts(ScenarioSource::Path(jfile)))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no steps"), "got: {err}");
+    }
+
+    #[test]
+    fn replay_validates_before_spawning_any_subprocess() {
+        let _g = lock_env();
+        let work = TempDir::new().unwrap();
+        let log = work.path().join("ab.log");
+        install_fake_browser(work.path(), &log);
+        // A missing scenario must fail on the file, having spawned
+        // NOTHING — validation precedes the session lock, mock clear,
+        // and every browser reset.
+        let err = run(&run_opts(ScenarioSource::Path(
+            work.path().join("ghost").join("scenario.json"),
+        )))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("scenario.json"), "got: {err}");
+        let spawned = fs::read_to_string(&log).unwrap_or_default();
+        assert!(spawned.is_empty(), "subprocess ran: {spawned}");
+        clear_fake_browser();
     }
 }
