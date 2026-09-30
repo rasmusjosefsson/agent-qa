@@ -57,6 +57,9 @@ fn continue_scenario(args: &[String]) -> Result<u8> {
         anyhow::anyhow!("usage: record continue <sid> [--session <n>] [--skip-replay]")
     })?;
     if !skip_replay {
+        // Replaying on the recording's own session is exactly what
+        // continue wants — opt out of the mid-recording refusal.
+        std::env::set_var(crate::runner::RUN_ON_RECORDED_SESSION_ENV, "1");
         let code = crate::runner::cli(&[
             sid.clone(),
             "--session".into(),
