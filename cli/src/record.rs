@@ -3,6 +3,7 @@
 use anyhow::{bail, Result};
 use serde_json::json;
 
+use crate::browser;
 use crate::recorder_state::RecorderState;
 
 pub fn run(args: &[String]) -> Result<u8> {
@@ -121,6 +122,18 @@ fn status(args: &[String]) -> Result<u8> {
         bail!("usage: record status [--json]");
     }
     let state = RecorderState::load_active()?;
+    // Probe the recording browser — a stale buffer flushes fine but
+    // silently loses HAR/network capture when the session is gone.
+    // Bounded at 3s so a dead daemon doesn't stall the status call.
+    let alive = browser::run(
+        &state.session,
+        ["--json", "errors"],
+        browser::RunOpts::new()
+            .capture()
+            .lenient()
+            .timeout_ms(3_000),
+    )
+    .is_ok_and(|r| r.exit_code == 0);
     if args.iter().any(|arg| arg == "--json") {
         println!(
             "{}",
@@ -128,6 +141,7 @@ fn status(args: &[String]) -> Result<u8> {
                 "sid": state.sid,
                 "intent": state.intent,
                 "session": state.session,
+                "sessionAlive": alive,
                 "paused": state.paused,
                 "steps": state.steps.len(),
                 "startedAt": state.started_at,
@@ -135,10 +149,18 @@ fn status(args: &[String]) -> Result<u8> {
         );
     } else {
         println!(
-            "{}: {} step(s), {}",
+            "{}: {} step(s), {}{}",
             state.sid,
             state.steps.len(),
-            if state.paused { "paused" } else { "recording" }
+            if state.paused { "paused" } else { "recording" },
+            if alive {
+                String::new()
+            } else {
+                format!(
+                    " — session {:?} unreachable (HAR/network capture lost)",
+                    state.session
+                )
+            },
         );
     }
     Ok(0)
