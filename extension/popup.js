@@ -42,7 +42,10 @@ btn.addEventListener("click", async () => {
     recording = true;
     paint();
     meta.textContent = "recording…";
-    poller = setInterval(status, 1000);
+    // A fast double-click can reach here twice — without the guard the
+    // first interval leaks, keeps polling after stop, and overwrites the
+    // "saved" message.
+    if (!poller) poller = setInterval(status, 1000);
   } else {
     clearInterval(poller);
     poller = null;

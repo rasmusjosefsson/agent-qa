@@ -33,10 +33,19 @@ function persist(tabId) {
   chrome.storage.session.set({ [keyOf(tabId)]: s }).catch(() => {});
 }
 
+// Resolves true when a content script actually received the message —
+// sendMessage rejects when the tab has no receiver (a page loaded
+// before the extension installed), which record:start turns into a
+// visible "reload the page" error instead of a dead REC badge.
 const tell = (tabId, msg) => {
   try {
-    chrome.tabs.sendMessage(tabId, msg).catch(() => {});
-  } catch {}
+    return chrome.tabs
+      .sendMessage(tabId, msg)
+      .then(() => true)
+      .catch(() => false);
+  } catch {
+    return Promise.resolve(false);
+  }
 };
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -113,15 +122,31 @@ async function handle(msg, sender) {
     if (!tab || !/^https?:/.test(tab.url || "")) {
       return { error: "can't record on this page" };
     }
-    sessions.set(msg.tabId, {
+    // Start is idempotent — a second click before the popup's status
+    // poll lands must not wipe an in-progress session's steps.
+    if (await getSession(msg.tabId)) {
+      return { recording: true };
+    }
+    const s = {
       steps: [],
       network: [],
       url: tab.url,
       lastUrl: tab.url,
       startedAt: new Date().toISOString(),
-    });
+    };
+    sessions.set(msg.tabId, s);
+    // The content script is absent on pages that loaded before the
+    // extension (install, update, or a restored tab) — nothing it does
+    // there can be captured, so fail the start rather than a silent
+    // dead recording.
+    if (!(await tell(msg.tabId, { t: "record:start" }))) {
+      sessions.delete(msg.tabId);
+      return {
+        error:
+          "this page was loaded before the extension — reload it, then record",
+      };
+    }
     persist(msg.tabId);
-    tell(msg.tabId, { t: "record:start" });
     chrome.action.setBadgeText({ tabId: msg.tabId, text: "REC" });
     chrome.action.setBadgeBackgroundColor({ tabId: msg.tabId, color: "#d33" });
     return { recording: true };
