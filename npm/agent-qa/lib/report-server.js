@@ -342,7 +342,21 @@ function coverageOf(steps) {
 
 async function scenarioSummary(root, sid) {
   const dir = path.join(root, sid);
-  const scenario = await readJson(path.join(dir, 'scenario.json'));
+  // Distinguish a missing scenario.json (un-flushed buffer — hidden below)
+  // from an unparseable one: a corrupt file must surface as a broken row,
+  // not silently drop the sid from the sidebar.
+  let scenario = null;
+  let scenarioError = null;
+  try {
+    const raw = await fsp.readFile(path.join(dir, 'scenario.json'), 'utf8');
+    try {
+      scenario = JSON.parse(raw);
+    } catch (e) {
+      scenarioError = `unparseable scenario.json — ${e.message}`;
+    }
+  } catch {
+    // missing or unreadable — treated as "no scenario yet"
+  }
   const latest = await latestRunId(dir);
   const activeRunId = await findActiveRunId(dir);
   // Prefer the in-flight run for the "current" view; fall back to the
@@ -375,6 +389,7 @@ async function scenarioSummary(root, sid) {
     dir,
     scenarioId: scenario?.id ?? null,
     hasScenario: !!scenario,
+    scenarioError,
     intent: scenario?.intent ?? null,
     steps: Array.isArray(scenario?.steps) ? scenario.steps.length : null,
     // scenario.json's tags[] — the field `replay --tags` selects on.
@@ -408,9 +423,12 @@ async function listScenarios(root) {
   }
   // Only surface real scenarios: a dir is shown once it has recorded steps
   // (a flushed scenario.json with steps) or it already has replay runs.
+  // A dir whose scenario.json exists but is unparseable is shown too —
+  // hiding it would make a corrupted recording silently disappear.
   // Un-flushed/empty recording buffers, start skeletons, and cancelled
-  // sessions (0 steps, no runs) are hidden so the list isn't cluttered.
-  return out.filter((s) => (s.steps && s.steps > 0) || s.latestRunId);
+  // sessions (0 steps, no runs, no file) are hidden so the list isn't
+  // cluttered.
+  return out.filter((s) => (s.steps && s.steps > 0) || s.latestRunId || s.scenarioError);
 }
 
 // -------- test cases (author-side artifact) --------

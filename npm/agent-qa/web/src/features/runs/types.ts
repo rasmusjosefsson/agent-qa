@@ -51,6 +51,9 @@ export interface ScenarioSummary {
   dir: string
   scenarioId: string | null
   hasScenario: boolean
+  // scenario.json exists on disk but is unparseable — the row must render as
+  // broken, not be filtered out like an un-flushed buffer dir.
+  scenarioError: string | null
   intent: string | null
   steps: number | null
   // do→check coverage (same heuristic as `scenario coverage`): null when no
