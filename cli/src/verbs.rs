@@ -21,6 +21,7 @@
 
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value as Json;
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 use crate::browser::{self, RoleAct};
@@ -40,6 +41,76 @@ pub struct DoContext<'a> {
     /// keeps the page's JS thread (and the daemon's pending eval reply)
     /// blocked, so post-click settle waits must yield to the dialog.
     pub uses_dialog: bool,
+}
+
+thread_local! {
+    /// Locator-removal expressions registered by `dismiss` steps. Consent
+    /// walls and overlay dialogs mount asynchronously — sometimes seconds
+    /// after load — so each interactive step re-applies the removals
+    /// before dispatching. Persistent across navigations on purpose: CMP
+    /// banners commonly re-mount on every page until accepted.
+    static DISMISSED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Reset the dismissal list at run start.
+pub fn clear_dismissed() {
+    DISMISSED.with(|d| d.borrow_mut().clear());
+}
+
+/// Verbs that touch the page DOM — a covering overlay can intercept their
+/// hit-test, so dismissed selectors are re-removed before dispatch.
+fn interactive_verb(verb: &Verb) -> bool {
+    matches!(
+        verb,
+        Verb::Click
+            | Verb::DblClick
+            | Verb::RightClick
+            | Verb::Check
+            | Verb::Uncheck
+            | Verb::Type
+            | Verb::Clear
+            | Verb::Select
+            | Verb::Upload
+            | Verb::Download
+            | Verb::Drag
+            | Verb::Hover
+            | Verb::Focus
+            | Verb::Blur
+            | Verb::ScrollTo
+            | Verb::Frame
+    )
+}
+
+/// Lower a locator to a JS expression removing every matching node. The
+/// expression must be re-runnable: it tolerates absent matches and has no
+/// side effects beyond removal. Role locators can't lower to a re-appliable
+/// selector — dismiss requires a raw css/testId/xpath locator.
+fn dismiss_expr(loc: &Locator, scope: &mut ValueScope, _scenario_dir: &Path) -> Result<String> {
+    let raw = match loc {
+        Locator::Role(_) => bail!(
+            "dismiss needs a raw locator (css/testId/xpath) — role locators can't be re-applied"
+        ),
+        Locator::Raw(raw) => raw,
+    };
+    if raw.raw.kind == RawLocatorKind::Text {
+        bail!("dismiss needs a css/testId/xpath locator — text locators can't be re-applied");
+    }
+    let v = serde_json::to_string(&crate::value::substitute_scenario_vars(
+        &raw.raw.value,
+        scope,
+    ))?;
+    Ok(match raw.raw.kind {
+        RawLocatorKind::Css => format!(
+            "(function(){{document.querySelectorAll({v}).forEach(function(e){{e.remove()}});return 1}})()"
+        ),
+        RawLocatorKind::TestId => format!(
+            "(function(){{document.querySelectorAll('[data-testid='+{v}+'],[data-test-id='+{v}+'],[data-test='+{v}+']').forEach(function(e){{e.remove()}});return 1}})()"
+        ),
+        RawLocatorKind::Xpath => format!(
+            "(function(){{var r=document.evaluate({v},document,null,XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,null);var i,n=[];for(i=0;i<r.snapshotLength;i++)n.push(r.snapshotItem(i));n.forEach(function(e){{e.remove()}});return 1}})()"
+        ),
+        RawLocatorKind::Text => unreachable!("text locators bail above"),
+    })
 }
 
 /// Dispatch a single `do` step. Returns `Ok(Some(saved))` if the verb
@@ -63,6 +134,15 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
         ),
         Step::Check { id, .. } => bail!("dispatch_do: step '{id}' is a check, not a do"),
     };
+    // Re-remove dismissed overlays before anything that hit-tests the DOM.
+    // Best-effort: a mid-navigation document just skips.
+    if interactive_verb(verb) {
+        DISMISSED.with(|d| {
+            for expr in d.borrow().iter() {
+                let _ = browser::eval_expression(ctx.session, expr);
+            }
+        });
+    }
     match verb {
         Verb::Goto => {
             let url = resolve_literal_string(value, scope, "goto.value")?;
@@ -175,14 +255,21 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
             Ok(None)
         }
         Verb::Clear => {
+            // Clear via keystrokes, not a value-set: framework-controlled
+            // inputs (React) keep their own state copy, so an empty fill
+            // leaves the bound state stale — the UI looks cleared but the
+            // app still behaves as if the old value were there. Focus +
+            // select-all + Backspace is the deletion a real user performs.
             act_on_locator(
                 ctx.session,
                 on.unwrap(),
                 scope,
-                RoleAct::Fill,
-                Some(""),
+                RoleAct::Focus,
+                None,
                 ctx.scenario_dir,
             )?;
+            browser::press_key(ctx.session, "Control+a")?;
+            browser::press_key(ctx.session, "Backspace")?;
             Ok(None)
         }
         Verb::Press => {
@@ -217,13 +304,16 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
         Verb::Wait => {
             // `params.ms` → wait by ms; `params.until` → wait --load <state>;
             // `params.url` → poll resource timing until a matching request
-            // completed; `params.idle`/`idleMs` → session-level network
-            // quiescence (zero pending requests for idleMs, default 500ms);
-            // `params.timeoutMs` (default 10s) bounds the last two; neither
-            // → soft wait for networkidle.
+            // completed; `params.locator` (+`state` attached|visible|hidden|
+            // detached, `timeoutMs`) → poll the element's DOM state;
+            // `params.idle`/`idleMs` → session-level network quiescence
+            // (zero pending requests for idleMs, default 500ms);
+            // `params.timeoutMs` (default 10s) bounds url/locator/idle;
+            // none → soft wait for networkidle.
             let ms = params.and_then(|p| p.get("ms")).and_then(|v| v.as_u64());
             let until = params.and_then(|p| p.get("until")).and_then(|v| v.as_str());
             let url = params.and_then(|p| p.get("url")).and_then(|v| v.as_str());
+            let locator = params.and_then(|p| p.get("locator"));
             let idle = params.and_then(|p| p.get("idle")).and_then(|v| v.as_bool());
             let idle_ms = params
                 .and_then(|p| p.get("idleMs"))
@@ -233,16 +323,24 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                 .and_then(|p| p.get("timeoutMs"))
                 .and_then(|v| v.as_u64())
                 .unwrap_or(10_000);
-            match (ms, until, url, wants_idle) {
-                (Some(ms), _, _, _) => {
+            match (ms, until, url, locator, wants_idle) {
+                (Some(ms), _, _, _, _) => {
                     // Pure wall-clock sleep — no browser round-trip, so a
                     // pending native dialog can't wedge it.
                     std::thread::sleep(std::time::Duration::from_millis(ms));
                 }
-                (_, Some(state), _, _) => browser::wait_for_load(ctx.session, state)?,
-                (_, _, Some(url), _) => browser::wait_for_resource(ctx.session, url, timeout_ms)
+                (_, Some(state), _, _, _) => browser::wait_for_load(ctx.session, state)?,
+                (_, _, Some(url), _, _) => browser::wait_for_resource(ctx.session, url, timeout_ms)
                     .map_err(|e| anyhow!("step '{id}' wait url {url}: {e}"))?,
-                (_, _, _, true) => {
+                (_, _, _, Some(loc), _) => wait_for_element_state(
+                    ctx,
+                    loc,
+                    params.and_then(|p| p.get("state")).and_then(|v| v.as_str()),
+                    timeout_ms,
+                    scope,
+                    id,
+                )?,
+                (_, _, _, _, true) => {
                     browser::wait_for_idle(ctx.session, idle_ms.unwrap_or(500), timeout_ms)
                         .map_err(|e| anyhow!("step '{id}' wait idle: {e}"))?
                 }
@@ -292,6 +390,12 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                 scope,
                 ctx.scenario_dir,
             )?;
+            Ok(None)
+        }
+        Verb::Dismiss => {
+            let expr = dismiss_expr(on.unwrap(), scope, ctx.scenario_dir)?;
+            let _ = browser::eval_expression(ctx.session, &expr);
+            DISMISSED.with(|d| d.borrow_mut().push(expr));
             Ok(None)
         }
         Verb::DblClick => {
@@ -1808,13 +1912,100 @@ fn click_locator(
     scope: &mut ValueScope,
     scenario_dir: &std::path::Path,
 ) -> Result<()> {
-    match act_on_locator(session, loc, scope, RoleAct::Click, None, scenario_dir) {
+    let probe = ClickProbe::arm(session);
+    let res = match act_on_locator(session, loc, scope, RoleAct::Click, None, scenario_dir) {
         Err(e) if dialog_blocking_error(&e) && dialog_pending_within(session, 3000) => {
             eprintln!("[v2-replay] click tolerated — dialog pending");
             Ok(())
         }
         other => other,
+    };
+    if res.is_ok() {
+        probe.warn_if_inert(session, loc);
     }
+    res
+}
+
+/// Arms a page-side observer before a click so a click whose handler never
+/// ran (unbound listener, detached element, covered target) surfaces as a
+/// warning instead of a confusingly-unrelated wait failure one step later.
+/// Advisory only: legitimate clicks can change nothing (focus, backdrop
+/// dismissal, canvas paints).
+struct ClickProbe {
+    armed: bool,
+}
+
+impl ClickProbe {
+    fn arm(session: &str) -> Self {
+        let armed = browser::eval_expression(
+            session,
+            "(function(){try{window.__aqClick={u:location.href,m:0,r:performance.getEntriesByType('resource').length};new MutationObserver(function(x){window.__aqClick.m+=x.length}).observe(document.documentElement,{subtree:true,childList:true,attributes:true,characterData:true});}catch(e){}return '1'})()",
+        )
+        .is_ok();
+        Self { armed }
+    }
+
+    /// Poll briefly for an observable effect — navigation (a full nav also
+    /// wipes `__aqClick`), DOM mutation, a completed fetch, or a pending
+    /// native dialog. Early-exits on the first effect, so a working click
+    /// costs ~one extra eval; a truly inert one costs the full window.
+    fn warn_if_inert(&self, session: &str, loc: &Locator) {
+        if !self.armed {
+            return;
+        }
+        for _ in 0..4 {
+            std::thread::sleep(std::time::Duration::from_millis(180));
+            if click_effect_seen(session) || browser::dialog_pending(session) {
+                return;
+            }
+        }
+        eprintln!(
+            "[v2-replay] click on {} produced no observable effect (no navigation, DOM change, request, or dialog) — the handler may not have been bound",
+            click_locator_label(loc)
+        );
+    }
+}
+
+/// False means "definitely inert"; any doubt (eval failure, parse failure,
+/// missing probe — a navigation removes it) reads as an effect.
+fn click_effect_seen(session: &str) -> bool {
+    let Ok(out) = browser::eval_expression(
+        session,
+        "(function(){var p=window.__aqClick;if(!p)return '{\"nav\":true}';return JSON.stringify({nav:location.href!==p.u,m:p.m,r:performance.getEntriesByType('resource').length-p.r})})()",
+    ) else {
+        return true;
+    };
+    // eval result arrives as a JSON string literal; unwrap then parse.
+    let Ok(inner) = serde_json::from_str::<String>(out.trim()) else {
+        return true;
+    };
+    let Ok(v) = serde_json::from_str::<Json>(&inner) else {
+        return true;
+    };
+    v["nav"].as_bool().unwrap_or(false)
+        || v["m"].as_u64().unwrap_or(0) > 0
+        || v["r"].as_i64().unwrap_or(0) != 0
+}
+
+fn click_locator_label(loc: &Locator) -> String {
+    let (kind, value) = match loc {
+        Locator::Role(r) => ("role", r.role.clone()),
+        Locator::Raw(raw) => {
+            let kind = match raw.raw.kind {
+                RawLocatorKind::Css => "css",
+                RawLocatorKind::TestId => "testId",
+                RawLocatorKind::Xpath => "xpath",
+                RawLocatorKind::Text => "text",
+            };
+            (kind, raw.raw.value.clone())
+        }
+    };
+    let v = if value.chars().count() > 80 {
+        format!("{}…", value.chars().take(80).collect::<String>())
+    } else {
+        value
+    };
+    format!("{kind} '{v}'")
 }
 
 /// Poll `dialog status` briefly — the daemon can take a beat to surface the
@@ -1837,6 +2028,52 @@ fn dialog_blocking_error(e: &anyhow::Error) -> bool {
     // `Runtime.evaluate` either returns the agent-browser error or times out:
     // both mean the click handler opened a native dialog mid-eval.
     msg.contains("dialog is blocking") || msg.contains("timed out")
+}
+
+/// `wait {locator, state?, timeoutMs?}` — poll the element's DOM state
+/// until it reaches `state` (default `attached`): `attached` resolves
+/// regardless of visibility, `visible` needs a layout box and no
+/// `display:none`/`visibility:hidden`, `hidden` is satisfied by either
+/// absent or non-visible, `detached` wants it gone entirely.
+fn wait_for_element_state(
+    ctx: &DoContext<'_>,
+    loc_json: &Json,
+    state: Option<&str>,
+    timeout_ms: u64,
+    scope: &mut ValueScope,
+    id: &str,
+) -> Result<()> {
+    let state = state.unwrap_or("attached");
+    if !matches!(state, "attached" | "visible" | "hidden" | "detached") {
+        bail!("step '{id}' wait: params.state must be attached|visible|hidden|detached, got '{state}'");
+    }
+    let loc: Locator = serde_json::from_value(loc_json.clone())
+        .map_err(|e| anyhow!("step '{id}' wait: params.locator is not a locator: {e}"))?;
+    let ep = drag_endpoint(&loc, scope, ctx.scenario_dir)
+        .map_err(|e| anyhow!("step '{id}' wait locator: {e}"))?;
+    let js = crate::dom_activate::build_element_state_js(&ep);
+    let start = std::time::Instant::now();
+    loop {
+        let got = browser::eval_expression(ctx.session, &js)
+            .ok()
+            .map(|s| s.trim().trim_matches('"').to_string());
+        let reached = match state {
+            "detached" => got.as_deref() == Some("detached"),
+            "visible" => got.as_deref() == Some("visible"),
+            "hidden" => matches!(got.as_deref(), Some("hidden") | Some("detached")),
+            _ => matches!(got.as_deref(), Some("visible") | Some("hidden")),
+        };
+        if reached {
+            return Ok(());
+        }
+        if start.elapsed().as_millis() as u64 >= timeout_ms {
+            bail!(
+                "step '{id}' wait: locator never reached state '{state}' within {timeout_ms}ms (last probe: {})",
+                got.as_deref().unwrap_or("eval failed")
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(120));
+    }
 }
 
 /// Resolve a role locator's `name` to the literal accessible name. Plain and
@@ -2346,6 +2583,19 @@ mod tests {
     }
 
     #[test]
+    fn clear_uses_keystrokes_not_an_empty_fill() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "clear",
+            "on": { "raw": { "kind": "css", "value": "#q" }, "reason": "test" }
+        }));
+        let out = run_one(&s);
+        assert!(out.contains("focus #q"), "got: {out}");
+        assert!(out.contains("press Control+a"), "got: {out}");
+        assert!(out.contains("press Backspace"), "got: {out}");
+        assert!(!out.contains("fill"), "got: {out}");
+    }
+
+    #[test]
     fn type_role_textbox_miss_falls_back_to_named_control_fill() {
         let _g = lock_env();
         let tmp = TempDir::new().unwrap();
@@ -2490,6 +2740,116 @@ mod tests {
         clear_fake();
         assert!(
             err.to_string().contains("no resource matching"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn wait_with_locator_polls_until_visible() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        // eval answers "visible" → the locator poll resolves on the first try.
+        let body = format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\nif [ \"$3\" = eval ]; then printf '\"visible\"'; fi\nexit 0\n",
+            log.display()
+        );
+        let bin = write_exec(tmp.path(), "agent-browser", &body);
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "wait",
+            "params": { "locator": { "raw": { "kind": "css", "value": "#ready" }, "reason": "" }, "state": "visible" }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        assert!(out.contains("eval"), "got: {out}");
+        assert!(out.contains("#ready"), "got: {out}");
+        assert!(out.contains("__aqWaitState"), "got: {out}");
+    }
+
+    #[test]
+    fn wait_with_locator_detached_accepts_absent_element() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        let body = format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\nif [ \"$3\" = eval ]; then printf '\"detached\"'; fi\nexit 0\n",
+            log.display()
+        );
+        let bin = write_exec(tmp.path(), "agent-browser", &body);
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "wait",
+            "params": { "locator": { "raw": { "kind": "css", "value": ".modal" }, "reason": "" }, "state": "detached" }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+        clear_fake();
+    }
+
+    #[test]
+    fn wait_with_locator_times_out_when_state_never_reached() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        // Plain fake: eval stdout is empty → element state never matches.
+        install_fake(tmp.path(), &log);
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "wait",
+            "params": { "locator": { "raw": { "kind": "css", "value": "#never" }, "reason": "" }, "state": "visible", "timeoutMs": 50 }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err();
+        clear_fake();
+        assert!(
+            err.to_string().contains("never reached state 'visible'"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn wait_with_locator_rejects_unknown_state() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "wait",
+            "params": { "locator": { "raw": { "kind": "css", "value": "#x" }, "reason": "" }, "state": "bogus" }
+        }));
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake(tmp.path(), &log);
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err();
+        clear_fake();
+        assert!(
+            err.to_string().contains("attached|visible|hidden|detached"),
             "got: {err}"
         );
     }
@@ -3371,6 +3731,33 @@ mod tests {
     }
 
     #[test]
+    fn click_locator_label_maps_kinds_and_truncates() {
+        let css = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "click",
+            "on": { "raw": { "kind": "css", "value": "#save" }, "reason": "t" }
+        }));
+        let Step::Do { on, .. } = &css else { panic!() };
+        assert_eq!(click_locator_label(on.as_ref().unwrap()), "css '#save'");
+
+        let role = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "click",
+            "on": { "role": "button" }
+        }));
+        let Step::Do { on, .. } = &role else { panic!() };
+        assert_eq!(click_locator_label(on.as_ref().unwrap()), "role 'button'");
+
+        let long = "x".repeat(200);
+        let txt = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "click",
+            "on": { "raw": { "kind": "text", "value": long }, "reason": "t" }
+        }));
+        let Step::Do { on, .. } = &txt else { panic!() };
+        let label = click_locator_label(on.as_ref().unwrap());
+        assert!(label.starts_with("text '") && label.ends_with("…'"));
+        assert!(label.len() < 100);
+    }
+
+    #[test]
     fn i18n_key_without_dictionary_errors() {
         let _g = lock_env();
         let tmp = TempDir::new().unwrap();
@@ -3390,6 +3777,90 @@ mod tests {
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         clear_fake();
         assert!(err.contains("i18n.json"), "got: {err}");
+    }
+
+    #[test]
+    fn dismiss_expr_rejects_non_reappliable_locators() {
+        let mut scope = ValueScope::default();
+        let dir = Path::new("/tmp");
+        let role: Locator =
+            serde_json::from_value(json!({ "role": "button", "name": "x" })).unwrap();
+        let err = dismiss_expr(&role, &mut scope, dir)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("raw locator"), "got: {err}");
+        let text: Locator = serde_json::from_value(
+            json!({ "raw": { "kind": "text", "value": "OK" }, "reason": "r" }),
+        )
+        .unwrap();
+        let err = dismiss_expr(&text, &mut scope, dir)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("css/testId/xpath"), "got: {err}");
+    }
+
+    #[test]
+    fn dismiss_expr_lowers_raw_kinds_to_removals() {
+        let mut scope = ValueScope::default();
+        let dir = Path::new("/tmp");
+        let css: Locator = serde_json::from_value(
+            json!({ "raw": { "kind": "css", "value": ".wall" }, "reason": "r" }),
+        )
+        .unwrap();
+        let expr = dismiss_expr(&css, &mut scope, dir).unwrap();
+        assert!(expr.contains("querySelectorAll(\".wall\")"), "got: {expr}");
+        let xp: Locator = serde_json::from_value(
+            json!({ "raw": { "kind": "xpath", "value": "//div" }, "reason": "r" }),
+        )
+        .unwrap();
+        let expr = dismiss_expr(&xp, &mut scope, dir).unwrap();
+        assert!(expr.contains("document.evaluate"), "got: {expr}");
+    }
+
+    #[test]
+    fn dismissed_selectors_reapply_before_interactive_steps() {
+        let _g = lock_env();
+        clear_dismissed();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake(tmp.path(), &log);
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        let d = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "dismiss",
+            "on": { "raw": { "kind": "css", "value": ".wall" }, "reason": "r" }
+        }));
+        dispatch_do(&d, &ctx, &mut scope).unwrap();
+        let c = parse(json!({
+            "id": "s2", "intent": "x", "kind": "do", "verb": "click",
+            "on": { "raw": { "kind": "css", "value": "#btn" }, "reason": "r" }
+        }));
+        dispatch_do(&c, &ctx, &mut scope).unwrap();
+        let out = fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            out.matches("querySelectorAll(\".wall\")").count(),
+            2,
+            "got: {out}"
+        );
+        // non-interactive verbs don't re-apply the list
+        let w = parse(json!({
+            "id": "s3", "intent": "x", "kind": "do", "verb": "wait",
+            "params": { "ms": 1 }
+        }));
+        dispatch_do(&w, &ctx, &mut scope).unwrap();
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        assert_eq!(
+            out.matches("querySelectorAll(\".wall\")").count(),
+            2,
+            "got: {out}"
+        );
+        clear_dismissed();
     }
 
     #[test]

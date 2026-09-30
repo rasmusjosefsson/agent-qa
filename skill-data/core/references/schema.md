@@ -41,6 +41,9 @@ and optional provenance.
 Use `record-step do` and `record-step check` to create steps. The recorder assigns
 `id` and `kind`. Do not hand-edit them into drafts.
 
+A check step polls its claim for up to 5s by default; give it
+`"context": {"timeoutMs": 30000}` to wait out slow async UI (capped at 60s).
+
 `env.open` and `env.close` accept the existing generic `EnvOp` kinds. They are
 `fresh`, `useProfile`, `nav`, `cookie`, `localStorage`, `gql`, and `flag`.
 `record-setup` records one schema-valid `env.open` value.
@@ -349,6 +352,26 @@ native dialog from the contextmenu handler, resolve it with the usual
 { "id": "s3", "intent": "open the context menu", "kind": "do", "verb": "rightclick",
   "on": { "role": "button", "name": "Actions" } }
 ```
+
+### Dismissing overlays
+
+`do/dismiss` removes every node matching `on` — for consent walls, modal
+backdrops, sticky banners, and CMP dialogs that sit on top of the page and
+swallow clicks. It needs a raw `css`/`testId`/`xpath` locator (role locators
+can't lower to a re-runnable selector):
+
+```json
+{ "id": "s2", "intent": "dismiss the consent wall", "kind": "do", "verb": "dismiss",
+  "on": { "raw": { "kind": "css", "value": ".fc-dialog-overlay, .consent-wall" }, "reason": "CMP overlay" } }
+```
+
+Beyond removing matches at dispatch, the selector stays on a per-run
+dismissal list: before every later interactive step (click, type, select,
+drag, …) the runner removes matching nodes again — so an overlay that mounts
+*after* the dismiss step still can't intercept the hit-test. The list
+persists across navigations (CMP banners re-mount per page until accepted)
+and absent matches are a no-op, so a dismiss step is safe to leave in even
+when the site doesn't always show the wall.
 
 ### Downloads and file claims
 

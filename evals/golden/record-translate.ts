@@ -211,6 +211,24 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
             params: y >= 99999 ? { to: "bottom" } : { y },
           });
         }
+        case "enterFrame":
+          return doStep(intent, {
+            verb: "frame",
+            params: { selector: args[0] },
+          });
+        case "exitFrame":
+          return doStep(intent, {
+            verb: "frame",
+            params: { main: true },
+          });
+        case "scrollTop": {
+          // args[0] is the pixel offset — a huge sentinel means "bottom".
+          const y = typeof args[0] === "number" ? args[0] : 0;
+          return doStep(intent, {
+            verb: "scrollTo",
+            params: y >= 99999 ? { to: "bottom" } : { y },
+          });
+        }
         case "dragBySelector":
           // args[0] = source css, args[1] = target css — drives do/drag.
           return doStep(intent, {
@@ -265,6 +283,13 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
           });
         case "reloadPage":
           return doStep(intent, { verb: "reload" });
+        case "frame":
+          // args[0] = css selector of the iframe to enter; no args returns to
+          // the top document.
+          return doStep(intent, {
+            verb: "frame",
+            params: args[0] === undefined ? { main: true } : { selector: args[0] },
+          });
         case "tabCommand":
           // args[0] is the full `tab` subcommand tail: "new <url>", "list",
           // "close <ref>", or "<ref>" to switch.
@@ -272,6 +297,13 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
         case "seedState":
           // do/state seeding: args[0] = params ({cookies:[...], localStorage:{...}, ...})
           return doStep(intent, { verb: "state", params: args[0] });
+        case "dismissBySelector":
+          // args[0] = css selector of an overlay/banner to remove now AND
+          // keep removing before every later interactive step.
+          return doStep(intent, {
+            verb: "dismiss",
+            on: css(args[0]),
+          });
         case "clickNthOption":
           // args[0] = scoped listbox css, args[1] = 1-based option index
           return doStep(intent, {
@@ -356,6 +388,13 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
             { element: css(args[0]), attribute: args[1] },
             args[2] ?? "equals",
             args[3],
+          );
+        case "elementCount":
+          return checkStep(
+            intent,
+            { element: css(args[0]), ofKind: "count" },
+            "equals",
+            args[1],
           );
         case "elementCount":
           // args: [selector, predicate, count] — numeric predicates compare

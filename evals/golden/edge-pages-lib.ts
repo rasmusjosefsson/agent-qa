@@ -1,4 +1,5 @@
 import { toRecordDraft } from "./record-translate";
+import { checkVisibleEval, clickTrustedOrVisible, clickVisibleEval, fillVisibleEval, hoverVisibleEval, selectVisibleEval, trustedOrVisible } from "./visible";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -46,11 +47,13 @@ interface GoldenContext {
 export interface EdgeGolden extends GoldenContext {
   openPage(): Promise<void>;
   clickSelector(selector: string, intent: string): Promise<void>;
+  clickRole(role: string, name: string, intent: string): Promise<void>;
   fillSelector(selector: string, value: string, intent: string): Promise<void>;
   // Fill a selector with a template containing `{{vars._unique}}`: mints a
   // fresh value at record time for the live fill, and records the template
   // verbatim so replay mints a different one (uniqueness-constrained fields).
   fillUnique(selector: string, template: string, intent: string): Promise<void>;
+  clearSelector(selector: string, intent: string): Promise<void>;
   selectOption(selector: string, value: string, intent: string): Promise<void>;
   checkSelector(selector: string, intent: string): Promise<void>;
   dblclickSelector(selector: string, intent: string): Promise<void>;
@@ -67,6 +70,7 @@ export interface EdgeGolden extends GoldenContext {
   assertFileExists(scenarioRelPath: string, intent: string): Promise<void>;
   assertFileName(scenarioRelPath: string, expectedName: string, intent: string): Promise<void>;
   assertFileContent(scenarioRelPath: string, needle: string, intent: string): Promise<void>;
+  dismissBySelector(selector: string, intent: string): Promise<void>;
   dialogAccept(intent: string, text?: string): Promise<void>;
   dialogDismiss(intent: string): Promise<void>;
   assertDialogText(text: string, intent: string): Promise<void>;
@@ -79,11 +83,17 @@ export interface EdgeGolden extends GoldenContext {
   waitSelectorAbsent(selector: string, intent: string): Promise<void>;
   waitSelectorText(selector: string, text: string, intent: string): Promise<void>;
   waitLoad(state: string, intent: string): Promise<void>;
+  enterFrame(selector: string, intent: string): Promise<void>;
+  exitFrame(intent: string): Promise<void>;
+  // `wait url` — poll resource timing until a matching request completed,
+  // live at record and in the replayed scenario (`params.timeoutMs` honored).
+  waitRequest(pattern: string, intent: string, timeoutMs?: number): Promise<void>;
   // `wait url` — poll resource timing until a matching request completed,
   // live at record and in the replayed scenario (`params.timeoutMs` honored).
   waitRequest(pattern: string, intent: string, timeoutMs?: number): Promise<void>;
   assertElementText(selector: string, expected: string, intent: string): Promise<void>;
   assertElementAttribute(selector: string, attribute: string, predicate: string, expected: string, intent: string): Promise<void>;
+  assertElementCount(selector: string, count: number, intent: string): Promise<void>;
   assertElementCount(selector: string, predicate: string, count: number, intent: string): Promise<void>;
   assertElementAbsent(selector: string, intent: string): Promise<void>;
   assertElementPresent(selector: string, intent: string): Promise<void>;
@@ -98,6 +108,9 @@ export interface EdgeGolden extends GoldenContext {
   assertStorage(keyOrMatcher: string | { key: string; scope?: string }, expectPresent: boolean, intent: string): Promise<void>;
   assertStyle(selector: string, cssProperty: string, expected: string, intent: string): Promise<void>;
   a11yAudit(matcher: true | Record<string, unknown>, predicate: string, value: number | undefined, intent: string): Promise<void>;
+  frameInto(selector: string, intent: string): Promise<void>;
+  frameMain(intent: string): Promise<void>;
+  fillInFrame(frameSelector: string, selector: string, value: string, intent: string): Promise<void>;
   // Role-locator drives resolve through the a11y snapshot refs, which
   // pierce open shadow roots where a plain css selector cannot.
   typeRole(role: string, name: string, value: string, intent: string): Promise<void>;
@@ -235,12 +248,17 @@ export async function runEdgeGolden(
       await record(ctx, "wait", { condition: { kind: "selector", selector: readySelector }, intent: "page rendered" });
     },
     async clickSelector(selector, stepIntent) {
+      await clickTrustedOrVisible(ctx, (n, c) => run(ctx, n, c), selector);
       await ensureHittable(ctx, selector, stepIntent);
       await run(ctx, `click ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "click", selector]);
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
+    async clickRole(role, name, stepIntent) {
+      await run(ctx, `click ${role} '${name}'`, [ctx.agentBrowser, "--session", ctx.session, "find", "role", role, "click", "--name", name]);
+      await record(ctx, "action", { method: "clickRole", args: [role, name], intent: stepIntent });
+    },
     async fillSelector(selector, value, stepIntent) {
-      await run(ctx, `fill ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, value]);
+      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `fill ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, value], fillVisibleEval(selector, value));
       await record(ctx, "action", { method: "fillBySelector", args: [selector, value], intent: stepIntent });
     },
     async fillUnique(selector, template, stepIntent) {
@@ -251,17 +269,27 @@ export async function runEdgeGolden(
       await run(ctx, `fill ${selector} (unique)`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, resolved]);
       await record(ctx, "action", { method: "fillBySelector", args: [selector, template], intent: stepIntent });
     },
+    async clearSelector(selector, stepIntent) {
+      // Keystroke clearing: focus + select-all + Backspace. `fill <sel> ""`
+      // leaves framework-controlled inputs (React) stale — the DOM value is
+      // empty but no onChange fires, so the app keeps behaving as filtered.
+      await run(ctx, `focus ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "focus", selector]);
+      await run(ctx, `press ctrl+a`, [ctx.agentBrowser, "--session", ctx.session, "press", "Control+a"]);
+      await run(ctx, `press backspace`, [ctx.agentBrowser, "--session", ctx.session, "press", "Backspace"]);
+      await record(ctx, "action", { method: "clearBySelector", args: [selector], intent: stepIntent });
+    },
     async selectOption(selector, value, stepIntent) {
-      await run(ctx, `select ${value}`, [ctx.agentBrowser, "--session", ctx.session, "select", selector, value]);
+      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `select ${value}`, [ctx.agentBrowser, "--session", ctx.session, "select", selector, value], selectVisibleEval(selector, Array.isArray(value) ? value : [value]));
       await record(ctx, "action", { method: "selectBySelector", args: [selector, value], intent: stepIntent });
     },
     async checkSelector(selector, stepIntent) {
+      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `check ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "check", selector], checkVisibleEval(selector));
       await ensureHittable(ctx, selector, stepIntent);
       await run(ctx, `check ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "check", selector]);
       await record(ctx, "action", { method: "checkBySelector", args: [selector], intent: stepIntent });
     },
     async hoverSelector(selector, stepIntent) {
-      await run(ctx, `hover ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "hover", selector]);
+      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `hover ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "hover", selector], hoverVisibleEval(selector));
       await record(ctx, "action", { method: "hoverBySelector", args: [selector], intent: stepIntent });
     },
     async dblclickSelector(selector, stepIntent) {
@@ -280,6 +308,10 @@ export async function runEdgeGolden(
     async scrollToSelector(selector, stepIntent) {
       await run(ctx, `scroll ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "scrollintoview", selector]);
       await record(ctx, "action", { method: "scrollToBySelector", args: [selector], intent: stepIntent });
+    },
+    async dismissBySelector(selector, stepIntent) {
+      await run(ctx, `dismiss ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "eval", `(function(){document.querySelectorAll(${JSON.stringify(selector)}).forEach(function(e){e.remove()});return 1})()`]);
+      await record(ctx, "action", { method: "dismissBySelector", args: [selector], intent: stepIntent });
     },
     async scrollBottom(stepIntent) {
       await run(ctx, "scroll to bottom", [ctx.agentBrowser, "--session", ctx.session, "eval", "(() => { window.scrollTo(0, document.body.scrollHeight); })()"]);
@@ -345,12 +377,20 @@ export async function runEdgeGolden(
       // a native DOM click, so this keeps record/replay identical while
       // dodging agent-browser's live covered-element refusal (e.g. a link
       // whose click point sits under a still-animating drawer header).
-      await run(ctx, `jsclick ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "eval", `document.querySelector(${JSON.stringify(selector)}).click()`]);
+      await run(ctx, `jsclick ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "eval", clickVisibleEval(selector)]);
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
     async waitMs(ms, stepIntent) {
       await Bun.sleep(ms);
       await record(ctx, "wait", { condition: { kind: "duration", ms }, intent: stepIntent });
+    },
+    async enterFrame(selector, stepIntent) {
+      await run(ctx, `frame ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "frame", selector]);
+      await record(ctx, "action", { method: "enterFrame", args: [selector], intent: stepIntent });
+    },
+    async exitFrame(stepIntent) {
+      await run(ctx, "frame main", [ctx.agentBrowser, "--session", ctx.session, "frame", "main"]);
+      await record(ctx, "action", { method: "exitFrame", args: [], intent: stepIntent });
     },
     async waitSelector(selector, stepIntent) {
       await run(ctx, `wait ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "wait", selector]);
@@ -396,6 +436,9 @@ export async function runEdgeGolden(
     },
     async assertElementAttribute(selector, attribute, predicate, expected, stepIntent) {
       await record(ctx, "assert", { kind: "elementAttribute", args: [selector, attribute, predicate, expected], intent: stepIntent });
+    },
+    async assertElementCount(selector, count, stepIntent) {
+      await record(ctx, "assert", { kind: "elementCount", args: [selector, count], intent: stepIntent });
     },
     async assertElementCount(selector, predicate, count, stepIntent) {
       await record(ctx, "assert", { kind: "elementCount", args: [selector, predicate, count], intent: stepIntent });
@@ -532,6 +575,21 @@ export async function runEdgeGolden(
     },
     async assertUrlContains(fragment, stepIntent) {
       await record(ctx, "assert", { kind: "url", args: [fragment], intent: stepIntent });
+    },
+    async frameInto(selector, stepIntent) {
+      await run(ctx, `frame ready ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "wait", selector]);
+      await record(ctx, "action", { method: "frame", args: [selector], intent: stepIntent });
+    },
+    async frameMain(stepIntent) {
+      await record(ctx, "action", { method: "frame", args: [], intent: stepIntent });
+    },
+    async fillInFrame(frameSelector, selector, value, stepIntent) {
+      const expr = `(function(){var f=document.querySelector(${JSON.stringify(frameSelector)});if(!f||!f.contentDocument)return 'no frame';var el=f.contentDocument.querySelector(${JSON.stringify(selector)});if(!el)return 'no input';el.value=${JSON.stringify(value)};el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));return 'ok'})()`;
+      const out = await run(ctx, `fill ${selector} in frame`, [ctx.agentBrowser, "--session", ctx.session, "eval", expr]);
+      if (!out.includes("ok")) {
+        throw new Error(`frame fill failed: ${out}`);
+      }
+      await record(ctx, "action", { method: "fillBySelector", args: [selector, value], intent: stepIntent });
     },
   };
 

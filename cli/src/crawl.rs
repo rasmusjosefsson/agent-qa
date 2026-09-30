@@ -485,7 +485,10 @@ fn network_claim_steps(reqs: &[crate::browser::CapturedRequest], idx: &mut usize
             break;
         }
         *idx += 1;
-        let escaped = claim_url_pattern(&r.url);
+        // `;` cuts matrix params — Java containers append a volatile
+        // `;jsessionid=<id>` path segment that can't match a fresh run.
+        let url = r.url.split(';').next().unwrap_or(&r.url);
+        let escaped = claim_url_pattern(url);
         out.push(json!({"id":format!("s{}",*idx),"intent":format!("{} {} fired",r.method,r.url),"kind":"check","claim":{"subject":{"network":{"urlMatches":escaped,"method":r.method}},"predicate":"exists"}}));
     }
     out
@@ -583,12 +586,13 @@ mod tests {
             req("https://x/api/u?a=(1)", "GET", Some("xhr")),
             req("https://x/api/u?a=(1)", "GET", Some("fetch")), // dup
             req("https://x/api/save", "POST", Some("fetch")),
+            req("https://x/app;jsessionid=v0latile", "POST", Some("xhr")),
             req("wss://x/live", "WS", Some("websocket")),
             req("https://x/events", "GET", Some("eventsource")),
         ];
         let mut idx = 0;
         let steps = network_claim_steps(&reqs, &mut idx);
-        assert_eq!(steps.len(), 4);
+        assert_eq!(steps.len(), 5);
         let m = &steps[0]["claim"]["subject"]["network"];
         // regex-escaped: the literal '?' and parens can't regex-match wild
         assert_eq!(
@@ -601,11 +605,18 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("POST https://x/api/save"));
+        // matrix params are volatile — the matcher drops `;jsessionid=…`
+        assert_eq!(
+            steps[2]["claim"]["subject"]["network"]["urlMatches"]
+                .as_str()
+                .unwrap(),
+            "https://x/app"
+        );
         // sockets + streams claim their own fired presence
-        let ws = &steps[2]["claim"]["subject"]["network"];
+        let ws = &steps[3]["claim"]["subject"]["network"];
         assert_eq!(ws["urlMatches"].as_str().unwrap(), "wss://x/live");
         assert_eq!(ws["method"].as_str().unwrap(), "WS");
-        let sse = &steps[3]["claim"]["subject"]["network"];
+        let sse = &steps[4]["claim"]["subject"]["network"];
         assert_eq!(sse["urlMatches"].as_str().unwrap(), "https://x/events");
     }
 

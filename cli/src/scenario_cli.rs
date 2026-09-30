@@ -2251,6 +2251,56 @@ fn lint_findings(path: &Path) -> Result<(Vec<Finding>, Scenario)> {
         }
     }
 
+    // 3f) hardcoded secrets — a type step on a password-shaped field whose
+    // value is a plain {from: literal} puts the secret verbatim in a file
+    // that gets committed. `scenario redact` rewrites it as a sensitive
+    // inputs ref.
+    if let Some(steps) = raw.get("steps").and_then(|s| s.as_array()) {
+        for step in steps {
+            let is_type = step
+                .get("verb")
+                .and_then(|v| v.as_str())
+                .is_some_and(|v| v == "type");
+            if !is_type {
+                continue;
+            }
+            let literal = step
+                .get("value")
+                .and_then(|v| v.get("literal"))
+                .and_then(|l| l.as_str());
+            if !literal.is_some_and(|l| !l.is_empty()) {
+                continue;
+            }
+            let Some(on) = step.get("on") else { continue };
+            // Any locator string mentioning "password" counts — css
+            // `input[type=password]`, a role name like "Password", or a
+            // testid. Conservative: no hint, no finding.
+            let mut hints_password = false;
+            let mut stack = vec![on];
+            while let Some(v) = stack.pop() {
+                match v {
+                    serde_json::Value::String(s) if s.to_lowercase().contains("password") => {
+                        hints_password = true;
+                        break;
+                    }
+                    serde_json::Value::Object(m) => stack.extend(m.values()),
+                    serde_json::Value::Array(a) => stack.extend(a.iter()),
+                    _ => {}
+                }
+            }
+            if hints_password {
+                let sid = step.get("id").and_then(|i| i.as_str()).unwrap_or("?");
+                findings.push(Finding {
+                    severity: "warning",
+                    code: "hardcoded-secret",
+                    message: format!(
+                        "step {sid:?} types a literal into a password-shaped field — the secret sits verbatim in scenario.json; run 'agent-qa scenario redact <file> --name <VAR> --step {sid}' to move it into a sensitive input"
+                    ),
+                });
+            }
+        }
+    }
+
     // 3f) claim value carrying a do-step `{"from": ...}` spec — claim values
     // are plain JSON; an object spec serializes verbatim and never matches,
     // so the check fails with a confusing "expected to contain {from:…}".

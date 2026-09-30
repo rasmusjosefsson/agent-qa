@@ -232,6 +232,7 @@ pub fn redirect_entries(session: &str) -> Vec<crate::browser::CapturedRequest> {
                     resource_type: None,
                     mime_type: None,
                     post_data: None,
+                    ws_frames: vec![],
                 })
                 .collect()
         })

@@ -41,7 +41,7 @@ use crate::value::{select_json_path, substitute_scenario_vars, value_to_string, 
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
-const MAX_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone)]
 pub struct CheckContext<'a> {
@@ -77,17 +77,6 @@ pub fn dispatch_check(
                 ctx,
                 scope,
                 timeout,
-            ),
-            Some(ElementClaimKind::Count) => check_element_count(
-                element,
-                &claim.predicate,
-                claim.value.as_ref(),
-                ctx,
-                scope,
-                timeout,
-            ),
-            Some(kind) => bail!("element claim ofKind {kind:?} is not yet supported"),
-        },
             ),
             Some(ElementClaimKind::Count) => check_element_count(
                 element,
@@ -3598,45 +3587,6 @@ mod tests {
         }));
         let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
         assert!(err.to_string().contains("not a valid regex"), "got: {err}");
-    }
-
-    #[test]
-    fn element_count_claim_hard_validation() {
-        let sid_dir = Path::new("/tmp");
-        let mut scope = ValueScope::default();
-        let ctx = CheckContext {
-            session: "s",
-            scenario_dir: sid_dir,
-            run_dir: None,
-        };
-        let el_claim = |subject: serde_json::Value, rest: serde_json::Value| -> Claim {
-            let mut m = serde_json::Map::new();
-            m.insert("subject".into(), subject);
-            if let serde_json::Value::Object(rest) = rest {
-                m.extend(rest);
-            }
-            serde_json::from_value(serde_json::Value::Object(m)).unwrap()
-        };
-        let subject = || json!({"element": {"raw": {"kind": "css", "value": ".item"}, "reason": "test"}, "ofKind": "count"});
-        // missing/blank value → bail before any browser call
-        let claim = el_claim(subject(), json!({"predicate": "equals"}));
-        let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
-        assert!(err.to_string().contains("numeric 'value'"), "got: {err}");
-        // string predicate → unsupported
-        let claim = el_claim(subject(), json!({"predicate": "contains", "value": 3}));
-        let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
-        assert!(
-            err.to_string().contains("does not support predicate"),
-            "got: {err}"
-        );
-        // a non-count ofKind still fails loudly, not silently
-        let claim: Claim = serde_json::from_value(json!({
-            "subject": {"element": {"raw": {"kind": "css", "value": ".item"}, "reason": "test"}, "ofKind": "text"},
-            "predicate": "isVisible"
-        }))
-        .unwrap();
-        let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
-        assert!(err.to_string().contains("not yet supported"), "got: {err}");
     }
 
     #[test]
