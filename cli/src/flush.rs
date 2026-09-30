@@ -582,6 +582,21 @@ fn flush(
         );
     }
     let scenario_file = scenario_dir.join("scenario.json");
+    // Refuse to clobber a scenario this recording didn't come from:
+    // `record continue`/`buffer load` stamp source_ref "scenario:<sid>",
+    // while a fresh recording flushing onto an occupied sid would silently
+    // replace an unrelated scenario.
+    let continuing = state
+        .source_ref
+        .as_deref()
+        .is_some_and(|r| r == format!("scenario:{}", state.sid));
+    if scenario_file.exists() && !continuing {
+        bail!(
+            "{:?} already has a scenario — refusing to overwrite it from a fresh recording. `record continue {}` extends it, or record under a different sid.",
+            state.sid,
+            state.sid
+        );
+    }
     let mut bytes = serde_json::to_string_pretty(&scenario_json)?.into_bytes();
     bytes.push(b'\n');
     atomic_write_file(&scenario_file, &bytes)?;
@@ -693,6 +708,47 @@ mod tests {
         assert!(paths::record_state_file().exists());
         // And no scenario directory leaked.
         assert!(!tmp.path().join("emptysid").exists());
+        std::env::remove_var(paths::SCENARIOS_DIR_ENV);
+        std::env::remove_var(paths::RECORD_DIR_ENV);
+        std::env::remove_var("AGENT_QA_RECORD_SKIP_SIDECARS");
+    }
+
+    #[test]
+    fn flush_refuses_to_clobber_an_unrelated_scenario() {
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var(paths::SCENARIOS_DIR_ENV, tmp.path());
+        std::env::set_var(paths::RECORD_DIR_ENV, tmp.path().join("record"));
+        std::env::set_var("AGENT_QA_RECORD_SKIP_SIDECARS", "1");
+        // `taken` already holds a sealed scenario the recording knows
+        // nothing about (source_ref is None — a fresh recording, not
+        // `record continue`/`buffer load`).
+        let dir = tmp.path().join("taken");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("scenario.json"), b"{\"original\": true}\n").unwrap();
+        let mut state = RecorderState::new(
+            "taken".into(),
+            "fresh recording".into(),
+            "default".into(),
+            crate::recorder_state::RecorderBaseline::Fresh,
+            None,
+            BrowserConnection::default(),
+        );
+        state.steps = serde_json::from_value(json!([
+            {"id":"s0","intent":"r","kind":"do","verb":"reload"}
+        ]))
+        .unwrap();
+        state.save().unwrap();
+
+        let err = flush(false, false, false, false).unwrap_err().to_string();
+        assert!(err.contains("refusing to overwrite"), "unexpected: {err}");
+        // The unrelated scenario survived untouched, and the recording is
+        // still active so the operator can re-flush under a free sid.
+        assert_eq!(
+            fs::read(dir.join("scenario.json")).unwrap(),
+            b"{\"original\": true}\n"
+        );
+        assert!(paths::record_state_file().exists());
         std::env::remove_var(paths::SCENARIOS_DIR_ENV);
         std::env::remove_var(paths::RECORD_DIR_ENV);
         std::env::remove_var("AGENT_QA_RECORD_SKIP_SIDECARS");
