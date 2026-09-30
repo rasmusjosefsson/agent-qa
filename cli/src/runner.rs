@@ -446,7 +446,7 @@ pub(crate) const RUN_ON_RECORDED_SESSION_ENV: &str = "AGENT_QA_RUN_ON_RECORDED_S
 
 /// Refuse a replay on a session that is mid-recording — the run and the
 /// recorder would fight over the same browser.
-fn refuse_if_recording_active(session: &str) -> Result<()> {
+pub(crate) fn refuse_if_recording_active(session: &str) -> Result<()> {
     if std::env::var_os(RUN_ON_RECORDED_SESSION_ENV).is_some() {
         return Ok(());
     }
