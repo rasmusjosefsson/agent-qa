@@ -365,6 +365,106 @@ fn set_geo_override_in(session: &str, lat: f64, lng: f64, accuracy: f64) -> Resu
     })
 }
 
+/// Apply a page-target `Emulation.*` command (timezone, locale, …) over a
+/// flat session attached to the ACTIVE page — same lifetime rules as
+/// `set_geo_override`: the override dies with this pooled ws connection
+/// and binds per navigation on that target. Returns Ok(false) when no
+/// page target exists so the caller decides between a daemon fallback
+/// (geo) or an actionable error (keys with no daemon equivalent).
+pub fn emulate_override(session: &str, method: &str, params: Json) -> Result<bool> {
+    match emulate_override_in(session, method, params) {
+        Err(e) if is_unavailable(&e) => Ok(false),
+        out => out,
+    }
+}
+
+fn emulate_override_in(session: &str, method: &str, params: Json) -> Result<bool> {
+    with_connection(session, |conn| {
+        let page = active_page(conn)?.map(|(id, _)| id);
+        let Some(target_id) = page else {
+            return Ok(false);
+        };
+        let sid = attach_flat(conn, &target_id)?;
+        conn.call_on(method, params, &sid)?;
+        Ok(true)
+    })
+}
+
+fn attach_flat(conn: &mut CdpConnection, target_id: &str) -> Result<String> {
+    let attached = conn.call(
+        "Target.attachToTarget",
+        json!({ "targetId": target_id, "flatten": true }),
+    )?;
+    attached
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow!("Target.attachToTarget: no sessionId in {attached}"))
+}
+
+/// Locale is three surfaces, not one: `Emulation.setLocaleOverride`
+/// moves the JS Intl default; `navigator.language(s)` and the
+/// `Accept-Language` request header come from the UA override's
+/// acceptLanguage. `set locale`-equivalent coverage therefore applies
+/// both on the active page's flat session, reusing the live UA.
+/// Returns Ok(false) when no page target exists.
+pub fn set_locale_override(session: &str, locale: &str) -> Result<bool> {
+    match set_locale_override_in(session, locale) {
+        Err(e) if is_unavailable(&e) => Ok(false),
+        out => out,
+    }
+}
+
+fn set_locale_override_in(session: &str, locale: &str) -> Result<bool> {
+    with_connection(session, |conn| {
+        let page = active_page(conn)?.map(|(id, _)| id);
+        let Some(target_id) = page else {
+            return Ok(false);
+        };
+        let sid = attach_flat(conn, &target_id)?;
+        conn.call_on(
+            "Emulation.setLocaleOverride",
+            json!({ "locale": locale }),
+            &sid,
+        )?;
+        let version = conn.call("Browser.getVersion", json!({}))?;
+        let ua = version
+            .get("userAgent")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("Browser.getVersion: no userAgent in {version}"))?;
+        conn.call_on(
+            "Network.setUserAgentOverride",
+            json!({ "userAgent": ua, "acceptLanguage": locale }),
+            &sid,
+        )?;
+        Ok(true)
+    })
+}
+
+/// Prepare the page for async-clipboard access: grant `clipboard-read`
+/// (plus `clipboard-write`/`clipboard-sanitized-write` when `write`) for
+/// the active page's origin and enable focus emulation — without a
+/// focused document `readText`/`writeText` reject `NotAllowedError`
+/// even with the permission granted. Grants/overrides live on this
+/// pooled connection; returns Ok(()) when no CDP endpoint exists so the
+/// caller's eval surfaces the real clipboard error instead.
+pub fn ensure_clipboard_access(session: &str, write: bool) -> Result<()> {
+    let perms: &[&str] = if write {
+        // `clipboard-sanitized-write` exists in blink but is rejected by
+        // `Browser.setPermission` — `clipboard-write` alone carries it.
+        &["clipboard-read", "clipboard-write"]
+    } else {
+        &["clipboard-read"]
+    };
+    let origin = active_page_origin(session)?;
+    let _ = grant_permissions(session, perms, origin.as_deref())?;
+    let _ = emulate_override(
+        session,
+        "Emulation.setFocusEmulationEnabled",
+        json!({ "enabled": true }),
+    )?;
+    Ok(())
+}
 /// Attach to the active page via flat session and switch on
 /// `Network.enable` there, so `webSocketCreated`/`webSocketFrame*`
 /// events start arriving on this connection. Idempotent per connection;

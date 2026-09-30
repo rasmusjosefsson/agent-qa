@@ -627,6 +627,14 @@ pub enum ClaimSubject {
     Cookie {
         cookie: String,
     },
+    /// `{"clipboard": true}` — assert on the OS clipboard's text content
+    /// (`navigator.clipboard.readText()`). `exists`/`notExists` test whether
+    /// the clipboard holds text; string predicates compare the text. Reading
+    /// grants `clipboard-read` for the page's origin over the pooled CDP
+    /// connection and enables focus emulation — both required headless.
+    Clipboard {
+        clipboard: bool,
+    },
     /// `{"indexeddb": {"db": "d", "store": "s", "key": "k"}}` — assert on
     /// an IndexedDB record. `exists`/`notExists` check record presence (the
     /// store's presence when `key` is omitted); string predicates compare

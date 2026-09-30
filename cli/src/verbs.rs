@@ -1104,6 +1104,7 @@ fn state_apply(
         "clearCookies",
         "clearLocalStorage",
         "clearSessionStorage",
+        "clipboard",
         "indexeddb",
     ];
     for k in obj.keys() {
@@ -1159,6 +1160,21 @@ fn state_apply(
                 ));
             }
         }
+    }
+    // Clipboard seeding runs in the same eval but needs the async
+    // clipboard API — the text lands in `tail` appended to an async
+    // body when present.
+    let mut tail = String::new();
+    if let Some(clip) = obj.get("clipboard") {
+        let text = clip
+            .as_str()
+            .ok_or_else(|| anyhow!("params.clipboard must be a string"))?;
+        let text = crate::value::substitute_scenario_vars(text, scope);
+        tail = format!(
+            "if (!navigator.clipboard) throw new Error('clipboard API unavailable'); \
+             await navigator.clipboard.writeText({});",
+            json_str(&text)
+        );
     }
     if let Some(cookies) = obj.get("cookies") {
         let list = cookies
@@ -1284,10 +1300,15 @@ fn state_apply(
         }
     }
 
-    let expr = if idb_body.is_empty() {
+    let expr = if tail.is_empty() && idb_body.is_empty() {
         format!("(() => {{ {body} }})()")
     } else {
-        format!("(async () => {{ {body} {idb_body} }})()")
+        // writeText rejects on an unfocused document without a
+        // permission grant — ensure_clipboard_access covers both.
+        if !tail.is_empty() {
+            crate::cdp::ensure_clipboard_access(session, true)?;
+        }
+        format!("(async () => {{ {body} {tail} {idb_body} }})()")
     };
     browser::eval_expression(session, &expr)?;
     Ok(())
@@ -1311,6 +1332,8 @@ fn emulate_apply(
         "headers",
         "credentials",
         "permissions",
+        "timezone",
+        "locale",
     ];
     for k in params.keys() {
         if !KEYS.contains(&k.as_str()) {
@@ -1413,6 +1436,31 @@ fn emulate_apply(
                 .map_err(|e| anyhow!("resolve page origin: {e}"))?;
             crate::cdp::grant_permissions(session, &refs, origin.as_deref())
                 .map_err(|e| anyhow!("grant permissions {names:?}: {e}"))?;
+        }
+    }
+    // Timezone + locale have no `set` subcommand in agent-browser —
+    // they ride the same pooled flat-session Emulation.* path as geo.
+    // No page target → nothing to override on → bail with the fix.
+    if let Some(v) = params.get("timezone") {
+        let tz = subst(v, scope)?;
+        if !crate::cdp::emulate_override(
+            session,
+            "Emulation.setTimezoneOverride",
+            serde_json::json!({ "timezoneId": tz }),
+        )
+        .map_err(|e| anyhow!("set timezone override: {e}"))?
+        {
+            bail!("emulate timezone needs a page target — place the step after a goto");
+        }
+    }
+    if let Some(v) = params.get("locale") {
+        let loc = subst(v, scope)?;
+        // Locale is Intl + navigator.language + Accept-Language — the
+        // helper applies all three (see cdp::set_locale_override).
+        if !crate::cdp::set_locale_override(session, &loc)
+            .map_err(|e| anyhow!("set locale override: {e}"))?
+        {
+            bail!("emulate locale needs a page target — place the step after a goto");
         }
     }
     if let Some(v) = params.get("offline") {
@@ -4034,5 +4082,58 @@ mod tests {
         }));
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         assert!(err.contains("db is required"), "got: {err}");
+    }
+
+    #[test]
+    fn state_clipboard_writes_text_in_an_async_eval() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake_eval_true(tmp.path(), &log);
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "state",
+            "params": { "clipboard": "aq-seeded-clip", "localStorage": {"k": "v"} }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        assert!(out.contains("(async () =>"), "async body: {out}");
+        assert!(
+            out.contains("navigator.clipboard.writeText(\"aq-seeded-clip\")"),
+            "writeText call: {out}"
+        );
+        assert!(
+            out.contains("localStorage.setItem"),
+            "storage seeds too: {out}"
+        );
+    }
+
+    #[test]
+    fn state_clipboard_requires_a_string() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake_eval_true(tmp.path(), &log);
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "state",
+            "params": { "clipboard": 42 }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
+        clear_fake();
+        assert!(err.contains("clipboard must be a string"), "got: {err}");
     }
 }
