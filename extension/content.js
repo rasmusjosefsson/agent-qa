@@ -16,9 +16,20 @@
   script.onload = () => script.remove();
   (document.documentElement || document.head).appendChild(script);
 
+  // True once the page-world patch posted its ready beacon on this
+  // document. Forwarded to the worker on record:start (and re-forwarded
+  // when it arrives mid-recording after a nav) so the export bundle can
+  // warn when capture never armed — CSP-strict pages block the inject.
+  let netReady = false;
+
   window.addEventListener("message", (e) => {
-    if (e.source !== window || !e.data || !e.data.__aqNet) return;
-    if (!active) return;
+    if (e.source !== window || !e.data) return;
+    if (e.data.__aqNetReady) {
+      netReady = true;
+      if (active) send({ t: "netReady" });
+      return;
+    }
+    if (!e.data.__aqNet || !active) return;
     send({ t: "net", entry: e.data.__aqNet });
   });
 
@@ -29,7 +40,10 @@
   };
 
   chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.t === "record:start") active = true;
+    if (msg.t === "record:start") {
+      active = true;
+      send({ t: "netReady", ready: netReady });
+    }
     if (msg.t === "record:stop") active = false;
   });
   // Page may have loaded mid-recording (full nav); ask the worker
@@ -298,7 +312,10 @@
   // mid-recording full navigation re-arms this document.
   try {
     chrome.runtime.sendMessage({ t: "state" }).then((r) => {
-      if (r && r.recording) active = true;
+      if (r && r.recording) {
+        active = true;
+        send({ t: "netReady", ready: netReady });
+      }
     });
   } catch {}
 })();
