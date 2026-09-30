@@ -14,7 +14,7 @@
 
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value as Json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
 use crate::cdp::CdpConnection;
@@ -33,13 +33,27 @@ pub struct NetEvent {
     /// This entry represents a redirect hop — the response that caused
     /// the follow-up request. The daemon never lists these.
     pub redirect: bool,
+    /// The request came from a worker-class target (service/dedicated/
+    /// shared worker) — invisible to the daemon's page-side capture.
+    pub worker: bool,
 }
 
 #[derive(Default)]
 struct Store {
     events: Vec<NetEvent>,
-    /// requestId → index into `events` for in-flight updates.
+    /// `{sessionId}:{requestId}` → index into `events` for in-flight
+    /// updates — requestIds are only unique per target session, so the
+    /// session prefix keeps a page fetch and a worker fetch distinct.
     by_req: HashMap<String, usize>,
+    /// sessionIds already given `Network.enable` (page + auto-attached
+    /// worker targets) — dedupes the enable per attach event.
+    enabled: HashSet<String>,
+    /// sessionId → targetInfo.type for every attached session.
+    session_types: HashMap<String, String>,
+    /// sessionIds queued for `Network.enable` — filled by `record` on
+    /// attach events (pure state, testable), drained by `reader_loop`,
+    /// which owns the socket.
+    pending_enables: Vec<String>,
     /// A reader thread is attached to a page target. False until the
     /// first successful attach — a run that starts before any page exists
     /// retries lazily from the read paths below.
@@ -89,10 +103,37 @@ fn start_in(session: &str) -> Result<()> {
         .ok_or_else(|| anyhow!("Target.attachToTarget: no sessionId in {attached}"))?
         .to_string();
     conn.call_on("Network.enable", json!({}), &session_id)?;
+    // Auto-attach every worker-class target as it appears: service-worker
+    // fetches live on the worker's own session, invisible to the page
+    // session we just enabled. Attach events land on THIS socket; the
+    // reader loop issues `Network.enable` per attached session. Filtered
+    // first; if a Chrome rejects the filter shape, retry unfiltered and
+    // let `handle_attach` ignore non-network-worthy types.
+    let attach = conn.call(
+        "Target.setAutoAttach",
+        json!({
+            "autoAttach": true,
+            "waitForDebuggerOnStart": false,
+            "flatten": true,
+            "filter": [
+                { "type": "worker" }, { "type": "service_worker" },
+                { "type": "shared_worker" }, { "type": "page" }
+            ]
+        }),
+    );
+    if attach.is_err() {
+        let _ = conn.call(
+            "Target.setAutoAttach",
+            json!({ "autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true }),
+        );
+    }
     {
         let mut map = stores().lock().unwrap_or_else(|e| e.into_inner());
         if let Some(s) = map.get_mut(session) {
             s.attached = true;
+            s.enabled.insert(session_id.clone());
+            s.session_types
+                .insert(session_id.clone(), "page".to_string());
         }
     }
     let name = session.to_string();
@@ -134,7 +175,33 @@ fn ensure(session: &str) {
 fn reader_loop(mut conn: CdpConnection, session: String) {
     while let Ok(v) = conn.next_event() {
         record(&session, &v);
+        drain_pending_enables(&mut conn, &session);
     }
+}
+
+/// Send `Network.enable` for sessions `record` queued on attach events.
+/// Fire-and-forget (`send_on`): the response frames interleave with
+/// events harmlessly while `call_on`'s wait would strand them.
+fn drain_pending_enables(conn: &mut CdpConnection, session: &str) {
+    let pending = {
+        let mut map = stores().lock().unwrap_or_else(|e| e.into_inner());
+        map.get_mut(session)
+            .map(|s| std::mem::take(&mut s.pending_enables))
+            .unwrap_or_default()
+    };
+    for sid in pending {
+        if let Err(e) = conn.send_on("Network.enable", json!({}), &sid) {
+            eprintln!("[v2-replay] cdp network capture: Network.enable on {sid}: {e:#}");
+        }
+    }
+}
+
+/// Target classes whose Network domain reports fetches we care about.
+fn network_worthy(target_type: &str) -> bool {
+    matches!(
+        target_type,
+        "page" | "worker" | "service_worker" | "shared_worker"
+    )
 }
 
 fn record(session: &str, v: &Json) {
@@ -142,6 +209,44 @@ fn record(session: &str, v: &Json) {
         return;
     };
     let method = v.get("method").and_then(|m| m.as_str()).unwrap_or("");
+    // Target lifecycle frames carry no requestId — handle them before
+    // the request path. `record` only updates store state (queued
+    // enables); `reader_loop` performs the socket send afterwards.
+    if method == "Target.attachedToTarget" {
+        let Some(sid) = params.get("sessionId").and_then(|s| s.as_str()) else {
+            return;
+        };
+        let ttype = params
+            .pointer("/targetInfo/type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("");
+        let mut map = match stores().lock() {
+            Ok(m) => m,
+            Err(e) => e.into_inner(),
+        };
+        let Some(store) = map.get_mut(session) else {
+            return;
+        };
+        store
+            .session_types
+            .insert(sid.to_string(), ttype.to_string());
+        if network_worthy(ttype) && !store.enabled.contains(sid) {
+            store.enabled.insert(sid.to_string());
+            store.pending_enables.push(sid.to_string());
+        }
+        return;
+    }
+    if method == "Target.detachedFromTarget" {
+        if let Some(sid) = params.get("sessionId").and_then(|s| s.as_str()) {
+            let mut map = stores().lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(store) = map.get_mut(session) {
+                store.enabled.remove(sid);
+                store.session_types.remove(sid);
+                store.pending_enables.retain(|p| p != sid);
+            }
+        }
+        return;
+    }
     let request_id = params
         .get("requestId")
         .and_then(|r| r.as_str())
@@ -150,6 +255,10 @@ fn record(session: &str, v: &Json) {
     if request_id.is_empty() {
         return;
     }
+    // Flat-mode frames carry their session at top level — the composite
+    // key keeps a worker's requestId from colliding with the page's.
+    let frame_sid = v.get("sessionId").and_then(|s| s.as_str()).unwrap_or("");
+    let req_key = format!("{frame_sid}:{request_id}");
     let mut map = match stores().lock() {
         Ok(m) => m,
         Err(e) => e.into_inner(),
@@ -157,13 +266,18 @@ fn record(session: &str, v: &Json) {
     let Some(store) = map.get_mut(session) else {
         return;
     };
+    let worker = !frame_sid.is_empty()
+        && store
+            .session_types
+            .get(frame_sid)
+            .is_some_and(|t| t != "page");
     match method {
         "Network.requestWillBeSent" => {
             // A redirectResponse means the *previous* exchange for this
             // requestId ended in a redirect — stamp it as a finished
             // redirect hop with the status the daemon never saw.
             if let Some(rr) = params.get("redirectResponse") {
-                if let Some(&idx) = store.by_req.get(&request_id) {
+                if let Some(&idx) = store.by_req.get(&req_key) {
                     let hop = &mut store.events[idx];
                     hop.status = rr.get("status").and_then(|s| s.as_i64());
                     hop.finished = true;
@@ -190,12 +304,13 @@ fn record(session: &str, v: &Json) {
                     status: None,
                     finished: false,
                     redirect: false,
+                    worker,
                 });
-                store.by_req.insert(request_id, idx);
+                store.by_req.insert(req_key, idx);
             }
         }
         "Network.responseReceived" => {
-            if let Some(&idx) = store.by_req.get(&request_id) {
+            if let Some(&idx) = store.by_req.get(&req_key) {
                 if let Some(resp) = params.get("response") {
                     let e = &mut store.events[idx];
                     e.status = resp.get("status").and_then(|s| s.as_i64());
@@ -206,7 +321,7 @@ fn record(session: &str, v: &Json) {
             }
         }
         "Network.loadingFinished" | "Network.loadingFailed" => {
-            if let Some(&idx) = store.by_req.get(&request_id) {
+            if let Some(&idx) = store.by_req.get(&req_key) {
                 store.events[idx].finished = true;
             }
         }
@@ -230,6 +345,34 @@ pub fn redirect_entries(session: &str) -> Vec<crate::browser::CapturedRequest> {
                     method: e.method.clone(),
                     status: e.status,
                     resource_type: None,
+                    mime_type: None,
+                    post_data: None,
+                    ws_frames: vec![],
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Requests issued by worker-class targets — service workers, dedicated
+/// and shared workers — which the daemon's page-side capture can never
+/// see. Merged into `network_requests` so `{"network"}` claims and
+/// `wait url` cover SW fetches the app performs (offline caches, sync
+/// workers, fetch proxies).
+pub fn worker_entries(session: &str) -> Vec<crate::browser::CapturedRequest> {
+    ensure(session);
+    let map = stores().lock().unwrap_or_else(|e| e.into_inner());
+    map.get(session)
+        .map(|s| {
+            s.events
+                .iter()
+                .filter(|e| e.worker)
+                .map(|e| crate::browser::CapturedRequest {
+                    request_id: format!("cdp-sw-{}", e.request_id),
+                    url: e.url.clone(),
+                    method: e.method.clone(),
+                    status: e.status,
+                    resource_type: Some("worker".into()),
                     mime_type: None,
                     post_data: None,
                     ws_frames: vec![],
@@ -318,5 +461,79 @@ mod tests {
         assert!(redirect_entries("s2").is_empty());
         let re = regex::Regex::new("x/api").unwrap();
         assert!(find_completed("s2", &re));
+    }
+
+    #[test]
+    fn worker_session_requests_are_tagged_and_listed() {
+        feed(
+            "s3",
+            vec![
+                // Page session attach — no worker tag for its events.
+                json!({"method":"Target.attachedToTarget","params":{
+                    "sessionId":"P1",
+                    "targetInfo":{"type":"page"}
+                }}),
+                json!({"sessionId":"P1","method":"Network.requestWillBeSent","params":{
+                    "requestId":"R1",
+                    "request":{"url":"https://x/app","method":"GET"}
+                }}),
+                // A service worker attaches and fetches on its own session.
+                json!({"method":"Target.attachedToTarget","params":{
+                    "sessionId":"W1",
+                    "targetInfo":{"type":"service_worker"}
+                }}),
+                json!({"sessionId":"W1","method":"Network.requestWillBeSent","params":{
+                    "requestId":"R1",
+                    "request":{"url":"https://x/api/cached","method":"GET"}
+                }}),
+                json!({"sessionId":"W1","method":"Network.responseReceived","params":{
+                    "requestId":"R1",
+                    "response":{"url":"https://x/api/cached","status":200}
+                }}),
+                json!({"sessionId":"W1","method":"Network.loadingFinished","params":{
+                    "requestId":"R1"
+                }}),
+            ],
+        );
+        // Same requestId "R1" on both sessions — the composite key keeps
+        // the worker's fetch separate instead of clobbering the page's.
+        let workers = worker_entries("s3");
+        assert_eq!(workers.len(), 1);
+        assert_eq!(workers[0].url, "https://x/api/cached");
+        assert_eq!(workers[0].status, Some(200));
+        assert_eq!(workers[0].resource_type.as_deref(), Some("worker"));
+        // wait url resolves on the worker's request too.
+        let re = regex::Regex::new("api/cached").unwrap();
+        assert!(find_completed("s3", &re));
+        // Both attaches queued a Network.enable — reader_loop drains
+        // them; the queue proves the worker's session is covered.
+        let map = stores().lock().unwrap();
+        let s = map.get("s3").unwrap();
+        assert_eq!(s.pending_enables, vec!["P1".to_string(), "W1".to_string()]);
+    }
+
+    #[test]
+    fn detached_worker_stops_being_marked() {
+        feed(
+            "s4",
+            vec![
+                json!({"method":"Target.attachedToTarget","params":{
+                    "sessionId":"W9",
+                    "targetInfo":{"type":"worker"}
+                }}),
+                json!({"method":"Target.detachedFromTarget","params":{
+                    "sessionId":"W9"
+                }}),
+                // A stray post-detach event must not be tagged worker.
+                json!({"sessionId":"W9","method":"Network.requestWillBeSent","params":{
+                    "requestId":"R2",
+                    "request":{"url":"https://x/late","method":"GET"}
+                }}),
+            ],
+        );
+        assert!(worker_entries("s4").is_empty());
+        let map = stores().lock().unwrap();
+        let s = map.get("s4").unwrap();
+        assert!(s.pending_enables.is_empty());
     }
 }

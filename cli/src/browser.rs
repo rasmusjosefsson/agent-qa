@@ -876,6 +876,9 @@ pub fn network_requests(session: &str) -> Result<Vec<CapturedRequest>, AgentBrow
             }
         }
     }
+    // Worker-target fetches (service/dedicated/shared workers) live on the
+    // worker's session — the daemon's page-side capture never sees them.
+    requests.extend(crate::cdp_net::worker_entries(session));
     requests.extend(mocked_requests(session));
     Ok(requests)
 }
