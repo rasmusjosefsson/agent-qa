@@ -399,7 +399,7 @@ pub(crate) fn load_into_buffer(sid: &str, session: &str, force: bool) -> Result<
             // first tab's record-step calls append into the wrong scenario
             // and the mid-recording guards lose track of the busy session.
             bail!(
-                "a recording is already active (sid {:?}, {} step(s)) — flush or `record stop` it first (or --force to abandon it)",
+                "a recording is already active (sid {:?}, {} step(s)) — `flush` it first, or `start --force` to abandon it",
                 existing.sid,
                 existing.steps.len(),
             );
