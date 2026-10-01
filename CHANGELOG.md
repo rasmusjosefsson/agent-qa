@@ -32,6 +32,15 @@ All notable changes to agent-qa are documented here. This project follows
   on `check`/`uncheck`/option picks — it counts capture-phase
   `input`/`change`/`submit`/`toggle` events like the replay probe.
 
+### Performance
+
+- Post-click settle is now adaptive: an always-on page init script
+  (`window.__aqNet`) counts in-flight fetch/XHR requests, so a click
+  that loads nothing skips the `wait --load networkidle` floor
+  (~700ms) after a short grace window — replaying DOM-only clicks
+  ~2x faster. Navigation, ajax, or untapped (warm) sessions fall back
+  to the same `networkidle` wait as before.
+
 ## [0.1.0] - 2026-09-28
 
 First tagged release. Everything under the pre-release `0.0.x` line lands

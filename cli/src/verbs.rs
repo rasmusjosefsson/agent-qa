@@ -203,7 +203,7 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                     return Ok(None);
                 }
             }
-            browser::wait_for_load(ctx.session, "networkidle")?;
+            crate::net_tap::settle_after_click(ctx.session)?;
             Ok(None)
         }
         Verb::Check | Verb::Uncheck => {

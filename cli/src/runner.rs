@@ -662,10 +662,29 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             let js_path = crate::mock::write_init_script(&opts.session_name, &run.run_root)
                 .with_context(|| "mock seed: write init script")?;
             // Children spawned from this process inherit the var; the
-            // daemon registers the script on session launch.
-            std::env::set_var("AGENT_BROWSER_INIT_SCRIPTS", &js_path);
+            // daemon registers the script on session launch. Merge over
+            // any pre-set paths rather than clobbering them.
+            let merged = crate::net_tap::merge_init_scripts(
+                std::env::var("AGENT_BROWSER_INIT_SCRIPTS").ok().as_deref(),
+                &[js_path.as_path()],
+            );
+            std::env::set_var("AGENT_BROWSER_INIT_SCRIPTS", merged);
             eprintln!("[v2-replay] mock init script {}", js_path.display());
         }
+    }
+    // Always-on network tap: `window.__aqNet.pending` lets post-click
+    // settles skip the ~700ms `wait --load networkidle` floor when the
+    // page is quiet. Registered as a page init script so every document
+    // gets it before page scripts run; a reused warm session ignores
+    // init scripts — the settle probe then falls back to networkidle.
+    if !opts.dry_run {
+        let tap_path = crate::net_tap::write_init_script(&run.run_root)
+            .with_context(|| "net tap: write init script")?;
+        let merged = crate::net_tap::merge_init_scripts(
+            std::env::var("AGENT_BROWSER_INIT_SCRIPTS").ok().as_deref(),
+            &[tap_path.as_path()],
+        );
+        std::env::set_var("AGENT_BROWSER_INIT_SCRIPTS", merged);
     }
 
     let mut scope = ValueScope::new(resolved_inputs);

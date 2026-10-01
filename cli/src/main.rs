@@ -43,6 +43,7 @@ mod io;
 mod junit;
 mod list;
 mod mock;
+mod net_tap;
 mod netlog;
 mod paths;
 mod perf_snapshot;
