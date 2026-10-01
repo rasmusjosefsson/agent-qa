@@ -44,11 +44,12 @@ What it captures per interaction:
 | Enter inside an input | `do/press` `Enter` |
 | Escape (dismissal) | `do/press` `Escape` |
 | arrow/Home/End/PageUp/PageDown on a slider/tab/listbox/menu/radio/range widget | `do/press` with the key |
+| file picked in `<input type=file>` | `do/upload` with `files/<name>` refs; contents ≤256KB are inlined into the bundle and `ingest` materializes them under `files/` — bigger/unreadable files keep the name ref and are named in the warning |
 | every fetch/XHR | `{url, method, status, body, postData, startedAt, durationMs}` (bodies capped at 256KB) |
 | interactions inside **same-origin iframes** | `do/frame` enter/exit drafts wrap the in-frame steps (nested frames handled one level at a time) |
 | interactions in a `window.open`/`target=_blank` popup | the popup joins the recording; first activity there emits `do/tab` `t2`, returning to the opener emits `do/tab` `t1` (the popup's opening nav is implied by the recorded opener click) |
 
-**Not captured (v1):** native file pickers, `alert()`/`confirm()`/
+**Not captured (v1):** `alert()`/`confirm()`/
 `prompt()`, cross-origin iframe internals (counted as a bundle
 warning — the iframe element can't be located from inside it),
 canvas drawing, real multi-touch, hover-only gestures, scrolling,
