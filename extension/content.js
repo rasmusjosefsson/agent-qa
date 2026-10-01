@@ -85,7 +85,34 @@
       active = true;
       send({ t: "netReady", ready: netReady });
     }
-    if (msg.t === "record:stop") active = false;
+    if (msg.t === "record:stop") {
+      // A scroll sitting inside the debounce window would silently
+      // drop — flush it before the flag flips.
+      if (scrollTimer && lastScrollEl) {
+        clearTimeout(scrollTimer);
+        const target = lastScrollEl;
+        lastScrollEl = null;
+        const isWindow =
+          target === document.scrollingElement ||
+          target === document.documentElement ||
+          target === document.body;
+        if (isWindow) {
+          const y = Math.round(window.scrollY);
+          const bottom = target.scrollHeight - target.clientHeight;
+          const params = bottom - y <= 2 ? { to: "bottom" } : { y };
+          send(stepMsg(doDraft("scroll page", "scrollTo", { params })));
+        } else {
+          send(
+            stepMsg(
+              doDraft(`scroll ${label(target)}`, "scrollTo", {
+                on: `css:${cssPath(target)}`,
+              })
+            )
+          );
+        }
+      }
+      active = false;
+    }
   });
   // Page may have loaded mid-recording (full nav); ask the worker
   // whether this tab is being recorded (the .then() below re-arms).

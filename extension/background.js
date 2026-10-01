@@ -353,9 +353,36 @@ function download(filename, text) {
   });
 }
 
-// A closing tab silently drops its capture — clean up the persisted
-// entry so a reopened tab with the same id doesn't resurrect it.
+// A closing tab silently drops its capture — but the close itself IS
+// part of the flow (window.close(), a finished payment popup, the user
+// tidying up): record it as `tab close tN` so replay closes the tab too
+// instead of leaving a stale window open. Emit BEFORE deleting the
+// in-memory session — s.tabs order still mirrors the refs already
+// recorded, so tN names the right tab. Splice it out after so later
+// popups renumber consistently with replay's open-order naming.
 chrome.tabs.onRemoved.addListener((tabId) => {
+  const s = sessions.get(tabId);
+  if (s && Array.isArray(s.tabs)) {
+    const n = s.tabs.indexOf(tabId) + 1;
+    if (n > 0) {
+      s.steps.push({
+        kind: "do",
+        draft: {
+          intent: `close tab t${n}`,
+          verb: "tab",
+          value: { from: "literal", literal: `close t${n}` },
+        },
+      });
+      s.tabs = s.tabs.filter((t) => t !== tabId);
+      if (s.lastUrls) delete s.lastUrls[tabId];
+      // The next step arriving from a surviving tab needs a switch-back
+      // draft — replay is still pointed at the closed handle.
+      if (s.activeTab === tabId) s.activeTab = null;
+      // persist fans out to every s.tabs key — one call covers all
+      // remaining tabs.
+      if (s.tabs.length) persist(s.tabs[0]);
+    }
+  }
   sessions.delete(tabId);
   chrome.storage.session.remove(keyOf(tabId)).catch(() => {});
 });
@@ -365,7 +392,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // — with no matching goto step the bundle replays against a page that
 // isn't there. webNavigation is worker-side so it survives the content
 // script being torn down by the nav itself.
-async function recordNav(tabId, url) {
+async function recordNav(tabId, url, transitionType) {
   const s = await getSession(tabId);
   if (!s) return;
   // The nav that opens an attached popup is implied by the recorded
@@ -381,7 +408,24 @@ async function recordNav(tabId, url) {
   // one transition, and the landing URL is already the bundle's `url`.
   // Dedupe is per-tab — a popup's URL must not mask the main tab's.
   const lastUrls = (s.lastUrls ||= {});
-  if (!url || lastUrls[tabId] === url) return;
+  if (!url || lastUrls[tabId] === url) {
+    // A same-URL commit is usually the dedupe hit — EXCEPT a real
+    // reload (F5/Ctrl+R/form resubmit), which is a flow event: page
+    // state resets and replay needs it too. transitionType names it.
+    if (transitionType === "reload") {
+      ensureActiveTab(s, tabId);
+      s.currentFrame = [];
+      s.steps.push({
+        kind: "do",
+        draft: {
+          intent: "reload the page",
+          verb: "reload",
+        },
+      });
+      persist(tabId);
+    }
+    return;
+  }
   lastUrls[tabId] = url;
   // A nav on a non-active tab means focus moved — switch drafts first.
   ensureActiveTab(s, tabId);
@@ -416,10 +460,10 @@ async function recordNav(tabId, url) {
 }
 
 chrome.webNavigation.onCommitted.addListener((d) => {
-  if (d.frameId === 0) recordNav(d.tabId, d.url);
+  if (d.frameId === 0) recordNav(d.tabId, d.url, d.transitionType);
 });
 chrome.webNavigation.onHistoryStateUpdated.addListener((d) => {
-  if (d.frameId === 0) recordNav(d.tabId, d.url);
+  if (d.frameId === 0) recordNav(d.tabId, d.url, d.transitionType);
 });
 
 // A target=_blank link or window.open mid-recording spawns a new tab.

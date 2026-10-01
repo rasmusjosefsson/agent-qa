@@ -50,14 +50,15 @@ What it captures per interaction:
 | every fetch/XHR | `{url, method, status, body, postData, startedAt, durationMs}` (bodies capped at 256KB) |
 | interactions inside **same-origin iframes** | `do/frame` enter/exit drafts wrap the in-frame steps (nested frames handled one level at a time) |
 | interactions in a `window.open`/`target=_blank` popup | the popup joins the recording; first activity there emits `do/tab` `t2`, returning to the opener emits `do/tab` `t1` (the popup's opening nav is implied by the recorded opener click) |
+| closing a tracked tab (`window.close()`, a finished popup) | `do/tab` `close tN` — replay closes it too instead of leaving a stale window; next step on a surviving tab re-emits the `tab t1` switch |
+| reload (F5/Ctrl+R, form resubmit) | `do/reload` — `webNavigation` transitionType names it, so a real reload isn't deduped away by the same-URL filter |
 
 **Not captured (v1):** `beforeunload` dialogs (no JS entry
 point to wrap), cross-origin iframe internals (counted as a bundle
 warning — the iframe element can't be located from inside it),
 canvas drawing, real multi-touch, hover-only gestures, exact
-element `scrollTop` (element scrolls replay as `scrollIntoView`),
-same-URL reloads, closing a popup tab. Record those flows with
-`agent-qa record` instead.
+element `scrollTop` (element scrolls replay as `scrollIntoView`).
+Record those flows with `agent-qa record` instead.
 
 ## Ingest
 
