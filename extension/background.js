@@ -333,7 +333,7 @@ async function handle(msg, sender) {
     // Nothing listening (or a refused ingest) falls back to the
     // download the flow always used; the daemon's refusal is worth
     // surfacing, a missing daemon is not.
-    const sent = await tryDaemon(bundle);
+    const sent = (await tryDaemon(bundle)) || {};
     const err = sent.sid
       ? null
       : await download(
