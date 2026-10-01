@@ -221,8 +221,10 @@ const tree = [
             loop.map((l) => (
               <li class="loop-card reveal">
                 <span class="loop-n">{l.n}</span>
-                <span class="loop-icon" aria-hidden="true"><span class="aqa-dark-only" set:html={l.icon} /><span class="aqa-light-only" set:html={l.iconLight} /></span>
-                <h3>{l.title}</h3>
+                <h3>
+                  <span class="loop-icon" aria-hidden="true"><span class="aqa-dark-only" set:html={l.icon} /><span class="aqa-light-only" set:html={l.iconLight} /></span>
+                  {l.title}
+                </h3>
                 <p>{l.body}</p>
               </li>
             ))
@@ -1120,18 +1122,19 @@ auth = <span class="s">"./plugins/acme-auth/agent-qa-plugin-acme-auth"</span>
     box-shadow: 0 6px 18px -6px color-mix(in oklab, var(--aqa-brand) 70%, transparent);
   }
   .loop-icon {
-    position: absolute;
-    top: 22px;
-    right: 22px;
+    flex: none;
     display: inline-grid;
-    width: 36px;
-    height: 36px;
+    width: 30px;
+    height: 30px;
   }
   .loop-icon :global(svg) {
     width: 100%;
     height: 100%;
   }
   .loop-card h3 {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     margin-top: 18px;
     font-size: 19px;
     font-weight: 620;
