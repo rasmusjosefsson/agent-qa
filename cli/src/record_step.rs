@@ -204,9 +204,9 @@ pub(crate) fn record_draft(
 ///
 /// The probe dies on navigation, so `record-step` re-arms it after every do
 /// step: the step's own click is covered when the previous step re-armed.
-const CLICK_FX_ARM: &str = "(function(){try{if(window.__aqFx)return '1';window.__aqFx={m:0,clicks:[]};new MutationObserver(function(x){window.__aqFx.m+=x.length}).observe(document.documentElement,{subtree:true,childList:true,attributes:true,characterData:true});document.addEventListener('click',function(){var f=window.__aqFx;if(!f)return;if(f.clicks.length>20)f.clicks.shift();var a=document.activeElement;f.clicks.push({t:Date.now(),m:f.m,u:location.href,r:performance.getEntriesByType('resource').length,a:a?a.tagName+'#'+(a.id||''):''})},true);return '1'}catch(e){return '1'}})()";
+const CLICK_FX_ARM: &str = "(function(){try{if(window.__aqFx)return '1';window.__aqFx={m:0,ev:0,clicks:[]};new MutationObserver(function(x){window.__aqFx.m+=x.length}).observe(document.documentElement,{subtree:true,childList:true,attributes:true,characterData:true});['input','change','submit','toggle'].forEach(function(t){document.addEventListener(t,function(){var f=window.__aqFx;if(f)f.ev++},true)});document.addEventListener('click',function(){var f=window.__aqFx;if(!f)return;if(f.clicks.length>20)f.clicks.shift();var a=document.activeElement;f.clicks.push({t:Date.now(),m:f.m,ev:f.ev,u:location.href,r:performance.getEntriesByType('resource').length,a:a?a.tagName+'#'+(a.id||''):''})},true);return '1'}catch(e){return '1'}})()";
 
-const CLICK_FX_CHECK: &str = "(function(){var p=window.__aqFx;if(!p)return '';var c=p.clicks[p.clicks.length-1];if(!c||Date.now()-c.t>30000)return '';var a=document.activeElement;var fa=(a?a.tagName+'#'+(a.id||''):'')!==c.a;return JSON.stringify({dm:p.m-c.m,nav:location.href!==c.u,dr:performance.getEntriesByType('resource').length-c.r,fa:fa})})()";
+const CLICK_FX_CHECK: &str = "(function(){var p=window.__aqFx;if(!p)return '';var c=p.clicks[p.clicks.length-1];if(!c||Date.now()-c.t>30000)return '';var a=document.activeElement;var fa=(a?a.tagName+'#'+(a.id||''):'')!==c.a;return JSON.stringify({dm:p.m-c.m,nav:location.href!==c.u,dr:performance.getEntriesByType('resource').length-c.r,fa:fa,ev:p.ev-(c.ev||0)})})()";
 
 fn click_verb(verb: &crate::scenario::Verb) -> bool {
     matches!(
@@ -236,7 +236,10 @@ fn click_inert(raw: &str) -> Option<bool> {
     let dr = parsed.get("dr").and_then(|v| v.as_i64()).unwrap_or(0);
     // Focus moving (e.g. clicking to focus an input) counts as an effect.
     let fa = parsed.get("fa").and_then(|v| v.as_bool()).unwrap_or(false);
-    Some(dm == 0 && !nav && dr == 0 && !fa)
+    // Form-control events (input/change/submit/toggle) are an effect too —
+    // check/uncheck and option picks flip IDL properties, not the DOM tree.
+    let ev = parsed.get("ev").and_then(|v| v.as_i64()).unwrap_or(0);
+    Some(dm == 0 && !nav && dr == 0 && !fa && ev == 0)
 }
 
 /// Re-install the probe if the page navigated it away. Best-effort: a dead
@@ -251,7 +254,7 @@ fn warn_if_click_inert(session: &str) {
     };
     if click_inert(&raw) == Some(true) {
         eprintln!(
-            "[v2-record] click produced no observable effect (no navigation, DOM mutation, or network) — the app's handler may not have been bound yet; a short wait before clicking usually fixes it"
+            "[v2-record] click produced no observable effect (no navigation, DOM mutation, request, or field event) — the app's handler may not have been bound yet; a short wait before clicking usually fixes it"
         );
     }
 }
@@ -452,6 +455,27 @@ mod tests {
             click_inert("\"{\\\"dm\\\":0,\\\"nav\\\":false,\\\"dr\\\":2}\""),
             Some(false)
         );
+        // A form-control event (checked flip, option pick, details toggle)
+        // is an effect even when the DOM tree and resources stay put.
+        assert_eq!(
+            click_inert("\"{\\\"dm\\\":0,\\\"nav\\\":false,\\\"dr\\\":0,\\\"ev\\\":1}\""),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn click_fx_probe_counts_form_events() {
+        // Capture-phase listeners on the form events that fire without a
+        // DOM mutation — 'click' is deliberately not counted so a bare
+        // handler-less click still reads inert.
+        for ev in ["input", "change", "submit", "toggle"] {
+            assert!(CLICK_FX_ARM.contains(&format!("'{ev}'")));
+        }
+        assert!(!CLICK_FX_ARM.contains("'click','"));
+        assert!(CLICK_FX_ARM.contains("ev:0"));
+        assert!(CLICK_FX_ARM.contains(",true)}"));
+        assert!(CLICK_FX_ARM.contains("ev:f.ev"));
+        assert!(CLICK_FX_CHECK.contains("ev:p.ev-(c.ev||0)"));
     }
 
     #[test]
