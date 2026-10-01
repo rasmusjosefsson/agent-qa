@@ -10,6 +10,12 @@
 //!
 //! ```text
 //! agent-qa ingest <bundle.json> [--sid <name>]
+//! agent-qa ingest --listen [--port <n>]
+//!
+//! --listen runs a localhost endpoint the extension's export button
+//! POSTs bundles to directly — the recording lands as a scenario with
+//! no file download step at all. The extension falls back to the
+//! download flow when nothing listens.
 //!
 //! writes:
 //!   <scenarios_root>/<sid>/scenario.json
@@ -31,17 +37,21 @@ use crate::record_step::{parse_draft, StepKind};
 use crate::scenario::{Env, EnvOp, Producer, Provenance, Scenario};
 use crate::sidecar::atomic_write_file;
 
-struct Opts {
-    bundle: PathBuf,
-    sid: Option<String>,
+/// What an ingested bundle produced — surfaced as the CLI's summary
+/// line and as the JSON the `--listen` endpoint answers with.
+struct Outcome {
+    sid: String,
+    scenario_path: PathBuf,
+    steps: usize,
+    requests: usize,
+    files: usize,
+    warnings: Vec<String>,
 }
 
-pub fn run(args: &[String]) -> Result<u8> {
-    let opts = parse_args(args)?;
-    let text = fs::read_to_string(&opts.bundle)
-        .with_context(|| format!("ingest: read {}", opts.bundle.display()))?;
-    let bundle: Json = serde_json::from_str(&text)
-        .with_context(|| format!("ingest: parse {}", opts.bundle.display()))?;
+/// Validate a capture bundle end-to-end and write the scenario +
+/// sidecars. `source_ref` lands in `produced_by.source_ref` — the CLI
+/// passes the bundle path, the HTTP endpoint the request origin.
+fn ingest_bundle(bundle: &Json, sid: Option<String>, source_ref: &str) -> Result<Outcome> {
     if !bundle.is_object() {
         bail!("ingest: bundle must be a JSON object — expected the extension export shape");
     }
@@ -55,16 +65,17 @@ pub fn run(args: &[String]) -> Result<u8> {
     }
 
     let url = bundle["url"].as_str().map(str::to_string);
-    for warning in bundle["warnings"].as_array().into_iter().flatten() {
-        if let Some(w) = warning.as_str() {
-            eprintln!("ingest: bundle warning: {w}");
-        }
-    }
+    let mut warnings: Vec<String> = bundle["warnings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|w| w.as_str().map(str::to_string))
+        .collect();
     let intent = bundle["intent"]
         .as_str()
         .map(str::to_string)
         .unwrap_or_else(|| "ingested capture".to_string());
-    let sid = opts.sid.unwrap_or_else(|| default_sid(url.as_deref()));
+    let sid = sid.unwrap_or_else(|| default_sid(url.as_deref()));
 
     let mut steps = Vec::with_capacity(steps_json.len());
     for (i, item) in steps_json.iter().enumerate() {
@@ -120,10 +131,7 @@ pub fn run(args: &[String]) -> Result<u8> {
                     .to_string(),
             ),
             recorded_at: bundle["startedAt"].as_str().map(str::to_string),
-            source_ref: Some(format!(
-                "agent-qa extension bundle {}",
-                opts.bundle.display()
-            )),
+            source_ref: Some(format!("agent-qa extension bundle {source_ref}")),
         }),
     };
 
@@ -146,7 +154,7 @@ pub fn run(args: &[String]) -> Result<u8> {
     )?;
 
     let step_count = scenario.steps.len();
-    let mut har_note = String::new();
+    let mut requests = 0usize;
     if let Some(network) = bundle["network"].as_array().filter(|n| !n.is_empty()) {
         let har_dir = dir.join("replays").join("recorded");
         fs::create_dir_all(&har_dir)
@@ -156,10 +164,7 @@ pub fn run(args: &[String]) -> Result<u8> {
             &har_path,
             (serde_json::to_string_pretty(&build_har(network, url.as_deref()))? + "\n").as_bytes(),
         )?;
-        har_note = format!(
-            " + {} captured requests → replays/recorded/network.har",
-            network.len()
-        );
+        requests = network.len();
     }
 
     // Upload steps reference files/<name>; the extension inlines small
@@ -205,21 +210,256 @@ pub fn run(args: &[String]) -> Result<u8> {
         }
     }
     if !missing_uploads.is_empty() {
-        eprintln!(
-            "ingest: warning: upload(s) arrived without contents — drop {} under {} before replaying",
+        warnings.push(format!(
+            "upload(s) arrived without contents — drop {} under {} before replaying",
             missing_uploads.join(", "),
             files_dir.display()
-        );
+        ));
     }
-    let files_note = if written_files > 0 {
-        format!(" + {written_files} file(s) → files/")
+
+    Ok(Outcome {
+        sid,
+        scenario_path,
+        steps: step_count,
+        requests,
+        files: written_files,
+        warnings,
+    })
+}
+
+/// The extension's one-button POST target: `agent-qa ingest --listen`
+/// runs a tiny localhost endpoint the export hands its bundle to —
+/// no file to find, attach, or send. `GET /health` answers liveness
+/// so the popup can fall back to a download when nothing listens.
+fn listen(port: u16) -> Result<u8> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", port))
+        .with_context(|| format!("ingest --listen: bind 127.0.0.1:{port}"))?;
+    println!("agent-qa ingest listening on http://127.0.0.1:{port}");
+    println!("  POST /ingest — the extension's export button hands bundles here");
+    println!("  GET  /health — liveness probe");
+    for conn in listener.incoming() {
+        match conn {
+            Ok(stream) => {
+                std::thread::spawn(move || {
+                    let _ = handle_conn(stream);
+                });
+            }
+            Err(e) => eprintln!("ingest --listen: accept: {e}"),
+        }
+    }
+    Ok(0)
+}
+
+/// Minimal HTTP/1.1: a request line, Content-Length body, one JSON
+/// answer per connection. CORS headers ride every response — the
+/// extension's service worker fetches cross-origin by design.
+fn handle_conn(mut stream: std::net::TcpStream) -> Result<()> {
+    use std::io::{Read, Write};
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(30)))
+        .ok();
+    stream
+        .set_write_timeout(Some(std::time::Duration::from_secs(30)))
+        .ok();
+
+    let mut head = Vec::with_capacity(4096);
+    let mut buf = [0u8; 4096];
+    let body_off = loop {
+        let n = stream.read(&mut buf)?;
+        if n == 0 {
+            bail!("connection closed before headers");
+        }
+        head.extend_from_slice(&buf[..n]);
+        if head.len() > 64 * 1024 {
+            bail!("request headers exceed 64KB");
+        }
+        if let Some(off) = find_subslice(&head, b"\r\n\r\n") {
+            break off + 4;
+        }
+    };
+    let head_text = String::from_utf8_lossy(&head[..body_off]);
+    let mut lines = head_text.lines();
+    let request = lines.next().unwrap_or_default();
+    let mut parts = request.split_whitespace();
+    let (method, path) = (
+        parts.next().unwrap_or_default(),
+        parts.next().unwrap_or_default(),
+    );
+    let mut content_length = 0usize;
+    for line in lines {
+        if let Some((k, v)) = line.split_once(':') {
+            if k.trim().eq_ignore_ascii_case("content-length") {
+                content_length = v.trim().parse().unwrap_or(0);
+            }
+        }
+    }
+
+    let cors = "Access-Control-Allow-Origin: *\r\n\
+                Access-Control-Allow-Headers: content-type\r\n\
+                Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n";
+    let answer = |status: &str, body: &str| -> Vec<u8> {
+        format!(
+            "HTTP/1.1 {status}\r\n{cors}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
+    };
+
+    if method == "OPTIONS" {
+        stream.write_all(&answer("204 No Content", ""))?;
+        return Ok(());
+    }
+    if method == "GET" && path.starts_with("/health") {
+        stream.write_all(&answer(
+            "200 OK",
+            r#"{"ok":true,"service":"agent-qa-ingest"}"#,
+        ))?;
+        return Ok(());
+    }
+    if method != "POST" || !path.starts_with("/ingest") {
+        stream.write_all(&answer(
+            "404 Not Found",
+            r#"{"error":"POST /ingest or GET /health"}"#,
+        ))?;
+        return Ok(());
+    }
+    if content_length == 0 {
+        stream.write_all(&answer(
+            "400 Bad Request",
+            r#"{"error":"empty body — POST the extension bundle JSON"}"#,
+        ))?;
+        return Ok(());
+    }
+    if content_length > 64 * 1024 * 1024 {
+        stream.write_all(&answer(
+            "413 Payload Too Large",
+            r#"{"error":"bundle exceeds 64MB"}"#,
+        ))?;
+        return Ok(());
+    }
+    let mut body = head[body_off..].to_vec();
+    while body.len() < content_length {
+        let n = stream.read(&mut buf)?;
+        if n == 0 {
+            bail!("connection closed mid-body");
+        }
+        body.extend_from_slice(&buf[..n]);
+    }
+    body.truncate(content_length);
+
+    let bundle: Json = match serde_json::from_slice(&body) {
+        Ok(j) => j,
+        Err(e) => {
+            stream.write_all(&answer(
+                "400 Bad Request",
+                &serde_json::json!({"error": format!("body is not JSON: {e}")}).to_string(),
+            ))?;
+            return Ok(());
+        }
+    };
+    // A bundle may name its scenario; the id still has to be filesystem
+    // + sid-safe — slug it like default_sid does for hosts.
+    let sid = bundle["sid"]
+        .as_str()
+        .and_then(|s| slug_id(s).filter(|v| !v.is_empty() && v != "." && v != ".."));
+    match ingest_bundle(&bundle, sid, "posted to the listen endpoint") {
+        Ok(out) => {
+            println!(
+                "[ingest] {} via endpoint: {} steps, {} requests, {} files",
+                out.sid, out.steps, out.requests, out.files
+            );
+            stream.write_all(&answer(
+                "200 OK",
+                &serde_json::json!({
+                    "sid": out.sid,
+                    "scenario": out.scenario_path.display().to_string(),
+                    "steps": out.steps,
+                    "requests": out.requests,
+                    "files": out.files,
+                    "warnings": out.warnings,
+                })
+                .to_string(),
+            ))?;
+        }
+        Err(e) => {
+            stream.write_all(&answer(
+                "422 Unprocessable Entity",
+                &serde_json::json!({"error": format!("{e:#}")}).to_string(),
+            ))?;
+        }
+    }
+    Ok(())
+}
+
+fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    hay.windows(needle.len()).position(|w| w == needle)
+}
+
+/// `[a-z0-9-_]`-safe slug for a bundle-supplied scenario id — the
+/// listen endpoint can't trust the id to stay inside the root.
+fn slug_id(s: &str) -> Option<String> {
+    let slug: String = s
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if slug.is_empty() {
+        None
+    } else {
+        Some(slug)
+    }
+}
+
+struct Opts {
+    bundle: Option<PathBuf>,
+    sid: Option<String>,
+    listen: Option<u16>,
+}
+
+pub fn run(args: &[String]) -> Result<u8> {
+    let opts = parse_args(args)?;
+    if let Some(port) = opts.listen {
+        return listen(port);
+    }
+    let bundle_path = opts.bundle.ok_or_else(|| {
+        anyhow::anyhow!("ingest: needs a bundle path — agent-qa ingest <bundle.json>")
+    })?;
+    let text = fs::read_to_string(&bundle_path)
+        .with_context(|| format!("ingest: read {}", bundle_path.display()))?;
+    let bundle: Json = serde_json::from_str(&text)
+        .with_context(|| format!("ingest: parse {}", bundle_path.display()))?;
+    let out = ingest_bundle(&bundle, opts.sid, &bundle_path.display().to_string())?;
+    for w in &out.warnings {
+        eprintln!("ingest: warning: {w}");
+    }
+    let har_note = if out.requests > 0 {
+        format!(
+            " + {} captured requests → replays/recorded/network.har",
+            out.requests
+        )
     } else {
         String::new()
     };
-
+    let files_note = if out.files > 0 {
+        format!(" + {} file(s) → files/", out.files)
+    } else {
+        String::new()
+    };
     println!(
-        "[ingest] {sid}: {step_count} steps{har_note}{files_note}\n  scenario: {}\n  replay: agent-qa replay {sid}\n  hermetic: agent-qa replay {sid} --mock-from recorded --offline",
-        scenario_path.display()
+        "[ingest] {sid}: {steps} steps{har_note}{files_note}\n  scenario: {}\n  replay: agent-qa replay {sid}\n  hermetic: agent-qa replay {sid} --mock-from recorded --offline",
+        out.scenario_path.display(),
+        sid = out.sid,
+        steps = out.steps,
     );
     Ok(0)
 }
@@ -328,9 +568,12 @@ fn build_har(entries: &[Json], page_url: Option<&str>) -> Json {
     })
 }
 
+const DEFAULT_PORT: u16 = 17321;
+
 fn parse_args(args: &[String]) -> Result<Opts> {
     let mut bundle = None;
     let mut sid = None;
+    let mut listen = None;
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -341,21 +584,44 @@ fn parse_args(args: &[String]) -> Result<Opts> {
                         .ok_or_else(|| anyhow::anyhow!("--sid needs a value"))?,
                 )
             }
+            "--listen" => {
+                listen = Some(DEFAULT_PORT);
+            }
+            "--port" => {
+                let v = it
+                    .next()
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("--port needs a value"))?;
+                listen = Some(
+                    v.parse::<u16>()
+                        .ok()
+                        .filter(|p| *p > 0)
+                        .ok_or_else(|| anyhow::anyhow!("--port: {v:?} is not a valid port"))?,
+                );
+            }
             "-h" | "--help" => {
                 println!(
                     "agent-qa ingest — turn an extension capture bundle into a scenario
 
 USAGE
   agent-qa ingest <bundle.json> [--sid <name>]
+  agent-qa ingest --listen [--port <n>]
 
 The browser extension's one-button export (steps + network traffic) is
 validated and written as <scenarios_root>/<sid>/scenario.json plus the
 replays/recorded/network.har sidecar `--mock-from recorded` replays
 against.
 
+--listen runs a localhost endpoint the extension's export button POSTs
+straight to — the recording lands as a scenario without the user ever
+touching a file. The extension falls back to a download when nothing
+listens, so the daemon is optional sugar.
+
 ARGUMENTS
   <bundle.json>    path to the downloaded capture bundle
-  --sid <name>     scenario id (default: capture-<host>-<timestamp>)"
+  --sid <name>     scenario id (default: capture-<host>-<timestamp>)
+  --listen         serve POST /ingest on localhost (default port {DEFAULT_PORT})
+  --port <n>       port for --listen"
                 );
                 std::process::exit(0);
             }
@@ -369,10 +635,11 @@ ARGUMENTS
             s => bail!("ingest: unknown flag {s:?}"),
         }
     }
-    let bundle = bundle.ok_or_else(|| {
-        anyhow::anyhow!("ingest: needs a bundle path — agent-qa ingest <bundle.json>")
-    })?;
-    Ok(Opts { bundle, sid })
+    Ok(Opts {
+        bundle,
+        sid,
+        listen,
+    })
 }
 
 #[cfg(test)]
@@ -467,10 +734,119 @@ mod tests {
             "mine".to_string(),
         ])
         .unwrap();
-        assert_eq!(o.bundle, PathBuf::from("b.json"));
+        assert_eq!(o.bundle.as_deref(), Some(std::path::Path::new("b.json")));
         assert_eq!(o.sid.as_deref(), Some("mine"));
+        assert!(o.listen.is_none());
         assert!(parse_args(&["a".into(), "b".into()]).is_err());
-        assert!(parse_args(&[]).is_err());
+        // No bundle and no --listen is legal at parse — run() reports it.
+        assert!(parse_args(&[]).unwrap().bundle.is_none());
+    }
+
+    #[test]
+    fn parse_args_listen_defaults_and_port() {
+        assert_eq!(
+            parse_args(&["--listen".into()]).unwrap().listen,
+            Some(17321)
+        );
+        assert_eq!(
+            parse_args(&["--listen".into(), "--port".into(), "9999".into()])
+                .unwrap()
+                .listen,
+            Some(9999)
+        );
+        assert!(parse_args(&["--port".into(), "nope".into()]).is_err());
+        assert!(parse_args(&["--port".into(), "0".into()]).is_err());
+        assert!(parse_args(&["--port".into()]).is_err());
+    }
+
+    #[test]
+    fn slug_id_makes_a_bundle_sid_filesystem_safe() {
+        assert_eq!(slug_id("My Flow!").as_deref(), Some("my-flow"));
+        assert_eq!(slug_id("../../../etc").as_deref(), Some("etc"));
+        assert_eq!(slug_id("...").as_deref(), None);
+        assert_eq!(slug_id("").as_deref(), None);
+    }
+
+    #[test]
+    fn ingest_bundle_returns_outcome_with_warnings() {
+        let _guard = crate::test_util::lock_env();
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var(crate::paths::SCENARIOS_DIR_ENV, tmp.path());
+        let mut b = bundle(
+            vec![click_draft()],
+            vec![json!({"url":"https://x/a","method":"GET","status":200,"body":"hi"})],
+        );
+        b["warnings"] = json!(["capture paused for 1 non-http navigation"]);
+        let out = ingest_bundle(&b, Some("w1".into()), "test").unwrap();
+        assert_eq!(out.sid, "w1");
+        assert_eq!(out.steps, 1);
+        assert_eq!(out.requests, 1);
+        assert_eq!(out.warnings.len(), 1);
+        assert!(out.scenario_path.exists());
+        assert!(tmp.path().join("w1/replays/recorded/network.har").exists());
+        std::env::remove_var(crate::paths::SCENARIOS_DIR_ENV);
+    }
+
+    #[test]
+    fn listen_endpoint_ingests_a_posted_bundle() {
+        let _guard = crate::test_util::lock_env();
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var(crate::paths::SCENARIOS_DIR_ENV, tmp.path());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            handle_conn(stream).unwrap();
+        });
+        let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        use std::io::{Read, Write};
+        let body = serde_json::to_vec(&json!({
+            "version": 1,
+            "url": "https://x/app",
+            "sid": "posted!",
+            "steps": [click_draft()],
+        }))
+        .unwrap();
+        client
+            .write_all(
+                format!(
+                    "POST /ingest HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        client.write_all(&body).unwrap();
+        let mut resp = String::new();
+        client.read_to_string(&mut resp).unwrap();
+        server.join().unwrap();
+        assert!(resp.starts_with("HTTP/1.1 200"), "got: {resp}");
+        assert!(resp.contains(r#""sid":"posted""#), "sid slugged: {resp}");
+        assert!(tmp.path().join("posted/scenario.json").exists());
+        std::env::remove_var(crate::paths::SCENARIOS_DIR_ENV);
+    }
+
+    #[test]
+    fn listen_endpoint_rejects_a_bad_body() {
+        let _guard = crate::test_util::lock_env();
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var(crate::paths::SCENARIOS_DIR_ENV, tmp.path());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let _ = handle_conn(stream);
+        });
+        let mut client = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        use std::io::{Read, Write};
+        client
+            .write_all(b"POST /ingest HTTP/1.1\r\nContent-Length: 4\r\n\r\nnope")
+            .unwrap();
+        let mut resp = String::new();
+        client.read_to_string(&mut resp).unwrap();
+        server.join().unwrap();
+        assert!(resp.starts_with("HTTP/1.1 400"), "got: {resp}");
+        std::env::remove_var(crate::paths::SCENARIOS_DIR_ENV);
     }
 
     #[test]

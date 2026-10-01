@@ -15,6 +15,12 @@ This is the "user sends us their bug" loop:
    `agent-qa replay <sid> --mock-from recorded --offline` replays it
    pinned to exactly the backend responses their browser saw.
 
+**Zero-file variant:** when `agent-qa ingest --listen` is running on
+the machine, Stop & export POSTs the bundle straight to it — the popup
+answers with the scenario id (`sent to agent-qa — <sid>`) and nothing
+ever hits the downloads folder. No daemon listening? It falls back to
+the download automatically, so the button behaves the same either way.
+
 ## Install (dev / unpacked)
 
 ```
@@ -64,9 +70,16 @@ Record those flows with `agent-qa record` instead.
 
 ```
 agent-qa ingest <bundle.json> [--sid <name>]
+agent-qa ingest --listen [--port <n>]   # POST /ingest on 127.0.0.1:17321
 ```
 
-writes:
+`--listen` serves a tiny localhost endpoint — `POST /ingest` ingests a
+posted bundle and answers `{"sid","scenario","steps","requests",
+"files","warnings"}`, `GET /health` is the liveness probe the popup
+uses to decide between POST and download. A bundle may carry `sid` to
+name its scenario; the id is slugged before it touches the filesystem.
+
+Both paths write:
 
 ```
 <scenarios_root>/<sid>/scenario.json

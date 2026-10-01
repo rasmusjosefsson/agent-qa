@@ -62,9 +62,13 @@ btn.addEventListener("click", async () => {
     }
     recording = false;
     paint();
-    meta.textContent = r
-      ? `saved — ${r.steps} steps, ${r.requests} requests`
-      : "saved";
+    meta.textContent = !r
+      ? "saved"
+      : r.sentSid
+        ? `sent to agent-qa — ${r.sentSid} (${r.steps} steps, ${r.requests} requests)`
+        : r.daemonError
+          ? `downloaded — daemon said: ${r.daemonError}`
+          : `saved — ${r.steps} steps, ${r.requests} requests`;
   }
 });
 

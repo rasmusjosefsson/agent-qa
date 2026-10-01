@@ -328,10 +328,18 @@ async function handle(msg, sender) {
     }
     const host = safeHost(s.url) || "page";
     const stamp = s.startedAt.replace(/[:.]/g, "-").slice(0, 19);
-    const err = await download(
-      `agent-qa-${host}-${stamp}.json`,
-      JSON.stringify(bundle, null, 2),
-    );
+    // One-press UX: when `agent-qa ingest --listen` is running the
+    // bundle posts straight to it — no file to find, attach, or send.
+    // Nothing listening (or a refused ingest) falls back to the
+    // download the flow always used; the daemon's refusal is worth
+    // surfacing, a missing daemon is not.
+    const sent = await tryDaemon(bundle);
+    const err = sent.sid
+      ? null
+      : await download(
+          `agent-qa-${host}-${stamp}.json`,
+          JSON.stringify(bundle, null, 2),
+        );
     if (err) {
       // The session is still persisted — keep reporting "recording" so
       // the popup's next click re-enters this handler and re-tries the
@@ -350,6 +358,8 @@ async function handle(msg, sender) {
       recording: false,
       steps: s.steps.length,
       requests: s.network.length,
+      sentSid: sent.sid || null,
+      daemonError: sent.error || null,
     };
   }
 
@@ -397,6 +407,29 @@ function download(filename, text) {
       },
     );
   });
+}
+
+// POST the bundle to `agent-qa ingest --listen` when one runs —
+// returns {sid, ...} on acceptance, {error} when the daemon refused,
+// null when nothing listens (the caller falls back to a download).
+// A daemon answer — even a refusal — is a real outcome: the caller
+// surfaces it. Only the absent-daemon case is silent.
+async function tryDaemon(bundle) {
+  try {
+    const r = await fetch("http://127.0.0.1:17321/ingest", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(bundle),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.sid) return j;
+    return {
+      error:
+        j.error || `agent-qa daemon refused the bundle (HTTP ${r.status})`,
+    };
+  } catch {
+    return null;
+  }
 }
 
 // A closing tab silently drops its capture — but the close itself IS
