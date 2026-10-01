@@ -359,6 +359,7 @@ async function handle(msg, sender) {
       steps: s.steps.length,
       requests: s.network.length,
       sentSid: sent.sid || null,
+      sentWarnings: Array.isArray(sent.warnings) ? sent.warnings.length : 0,
       daemonError: sent.error || null,
     };
   }
