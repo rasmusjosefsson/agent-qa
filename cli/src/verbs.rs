@@ -1924,6 +1924,40 @@ fn try_selector_native_click(session: &str, selector: &str) -> anyhow::Result<bo
     Ok(out.trim() == "true")
 }
 
+/// Same as [`try_selector_native_click`] for xpath locators — resolves via
+/// `document.evaluate` and dispatches the pointer/mouse/click chain so a
+/// coordinate miss at scroll depth can't silently drop the click.
+fn try_xpath_native_click(session: &str, xpath: &str) -> anyhow::Result<bool> {
+    let expr = format!(
+        r#"(() => {{
+  const resolve = () => {{
+    const r = document.evaluate({xpath_lit}, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+    return r && r.singleNodeValue;
+  }};
+  const el = resolve();
+  if (!el) return false;
+  try {{ el.focus(); }} catch (e) {{}}
+  // See try_selector_native_click: the deferred dispatch keeps a blocking
+  // onclick dialog out of the eval response window.
+  setTimeout(() => {{
+    try {{
+      const el2 = resolve() || el;
+      const mouse = {{ bubbles: true, cancelable: true, view: window }};
+      el2.dispatchEvent(new PointerEvent('pointerdown', mouse));
+      el2.dispatchEvent(new MouseEvent('mousedown', mouse));
+      el2.dispatchEvent(new PointerEvent('pointerup', mouse));
+      el2.dispatchEvent(new MouseEvent('mouseup', mouse));
+      el2.click();
+    }} catch (e) {{}}
+  }}, 150);
+  return true;
+}})()"#,
+        xpath_lit = json_str(xpath)
+    );
+    let out = browser::eval_expression(session, &expr)?;
+    Ok(out.trim() == "true")
+}
+
 /// Hit-test the element a raw locator resolves to before handing the action
 /// to agent-browser's coordinate dispatch. `agent-browser click` reports
 /// success even when the element's centre point misses `elementFromPoint`
@@ -2636,15 +2670,19 @@ fn act_on_locator(
                     }
                 }
                 RawLocatorKind::Xpath => {
-                    let state = ensure_click_target(
-                        session,
-                        &format!(
-                            "return document.evaluate({}, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;",
-                            json_str(&v)
-                        ),
-                    );
-                    warn_unhittable(act.as_str(), &format!("xpath '{v}'"), &state);
-                    browser::find_xpath_act(session, &v, act, value)?;
+                    if matches!(act, RoleAct::Click) && try_xpath_native_click(session, &v)? {
+                        eprintln!("[v2-replay] xpath '{v}' activated via native DOM click");
+                    } else {
+                        let state = ensure_click_target(
+                            session,
+                            &format!(
+                                "return document.evaluate({}, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;",
+                                json_str(&v)
+                            ),
+                        );
+                        warn_unhittable(act.as_str(), &format!("xpath '{v}'"), &state);
+                        browser::find_xpath_act(session, &v, act, value)?;
+                    }
                 }
                 RawLocatorKind::TestId => {
                     let css = format!("[data-testid=\"{}\"]", v.replace('"', "\\\""));
@@ -3288,6 +3326,34 @@ mod tests {
         assert!(out.contains("--session sess eval"), "got: {out}");
         assert!(out.contains("MouseEvent"), "got: {out}");
         assert!(!out.contains("click button[type=submit]"), "got: {out}");
+    }
+
+    #[test]
+    fn raw_xpath_click_prefers_native_dom_click_when_resolved() {
+        // eval → "true": the xpath locator activates via the DOM chain
+        // instead of agent-browser's coordinate `find xpath … click`.
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        install_fake_eval_true(tmp.path(), &log);
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "click",
+            "on": { "raw": { "kind": "xpath", "value": "//button[1]" }, "reason": "xpath recorded" }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        assert!(out.contains("--session sess eval"), "got: {out}");
+        assert!(out.contains("MouseEvent"), "got: {out}");
+        assert!(!out.contains("find xpath"), "got: {out}");
     }
 
     #[test]
