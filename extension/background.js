@@ -10,7 +10,41 @@
 // silently destroys the capture while the REC badge stays lit.
 
 const sessions = new Map(); // tabId -> {steps, network, url, startedAt}
+// A popup opened by a recording tab SHARES its session object (same map
+// entry under a second key), so interactions there land in one bundle.
 const keyOf = (tabId) => `capture-${tabId}`;
+
+// Replay-side tab naming is open-order (t1, t2, …) — mirror it: the
+// recording tab is t1, every attached popup takes the next index.
+const tabIndex = (s, tabId) => {
+  s.tabs ||= [s.rootTabId ?? tabId];
+  let i = s.tabs.indexOf(tabId);
+  if (i === -1) {
+    s.tabs.push(tabId);
+    i = s.tabs.length - 1;
+  }
+  return i + 1;
+};
+
+const tabDraft = (n) => ({
+  kind: "do",
+  draft: {
+    intent: `switch to tab t${n}`,
+    verb: "tab",
+    value: { from: "literal", literal: `t${n}` },
+  },
+});
+
+// Steps and navs may arrive from any attached tab — emit the `tab tN`
+// switch draft the first time capture follows focus into a different
+// tab. Frame context is per-tab, so a switch resets it like a nav does.
+const ensureActiveTab = (s, tabId) => {
+  const n = tabIndex(s, tabId);
+  if (s.activeTab === tabId) return;
+  s.activeTab = tabId;
+  s.currentFrame = [];
+  s.steps.push(tabDraft(n));
+};
 
 async function getSession(tabId) {
   if (sessions.has(tabId)) return sessions.get(tabId);
@@ -29,8 +63,13 @@ function persist(tabId) {
   const s = sessions.get(tabId);
   if (!s) return;
   // Fire-and-forget: quota errors keep the in-memory copy; the worst
-  // case is a lost capture on suspend, same as before.
-  chrome.storage.session.set({ [keyOf(tabId)]: s }).catch(() => {});
+  // case is a lost capture on suspend, same as before. Attached popup
+  // tabs share the object — write it under every key it lives at so a
+  // worker restart rehydrates the same session on any of them.
+  const tabs = Array.isArray(s.tabs) ? s.tabs : [tabId];
+  for (const t of new Set([tabId, ...tabs])) {
+    chrome.storage.session.set({ [keyOf(t)]: s }).catch(() => {});
+  }
 }
 
 // Resolves true when a content script actually received the message —
@@ -76,6 +115,9 @@ async function handle(msg, sender) {
       // by frame. A cross-origin hop can't name its iframe element;
       // those steps are skipped + counted for the bundle warning
       // rather than recorded against the wrong document.
+      // Focus may have moved to an attached popup tab — emit the tab
+      // switch before frame transitions so replay follows focus first.
+      ensureActiveTab(s, tabId);
       const frame = msg.frame || [];
       if (msg.wall) {
         s.botWallSteps = (s.botWallSteps || 0) + 1;
@@ -136,7 +178,10 @@ async function handle(msg, sender) {
       steps: [],
       network: [],
       url: tab.url,
-      lastUrl: tab.url,
+      lastUrls: { [msg.tabId]: tab.url },
+      tabs: [msg.tabId],
+      rootTabId: msg.tabId,
+      activeTab: msg.tabId,
       startedAt: new Date().toISOString(),
     };
     sessions.set(msg.tabId, s);
@@ -165,8 +210,12 @@ async function handle(msg, sender) {
     // Stop capture up front (listeners off, badge cleared) but keep the
     // session data until the export is confirmed — a failed download
     // must not take the recorded bundle down with it.
-    tell(msg.tabId, { t: "record:stop" });
-    chrome.action.setBadgeText({ tabId: msg.tabId, text: "" });
+    // Every attached popup tab shares the session — stop capture on
+    // all of them and clear every badge.
+    for (const t of s.tabs || [msg.tabId]) {
+      tell(t, { t: "record:stop" });
+      chrome.action.setBadgeText({ tabId: t, text: "" });
+    }
     const bundle = {
       version: 1,
       url: s.url,
@@ -217,12 +266,6 @@ async function handle(msg, sender) {
           `drop ${uploadRefs.join(", ")} under the scenario dir before replaying`,
       );
     }
-    if (s.popupTabs) {
-      (bundle.warnings ||= []).push(
-        `${s.popupTabs} new tab/window opened during recording — capture is ` +
-          "per-tab, so interactions in the popup are not in this bundle",
-      );
-    }
     if (s.botWallSteps) {
       (bundle.warnings ||= []).push(
         `${s.botWallSteps} interaction(s) captured while the site showed a ` +
@@ -247,10 +290,10 @@ async function handle(msg, sender) {
         error: `export failed: ${err} — click stop again to retry`,
       };
     }
-    sessions.delete(msg.tabId);
-    try {
-      await chrome.storage.session.remove(keyOf(msg.tabId));
-    } catch {}
+    for (const t of s.tabs || [msg.tabId]) {
+      sessions.delete(t);
+      await chrome.storage.session.remove(keyOf(t)).catch(() => {});
+    }
     return {
       recording: false,
       steps: s.steps.length,
@@ -319,10 +362,23 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 async function recordNav(tabId, url) {
   const s = await getSession(tabId);
   if (!s) return;
+  // The nav that opens an attached popup is implied by the recorded
+  // opener click — skip it so replay doesn't goto the popup's URL a
+  // second time on the freshly-switched tab.
+  if (s.popupNavPending && s.popupNavPending.includes(tabId)) {
+    s.popupNavPending = s.popupNavPending.filter((t) => t !== tabId);
+    (s.lastUrls ||= {})[tabId] = url;
+    persist(tabId);
+    return;
+  }
   // Dedupe: onCommitted and onHistoryStateUpdated can both fire for
   // one transition, and the landing URL is already the bundle's `url`.
-  if (!url || url === s.lastUrl) return;
-  s.lastUrl = url;
+  // Dedupe is per-tab — a popup's URL must not mask the main tab's.
+  const lastUrls = (s.lastUrls ||= {});
+  if (!url || lastUrls[tabId] === url) return;
+  lastUrls[tabId] = url;
+  // A nav on a non-active tab means focus moved — switch drafts first.
+  ensureActiveTab(s, tabId);
   // A fresh document clears every frame context — the next step starts
   // from the top document again.
   s.currentFrame = [];
@@ -360,16 +416,21 @@ chrome.webNavigation.onHistoryStateUpdated.addListener((d) => {
   if (d.frameId === 0) recordNav(d.tabId, d.url);
 });
 
-// A target=_blank link or window.open mid-recording spawns a new tab —
-// capture is per-tab, so everything the user does in the popup lands in
-// a session that doesn't exist. Count it and flag the badge; the export
-// warning names the gap.
+// A target=_blank link or window.open mid-recording spawns a new tab.
+// Attach it to the SAME session so popup interactions (SSO, payment,
+// confirmation dialogs-as-pages) land in the bundle — the first step or
+// nav arriving from it emits the `tab tN` switch draft replay needs.
+// Its content script self-arms via the state ping (getSession resolves
+// the shared session), and its opening nav is skipped via
+// popupNavPending since the recorded opener click already implies it.
 chrome.webNavigation.onCreatedNavigationTarget.addListener((d) => {
   getSession(d.sourceTabId).then((s) => {
-    if (!s) return;
-    s.popupTabs = (s.popupTabs || 0) + 1;
-    persist(d.sourceTabId);
-    chrome.action.setBadgeText({ tabId: d.sourceTabId, text: "!" });
-    chrome.action.setBadgeBackgroundColor({ tabId: d.sourceTabId, color: "#e80" });
+    if (!s || d.sourceTabId === d.tabId) return;
+    tabIndex(s, d.tabId);
+    sessions.set(d.tabId, s);
+    (s.popupNavPending ||= []).push(d.tabId);
+    persist(d.tabId);
+    chrome.action.setBadgeText({ tabId: d.tabId, text: "REC" });
+    chrome.action.setBadgeBackgroundColor({ tabId: d.tabId, color: "#d33" });
   });
 });
