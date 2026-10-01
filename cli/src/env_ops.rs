@@ -71,17 +71,22 @@ pub fn run_phase(phase: &str, ops: &[EnvOp], session: &str, scope: &mut ValueSco
     // Origin-bound env.open ops before the first nav write into
     // about:blank — document.cookie is silently dropped, localStorage
     // throws a DOMException. A warm-reused session already on a page
-    // supplies the origin, so probe once rather than warning blindly.
+    // supplies the origin, so probe once rather than skipping blindly.
+    let mut skip: Vec<usize> = Vec::new();
     if phase == "env.open" {
         let on_origin = crate::browser::current_url(session).is_some();
-        for idx in ops_without_origin(ops, on_origin) {
+        skip = ops_without_origin(ops, on_origin);
+        for &idx in &skip {
             eprintln!(
-                "[v2-replay] {phase}#{idx}: {} runs with no page origin — the write is dropped or throws on about:blank; add a `nav` op first",
+                "[v2-replay] {phase}#{idx}: {} has no page origin — skipped (the write would drop on about:blank or throw); add a `nav` op first",
                 op_kind(&ops[idx])
             );
         }
     }
     for (idx, op) in ops.iter().enumerate() {
+        if skip.contains(&idx) {
+            continue;
+        }
         let policy = policy_of(op);
         let result = run_one(phase, idx, op, session, scope);
         if let Err(e) = result {
@@ -524,6 +529,20 @@ mod tests {
         bin
     }
 
+    /// Logging stub that also answers the `location.href` probe with a real
+    /// URL — the session reads as already on an origin, so origin-bound ops
+    /// execute instead of being skipped.
+    fn install_fake_logging_on_origin(dir: &Path, log: &Path) -> PathBuf {
+        let body = format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\nif [ \"$3\" = 'eval' ]; then echo '\"https://example.com/\"'; fi\nexit 0\n",
+            log.display()
+        );
+        let bin = write_exec(dir, "agent-browser", &body);
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+        bin
+    }
+
     #[allow(dead_code)]
     fn install_fake_gql(dir: &Path, response_body: &str) -> PathBuf {
         // For 'eval --stdin' / 'eval <expr>' shape, output a JSON-wrapped
@@ -569,7 +588,7 @@ mod tests {
         let _g = lock_env();
         let tmp = TempDir::new().unwrap();
         let log = tmp.path().join("ab.log");
-        install_fake_logging(tmp.path(), &log);
+        install_fake_logging_on_origin(tmp.path(), &log);
         let op = parse_op(json!({ "kind": "localStorage", "key": "x", "value": "1" }));
         let mut scope = ValueScope::default();
         run_phase("env.open", &[op], "s", &mut scope).unwrap();
@@ -584,7 +603,7 @@ mod tests {
         let _g = lock_env();
         let tmp = TempDir::new().unwrap();
         let log = tmp.path().join("ab.log");
-        install_fake_logging(tmp.path(), &log);
+        install_fake_logging_on_origin(tmp.path(), &log);
         let op = parse_op(json!({ "kind": "flag", "name": "my-flag", "enabled": true }));
         let mut scope = ValueScope::default();
         run_phase("env.open", &[op], "s", &mut scope).unwrap();
@@ -599,7 +618,7 @@ mod tests {
         let _g = lock_env();
         let tmp = TempDir::new().unwrap();
         let log = tmp.path().join("ab.log");
-        install_fake_logging(tmp.path(), &log);
+        install_fake_logging_on_origin(tmp.path(), &log);
         let op = parse_op(json!({
             "kind": "cookie", "name": "session", "value": "abc",
             "domain": ".example.com", "path": "/"
@@ -610,6 +629,31 @@ mod tests {
         assert!(lines.contains("document.cookie"), "got: {lines}");
         assert!(lines.contains("session=abc"), "got: {lines}");
         assert!(lines.contains(".example.com"), "got: {lines}");
+        clear_fake();
+    }
+
+    #[test]
+    fn origin_bound_op_without_origin_is_skipped() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        // Plain stub: eval prints nothing → current_url probe reads no origin.
+        install_fake_logging(tmp.path(), &log);
+        let ops = vec![
+            parse_op(json!({ "kind": "localStorage", "key": "k", "value": "v" })),
+            parse_op(json!({ "kind": "cookie", "name": "c", "value": "v" })),
+            parse_op(json!({ "kind": "nav", "url": "https://x/" })),
+            parse_op(json!({ "kind": "localStorage", "key": "k2", "value": "v" })),
+        ];
+        let mut scope = ValueScope::default();
+        run_phase("env.open", &ops, "s", &mut scope).unwrap();
+        let lines = fs::read_to_string(&log).unwrap();
+        // The skipped pre-nav writes never reach the page…
+        assert!(!lines.contains("setItem(\"k\""), "got: {lines}");
+        assert!(!lines.contains("c=v"), "got: {lines}");
+        // …but the nav and the post-nav write still do.
+        assert!(lines.contains("open https://x/"), "got: {lines}");
+        assert!(lines.contains("setItem(\"k2\""), "got: {lines}");
         clear_fake();
     }
 
