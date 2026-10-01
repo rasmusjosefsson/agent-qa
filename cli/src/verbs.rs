@@ -2137,18 +2137,16 @@ struct ClickProbe {
 
 impl ClickProbe {
     fn arm(session: &str) -> Self {
-        let armed = browser::eval_expression(
-            session,
-            "(function(){try{window.__aqClick={u:location.href,m:0,r:performance.getEntriesByType('resource').length};new MutationObserver(function(x){window.__aqClick.m+=x.length}).observe(document.documentElement,{subtree:true,childList:true,attributes:true,characterData:true});}catch(e){}return '1'})()",
-        )
-        .is_ok();
+        let armed = browser::eval_expression(session, click_probe_arm_expr()).is_ok();
         Self { armed }
     }
 
     /// Poll briefly for an observable effect — navigation (a full nav also
-    /// wipes `__aqClick`), DOM mutation, a completed fetch, or a pending
-    /// native dialog. Early-exits on the first effect, so a working click
-    /// costs ~one extra eval; a truly inert one costs the full window.
+    /// wipes `__aqClick`), DOM mutation, a form-control event (input/change/
+    /// submit/toggle — a checkbox's `checked` flip is a property, not an
+    /// attribute, so mutations alone never see it), a completed fetch, or a
+    /// pending native dialog. Early-exits on the first effect, so a working
+    /// click costs ~one extra eval; a truly inert one costs the full window.
     fn warn_if_inert(&self, session: &str, loc: &Locator) {
         if !self.armed {
             return;
@@ -2160,7 +2158,7 @@ impl ClickProbe {
             }
         }
         eprintln!(
-            "[v2-replay] click on {} produced no observable effect (no navigation, DOM change, request, or dialog) — the handler may not have been bound",
+            "[v2-replay] click on {} produced no observable effect (no navigation, DOM change, field event, request, or dialog) — the handler may not have been bound",
             click_locator_label(loc)
         );
     }
@@ -2171,7 +2169,7 @@ impl ClickProbe {
 fn click_effect_seen(session: &str) -> bool {
     let Ok(out) = browser::eval_expression(
         session,
-        "(function(){var p=window.__aqClick;if(!p)return '{\"nav\":true}';return JSON.stringify({nav:location.href!==p.u,m:p.m,r:performance.getEntriesByType('resource').length-p.r})})()",
+        "(function(){var p=window.__aqClick;if(!p)return '{\"nav\":true}';return JSON.stringify({nav:location.href!==p.u,m:p.m,ev:p.ev||0,r:performance.getEntriesByType('resource').length-p.r})})()",
     ) else {
         return true;
     };
@@ -2184,7 +2182,18 @@ fn click_effect_seen(session: &str) -> bool {
     };
     v["nav"].as_bool().unwrap_or(false)
         || v["m"].as_u64().unwrap_or(0) > 0
+        || v["ev"].as_u64().unwrap_or(0) > 0
         || v["r"].as_i64().unwrap_or(0) != 0
+}
+
+/// Page-side observer armed before a click. `ev` counts capture-phase
+/// input/change/submit/toggle events — capture reaches non-bubbling
+/// `toggle` too — so a click that flips a form control's live state
+/// reads as an effect even when nothing mutates or navigates. `click`
+/// itself is deliberately not counted: the click dispatching is not
+/// evidence its handler ran.
+fn click_probe_arm_expr() -> &'static str {
+    "(function(){try{window.__aqClick={u:location.href,m:0,ev:0,r:performance.getEntriesByType('resource').length};new MutationObserver(function(x){window.__aqClick.m+=x.length}).observe(document.documentElement,{subtree:true,childList:true,attributes:true,characterData:true});['input','change','submit','toggle'].forEach(function(t){document.addEventListener(t,function(){window.__aqClick.ev++},true)});}catch(e){}return '1'})()"
 }
 
 fn click_locator_label(loc: &Locator) -> String {
@@ -4232,6 +4241,27 @@ mod tests {
             !out.contains("elementFromPoint"),
             "name-less role probe would resolve an arbitrary first match: {out}"
         );
+    }
+
+    #[test]
+    fn click_probe_arm_counts_form_events() {
+        // The observer must count form-control events in capture phase —
+        // a checkbox/radio `checked` flip is an IDL property change, so
+        // mutations alone never see it and would false-positive "inert".
+        let expr = click_probe_arm_expr();
+        for event in ["'input'", "'change'", "'submit'", "'toggle'"] {
+            assert!(expr.contains(event), "probe misses {event}: {expr}");
+        }
+        assert!(
+            expr.contains("ev:0"),
+            "probe seeds no event counter: {expr}"
+        );
+        assert!(
+            expr.contains(",true)}"),
+            "listeners must use capture phase (non-bubbling toggle): {expr}"
+        );
+        // `click` is not counted — dispatch alone isn't an effect.
+        assert!(!expr.contains("'click'"), "probe counts click: {expr}");
     }
 
     #[test]
