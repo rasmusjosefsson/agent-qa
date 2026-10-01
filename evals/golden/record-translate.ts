@@ -18,6 +18,10 @@ const textLoc = (text: unknown) => ({
   raw: { kind: "text", value: text },
   reason: "visible text recorded by golden runner",
 });
+const xpathLoc = (expr: unknown) => ({
+  raw: { kind: "xpath", value: expr },
+  reason: "xpath recorded by golden runner",
+});
 const roleLoc = (role: unknown, name: unknown) => ({ role, name });
 const doStep = (intent: string, body: Record<string, unknown>): RecordDraft => [
   "do",
@@ -51,6 +55,8 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
       switch (p.method) {
         case "clickSelector":
           return doStep(intent, { verb: "click", on: css(args[0]) });
+        case "clickXpath":
+          return doStep(intent, { verb: "click", on: xpathLoc(args[0]) });
         case "clickByText":
         case "clickText":
           return doStep(intent, { verb: "click", on: textLoc(args[0]) });

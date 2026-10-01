@@ -68,6 +68,7 @@ describe("toRecordDraft — emitted verbs are shipped", () => {
   const payloads: Array<[string, unknown]> = [
     ["navigation", { route: "https://example.com" }],
     ["action", { method: "clickSelector", args: ["#a"] }],
+    ["action", { method: "clickXpath", args: ["//a"] }],
     ["action", { method: "clickText", args: ["Save"] }],
     ["action", { method: "clickRole", args: ["button", "Save"] }],
     ["action", { method: "clickScopedRole", args: ["#c", "checkbox", "All"] }],
