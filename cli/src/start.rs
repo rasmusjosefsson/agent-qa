@@ -251,7 +251,13 @@ fn start(opts: &Opts) -> Result<StartSummary> {
         }
         let js_path = crate::mock::write_init_script(&opts.session_name, &scenario_dir)
             .with_context(|| "mock seed: write init script")?;
-        std::env::set_var("AGENT_BROWSER_INIT_SCRIPTS", &js_path);
+        // Merge over any pre-set paths — replay's wiring does the same;
+        // overwriting would drop the caller's own init scripts.
+        let merged = crate::net_tap::merge_init_scripts(
+            std::env::var("AGENT_BROWSER_INIT_SCRIPTS").ok().as_deref(),
+            &[js_path.as_path()],
+        );
+        std::env::set_var("AGENT_BROWSER_INIT_SCRIPTS", merged);
         eprintln!("[v2-record] mock init script {}", js_path.display());
     }
     let mut summary = StartSummary {
@@ -425,10 +431,12 @@ mod tests {
         let body = fs::read_to_string(&init).unwrap();
         assert!(body.contains("https://x/api/u"), "HAR URL seeded");
         assert!(body.contains("Failed to fetch (offline)"), "strict mode on");
-        assert_eq!(
-            std::env::var("AGENT_BROWSER_INIT_SCRIPTS").unwrap(),
-            init.display().to_string(),
-            "the launch env registers the init script"
+        let registered = std::env::var("AGENT_BROWSER_INIT_SCRIPTS").unwrap();
+        assert!(
+            registered
+                .split(',')
+                .any(|p| p == init.display().to_string()),
+            "the launch env registers the init script, got {registered}"
         );
         std::env::remove_var("AGENT_BROWSER_INIT_SCRIPTS");
         std::env::remove_var(paths::SCENARIOS_DIR_ENV);

@@ -34,6 +34,9 @@ All notable changes to agent-qa are documented here. This project follows
 - Record-side click probe no longer false-warns "no observable effect"
   on `check`/`uncheck`/option picks — it counts capture-phase
   `input`/`change`/`submit`/`toggle` events like the replay probe.
+- `start --mock-from`/`--offline` no longer clobbers a caller-set
+  `AGENT_BROWSER_INIT_SCRIPTS` — the mock init script is merged into
+  the path list like replay does.
 
 ### Performance
 
@@ -43,6 +46,9 @@ All notable changes to agent-qa are documented here. This project follows
   (~700ms) after a short grace window — replaying DOM-only clicks
   ~2x faster. Navigation, ajax, or untapped (warm) sessions fall back
   to the same `networkidle` wait as before.
+- Post-navigation `networkidle` waits (`goto`, the settle fallback, and
+  a bare `wait` step) are now bounded to 5s — an analytics/beacon-heavy
+  page that never goes idle no longer stalls a run ~30s per navigation.
 
 ## [0.1.0] - 2026-09-28
 
