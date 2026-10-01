@@ -1,6 +1,6 @@
 // web/src/features/chat/BrowserPane.tsx
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ChevronLeftIcon, ChevronRightIcon, Loader2Icon, RotateCwIcon } from 'lucide-react'
+import { ChevronLeftIcon, ChevronRightIcon, GlobeIcon, Loader2Icon, RotateCwIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 type Status = { text: string; tone: 'idle' | 'busy' | 'ok' | 'err' }
@@ -212,6 +212,9 @@ export function BrowserPane({ available, chatId, navigate, initialSession }: Bro
     }
   }, [available, effective])
 
+  // Connected, but the tab has no address yet (about:blank).
+  const blankTab = phase === 'live' && !url.trim()
+
   async function browserAction(payload: Record<string, unknown>) {
     try {
       const res = await navigate({ ...payload, session: sessionRef.current })
@@ -244,7 +247,7 @@ export function BrowserPane({ available, chatId, navigate, initialSession }: Bro
             onChange={(e) => setUrl(e.target.value)}
             spellCheck={false}
             placeholder="Enter a URL to drive the agent's browser…"
-            className="w-full rounded-md border border-border bg-background px-2 py-1 text-xs outline-none focus:border-ring"
+            className="h-7 w-full rounded-full border border-border bg-muted/50 px-3 font-mono text-[11px] outline-none transition-colors focus:border-primary/50 focus:bg-card focus:ring-3 focus:ring-primary/10"
           />
         </form>
         <span
@@ -252,8 +255,8 @@ export function BrowserPane({ available, chatId, navigate, initialSession }: Bro
             // Fixed min-width + right-align so swapping status text
             // (idle ↔ connecting… ↔ live) never reflows the header / URL bar.
             'shrink-0 rounded px-1.5 py-0.5 text-right text-[10px] font-medium uppercase tracking-wide tabular-nums min-w-[6rem]',
-            status.tone === 'ok' && 'text-emerald-400',
-            status.tone === 'busy' && 'text-amber-400',
+            status.tone === 'ok' && 'text-success',
+            status.tone === 'busy' && 'text-warning',
             status.tone === 'err' && 'text-destructive',
             status.tone === 'idle' && 'text-muted-foreground'
           )}
@@ -261,22 +264,48 @@ export function BrowserPane({ available, chatId, navigate, initialSession }: Bro
           {autoRecording ? `rec · ${status.text}` : status.text}
         </span>
       </div>
-      <div className="relative flex min-h-0 flex-1 items-center justify-center bg-background">
-        <canvas ref={canvasRef} width={1280} height={800} className="max-h-full max-w-full object-contain" />
+      <div className="aqa-dots relative flex min-h-0 flex-1 items-center justify-center bg-muted/30 p-3">
+        <canvas
+          ref={canvasRef}
+          width={1280}
+          height={800}
+          className={cn(
+            'max-h-full max-w-full rounded-md object-contain shadow-sm ring-1 ring-border',
+            // A blank tab streams as a black frame; keep it hidden behind the
+            // "ready" state until a page has an address.
+            (phase !== 'live' || blankTab) && 'invisible'
+          )}
+        />
         {phase === 'connecting' && (
-          <div className="absolute inset-0 flex items-center justify-center gap-2 text-xs text-muted-foreground">
-            <Loader2Icon className="size-4 animate-spin" />
-            Connecting to the browser…
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-4 py-3 text-xs text-muted-foreground shadow-sm">
+              <Loader2Icon className="size-4 animate-spin text-primary" />
+              Connecting to the browser…
+            </div>
           </div>
         )}
-        {phase === 'idle' && (
-          <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-xs text-muted-foreground">
-            No page open yet — type a URL above, or ask the agent to open one.
+        {(phase === 'idle' || blankTab) && (
+          <div className="absolute inset-0 flex items-center justify-center p-6">
+            <div className="flex max-w-xs flex-col items-center gap-3 text-center">
+              <div className="grid size-11 place-items-center rounded-xl bg-primary/10 text-primary">
+                <GlobeIcon className="size-5" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold tracking-tight text-foreground">
+                  {blankTab ? 'Browser ready' : 'No page open yet'}
+                </div>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  Type a URL above, or ask the agent to open a page. You&apos;ll watch it here as it happens.
+                </p>
+              </div>
+            </div>
           </div>
         )}
         {phase === 'off' && (
-          <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-xs text-muted-foreground">
-            Live browser unavailable — launch via the agent-qa CLI.
+          <div className="absolute inset-0 flex items-center justify-center p-6">
+            <div className="max-w-xs rounded-xl border border-border bg-card px-4 py-3 text-center text-xs leading-relaxed text-muted-foreground shadow-sm">
+              Live browser unavailable — launch via the agent-qa CLI.
+            </div>
           </div>
         )}
       </div>
@@ -291,7 +320,7 @@ function NavBtn({ icon, title, onClick }: { icon: ReactNode; title: string; onCl
       title={title}
       aria-label={title}
       onClick={onClick}
-      className="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground"
+      className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
     >
       {icon}
     </button>

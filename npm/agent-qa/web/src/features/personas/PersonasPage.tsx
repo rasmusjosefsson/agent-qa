@@ -14,6 +14,8 @@ import {
 } from '@/components/ui/dialog'
 import { getPersonas, upsertPersona, deletePersona } from '@/lib/run-config-api'
 import type { PersonaRecord } from './types'
+import { PageHeader, PageError } from '@/components/page-header'
+import { EmptyState, LoadingState } from '@/components/empty-state'
 
 function slugify(s: string): string {
   return (
@@ -49,114 +51,123 @@ export function PersonasPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3">
-        <div>
-          <h1 className="text-base font-semibold tracking-tight">Personas</h1>
-          <p className="text-xs text-muted-foreground">
+      <PageHeader
+        icon={UsersIcon}
+        title="Personas"
+        description={
+          <>
             A login a test runs as — a profile plus the credentials it signs in with.
-          </p>
-        </div>
-        <Button size="sm" onClick={() => setEditing('new')}>
-          <PlusIcon /> New persona
-        </Button>
-      </div>
+          </>
+        }
+        actions={
+          <>
+            <Button size="sm" onClick={() => setEditing('new')}>
+              <PlusIcon /> New persona
+            </Button>
+          </>
+        }
+      />
 
       {err && (
-        <div className="border-b border-destructive/30 bg-destructive/10 px-5 py-1.5 text-xs text-destructive">
-          {err}
-        </div>
+        <PageError>{err}</PageError>
       )}
 
       <div className="min-h-0 flex-1 overflow-auto">
         {personas === null ? (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            <Loader2Icon className="mr-2 size-4 animate-spin" /> Loading…
-          </div>
+          <LoadingState>Loading…</LoadingState>
         ) : personas.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-            <UsersIcon className="size-8 text-muted-foreground/50" />
-            <div>
-              <div className="text-sm font-medium">No personas yet</div>
-              <p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">
+          <EmptyState
+            icon={UsersIcon}
+            title="No personas yet"
+            description={
+              <>
                 A persona is a login: a profile + the credentials it signs in with (typed in, or
                 pointed at a vault).
-              </p>
-            </div>
-            <Button size="sm" onClick={() => setEditing('new')}>
-              <PlusIcon /> New persona
-            </Button>
-          </div>
+              </>
+            }
+            action={
+              <>
+                <Button size="sm" onClick={() => setEditing('new')}>
+                  <PlusIcon /> New persona
+                </Button>
+              </>
+            }
+          />
         ) : (
-          <table className="w-full text-sm">
-            <thead className="sticky top-0 z-10 bg-background">
-              <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
-                <th className="px-5 py-2 font-medium">Name</th>
-                <th className="px-3 py-2 font-medium">Profile</th>
-                <th className="px-3 py-2 font-medium">Credentials</th>
-                <th className="px-3 py-2 font-medium" />
-              </tr>
-            </thead>
-            <tbody>
-              {personas.map((p) => {
-                const ro = !!p.readOnly
-                return (
-                  <tr
-                    key={p.id}
-                    onClick={() => setEditing(ro ? { seed: p } : p)}
-                    className="cursor-pointer border-b border-border/60 transition-colors hover:bg-muted/40"
-                  >
-                    <td className="px-5 py-2.5">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-foreground">{p.name}</span>
-                        {ro && (
-                          <span className="shrink-0 rounded-sm border border-border bg-muted/50 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                            from {p.source}
-                          </span>
-                        )}
-                      </div>
-                      {p.description && (
-                        <div className="truncate text-xs text-muted-foreground">{p.description}</div>
-                      )}
-                    </td>
-                    <td className="px-3 py-2.5 font-mono text-[11px] text-muted-foreground">
-                      {p.profile || '—'}
-                    </td>
-                    <td className="px-3 py-2.5 text-muted-foreground">
-                      {Object.keys(p.credentials?.entries || {}).length} keys
-                    </td>
-                    <td className="px-3 py-2.5 text-right">
-                      {ro ? (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-7"
-                          title="Clone to an editable copy"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setEditing({ seed: p })
-                          }}
-                        >
-                          <CopyIcon className="size-4" />
-                        </Button>
-                      ) : (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-7"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            void remove(p.id)
-                          }}
-                        >
-                          <Trash2Icon className="size-4" />
-                        </Button>
-                      )}
-                    </td>
+          <div className="p-5">
+            <div className="aqa-table-card aqa-elevated">
+              <table className="aqa-table w-full text-sm">
+                <thead className="sticky top-0 z-10 bg-background">
+                  <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                    <th className="px-5 py-2 font-medium">Name</th>
+                    <th className="px-3 py-2 font-medium">Profile</th>
+                    <th className="px-3 py-2 font-medium">Credentials</th>
+                    <th className="px-3 py-2 font-medium" />
                   </tr>
-                )
-              })}
-            </tbody>
-          </table>
+                </thead>
+                <tbody>
+                  {personas.map((p) => {
+                    const ro = !!p.readOnly
+                    return (
+                      <tr
+                        key={p.id}
+                        onClick={() => setEditing(ro ? { seed: p } : p)}
+                        className="cursor-pointer border-b border-border/60 transition-colors hover:bg-muted/40"
+                      >
+                        <td className="px-5 py-2.5">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-foreground">{p.name}</span>
+                            {ro && (
+                              <span className="shrink-0 rounded-sm border border-border bg-muted/50 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                                from {p.source}
+                              </span>
+                            )}
+                          </div>
+                          {p.description && (
+                            <div className="truncate text-xs text-muted-foreground">{p.description}</div>
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5 font-mono text-[11px] text-muted-foreground">
+                          {p.profile || '—'}
+                        </td>
+                        <td className="px-3 py-2.5 text-muted-foreground">
+                          {Object.keys(p.credentials?.entries || {}).length} keys
+                        </td>
+                        <td className="px-3 py-2.5 text-right">
+                          {ro ? (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-7"
+                              title="Clone to an editable copy"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setEditing({ seed: p })
+                              }}
+                            >
+                              <CopyIcon className="size-4" />
+                            </Button>
+                          ) : (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-7"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                void remove(p.id)
+                              }}
+                            >
+                              <Trash2Icon className="size-4" />
+                            </Button>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
         )}
       </div>
 

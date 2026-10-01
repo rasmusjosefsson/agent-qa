@@ -10,9 +10,9 @@ import { relRunTime } from '../rows'
 import type { RunsApi } from '../useRuns'
 
 const OUTCOME_TONE: Record<string, string> = {
-  CHANGED: 'bg-amber-500/15 text-amber-400',
-  'ONLY-A': 'bg-sky-500/15 text-sky-400',
-  'ONLY-B': 'bg-sky-500/15 text-sky-400',
+  CHANGED: 'bg-warning/15 text-warning',
+  'ONLY-A': 'bg-info/15 text-info',
+  'ONLY-B': 'bg-info/15 text-info',
 }
 
 function OutcomeBadge({ outcome }: { outcome: string }) {

@@ -1,6 +1,7 @@
 // web/src/features/chat/components/PromptInput.tsx
 import { useEffect, useRef, type KeyboardEvent } from 'react'
 import type { ModelInfo } from '@/lib/types'
+import { ArrowUpIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -63,7 +64,7 @@ export function PromptInput(props: PromptInputProps) {
 
   return (
     <div className="bg-background px-3 pb-3 pt-1">
-      <div className="rounded-xl border border-border bg-card shadow-sm transition-shadow focus-within:border-ring/60 focus-within:ring-2 focus-within:ring-ring/20">
+      <div className="aqa-elevated rounded-2xl border border-border bg-card transition-all focus-within:border-primary/40 focus-within:ring-4 focus-within:ring-primary/10">
       <textarea
         ref={taRef}
         value={value}
@@ -127,7 +128,7 @@ export function PromptInput(props: PromptInputProps) {
             </Button>
           )}
           <Button type="button" size="sm" className="rounded-lg font-medium" onClick={onSubmit} disabled={!available || !value.trim()}>
-            Send
+            Send <ArrowUpIcon />
           </Button>
         </div>
       </div>

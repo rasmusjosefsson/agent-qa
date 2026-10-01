@@ -14,6 +14,8 @@ import {
 } from '@/components/ui/dialog'
 import { getEnvironments, upsertEnvironment, deleteEnvironment } from '@/lib/run-config-api'
 import type { EnvironmentRecord } from './types'
+import { PageHeader, PageError } from '@/components/page-header'
+import { EmptyState, LoadingState } from '@/components/empty-state'
 
 function slugify(s: string): string {
   return (
@@ -48,112 +50,121 @@ export function EnvironmentsPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3">
-        <div>
-          <h1 className="text-base font-semibold tracking-tight">Environments</h1>
-          <p className="text-xs text-muted-foreground">
+      <PageHeader
+        icon={GlobeIcon}
+        title="Environments"
+        description={
+          <>
             Where a test runs — a named target (base URL + values) passed to a run as params.
-          </p>
-        </div>
-        <Button size="sm" onClick={() => setEditing('new')}>
-          <PlusIcon /> New environment
-        </Button>
-      </div>
+          </>
+        }
+        actions={
+          <>
+            <Button size="sm" onClick={() => setEditing('new')}>
+              <PlusIcon /> New environment
+            </Button>
+          </>
+        }
+      />
 
       {err && (
-        <div className="border-b border-destructive/30 bg-destructive/10 px-5 py-1.5 text-xs text-destructive">
-          {err}
-        </div>
+        <PageError>{err}</PageError>
       )}
 
       <div className="min-h-0 flex-1 overflow-auto">
         {envs === null ? (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            <Loader2Icon className="mr-2 size-4 animate-spin" /> Loading…
-          </div>
+          <LoadingState>Loading…</LoadingState>
         ) : envs.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-            <GlobeIcon className="size-8 text-muted-foreground/50" />
-            <div>
-              <div className="text-sm font-medium">No environments yet</div>
-              <p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">
+          <EmptyState
+            icon={GlobeIcon}
+            title="No environments yet"
+            description={
+              <>
                 An environment names a target (e.g. Staging → its base URL) so the same test can run
                 against different deployments.
-              </p>
-            </div>
-            <Button size="sm" onClick={() => setEditing('new')}>
-              <PlusIcon /> New environment
-            </Button>
-          </div>
+              </>
+            }
+            action={
+              <>
+                <Button size="sm" onClick={() => setEditing('new')}>
+                  <PlusIcon /> New environment
+                </Button>
+              </>
+            }
+          />
         ) : (
-          <table className="w-full text-sm">
-            <thead className="sticky top-0 z-10 bg-background">
-              <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
-                <th className="px-5 py-2 font-medium">Name</th>
-                <th className="px-3 py-2 font-medium">Base URL</th>
-                <th className="px-3 py-2 font-medium">Params</th>
-                <th className="px-3 py-2 font-medium" />
-              </tr>
-            </thead>
-            <tbody>
-              {envs.map((e) => {
-                const ro = !!e.readOnly
-                return (
-                  <tr
-                    key={e.id}
-                    onClick={() => setEditing(ro ? { seed: e } : e)}
-                    className="cursor-pointer border-b border-border/60 transition-colors hover:bg-muted/40"
-                  >
-                    <td className="px-5 py-2.5">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-foreground">{e.name}</span>
-                        {ro && (
-                          <span className="shrink-0 rounded-sm border border-border bg-muted/50 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                            from {e.source}
-                          </span>
-                        )}
-                      </div>
-                      {e.description && (
-                        <div className="truncate text-xs text-muted-foreground">{e.description}</div>
-                      )}
-                    </td>
-                    <td className="px-3 py-2.5 font-mono text-[11px] text-muted-foreground">
-                      {e.baseUrl || '—'}
-                    </td>
-                    <td className="px-3 py-2.5 text-muted-foreground">{Object.keys(e.params).length}</td>
-                    <td className="px-3 py-2.5 text-right">
-                      {ro ? (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-7"
-                          title="Clone to an editable copy"
-                          onClick={(ev) => {
-                            ev.stopPropagation()
-                            setEditing({ seed: e })
-                          }}
-                        >
-                          <CopyIcon className="size-4" />
-                        </Button>
-                      ) : (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-7"
-                          onClick={(ev) => {
-                            ev.stopPropagation()
-                            void remove(e.id)
-                          }}
-                        >
-                          <Trash2Icon className="size-4" />
-                        </Button>
-                      )}
-                    </td>
+          <div className="p-5">
+            <div className="aqa-table-card aqa-elevated">
+              <table className="aqa-table w-full text-sm">
+                <thead className="sticky top-0 z-10 bg-background">
+                  <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                    <th className="px-5 py-2 font-medium">Name</th>
+                    <th className="px-3 py-2 font-medium">Base URL</th>
+                    <th className="px-3 py-2 font-medium">Params</th>
+                    <th className="px-3 py-2 font-medium" />
                   </tr>
-                )
-              })}
-            </tbody>
-          </table>
+                </thead>
+                <tbody>
+                  {envs.map((e) => {
+                    const ro = !!e.readOnly
+                    return (
+                      <tr
+                        key={e.id}
+                        onClick={() => setEditing(ro ? { seed: e } : e)}
+                        className="cursor-pointer border-b border-border/60 transition-colors hover:bg-muted/40"
+                      >
+                        <td className="px-5 py-2.5">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-foreground">{e.name}</span>
+                            {ro && (
+                              <span className="shrink-0 rounded-sm border border-border bg-muted/50 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                                from {e.source}
+                              </span>
+                            )}
+                          </div>
+                          {e.description && (
+                            <div className="truncate text-xs text-muted-foreground">{e.description}</div>
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5 font-mono text-[11px] text-muted-foreground">
+                          {e.baseUrl || '—'}
+                        </td>
+                        <td className="px-3 py-2.5 text-muted-foreground">{Object.keys(e.params).length}</td>
+                        <td className="px-3 py-2.5 text-right">
+                          {ro ? (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-7"
+                              title="Clone to an editable copy"
+                              onClick={(ev) => {
+                                ev.stopPropagation()
+                                setEditing({ seed: e })
+                              }}
+                            >
+                              <CopyIcon className="size-4" />
+                            </Button>
+                          ) : (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-7"
+                              onClick={(ev) => {
+                                ev.stopPropagation()
+                                void remove(e.id)
+                              }}
+                            >
+                              <Trash2Icon className="size-4" />
+                            </Button>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
         )}
       </div>
 

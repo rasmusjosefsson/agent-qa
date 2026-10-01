@@ -29,16 +29,18 @@ const runConfig: RunConfig = {
 }
 
 describe('CenterPane scenario controls', () => {
-  it('keeps replay controls in a full-width wrapping row until the pane is wide', () => {
+  it('puts replay settings in their own wrapping row under the title', () => {
     const html = renderToStaticMarkup(
       <CenterPane runs={scenarioRuns()} onReplay={() => {}} runConfig={runConfig} />
     )
 
     expect(html).toContain('Replay</button>')
-    expect(html).toContain('@3xl:flex-row')
-    expect(html).toContain('w-full min-w-0 flex-wrap')
-    expect(html).toContain('max-w-full flex-1')
-    expect(html).not.toContain('@md:flex-row')
+    // Settings row wraps instead of overflowing a narrow pane, and its
+    // selects can shrink below their content width.
+    expect(html).toContain('flex flex-wrap items-center gap-x-2')
+    expect(html).toContain('aria-label="Replay as persona"')
+    expect(html).toContain('aria-label="Replay on environment"')
+    expect(html).toContain('min-w-0 max-w-[16rem]')
   })
 
   it('warns when setup has reported no progress for over a minute', () => {

@@ -28,12 +28,12 @@ import { cleanSummary, fmtRunTime, relRunTime, scenarioVerdict, verdictTone } fr
 import type { RunsApi } from '../useRuns'
 
 const TONE: Record<string, string> = {
-  pass: 'bg-emerald-500/15 text-emerald-400',
+  pass: 'bg-success/15 text-success',
   fail: 'bg-destructive/15 text-destructive',
-  running: 'bg-amber-500/15 text-amber-400',
-  flaky: 'bg-amber-500/15 text-amber-400',
-  slow: 'bg-sky-500/15 text-sky-400',
-  chronic: 'bg-violet-500/15 text-violet-400',
+  running: 'bg-warning/15 text-warning',
+  flaky: 'bg-warning/15 text-warning',
+  slow: 'bg-info/15 text-info',
+  chronic: 'bg-violet-500/12 text-violet-600 dark:text-violet-300',
 }
 
 function HealthBadges({ sid, runs }: { sid: string; runs: RunsApi }) {
@@ -60,7 +60,7 @@ function HealthBadges({ sid, runs }: { sid: string; runs: RunsApi }) {
 
 function Badge({ tone, title, children }: { tone: string; title?: string; children: React.ReactNode }) {
   return (
-    <span data-qa-volatile title={title} className={cn('shrink-0 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide', TONE[tone] || 'bg-muted text-muted-foreground')}>
+    <span data-qa-volatile title={title} className={cn('shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide', TONE[tone] || 'bg-muted text-muted-foreground')}>
       {children}
     </span>
   )
@@ -130,8 +130,8 @@ function CrawlDialog({ runs }: { runs: RunsApi }) {
 export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
   const { scenarios, expanded, runsBySid, sel } = runs
   return (
-    <nav className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="flex items-center justify-between border-b border-border px-3 py-2.5">
+    <nav className="flex h-full min-h-0 flex-col overflow-hidden bg-sidebar/60">
+      <div className="flex h-11 items-center justify-between border-b border-border px-3">
         <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Scenarios</span>
         <div className="flex items-center gap-1">
           <CrawlDialog runs={runs} />
@@ -161,7 +161,7 @@ export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
           const list = runsBySid[sc.sid]
           return (
             <li key={sc.sid} className="group">
-              <div className="flex items-center rounded-lg transition-colors hover:bg-muted/60">
+              <div className={cn('flex items-center rounded-lg transition-colors', open ? 'bg-accent/60 shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--primary)_12%,transparent)]' : 'hover:bg-muted/70')}>
                 <button
                   type="button"
                   onClick={() => void runs.toggleScenario(sc.sid)}
@@ -224,7 +224,7 @@ export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
                 </AlertDialog>
               </div>
               {open && (
-                <div className="ml-2 mt-0.5 border-l border-border pl-2">
+                <div className="ml-3.5 mt-1 mb-1.5 space-y-0.5 border-l border-border pl-2">
                   {!list && <div className="px-1 py-1 text-xs text-muted-foreground">loading…</div>}
                   {list && list.length === 0 && <div className="px-1 py-1 text-xs text-muted-foreground">No replays yet</div>}
                   {list &&
@@ -236,8 +236,8 @@ export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
                         <div
                           key={r.runId}
                           className={cn(
-                            'group/run flex items-center rounded',
-                            selected ? 'bg-muted' : 'hover:bg-muted/50'
+                            'group/run flex items-center rounded-md transition-colors',
+                            selected ? 'bg-card shadow-sm ring-1 ring-primary/20' : 'hover:bg-muted/60'
                           )}
                         >
                           <button

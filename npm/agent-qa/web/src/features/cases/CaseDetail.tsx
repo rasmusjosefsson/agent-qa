@@ -245,16 +245,16 @@ export function CaseDetail({ id }: { id: string }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* header */}
-      <div className="flex items-center gap-3 border-b border-border px-4 py-2.5">
+      <div className="flex items-center gap-3 border-b border-border px-5 py-3">
         <BackToCases />
         <Input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder="Untitled case"
-          className="h-8 max-w-xl border-transparent bg-transparent px-1 text-base font-semibold shadow-none focus-visible:border-border"
+          className="h-8 max-w-xl border-transparent bg-transparent px-1.5 text-base font-semibold shadow-none transition-colors hover:bg-muted/50 focus-visible:border-primary/40 focus-visible:bg-card dark:bg-transparent dark:hover:bg-muted/50 dark:focus-visible:bg-card"
         />
         <div className="ml-auto flex items-center gap-2">
-          {flash && <span className="text-xs text-emerald-400">{flash}</span>}
+          {flash && <span className="text-xs text-success">{flash}</span>}
           {loaded.scenarioSid && (
             <>
               <Button size="sm" variant="ghost" onClick={() => navigate('/')}>
@@ -336,7 +336,7 @@ export function CaseDetail({ id }: { id: string }) {
                       key={t}
                       className="flex items-center gap-3 border-b border-border/60 px-3 py-2 last:border-0"
                     >
-                      <span className="w-40 shrink-0 font-mono text-xs text-pink-400">[{t}]</span>
+                      <span className="w-40 shrink-0 font-mono text-xs text-primary">[{t}]</span>
                       <Input
                         value={d.sensitive ? '' : String(d.default ?? '')}
                         onChange={(e) => setInput(t, { default: e.target.value })}
@@ -368,7 +368,7 @@ export function CaseDetail({ id }: { id: string }) {
         </div>
 
         {/* properties */}
-        <aside className="hidden w-72 shrink-0 flex-col gap-4 overflow-auto border-l border-border px-4 py-4 lg:flex">
+        <aside className="hidden w-72 shrink-0 flex-col gap-4 overflow-auto border-l border-border bg-sidebar/60 px-4 py-4 lg:flex">
           <Prop label="Status">
             <StatusBadge scenario={scenario} />
           </Prop>
@@ -440,7 +440,7 @@ function BackToCases() {
     <a
       href="/cases"
       onClick={onClick}
-      className="flex size-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+      className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground shadow-xs transition-colors hover:text-foreground"
       aria-label="Back to cases"
     >
       <ArrowLeftIcon className="size-4" />

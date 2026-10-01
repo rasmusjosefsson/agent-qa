@@ -18,7 +18,7 @@ export function BrowserModeToggle({
       disabled={disabled}
       onClick={() => onChange(!headed)}
       title="Headless by default. Changing mode restarts the selected browser session."
-      className="flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-border bg-background px-2 text-xs text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+      className="flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-card px-2 text-xs font-medium text-foreground shadow-xs transition-colors hover:border-primary/30 disabled:cursor-not-allowed disabled:opacity-50"
     >
       <MonitorIcon className="size-3.5" />
       <span>{headed ? 'Browser visible' : 'Headless'}</span>

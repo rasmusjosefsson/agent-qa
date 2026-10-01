@@ -140,7 +140,7 @@ export function SetDetail({ id }: { id: string }) {
           <Input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="h-8 border-transparent bg-transparent px-1 text-base font-semibold shadow-none focus-visible:border-border"
+            className="h-8 border-transparent bg-transparent px-1.5 text-base font-semibold shadow-none transition-colors hover:bg-muted/50 focus-visible:border-primary/40 focus-visible:bg-card dark:bg-transparent dark:hover:bg-muted/50 dark:focus-visible:bg-card"
           />
           <div className="px-1 font-mono text-[11px] text-muted-foreground">
             {set.id} · {members.length} {members.length === 1 ? 'case' : 'cases'}

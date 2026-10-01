@@ -4,16 +4,9 @@ import { rowLabel } from '../compose'
 import { cn } from '@/lib/utils'
 import { useState, type ReactNode } from 'react'
 import { ArrowUpIcon, ArrowDownIcon, XIcon, PencilIcon, CameraIcon, PlayIcon } from 'lucide-react'
+import { VERB_TONE } from '@/lib/verb-tone'
 
-const BADGE: Record<string, string> = {
-  nav: 'bg-sky-500/15 text-sky-400',
-  click: 'bg-violet-500/15 text-violet-400',
-  fill: 'bg-emerald-500/15 text-emerald-400',
-  press: 'bg-amber-500/15 text-amber-400',
-  wait: 'bg-zinc-500/15 text-zinc-400',
-  assert: 'bg-rose-500/15 text-rose-400',
-  action: 'bg-zinc-500/15 text-zinc-400',
-}
+const BADGE = VERB_TONE
 
 // The editable draft of a step is its JSON minus the recorder-assigned
 // id/kind — same contract as `record-step` / `buffer edit`.

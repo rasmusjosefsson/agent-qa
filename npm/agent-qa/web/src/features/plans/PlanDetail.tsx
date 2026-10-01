@@ -352,7 +352,7 @@ export function PlanDetail({ id }: { id: string }) {
           <Input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="h-8 border-transparent bg-transparent px-1 text-base font-semibold shadow-none focus-visible:border-border"
+            className="h-8 border-transparent bg-transparent px-1.5 text-base font-semibold shadow-none transition-colors hover:bg-muted/50 focus-visible:border-primary/40 focus-visible:bg-card dark:bg-transparent dark:hover:bg-muted/50 dark:focus-visible:bg-card"
           />
           <div className="px-1 font-mono text-[11px] text-muted-foreground">
             {id} · {members.length} {members.length === 1 ? 'case' : 'cases'}
@@ -492,9 +492,9 @@ export function PlanDetail({ id }: { id: string }) {
             </div>
 
             <div className="flex flex-wrap gap-2 text-xs">
-              <Pill label="Passed" n={rollup.pass} tone="text-emerald-400" />
+              <Pill label="Passed" n={rollup.pass} tone="text-success" />
               <Pill label="Failed" n={rollup.fail} tone="text-destructive" />
-              <Pill label="Running" n={rollup.running} tone="text-amber-300" />
+              <Pill label="Running" n={rollup.running} tone="text-warning" />
               <Pill label="Not recorded" n={rollup.none} tone="text-muted-foreground" />
             </div>
 
@@ -524,14 +524,14 @@ export function PlanDetail({ id }: { id: string }) {
                         </button>
                         {healed > 0 && (
                           <span
-                            className="flex shrink-0 items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-400"
+                            className="flex shrink-0 items-center gap-1 rounded bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-warning"
                             title="The latest run passed/failed only after the auto-heal loop corrected a drifting locator — review the diff on the run."
                           >
                             <WrenchIcon className="size-3" />
                             {healed} healed
                           </span>
                         )}
-                        {progress && <span className="text-[11px] text-amber-400">{progress}</span>}
+                        {progress && <span className="text-[11px] text-warning">{progress}</span>}
                         {recorded && (
                           <button
                             onClick={() => void rerunCase(c)}
@@ -546,7 +546,7 @@ export function PlanDetail({ id }: { id: string }) {
                       </div>
                       {/* Live browser, inline under the case it belongs to. */}
                       {running && (
-                        <div className="h-52 border-t border-amber-500/30 bg-black/40 px-2 pb-2 pt-1">
+                        <div className="h-52 border-t border-warning/30 bg-muted/40 px-2 pb-2 pt-1">
                           <ReplayLive
                             sid={c.scenario!.sid}
                             onLightbox={(url, caption) => setLightbox({ url, caption })}
@@ -609,7 +609,7 @@ function RunSelect({
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none focus-visible:border-ring"
+      className="h-7 rounded-lg border border-border bg-card px-2 text-xs font-medium text-foreground shadow-xs outline-none transition-colors hover:border-primary/30 focus-visible:border-primary/50 focus-visible:ring-3 focus-visible:ring-primary/10 disabled:opacity-50"
     >
       <option value="">{placeholder}</option>
       {options.map((o) => (
@@ -623,7 +623,7 @@ function RunSelect({
 
 function Pill({ label, n, tone }: { label: string; n: number; tone: string }) {
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1">
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-1 shadow-xs">
       <span className={`font-semibold ${tone}`}>{n}</span>
       <span className="text-muted-foreground">{label}</span>
     </span>

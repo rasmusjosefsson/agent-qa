@@ -80,7 +80,7 @@ export function EditorPage() {
       <Group orientation="horizontal" defaultLayout={cols.defaultLayout} onLayoutChanged={cols.onLayoutChanged} className="min-h-0 flex-1">
         {/* left: session + steps + composer — flat sections divided by hairlines */}
         <Panel defaultSize="26" minSize="16%" className="min-h-0">
-          <div className="flex h-full min-h-0 flex-col overflow-auto">
+          <div className="flex h-full min-h-0 flex-col overflow-auto bg-sidebar/60">
           <SessionBox
             buffer={ed.buffer}
             scenarios={ed.scenarioSids}
@@ -96,7 +96,7 @@ export function EditorPage() {
           />
           <div className="border-b border-border p-3">
             <div className="mb-1 flex items-center justify-between px-1">
-              <span className="text-xs font-medium text-muted-foreground">Steps</span>
+              <span className="text-[10.5px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">Steps</span>
               <button
                 type="button"
                 title="Refresh"
@@ -165,7 +165,7 @@ export function EditorPage() {
       <div data-qa-volatile className="flex h-7 shrink-0 items-center justify-between gap-3 border-t border-border px-4 text-xs text-muted-foreground">
         <div className="truncate font-mono">{ed.scenariosRoot}</div>
         {ed.flashMsg && (
-          <div className={cn('shrink-0', ed.flashMsg.error ? 'text-destructive' : 'text-emerald-400')}>
+          <div className={cn('shrink-0', ed.flashMsg.error ? 'text-destructive' : 'text-success')}>
             {ed.flashMsg.text}
           </div>
         )}

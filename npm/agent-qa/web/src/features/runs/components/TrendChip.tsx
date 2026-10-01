@@ -34,7 +34,7 @@ export function TrendChip({ sid }: { sid: string }) {
       <span aria-hidden>·</span>
       <span aria-label="recent outcomes">
         {glyphs.map((g, i) => (
-          <span key={i} className={g === '✓' ? 'text-emerald-500' : 'text-rose-500'}>
+          <span key={i} className={g === '✓' ? 'text-success' : 'text-destructive'}>
             {g}
           </span>
         ))}

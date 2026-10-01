@@ -26,9 +26,9 @@ export function ElementPicker({
   )
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-2 p-3">
+    <div className="flex h-full min-h-0 flex-col gap-2 bg-sidebar/60 p-3">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-muted-foreground">Element picker</span>
+        <span className="text-[10.5px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">Element picker</span>
         <span className="flex items-center gap-2">
           <label
             className="flex items-center gap-1.5 text-[11px] text-muted-foreground"
@@ -76,7 +76,7 @@ export function ElementPicker({
                 n.pickable ? 'cursor-pointer hover:bg-muted' : 'opacity-60'
               )}
             >
-              <span className="text-sky-400">{n.role || ''}</span>
+              <span className="text-info">{n.role || ''}</span>
               {n.name ? <span className="text-foreground"> “{n.name}”</span> : null}
             </li>
           ))}

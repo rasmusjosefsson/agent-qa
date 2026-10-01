@@ -14,6 +14,9 @@ import {
 import { getPlans, upsertPlan } from '@/lib/plans-api'
 import { navigate } from '@/router'
 import type { PlanWithCount } from './types'
+import { PageHeader, PageError } from '@/components/page-header'
+import { EmptyState, LoadingState } from '@/components/empty-state'
+import { TestFlow } from '@/components/test-flow'
 
 function slugify(s: string): string {
   return (
@@ -69,74 +72,85 @@ export function PlanList() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3">
-        <div>
-          <h1 className="text-base font-semibold tracking-tight">Test Plans</h1>
-          <p className="text-xs text-muted-foreground">
+      <PageHeader
+        icon={FolderTreeIcon}
+        title="Test Plans"
+        description={
+          <>
             Pick a scope of sets and cases, run it, and track each case's result.
-          </p>
-        </div>
-        <Button size="sm" onClick={() => setOpen(true)}>
-          <PlusIcon /> New plan
-        </Button>
-      </div>
+          </>
+        }
+        actions={
+          <>
+            <Button size="sm" onClick={() => setOpen(true)}>
+              <PlusIcon /> New plan
+            </Button>
+          </>
+        }
+      >
+        <TestFlow current="plans" />
+      </PageHeader>
 
       {err && (
-        <div className="border-b border-destructive/30 bg-destructive/10 px-5 py-1.5 text-xs text-destructive">
-          {err}
-        </div>
+        <PageError>{err}</PageError>
       )}
 
       <div className="min-h-0 flex-1 overflow-auto">
         {plans === null ? (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            <Loader2Icon className="mr-2 size-4 animate-spin" /> Loading plans…
-          </div>
+          <LoadingState>Loading plans…</LoadingState>
         ) : plans.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-            <FolderTreeIcon className="size-8 text-muted-foreground/50" />
-            <div>
-              <div className="text-sm font-medium">No test plans yet</div>
-              <p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">
+          <EmptyState
+            icon={FolderTreeIcon}
+            title="No test plans yet"
+            description={
+              <>
                 A plan is a runnable scope — assemble it from sets and individual cases, then run
                 them together.
-              </p>
-            </div>
-            <Button size="sm" onClick={() => setOpen(true)}>
-              <PlusIcon /> New plan
-            </Button>
-          </div>
+              </>
+            }
+            action={
+              <>
+                <Button size="sm" onClick={() => setOpen(true)}>
+                  <PlusIcon /> New plan
+                </Button>
+              </>
+            }
+          />
         ) : (
-          <table className="w-full text-sm">
-            <thead className="sticky top-0 z-10 bg-background">
-              <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
-                <th className="px-5 py-2 font-medium">Name</th>
-                <th className="px-3 py-2 font-medium">Scope</th>
-                <th className="px-3 py-2 font-medium">Cases</th>
-                <th className="px-3 py-2 font-medium">Updated</th>
-              </tr>
-            </thead>
-            <tbody>
-              {plans.map((p) => (
-                <tr
-                  key={p.id}
-                  onClick={() => gotoPlan(p.id)}
-                  className="cursor-pointer border-b border-border/60 transition-colors hover:bg-muted/40"
-                >
-                  <td className="px-5 py-2.5">
-                    <div className="font-medium text-foreground">{p.name}</div>
-                    <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">{p.id}</div>
-                  </td>
-                  <td className="px-3 py-2.5 text-muted-foreground">
-                    {p.scope.setIds.length} {p.scope.setIds.length === 1 ? 'set' : 'sets'} ·{' '}
-                    {p.scope.caseIds.length} direct
-                  </td>
-                  <td className="px-3 py-2.5 text-muted-foreground">{p.caseCount}</td>
-                  <td className="px-3 py-2.5 text-muted-foreground">{fmtAgo(p.updatedAt)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="p-5">
+            <div className="aqa-table-card aqa-elevated">
+              <table className="aqa-table w-full text-sm">
+                <thead className="sticky top-0 z-10 bg-background">
+                  <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                    <th className="px-5 py-2 font-medium">Name</th>
+                    <th className="px-3 py-2 font-medium">Scope</th>
+                    <th className="px-3 py-2 font-medium">Cases</th>
+                    <th className="px-3 py-2 font-medium">Updated</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {plans.map((p) => (
+                    <tr
+                      key={p.id}
+                      onClick={() => gotoPlan(p.id)}
+                      className="cursor-pointer border-b border-border/60 transition-colors hover:bg-muted/40"
+                    >
+                      <td className="px-5 py-2.5">
+                        <div className="font-medium text-foreground">{p.name}</div>
+                        <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">{p.id}</div>
+                      </td>
+                      <td className="px-3 py-2.5 text-muted-foreground">
+                        {p.scope.setIds.length} {p.scope.setIds.length === 1 ? 'set' : 'sets'} ·{' '}
+                        {p.scope.caseIds.length} direct
+                      </td>
+                      <td className="px-3 py-2.5 text-muted-foreground">{p.caseCount}</td>
+                      <td className="px-3 py-2.5 text-muted-foreground">{fmtAgo(p.updatedAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
         )}
       </div>
 

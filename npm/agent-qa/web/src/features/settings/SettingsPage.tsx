@@ -3,7 +3,7 @@
 // Values persist to <root>/_config/settings.json via /api/config/settings;
 // env vars override stored values and are flagged inline.
 import { useEffect, useState } from 'react'
-import { Loader2Icon, RefreshCwIcon } from 'lucide-react'
+import { Loader2Icon, RefreshCwIcon, Settings2Icon } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -21,6 +21,8 @@ import {
   type ChatBackend,
   type SettingsResponse,
 } from '@/lib/settings-api'
+import { PageHeader, PageError } from '@/components/page-header'
+import { LoadingState } from '@/components/empty-state'
 
 export function SettingsPage() {
   const [data, setData] = useState<SettingsResponse | null>(null)
@@ -61,44 +63,43 @@ export function SettingsPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3">
-        <div>
-          <h1 className="text-base font-semibold tracking-tight">Settings</h1>
-          <p className="text-xs text-muted-foreground">
+      <PageHeader
+        icon={Settings2Icon}
+        title="Settings"
+        description={
+          <>
             Workbench preferences, stored in <span className="font-mono">_config/settings.json</span>{' '}
             next to your scenarios. Environment variables override stored values.
-          </p>
-        </div>
-        <div className="flex items-center gap-1.5">
-          {saving && <Loader2Icon className="size-3.5 animate-spin text-muted-foreground" />}
-          {savedTick > 0 && !saving && !err && (
-            <span className="text-xs text-muted-foreground">Saved</span>
-          )}
-          <Button variant="ghost" size="sm" onClick={() => void load()}>
-            <RefreshCwIcon /> Refresh
-          </Button>
-        </div>
-      </div>
+          </>
+        }
+        actions={
+          <>
+            {saving && <Loader2Icon className="size-3.5 animate-spin text-muted-foreground" />}
+            {savedTick > 0 && !saving && !err && (
+              <span className="text-xs text-muted-foreground">Saved</span>
+            )}
+            <Button variant="ghost" size="sm" onClick={() => void load()}>
+              <RefreshCwIcon /> Refresh
+            </Button>
+          </>
+        }
+      />
 
       {err && (
-        <div className="border-b border-destructive/30 bg-destructive/10 px-5 py-1.5 text-xs text-destructive">
-          {err}
-        </div>
+        <PageError>{err}</PageError>
       )}
 
       <div className="min-h-0 flex-1 overflow-auto">
         {!data ? (
-          <div className="flex items-center gap-2 p-5 text-sm text-muted-foreground">
-            <Loader2Icon className="size-4 animate-spin" /> Loading settings…
-          </div>
+          <LoadingState>Loading settings…</LoadingState>
         ) : (
           <div className="mx-auto w-full max-w-2xl space-y-6 p-6">
             {/* Chat */}
             <section className="space-y-3">
-              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <div className="px-1 text-[10.5px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">
                 Chat
               </div>
-              <div className="rounded-md border border-border p-4">
+              <div className="aqa-elevated rounded-xl border border-border bg-card p-4">
                 <div className="flex items-center justify-between gap-4">
                   <div className="space-y-1">
                     <Label htmlFor="chat-backend">Agent backend</Label>
@@ -138,10 +139,10 @@ export function SettingsPage() {
 
             {/* Replay */}
             <section className="space-y-3">
-              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <div className="px-1 text-[10.5px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">
                 Replay
               </div>
-              <div className="rounded-md border border-border p-4">
+              <div className="aqa-elevated rounded-xl border border-border bg-card p-4">
                 <div className="flex items-center justify-between gap-4">
                   <div className="space-y-1">
                     <Label htmlFor="headed-default">Headed browser by default</Label>
@@ -162,18 +163,18 @@ export function SettingsPage() {
 
             {/* Paths */}
             <section className="space-y-3">
-              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <div className="px-1 text-[10.5px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">
                 Paths
               </div>
-              <div className="rounded-md border border-border p-4">
+              <div className="aqa-elevated rounded-xl border border-border bg-card p-4">
                 <dl className="space-y-2 text-xs">
                   <div className="flex justify-between gap-4">
-                    <dt className="text-muted-foreground">Scenario root</dt>
-                    <dd data-qa-volatile className="truncate font-mono">{data.root}</dd>
+                    <dt className="w-24 shrink-0 text-muted-foreground">Scenario root</dt>
+                    <dd data-qa-volatile className="min-w-0 flex-1 truncate font-mono" title={data.root}>{data.root}</dd>
                   </div>
                   <div className="flex justify-between gap-4">
-                    <dt className="text-muted-foreground">Settings file</dt>
-                    <dd data-qa-volatile className="truncate font-mono">{data.root}/_config/settings.json</dd>
+                    <dt className="w-24 shrink-0 text-muted-foreground">Settings file</dt>
+                    <dd data-qa-volatile className="min-w-0 flex-1 truncate font-mono" title={`${data.root}/_config/settings.json`}>{data.root}/_config/settings.json</dd>
                   </div>
                 </dl>
               </div>

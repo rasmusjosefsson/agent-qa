@@ -19,24 +19,15 @@ import {
   stepText,
   verbBadge,
   verbCat,
-  type VerbCat,
 } from '../rows'
 import type { RunsApi } from '../useRuns'
+import { VERB_TONE } from '@/lib/verb-tone'
 
-const VERB_TONE: Record<VerbCat, string> = {
-  nav: 'bg-sky-500/15 text-sky-400',
-  click: 'bg-indigo-500/15 text-indigo-400',
-  fill: 'bg-teal-500/15 text-teal-400',
-  press: 'bg-violet-500/15 text-violet-400',
-  assert: 'bg-rose-500/15 text-rose-400',
-  wait: 'bg-zinc-500/15 text-zinc-300',
-  action: 'bg-zinc-500/15 text-zinc-300',
-}
 
 const STATUS_TONE: Record<string, string> = {
-  pass: 'text-emerald-400',
+  pass: 'text-success',
   fail: 'text-destructive',
-  running: 'text-amber-400',
+  running: 'text-warning',
   pending: 'text-muted-foreground',
 }
 
@@ -95,37 +86,59 @@ export function CenterPane({
       : null
     return (
       <Pane>
-        <div className="flex flex-col items-stretch gap-3 border-b border-border px-5 py-3.5 @3xl:flex-row @3xl:items-center @3xl:justify-between">
-          <div className="min-w-0 @3xl:flex-1">
-            <h2 className="truncate text-[15px] font-semibold tracking-tight">{scenarioDef.intent || scenarioDef.id || 'Scenario'}</h2>
-            <div className="tnum mt-0.5 truncate text-xs text-muted-foreground">
-              {steps.length} step{steps.length === 1 ? '' : 's'} · recorded {fmtRunTime(sel.sid)}
-              {lastRun
-                ? ` · last run ${relRunTime(lastRun.runId)}${lastRun.summary ? ' · ' + cleanSummary(lastRun.summary) : ''}`
-                : ' · not yet replayed'}
-              {sel.sid && <TrendChip sid={sel.sid} />}
+        {/* Two rows: what this scenario is + the Replay action, then the
+            settings the next replay uses. */}
+        <div className="border-b border-border">
+          <div className="flex items-start gap-4 px-5 pt-4 pb-3">
+            <div className="min-w-0 flex-1">
+              <h2
+                className="line-clamp-2 text-[15px] font-semibold leading-snug tracking-tight"
+                title={scenarioDef.intent || scenarioDef.id || 'Scenario'}
+              >
+                {scenarioDef.intent || scenarioDef.id || 'Scenario'}
+              </h2>
+              <div className="tnum mt-1 truncate text-xs text-muted-foreground">
+                {steps.length} step{steps.length === 1 ? '' : 's'} · recorded {fmtRunTime(sel.sid)}
+                {lastRun
+                  ? ` · last run ${relRunTime(lastRun.runId)}${lastRun.summary ? ' · ' + cleanSummary(lastRun.summary) : ''}`
+                  : ' · not yet replayed'}
+                {sel.sid && <TrendChip sid={sel.sid} />}
+              </div>
+              {sel.sid && (
+                <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground opacity-50">{sel.sid}</div>
+              )}
             </div>
             {sel.sid && (
-              <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground opacity-50">{sel.sid}</div>
+              <button
+                type="button"
+                onClick={() => onReplay(sel.sid!)}
+                disabled={busy}
+                title={busy ? 'A replay is already running for this scenario' : undefined}
+                className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {busy ? (
+                  <>
+                    <Loader2Icon className="size-3.5 animate-spin" /> Replaying…
+                  </>
+                ) : (
+                  <>
+                    <PlayIcon className="size-3.5 fill-current" /> Replay
+                  </>
+                )}
+              </button>
             )}
           </div>
-          {sel.sid && (
-            <div className="flex w-full min-w-0 flex-wrap items-center gap-2 @3xl:w-auto @3xl:shrink-0 @3xl:justify-end">
-              {runConfig && (
-                <BrowserModeToggle
-                  headed={runConfig.headed}
-                  onChange={runConfig.setHeaded}
-                  disabled={busy}
-                />
-              )}
-              {runConfig && (runConfig.personas.length > 0 || runConfig.environments.length > 0) && (
-                <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 text-xs text-muted-foreground @3xl:flex-none @3xl:flex-nowrap">
-                  <span>as</span>
+          {sel.sid && runConfig && (
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-2 border-t border-border/60 bg-muted/30 px-5 py-2 text-xs text-muted-foreground">
+              {(runConfig.personas.length > 0 || runConfig.environments.length > 0) && (
+                <>
+                  <span>Run as</span>
                   <select
                     value={runConfig.personaId}
                     onChange={(e) => runConfig.setPersonaId(e.target.value)}
                     disabled={busy}
-                    className="min-w-0 max-w-[10rem] rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none focus-visible:border-ring disabled:opacity-50"
+                    aria-label="Replay as persona"
+                    className="min-w-0 max-w-[12rem] h-7 rounded-lg border border-border bg-card px-2 text-xs font-medium text-foreground shadow-xs outline-none transition-colors hover:border-primary/30 focus-visible:border-primary/50 focus-visible:ring-3 focus-visible:ring-primary/10 disabled:opacity-50"
                   >
                     <option value="">default login</option>
                     {runConfig.personas.map((p) => (
@@ -139,7 +152,8 @@ export function CenterPane({
                     value={runConfig.envId}
                     onChange={(e) => runConfig.setEnvId(e.target.value)}
                     disabled={busy}
-                    className="min-w-0 max-w-full flex-1 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none focus-visible:border-ring disabled:opacity-50 @3xl:max-w-[18rem] @3xl:flex-none"
+                    aria-label="Replay on environment"
+                    className="min-w-0 max-w-[16rem] h-7 rounded-lg border border-border bg-card px-2 text-xs font-medium text-foreground shadow-xs outline-none transition-colors hover:border-primary/30 focus-visible:border-primary/50 focus-visible:ring-3 focus-visible:ring-primary/10 disabled:opacity-50"
                   >
                     <option value="">default environment</option>
                     {runConfig.environments.map((en) => (
@@ -148,25 +162,15 @@ export function CenterPane({
                       </option>
                     ))}
                   </select>
-                </div>
+                </>
               )}
-              <button
-                type="button"
-                onClick={() => onReplay(sel.sid!)}
-                disabled={busy}
-                title={busy ? 'A replay is already running for this scenario' : undefined}
-                className="flex shrink-0 items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition-all hover:brightness-110 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:brightness-100"
-              >
-                {busy ? (
-                  <>
-                    <Loader2Icon className="size-4 animate-spin" /> Replaying…
-                  </>
-                ) : (
-                  <>
-                    <PlayIcon className="size-4 fill-current" /> Replay
-                  </>
-                )}
-              </button>
+              <div className="ml-auto">
+                <BrowserModeToggle
+                  headed={runConfig.headed}
+                  onChange={runConfig.setHeaded}
+                  disabled={busy}
+                />
+              </div>
             </div>
           )}
         </div>
@@ -176,7 +180,7 @@ export function CenterPane({
               key={i}
               className="group relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 transition-colors hover:bg-muted/60"
             >
-              <span className="tnum w-5 shrink-0 text-right text-xs text-muted-foreground/70">{i}</span>
+              <span className="tnum grid size-5 shrink-0 place-items-center rounded-full bg-muted font-mono text-[10px] text-muted-foreground">{i}</span>
               <VerbBadge verb={st.verb} />
               <span className="truncate text-[13px]">{st.intent || stepText(st)}</span>
               {st.id && (
@@ -184,7 +188,7 @@ export function CenterPane({
                   type="button"
                   title={`Insert a check after “${st.id}”`}
                   onClick={() => setInsertAfter({ stepId: st.id!, label: st.intent || st.id! })}
-                  className="absolute right-1 top-1/2 -translate-y-1/2 rounded bg-background p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md border border-border bg-card p-1 text-muted-foreground opacity-0 shadow-xs transition-opacity hover:border-primary/30 hover:text-primary group-hover:opacity-100"
                 >
                   <PlusIcon className="size-3.5" />
                 </button>
@@ -272,21 +276,25 @@ export function CenterPane({
           <div className="flex items-center gap-2">
             <span
               className={cn(
-                'rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide',
-                tone === 'pass' && 'bg-emerald-500/15 text-emerald-400',
+                'inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide before:size-1.5 before:rounded-full before:bg-current',
+                tone === 'pass' && 'bg-success/15 text-success',
                 tone === 'fail' && 'bg-destructive/15 text-destructive',
-                tone === 'running' && 'bg-amber-500/15 text-amber-400'
+                tone === 'running' && 'bg-warning/15 text-warning'
               )}
             >
               {cleanSummary(summary)}
             </span>
-            {live && <span className="text-xs text-amber-400">● live</span>}
+            {live && (
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-warning">
+                <span className="aqa-ping size-1.5 rounded-full bg-current" /> live
+              </span>
+            )}
             {detail.video && (
               <button
                 type="button"
                 onClick={() => setShowVideo((v) => !v)}
                 title="This run was recorded with --record-video — toggle the run.webm player"
-                className="flex items-center gap-1 rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-sky-400 hover:bg-sky-500/25"
+                className="flex items-center gap-1 rounded bg-info/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-info hover:bg-info/25"
               >
                 <PlayIcon className="size-3" />
                 video
@@ -294,7 +302,7 @@ export function CenterPane({
             )}
             {healedCount > 0 && (
               <span
-                className="flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-400"
+                className="flex items-center gap-1 rounded bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-warning"
                 title="Auto-heal corrected a drifting locator on these steps — review the diff in the step detail."
               >
                 <WrenchIcon className="size-3" />
@@ -308,7 +316,7 @@ export function CenterPane({
                     type="button"
                     disabled={acceptAll === 'busy'}
                     title="Promote every golden captured in this run (screenshots + ARIA snapshots) to the checked-in baselines — apply new goldens"
-                    className="flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                    className="flex h-7 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-[11px] font-medium text-muted-foreground shadow-xs transition-colors hover:border-primary/30 hover:text-foreground disabled:opacity-50"
                     onClick={() => {
                       if (!sel.sid) return
                       setAcceptAll('busy')
@@ -335,7 +343,7 @@ export function CenterPane({
                   onChange={(e) => setBaseline(e.target.value)}
                   disabled={runs.compareBusy}
                   title="Baseline run to compare against"
-                  className="max-w-[10rem] rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] text-foreground outline-none focus-visible:border-ring disabled:opacity-50"
+                  className="h-7 max-w-[11rem] rounded-lg border border-border bg-card px-2 text-[11px] font-medium text-foreground shadow-xs outline-none transition-colors hover:border-primary/30 focus-visible:border-primary/50 focus-visible:ring-3 focus-visible:ring-primary/10 disabled:opacity-50"
                 >
                   {otherRuns.map((r) => (
                     <option key={r.runId} value={r.runId}>
@@ -350,7 +358,7 @@ export function CenterPane({
                   onClick={() => void runs.startCompare(baseRun)}
                   disabled={runs.compareBusy || !baseRun}
                   title="Diff this run's snapshots and screenshots against the baseline"
-                  className="flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                  className="flex h-7 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-[11px] font-medium text-muted-foreground shadow-xs transition-colors hover:border-primary/30 hover:text-foreground disabled:opacity-50"
                 >
                   {runs.compareBusy ? (
                     <Loader2Icon className="size-3 animate-spin" />
@@ -366,7 +374,7 @@ export function CenterPane({
             {fmtRunTime(detail.runId)} <span className="font-mono opacity-50">· {detail.runId}</span>
           </div>
           {signingIn && (
-            <div className="mt-2 flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-300">
+            <div className="mt-2 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
               <Loader2Icon className="size-3.5 shrink-0 animate-spin" />
               {setupSlow
                 ? 'No replay progress for over a minute. Setup may be stuck; the host watchdog will stop it and mark it failed if this continues.'
@@ -374,7 +382,7 @@ export function CenterPane({
             </div>
           )}
           {setupError && (
-            <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-xs text-destructive">
+            <div className="mt-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               <div className="font-medium">Setup failed — the run never started.</div>
               <div className="mt-0.5 opacity-90">{setupError}</div>
               <div className="mt-1 text-muted-foreground">
@@ -384,7 +392,7 @@ export function CenterPane({
             </div>
           )}
           {stepError && (
-            <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-xs text-destructive">
+            <div className="mt-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               <div className="font-medium">
                 Failed at step {stepFail?.idx ?? '?'}/{stepFail?.total ?? rows.length}
                 {stepFail?.intent ? ` — ${cleanSummary(stepFail.intent)}` : ''}
@@ -399,7 +407,7 @@ export function CenterPane({
             </div>
           )}
           {runs.compareErr && (
-            <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-xs text-destructive">
+            <div className="mt-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               {runs.compareErr}
             </div>
           )}
@@ -427,16 +435,22 @@ export function CenterPane({
                   disabled={pending}
                   onClick={pending ? undefined : () => runs.selectStep(st.idx)}
                   className={cn(
-                    'flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
-                    selected && 'bg-accent ring-1 ring-inset ring-border',
-                    isCurrent && 'ring-1 ring-amber-400/40',
+                    'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-all',
+                    selected && 'bg-card shadow-sm ring-1 ring-inset ring-primary/25',
+                    isCurrent && 'bg-warning/5 ring-1 ring-warning/40',
                     pending ? 'opacity-50' : !selected && 'hover:bg-muted/60'
                   )}
                 >
-                  <span data-qa-volatile className={cn('w-4 text-center', STATUS_TONE[st.status || ''] || 'text-muted-foreground')}>
+                  <span
+                    data-qa-volatile
+                    className={cn(
+                      'grid size-5 shrink-0 place-items-center rounded-full bg-current/10 text-[11px] font-semibold',
+                      STATUS_TONE[st.status || ''] || 'text-muted-foreground'
+                    )}
+                  >
                     {icon(st.status)}
                   </span>
-                  <span className="w-12 shrink-0 text-xs text-muted-foreground">
+                  <span className="tnum w-10 shrink-0 font-mono text-[11px] text-muted-foreground">
                     {st.idx}/{st.total || rows.length}
                   </span>
                   <span className="truncate text-sm">{st.intent || st.id}</span>
@@ -445,14 +459,14 @@ export function CenterPane({
                     if (!h) return null
                     return h.mode === 'value-rejection' ? (
                       <span
-                        className="shrink-0 rounded bg-destructive/15 px-1 py-0.5 text-[10px] font-medium text-destructive"
+                        className="shrink-0 rounded-full bg-destructive/12 px-1.5 py-0.5 text-[10px] font-semibold text-destructive"
                         title="Auto-heal classified this step's failure as a value rejection (page refused the value) — evidence is in the step detail."
                       >
                         rejected
                       </span>
                     ) : (
                       <span
-                        className="shrink-0 rounded bg-amber-500/15 px-1 py-0.5 text-[10px] font-medium text-amber-400"
+                        className="shrink-0 rounded-full bg-warning/12 px-1.5 py-0.5 text-[10px] font-semibold text-warning"
                         title={`Locator auto-healed via ${h.strategy || 'the name ladder'}: ${h.from || ''} → ${h.to || ''}`}
                       >
                         healed
@@ -460,7 +474,7 @@ export function CenterPane({
                     )
                   })()}
                   {st.kind && <span className="shrink-0 text-xs text-muted-foreground">({st.kind})</span>}
-                  <span data-qa-volatile className="ml-auto shrink-0 text-xs text-muted-foreground">{pending ? '' : fmtMs(st.ms)}</span>
+                  <span data-qa-volatile className={cn('tnum ml-auto shrink-0 font-mono text-[11px] text-muted-foreground transition-[margin]', st.id && !live && 'group-hover:mr-7')}>{pending ? '' : fmtMs(st.ms)}</span>
                 </button>
                 {st.id && !live && (
                   <button
@@ -469,7 +483,7 @@ export function CenterPane({
                     onClick={() =>
                       setInsertAfter({ stepId: st.id!, label: st.intent || st.id! })
                     }
-                    className="absolute right-1 top-1/2 -translate-y-1/2 rounded bg-background p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md border border-border bg-card p-1 text-muted-foreground opacity-0 shadow-xs transition-opacity hover:border-primary/30 hover:text-primary group-hover:opacity-100"
                   >
                     <PlusIcon className="size-3.5" />
                   </button>
@@ -494,14 +508,16 @@ export function CenterPane({
   const hasAnyScenario = (runs.scenarios || []).length > 0
   return (
     <Pane>
-      <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center">
-        <div className="grid size-10 place-items-center rounded-xl border border-border bg-muted/50 text-muted-foreground">
-          <PlayIcon className="size-4" />
+      <div className="aqa-dots flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
+        <div className="mb-1">
+          <div className="grid size-12 place-items-center rounded-2xl bg-primary/10 text-primary">
+            <PlayIcon className="size-6 fill-current" />
+          </div>
         </div>
-        <div className="text-[15px] font-semibold tracking-tight">
+        <div className="text-lg font-semibold tracking-tight">
           {hasAnyScenario ? 'No run selected' : 'Record your first scenario'}
         </div>
-        <div className="max-w-xs text-[13px] leading-relaxed text-muted-foreground">
+        <div className="max-w-sm text-[13px] leading-relaxed text-muted-foreground">
           {hasAnyScenario
             ? 'Pick a scenario on the left to preview its steps, then press Replay.'
             : 'Head to Chat and ask it to record a flow — it will show up here ready to replay.'}

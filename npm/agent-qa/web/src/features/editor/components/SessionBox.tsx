@@ -61,7 +61,7 @@ export function SessionBox({
           {buffer.editing ? 'editing' : 'recording'}{' '}
           <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">{buffer.sid}</code>
           {buffer.paused && (
-            <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-400">
+            <span className="rounded bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-warning">
               paused
             </span>
           )}
