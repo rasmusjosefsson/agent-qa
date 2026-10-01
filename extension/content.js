@@ -37,19 +37,17 @@
       // a check pinning the message, then the resolve step — but here the
       // user's real answer is known, so confirm/prompt record the actual
       // action instead of an unconditional accept.
-      send(
-        stepMsg({
-          kind: "check",
-          draft: {
-            intent: `${d.type} dialog says "${message.slice(0, 80)}"`,
-            claim: {
-              subject: { dialog: true },
-              predicate: "contains",
-              value: message,
-            },
+      emitStep({
+        kind: "check",
+        draft: {
+          intent: `${d.type} dialog says "${message.slice(0, 80)}"`,
+          claim: {
+            subject: { dialog: true },
+            predicate: "contains",
+            value: message,
           },
-        }),
-      );
+        },
+      });
       const params =
         (d.type === "confirm" && d.result !== true) ||
         (d.type === "prompt" && d.result === null)
@@ -58,16 +56,14 @@
       if (params.action === "accept" && d.type === "prompt") {
         params.text = String(d.result ?? "");
       }
-      send(
-        stepMsg({
-          kind: "do",
-          draft: {
-            intent: `${d.type} dialog → ${params.action}`,
-            verb: "dialog",
-            params,
-          },
-        }),
-      );
+      emitStep({
+        kind: "do",
+        draft: {
+          intent: `${d.type} dialog → ${params.action}`,
+          verb: "dialog",
+          params,
+        },
+      });
       return;
     }
     if (!e.data.__aqNet || !active) return;
@@ -88,29 +84,7 @@
     if (msg.t === "record:stop") {
       // A scroll sitting inside the debounce window would silently
       // drop — flush it before the flag flips.
-      if (scrollTimer && lastScrollEl) {
-        clearTimeout(scrollTimer);
-        const target = lastScrollEl;
-        lastScrollEl = null;
-        const isWindow =
-          target === document.scrollingElement ||
-          target === document.documentElement ||
-          target === document.body;
-        if (isWindow) {
-          const y = Math.round(window.scrollY);
-          const bottom = target.scrollHeight - target.clientHeight;
-          const params = bottom - y <= 2 ? { to: "bottom" } : { y };
-          send(stepMsg(doDraft("scroll page", "scrollTo", { params })));
-        } else {
-          send(
-            stepMsg(
-              doDraft(`scroll ${label(target)}`, "scrollTo", {
-                on: `css:${cssPath(target)}`,
-              })
-            )
-          );
-        }
-      }
+      flushScroll();
       active = false;
     }
   });
@@ -223,9 +197,7 @@
         el.getAttribute?.("name") ||
         ""
       );
-      const role = { role: implicitRole(el) };
-      if (raw) role.name = raw;
-      return { role };
+      return { role: implicitRole(el), ...(raw ? { name: raw } : {}) };
     }
     return `css:${cssPath(el)}`;
   }
@@ -278,13 +250,20 @@
 
   // ---------- interaction capture ----------
 
-  // A double-click fires click,click,dblclick — recording it verbatim
-  // gives two clicks that replay differently than the dblclick the user
-  // performed (row-edit openers, word-select). Defer each click draft
-  // ~350ms; a dblclick clears the queue and records `dblclick` instead.
-  const CLICK_DEBOUNCE_MS = 350;
-  const pendingClicks = [];
+  // A pending scroll debounce must flush before ANY other step goes
+  // out — a scroll that happened before a click but emits after it
+  // reorders the recorded flow.
+  const emitStep = (item) => {
+    flushScroll();
+    send(stepMsg(item));
+  };
 
+  // Clicks emit at event time — debouncing them to merge dblclicks
+  // used to reorder them after their own effects (dialogs, navs) and
+  // drop them entirely when a nav tore the document down first. A real
+  // dblclick sends click,click,dblclick: the two clicks are already
+  // recorded, so the dblclick carries a merge flag and the worker
+  // swaps them out.
   document.addEventListener(
     "click",
     (e) => {
@@ -296,14 +275,11 @@
         real.closest?.(
           "a[href],button,[role=button],[role=link],input[type=submit],input[type=button],summary,[onclick]"
         ) || real;
-      const item = doDraft(`click ${label(el)}`, "click", {
-        on: locator(el),
-      });
-      const timer = setTimeout(() => {
-        pendingClicks.splice(pendingClicks.indexOf(timer), 1);
-        send(stepMsg(item));
-      }, CLICK_DEBOUNCE_MS);
-      pendingClicks.push(timer);
+      emitStep(
+        doDraft(`click ${label(el)}`, "click", {
+          on: locator(el),
+        })
+      );
     },
     true
   );
@@ -312,16 +288,16 @@
     "dblclick",
     (e) => {
       if (!active || !e.isTrusted) return;
-      while (pendingClicks.length) clearTimeout(pendingClicks.pop());
       const real = e.composedPath?.()[0] || e.target;
       const el = real.closest?.("a,button,[role=button],input,summary") || real;
-      send(
-        stepMsg(
-          doDraft(`double-click ${label(el)}`, "dblclick", {
-            on: locator(el),
-          })
-        )
+      flushScroll();
+      const msg = stepMsg(
+        doDraft(`double-click ${label(el)}`, "dblclick", {
+          on: locator(el),
+        })
       );
+      msg.merge = "dblclick";
+      send(msg);
     },
     true
   );
@@ -340,26 +316,22 @@
         const picked = el.multiple
           ? [...el.selectedOptions].map((o) => o.value || o.text)
           : [el.value || el.options[el.selectedIndex]?.text || ""];
-        send(
-          stepMsg(
-            doDraft(`select ${label(el)}`, "select", {
-              on: locator(el),
-              value: literal(picked.join(",")),
-            })
-          )
+        emitStep(
+          doDraft(`select ${label(el)}`, "select", {
+            on: locator(el),
+            value: literal(picked.join(",")),
+          })
         );
         return;
       }
       if (name !== "input" && name !== "textarea") return;
       const type = (el.getAttribute("type") || "text").toLowerCase();
       if (type === "checkbox" || type === "radio") {
-        send(
-          stepMsg(
-            doDraft(
-              `${el.checked ? "check" : "uncheck"} ${label(el)}`,
-              el.checked ? "check" : "uncheck",
-              { on: locator(el) }
-            )
+        emitStep(
+          doDraft(
+            `${el.checked ? "check" : "uncheck"} ${label(el)}`,
+            el.checked ? "check" : "uncheck",
+            { on: locator(el) }
           )
         );
         return;
@@ -384,6 +356,14 @@
                 : files.map((f) => `files/${f.name}`),
           },
         });
+        // The draft lands now (in interaction order); file contents
+        // arrive on a follow-up augment message once read — waiting
+        // for the reads would let a quick next-click reorder past it.
+        // augmentId matches the augment to THIS draft when two
+        // uploads race (extra envelope keys pass through ingest).
+        const augmentId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        item.augmentId = augmentId;
+        emitStep(item);
         const reads = files.map(
           (f) =>
             new Promise((res) => {
@@ -403,19 +383,16 @@
             }),
         );
         Promise.all(reads).then((uploads) => {
-          item.uploads = uploads;
-          send(stepMsg(item));
+          send({ t: "augment", id: augmentId, uploads });
         });
         return;
       }
       if (el.value === "") return;
-      send(
-        stepMsg(
-          doDraft(`type into ${label(el)}`, "type", {
-            on: locator(el),
-            value: literal(el.value),
-          })
-        )
+      emitStep(
+        doDraft(`type into ${label(el)}`, "type", {
+          on: locator(el),
+          value: literal(el.value),
+        })
       );
     },
     true
@@ -462,10 +439,8 @@
           (widget ||
             (el && (el.localName === "input" || el.localName === "textarea"))));
       if (!record) return;
-      send(
-        stepMsg(
-          doDraft(`press ${e.key}`, "press", { value: literal(e.key) })
-        )
+      emitStep(
+        doDraft(`press ${e.key}`, "press", { value: literal(e.key) })
       );
     },
     true
@@ -478,6 +453,36 @@
   // (exact scrollTop isn't expressible by the replay verb).
   let scrollTimer = null;
   let lastScrollEl = null;
+  const emitScroll = (target) => {
+    const isWindow =
+      target === document.scrollingElement ||
+      target === document.documentElement ||
+      target === document.body;
+    if (isWindow) {
+      const y = Math.round(window.scrollY);
+      const bottom = target.scrollHeight - target.clientHeight;
+      const params = bottom - y <= 2 ? { to: "bottom" } : { y };
+      send(stepMsg(doDraft("scroll page", "scrollTo", { params })));
+    } else {
+      // Element scrolls must use css — replay's scrollTo rejects
+      // role locators (scrollIntoView path only handles raw).
+      send(
+        stepMsg(
+          doDraft(`scroll ${label(target)}`, "scrollTo", {
+            on: `css:${cssPath(target)}`,
+          })
+        )
+      );
+    }
+  };
+  function flushScroll() {
+    if (!scrollTimer || !lastScrollEl) return;
+    clearTimeout(scrollTimer);
+    scrollTimer = null;
+    const target = lastScrollEl;
+    lastScrollEl = null;
+    emitScroll(target);
+  }
   document.addEventListener(
     "scroll",
     (e) => {
@@ -490,33 +495,17 @@
       lastScrollEl = el;
       clearTimeout(scrollTimer);
       scrollTimer = setTimeout(() => {
+        scrollTimer = null;
         const target = lastScrollEl;
         lastScrollEl = null;
-        if (!target) return;
-        const isWindow =
-          target === document.scrollingElement ||
-          target === document.documentElement ||
-          target === document.body;
-        if (isWindow) {
-          const y = Math.round(window.scrollY);
-          const bottom = target.scrollHeight - target.clientHeight;
-          const params = bottom - y <= 2 ? { to: "bottom" } : { y };
-          send(stepMsg(doDraft("scroll page", "scrollTo", { params })));
-        } else {
-          // Element scrolls must use css — replay's scrollTo rejects
-          // role locators (scrollIntoView path only handles raw).
-          send(
-            stepMsg(
-              doDraft(`scroll ${label(target)}`, "scrollTo", {
-                on: `css:${cssPath(target)}`,
-              })
-            )
-          );
-        }
+        if (target) emitScroll(target);
       }, 400);
     },
     { capture: true, passive: true }
   );
+  // A scroll left inside the debounce window when the page unloads
+  // dies with the document — flush on the way out.
+  window.addEventListener("pagehide", flushScroll);
 
   // Service worker answers with the tab's recording flag so a
   // mid-recording full navigation re-arms this document.
