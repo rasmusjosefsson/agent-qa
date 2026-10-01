@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+  <linearGradient id="aqa-df" x1="26" y1="26" x2="50" y2="50" gradientUnits="userSpaceOnUse">
+  <stop stop-color="#6d5ff5"/>
+  <stop offset="1" stop-color="#c04fd8"/>
+  </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="#12121f"/>
+  <rect x="13" y="13" width="25" height="25" rx="6.5" stroke="#8b93ff" stroke-opacity=".55" stroke-width="3.2" stroke-dasharray="5 3.6"/>
+  <rect x="25" y="25" width="26" height="26" rx="6.5" fill="url(#aqa-df)"/>
+  <path d="M31.5 38.3l4.5 4.5 8.5-9" stroke="#fff" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

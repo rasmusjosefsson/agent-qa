@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+  <linearGradient id="aqa-cc" x1="14" y1="12" x2="38" y2="44" gradientUnits="userSpaceOnUse">
+  <stop stop-color="#6d5ff5"/>
+  <stop offset="1" stop-color="#c04fd8"/>
+  </linearGradient>
+  <linearGradient id="aqa-cc-b" x1="34" y1="34" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+  <stop stop-color="#22d3ee"/>
+  <stop offset="1" stop-color="#6d5ff5"/>
+  </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="#12121f"/>
+  <path d="M16 11.5v29l7.2-6.7 4.6 10.3 4.8-2.1-4.6-10.1H38Z" fill="url(#aqa-cc)" stroke="url(#aqa-cc)" stroke-width="2" stroke-linejoin="round"/>
+  <circle cx="44.5" cy="44.5" r="12" fill="url(#aqa-cc-b)" stroke="#12121f" stroke-width="3.5"/>
+  <path d="M39 44.8l3.8 3.8 7-7.6" stroke="#fff" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

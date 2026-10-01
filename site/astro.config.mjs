@@ -13,7 +13,7 @@ export default defineConfig({
     starlight({
       title: "agent-qa",
       description: "Record a user scenario in a real browser. Replay it later. See exactly what changed.",
-      logo: { src: "./src/assets/logo.svg" },
+      logo: { dark: "./src/assets/logo.svg", light: "./src/assets/logo-light.svg" },
       favicon: "/favicon.svg",
       social: [{ icon: "github", label: "GitHub", href: "https://github.com/rasmusjosefsson/agent-qa" }],
       customCss: [
@@ -23,7 +23,7 @@ export default defineConfig({
         "./src/styles/starlight.css",
         "./src/styles/diagrams.css",
       ],
-      components: { Head: "./src/components/DocsHead.astro" },
+      components: { Head: "./src/components/DocsHead.astro", PageTitle: "./src/components/PageTitle.astro" },
       expressiveCode: {
         themes: ["github-dark-default", "github-light-default"],
         styleOverrides: { borderRadius: "0.75rem", codeFontFamily: "var(--aqa-font-mono)" },
