@@ -378,7 +378,15 @@ two-window `window.open` popup. Four goldens (#358) + one drag case
 - **nopCommerce is Cloudflare-gated** — `demo.nopcommerce.com` serves
   "Just a moment" to headless Chrome forever; swapped sites. Rule of
   thumb for sweep picks: probe with a real `agent-browser open`, not
-  curl.
+  curl. **Verified deeper (headed+profile pass):** the wall isn't
+  headless detection — Cloudflare Turnstile fingerprints the
+  Chrome-for-Testing build itself, so `--headed --browser-profile`
+  hits the interactive managed challenge and even *trusted* mouse
+  clicks on the checkbox get bounced to a second round forever. The
+  one path that bypasses it is the **extension** — it rides the
+  user's own real Chrome (no CDP fingerprint), records steps+HAR on
+  their side, and our side replays hermetically with `--mock-from`.
+  A real-Chrome channel override is upstream `agent-browser` work.
 
 ## Dogfood pass VI — JPetStore (petstore.octoperf.com)
 
@@ -586,9 +594,11 @@ A sweep over the "agent silently does the wrong thing or stalls" class
 - **heal-chronic --apply** (#373): one command promotes every chronic
   self-heal row's latest patch — the heal-debt handoff is now an
   action, not a paste-ready issue.
-- **`--browser-profile`** (#374): a persistent Chrome profile for
-  bot-walled sites (Cloudflare class) where headless sits on a
-  challenge — record the profile once, replay reuses it.
+- **`--browser-profile`** (#374): a persistent Chrome profile
+  (login state, warm cookies) — but NOT a Cloudflare bypass:
+  Turnstile fingerprints the Chrome-for-Testing build itself, so
+  managed challenges stay blocked even headed (see the nopCommerce
+  note). It still helps sites whose gating is cookie/session-based.
 - **`emulate <key>:"off"`** (#375): every runner-side emulate key can
   be cleared mid-run; `credentials:"off"` bails honestly.
 - **Subprocess cap** (#376): every `agent-browser` spawn has a default
