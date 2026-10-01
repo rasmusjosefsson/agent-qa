@@ -212,7 +212,12 @@ async function handle(msg, sender) {
 
   if (msg.t === "popup:start") {
     const tab = await chrome.tabs.get(msg.tabId).catch(() => null);
-    if (!tab || !/^https?:/.test(tab.url || "")) {
+    // Content scripts can't inject on restricted https pages either —
+    // the Web Store is the one users hit (extensions can't touch it);
+    // without the exclusion the fallback error tells them to reload,
+    // which never helps there.
+    const store = /chromewebstore\.google\.com|chrome\.google\.com\/webstore/;
+    if (!tab || !/^https?:/.test(tab.url || "") || store.test(tab.url || "")) {
       return { error: "can't record on this page" };
     }
     // Start is idempotent — a second click before the popup's status
