@@ -65,7 +65,9 @@ btn.addEventListener("click", async () => {
     meta.textContent = !r
       ? "saved"
       : r.sentSid
-        ? `sent to agent-qa — ${r.sentSid} (${r.steps} steps, ${r.requests} requests)`
+        ? `sent to agent-qa — ${r.sentSid} (${r.steps} steps, ${r.requests} requests` +
+          (r.sentWarnings ? `, ${r.sentWarnings} warning(s)` : ``) +
+          `)`
         : r.daemonError
           ? `downloaded — daemon said: ${r.daemonError}`
           : `saved — ${r.steps} steps, ${r.requests} requests`;
