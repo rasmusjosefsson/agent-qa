@@ -191,7 +191,22 @@
     return chain;
   })();
 
-  const stepMsg = (item) => ({ t: "step", item, frame: frameCtx });
+  // Cloudflare-class interstitial: interactions captured while the wall
+  // is up (its checkbox inside a cross-origin iframe counts as a click on
+  // the frame's host) target a widget that won't exist at replay — flag
+  // them so the bundle can say so instead of shipping a dead scenario.
+  const onChallengePage = () =>
+    document.title === "Just a moment" ||
+    !!document.querySelector(
+      'script[src*="challenges.cloudflare"], iframe[src*="challenges.cloudflare"], #challenge-form, .cf-chl-widget',
+    );
+
+  const stepMsg = (item) => ({
+    t: "step",
+    item,
+    frame: frameCtx,
+    wall: onChallengePage(),
+  });
 
   // ---------- interaction capture ----------
 
