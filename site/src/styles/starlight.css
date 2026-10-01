@@ -1,0 +1,181 @@
+/* Map Starlight's palette onto the shared tokens. */
+:root {
+  --sl-font: var(--aqa-font-sans);
+  --sl-font-mono: var(--aqa-font-mono);
+  --sl-color-accent-low: oklch(0.27 0.07 277);
+  --sl-color-accent: var(--aqa-brand);
+  --sl-color-accent-high: oklch(0.86 0.08 277);
+  --sl-color-white: var(--aqa-fg);
+  --sl-color-gray-1: oklch(0.9 0.01 275);
+  --sl-color-gray-2: oklch(0.8 0.015 275);
+  --sl-color-gray-3: var(--aqa-muted-fg);
+  --sl-color-gray-4: oklch(0.45 0.02 275);
+  --sl-color-gray-5: oklch(0.3 0.02 275);
+  --sl-color-gray-6: var(--aqa-card);
+  --sl-color-black: var(--aqa-bg);
+  --sl-color-hairline: var(--aqa-border);
+  --sl-color-hairline-light: var(--aqa-border-strong);
+  --sl-color-bg-nav: color-mix(in oklab, var(--aqa-bg) 82%, transparent);
+  --sl-color-bg-sidebar: var(--aqa-bg-deep);
+}
+
+:root[data-theme="light"] {
+  --sl-color-accent-low: oklch(0.93 0.035 277);
+  --sl-color-accent: var(--aqa-brand);
+  --sl-color-accent-high: oklch(0.36 0.16 277);
+  --sl-color-white: var(--aqa-fg);
+  --sl-color-gray-1: oklch(0.28 0.02 275);
+  --sl-color-gray-2: oklch(0.36 0.02 275);
+  --sl-color-gray-3: var(--aqa-muted-fg);
+  --sl-color-gray-4: oklch(0.7 0.015 275);
+  --sl-color-gray-5: oklch(0.88 0.01 275);
+  --sl-color-gray-6: var(--aqa-muted);
+  --sl-color-gray-7: oklch(0.975 0.005 275);
+  --sl-color-black: var(--aqa-card);
+  --sl-color-bg-sidebar: var(--aqa-bg);
+}
+
+body {
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--aqa-brand) 28%, transparent);
+}
+
+header.header {
+  backdrop-filter: saturate(1.4) blur(12px);
+}
+
+.site-title {
+  gap: 0.6rem;
+  font-size: 1.05rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--aqa-fg);
+}
+.site-title img {
+  height: 1.6rem;
+  width: auto;
+}
+
+.sl-markdown-content h1,
+.sl-markdown-content h2,
+.sl-markdown-content h3,
+h1#_top {
+  letter-spacing: -0.025em;
+}
+
+h1#_top {
+  background-image: linear-gradient(100deg, var(--aqa-fg) 30%, var(--aqa-brand) 80%, var(--aqa-brand-3) 110%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Inline code: soft brand tint instead of a grey box. */
+.sl-markdown-content :not(pre) > code {
+  background: color-mix(in oklab, var(--aqa-brand) 11%, transparent);
+  border: 1px solid color-mix(in oklab, var(--aqa-brand) 18%, transparent);
+  border-radius: 0.375rem;
+  padding: 0.1em 0.35em;
+}
+
+/* Tables: the same card surface as the landing page and diagrams, with the
+   workbench's uppercase header band and brand edge on row hover. */
+.sl-markdown-content table {
+  display: table;
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--aqa-border);
+  border-radius: 16px;
+  overflow: hidden;
+  font-size: var(--sl-text-sm);
+  line-height: 1.6;
+  background:
+    radial-gradient(60% 120% at 100% 0%, color-mix(in oklab, var(--aqa-brand) 5%, transparent), transparent 70%),
+    color-mix(in oklab, var(--aqa-card) 55%, transparent);
+}
+.sl-markdown-content th {
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid var(--aqa-border-strong);
+  background: color-mix(in oklab, var(--aqa-muted) 65%, transparent);
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-align: left;
+  text-transform: uppercase;
+  color: var(--aqa-muted-fg);
+}
+.sl-markdown-content th code {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+}
+.sl-markdown-content td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--aqa-border);
+  vertical-align: top;
+  color: color-mix(in oklab, var(--aqa-fg) 88%, var(--aqa-muted-fg));
+}
+.sl-markdown-content tr:last-child td {
+  border-bottom: 0;
+}
+.sl-markdown-content tbody tr {
+  transition: background-color 140ms ease;
+}
+.sl-markdown-content tbody tr:hover {
+  background: color-mix(in oklab, var(--aqa-brand) 6%, transparent);
+}
+.sl-markdown-content tbody tr:hover > td:first-child {
+  box-shadow: inset 2px 0 0 var(--aqa-brand);
+}
+.sl-markdown-content td:first-child {
+  color: var(--aqa-fg);
+}
+.sl-markdown-content td code {
+  overflow-wrap: break-word;
+}
+/* Key columns (rule codes, verbs, flags): wide enough that a hyphenated
+   identifier stays on one line; longer signatures still wrap at spaces. */
+.sl-markdown-content td:first-child:has(> code:first-child) {
+  min-width: 14.5rem;
+}
+/* Phones: the card becomes its own horizontal scroller. */
+@media (max-width: 50rem) {
+  .sl-markdown-content table {
+    display: block;
+    overflow-x: auto;
+  }
+  .sl-markdown-content td:first-child:has(> code:first-child) {
+    min-width: 0;
+  }
+}
+
+/* Mermaid diagrams (see DocsHead.astro). Hidden until rendered. */
+pre.mermaid {
+  display: flex;
+  justify-content: center;
+  margin-block: 1.5rem;
+  padding: 1.5rem;
+  border: 1px solid var(--aqa-border);
+  border-radius: calc(var(--aqa-radius) * 1.4);
+  background: color-mix(in oklab, var(--aqa-card) 60%, transparent);
+  overflow-x: auto;
+}
+pre.mermaid:not([data-processed]) {
+  color: transparent;
+  min-height: 8rem;
+}
+
+/* Sidebar: current page gets the brand edge. */
+.sidebar-content a[aria-current="page"] {
+  background: color-mix(in oklab, var(--aqa-brand) 16%, transparent);
+  color: var(--sl-color-accent-high);
+  box-shadow: inset 2px 0 0 var(--aqa-brand);
+  font-weight: 600;
+}

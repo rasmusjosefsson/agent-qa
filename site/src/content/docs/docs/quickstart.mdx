@@ -1,0 +1,82 @@
+---
+title: Quickstart
+description: Install agent-qa, record a scenario, replay it, and diff two runs.
+---
+
+import { Steps, Aside } from "@astrojs/starlight/components"
+
+<Steps>
+
+1. **Install the CLI.** It ships as one npm package with a prebuilt binary
+   per platform; `agent-browser` comes along as a dependency.
+
+   ```bash
+   npm i -g @rasmusjosefsson/agent-qa
+   agent-qa --help
+   agent-qa doctor
+   ```
+
+2. **Tell your coding agent about it** (optional). The discovery stub works with
+   Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot, Goose, OpenCode,
+   Windsurf, and Pi. It points the agent at `agent-qa skills get core`, so the
+   instructions always match the CLI version you installed.
+
+   ```bash
+   npx skills add rasmusjosefsson/agent-qa
+   ```
+
+3. **Record a scenario.** Recording is serial: take an action, then let
+   `record-step` observe the settled page before you take the next one.
+
+   ```bash
+   agent-qa start "open the homepage and check the URL"
+
+   agent-qa record-step do '{"intent":"land","verb":"goto",
+     "value":{"from":"literal","literal":"https://example.com/"}}'
+   agent-qa fill-unique Email --template 'qa-{{vars._unique}}@example.com'
+   agent-qa smart-click "Save"
+   agent-qa record-step check '{"intent":"url is set",
+     "claim":{"subject":{"url":true},"predicate":"exists"}}'
+
+   agent-qa verify   # inspect the buffer
+   agent-qa flush    # seal it to scenario.json
+   ```
+
+4. **Replay it.** Replay is deterministic, with no LLM in the loop. Each run
+   gets a fresh `_unique` token and writes its own evidence folder.
+
+   ```bash
+   agent-qa replay <sid>
+   ```
+
+5. **Compare runs.** `compare` diffs ARIA snapshots and screenshots from disk
+   and writes `compare.md` plus JSON deltas.
+
+   ```bash
+   agent-qa list <sid>
+   agent-qa compare <sid>
+   ```
+
+</Steps>
+
+<Aside type="tip" title="Needs a login?">
+  Authentication, session policy, and setup hooks live in plugins, so the core
+  never learns anything about your app. Register one in `agent-qa.toml` and run
+  `agent-qa plugins doctor`. See [Plugins](../plugins/).
+</Aside>
+
+## Guard it with golden screenshots
+
+```bash
+agent-qa flush --auto-shots        # one shot claim per do-step
+agent-qa replay <sid>              # captures screenshots
+agent-qa shot-accept <sid>         # mint baselines
+agent-qa replay <sid>              # now guarded
+```
+
+More in [Visual testing](../visual-testing/).
+
+## Prefer a UI?
+
+`agent-qa serve` opens the workbench, where you write cases in plain English,
+group them into sets, run plans, and review each replay step by step.

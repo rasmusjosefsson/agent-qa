@@ -1,0 +1,34 @@
+---
+import Default from "@astrojs/starlight/components/Head.astro"
+---
+
+<Default />
+
+<script>
+  // Render ```mermaid blocks (converted to <pre class="mermaid"> by
+  // scripts/sync-docs.mjs). Loaded only on pages that have a diagram, and
+  // re-rendered when the theme toggles.
+  const blocks = [...document.querySelectorAll<HTMLElement>("pre.mermaid")]
+  if (blocks.length) {
+    for (const el of blocks) el.dataset.source = el.textContent ?? ""
+    const { default: mermaid } = await import("mermaid")
+    const render = async () => {
+      const dark = document.documentElement.dataset.theme !== "light"
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: "base",
+        fontFamily: "Geist Variable, ui-sans-serif, system-ui, sans-serif",
+        themeVariables: dark
+          ? { background: "transparent", primaryColor: "#23264a", primaryTextColor: "#eef0fb", primaryBorderColor: "#6f73f5", lineColor: "#8a8fb8", secondaryColor: "#1a2a36", tertiaryColor: "#2a1f33" }
+          : { background: "transparent", primaryColor: "#eef0ff", primaryTextColor: "#1d2040", primaryBorderColor: "#5b5bea", lineColor: "#7c80a6", secondaryColor: "#e6f7fb", tertiaryColor: "#fbeaf6" },
+      })
+      for (const el of blocks) {
+        el.removeAttribute("data-processed")
+        el.textContent = el.dataset.source ?? ""
+      }
+      await mermaid.run({ nodes: blocks })
+    }
+    await render()
+    new MutationObserver(render).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] })
+  }
+</script>

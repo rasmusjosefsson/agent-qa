@@ -1,0 +1,416 @@
+/* Diagrams from scripts/diagrams.mjs. Inline SVG, so every colour is a token
+   and both themes come for free. */
+.aqa-diagram {
+  margin: 1.75rem 0;
+  padding: 1.25rem;
+  border: 1px solid var(--aqa-border);
+  border-radius: 16px;
+  background:
+    radial-gradient(60% 90% at 100% 0%, color-mix(in oklab, var(--aqa-brand) 8%, transparent), transparent 70%),
+    radial-gradient(color-mix(in oklab, var(--aqa-fg) 7%, transparent) 1px, transparent 1.2px) 0 0 / 18px 18px,
+    color-mix(in oklab, var(--aqa-card) 55%, transparent);
+  overflow-x: auto;
+}
+.aqa-diagram svg {
+  display: block;
+  width: 100%;
+  min-width: 620px;
+  height: auto;
+  overflow: visible;
+  font-family: var(--aqa-font-sans);
+}
+
+.d-node rect {
+  fill: var(--aqa-card);
+  stroke: var(--aqa-border-strong);
+  stroke-width: 1;
+}
+.d-core rect {
+  fill: color-mix(in oklab, var(--aqa-brand) 13%, var(--aqa-card));
+  stroke: var(--d-grad, var(--aqa-brand));
+  stroke-width: 1.5;
+  filter: drop-shadow(0 6px 14px color-mix(in oklab, var(--aqa-brand) 30%, transparent));
+}
+.d-artifact rect {
+  fill: var(--aqa-bg-deep);
+  stroke: color-mix(in oklab, var(--aqa-brand-2) 55%, var(--aqa-border-strong));
+  stroke-dasharray: 5 4;
+}
+.d-bad rect {
+  fill: color-mix(in oklab, var(--aqa-destructive) 12%, var(--aqa-card));
+  stroke: color-mix(in oklab, var(--aqa-destructive) 60%, transparent);
+}
+.d-good rect {
+  fill: color-mix(in oklab, var(--aqa-success) 10%, var(--aqa-card));
+  stroke: color-mix(in oklab, var(--aqa-success) 55%, transparent);
+}
+.d-g1 {
+  stop-color: var(--aqa-brand);
+}
+.d-g2 {
+  stop-color: var(--aqa-brand-3);
+}
+
+.d-title {
+  fill: var(--aqa-fg);
+  font-size: 13px;
+  font-weight: 620;
+  text-anchor: middle;
+  letter-spacing: -0.01em;
+}
+.d-sub {
+  fill: var(--aqa-muted-fg);
+  font-size: 11px;
+  text-anchor: middle;
+}
+.d-mono {
+  font-family: var(--aqa-font-mono);
+  letter-spacing: -0.02em;
+}
+.d-title.d-mono {
+  font-size: 12.5px;
+}
+.d-sub.d-mono {
+  font-size: 10.5px;
+}
+.d-artifact .d-title {
+  fill: color-mix(in oklab, var(--aqa-brand-2) 60%, var(--aqa-fg));
+}
+.d-label {
+  fill: var(--aqa-muted-fg);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  paint-order: stroke;
+  stroke: var(--aqa-bg);
+  stroke-width: 5px;
+  stroke-linejoin: round;
+}
+
+.d-edge {
+  fill: none;
+  stroke: color-mix(in oklab, var(--aqa-muted-fg) 70%, transparent);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+.d-soft {
+  stroke-dasharray: 3 5;
+}
+.d-flow {
+  stroke: var(--aqa-brand);
+  stroke-width: 2;
+  stroke-dasharray: 5 5;
+  animation: d-flow 0.9s linear infinite;
+}
+@keyframes d-flow {
+  to {
+    stroke-dashoffset: -10;
+  }
+}
+.d-head {
+  fill: color-mix(in oklab, var(--aqa-muted-fg) 80%, transparent);
+}
+.d-head-b {
+  fill: var(--aqa-brand);
+}
+
+.d-legend text {
+  fill: var(--aqa-muted-fg);
+  font-size: 11px;
+}
+.d-lg-step {
+  fill: var(--aqa-card);
+  stroke: var(--aqa-border-strong);
+}
+.d-lg-core {
+  fill: color-mix(in oklab, var(--aqa-brand) 13%, var(--aqa-card));
+  stroke: var(--aqa-brand);
+}
+.d-lg-art {
+  fill: var(--aqa-bg-deep);
+  stroke: color-mix(in oklab, var(--aqa-brand-2) 55%, var(--aqa-border-strong));
+  stroke-dasharray: 3 2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .d-flow {
+    animation: none;
+  }
+}
+
+/* Module map (HTML, not SVG: chip lists need to wrap). */
+.aqa-mods {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) auto minmax(0, 1fr);
+  gap: 1rem;
+  align-items: stretch;
+}
+.aqa-mods-panel {
+  padding: 1rem;
+  border-radius: 12px;
+  border: 1px solid var(--aqa-border-strong);
+  background: var(--aqa-card);
+}
+.aqa-mods-panel h4 {
+  margin: 0 0 0.75rem;
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--aqa-muted-fg);
+}
+.aqa-mods-infra {
+  border-style: dashed;
+  border-color: color-mix(in oklab, var(--aqa-brand-2) 45%, var(--aqa-border-strong));
+  background: var(--aqa-bg-deep);
+}
+.aqa-mods-group {
+  display: grid;
+  grid-template-columns: 5.5rem 1fr;
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.4rem 0;
+  border-top: 1px solid var(--aqa-border);
+}
+.aqa-mods-group:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+.aqa-mods-group > span {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--aqa-fg);
+}
+.aqa-mods ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.aqa-mods li {
+  margin: 0;
+  padding: 0.12rem 0.5rem;
+  border-radius: 6px;
+  font: 0.74rem/1.6 var(--aqa-font-mono);
+  color: color-mix(in oklab, var(--aqa-brand) 60%, var(--aqa-fg));
+  background: color-mix(in oklab, var(--aqa-brand) 11%, transparent);
+  border: 1px solid color-mix(in oklab, var(--aqa-brand) 18%, transparent);
+}
+.aqa-mods-infra li {
+  color: color-mix(in oklab, var(--aqa-brand-2) 60%, var(--aqa-fg));
+  background: color-mix(in oklab, var(--aqa-brand-2) 10%, transparent);
+  border-color: color-mix(in oklab, var(--aqa-brand-2) 20%, transparent);
+}
+.aqa-mods-arrow {
+  display: grid;
+  place-items: center;
+  width: 3rem;
+  position: relative;
+}
+.aqa-mods-arrow::before {
+  content: "";
+  position: absolute;
+  inset: 50% 0 auto;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--aqa-brand));
+}
+.aqa-mods-arrow span {
+  position: relative;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--aqa-muted-fg);
+  background: var(--aqa-bg);
+  padding: 0.3rem 0;
+}
+@media (max-width: 720px) {
+  .aqa-mods {
+    grid-template-columns: 1fr;
+  }
+  .aqa-mods-arrow {
+    width: auto;
+    height: 1.5rem;
+  }
+  .aqa-mods-arrow::before {
+    display: none;
+  }
+  .aqa-mods-arrow span {
+    writing-mode: horizontal-tb;
+    transform: none;
+  }
+}
+
+.d-activation {
+  fill: color-mix(in oklab, var(--aqa-brand) 35%, var(--aqa-card));
+  stroke: var(--aqa-brand);
+  stroke-width: 1;
+}
+
+/* File trees (├── blocks in docs/, rendered by fileTree()). */
+.aqa-tree {
+  margin: 1.75rem 0;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--aqa-border);
+  border-radius: 16px;
+  background:
+    radial-gradient(60% 90% at 100% 0%, color-mix(in oklab, var(--aqa-brand-2) 7%, transparent), transparent 70%),
+    color-mix(in oklab, var(--aqa-card) 55%, transparent);
+  font: 0.8rem/1.2 var(--aqa-font-mono);
+  overflow-x: auto;
+}
+.aqa-tree ul {
+  margin: 0 0 0 0.9rem;
+  padding: 0 0 0 0.85rem;
+  list-style: none;
+  border-left: 1px solid var(--aqa-border-strong);
+}
+.aqa-tree li {
+  position: relative;
+  margin: 0;
+}
+.aqa-tree li::before {
+  content: "";
+  position: absolute;
+  left: -0.85rem;
+  top: 0.95rem;
+  width: 0.6rem;
+  border-top: 1px solid var(--aqa-border-strong);
+}
+/* Last child: stop the guide line at its row. */
+.aqa-tree li:last-child::after {
+  content: "";
+  position: absolute;
+  left: calc(-0.85rem - 1px);
+  top: calc(0.95rem + 1px);
+  bottom: 0;
+  width: 1px;
+  background: color-mix(in oklab, var(--aqa-card) 55%, var(--aqa-bg));
+}
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 1.9rem;
+  padding: 0 0.5rem;
+  border-radius: 8px;
+  white-space: nowrap;
+  transition: background-color 120ms;
+}
+.tree-row:hover {
+  background: color-mix(in oklab, var(--aqa-brand) 9%, transparent);
+}
+.tree-row svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  fill: color-mix(in oklab, var(--aqa-muted-fg) 35%, transparent);
+  stroke: var(--aqa-muted-fg);
+  stroke-width: 1;
+}
+.tree-row.t-dir svg {
+  fill: color-mix(in oklab, var(--aqa-brand) 30%, transparent);
+  stroke: var(--aqa-brand);
+}
+.tree-row.t-json svg {
+  fill: color-mix(in oklab, var(--aqa-brand-2) 25%, transparent);
+  stroke: var(--aqa-brand-2);
+}
+.tree-row.t-img svg {
+  fill: color-mix(in oklab, var(--aqa-brand-3) 25%, transparent);
+  stroke: var(--aqa-brand-3);
+}
+.tree-row.t-diff svg {
+  fill: color-mix(in oklab, var(--aqa-warning) 25%, transparent);
+  stroke: var(--aqa-warning);
+}
+.tree-row.t-doc svg {
+  fill: color-mix(in oklab, var(--aqa-success) 25%, transparent);
+  stroke: var(--aqa-success);
+}
+.tree-name {
+  color: var(--aqa-fg);
+}
+.t-dir > .tree-name {
+  font-weight: 600;
+}
+.tree-name .ph {
+  color: color-mix(in oklab, var(--aqa-brand) 70%, var(--aqa-fg));
+  font-style: italic;
+}
+.tree-note {
+  margin-left: auto;
+  padding-left: 2rem;
+  font: 0.76rem var(--aqa-font-sans);
+  color: var(--aqa-muted-fg);
+}
+
+/* Step strips ("a → b → c" one-liners, rendered by stepStrip()). */
+.aqa-strip {
+  margin: 1.5rem 0;
+}
+.aqa-strip ol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.aqa-strip li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0.45rem 0.8rem 0.45rem 0.45rem;
+  border-radius: 12px;
+  border: 1px solid var(--aqa-border-strong);
+  background: var(--aqa-card);
+  font-size: 0.85rem;
+  color: var(--aqa-fg);
+}
+.aqa-strip li {
+  position: relative;
+}
+.aqa-strip li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  right: -0.95rem;
+  top: calc(50% - 0.25rem);
+  width: 0.45rem;
+  height: 0.45rem;
+  border-top: 2px solid var(--aqa-brand);
+  border-right: 2px solid var(--aqa-brand);
+  transform: rotate(45deg);
+  flex: none;
+}
+.aqa-strip li:not(:last-child) {
+  margin-right: 0.9rem;
+}
+.aqa-strip li:last-child {
+  border-color: color-mix(in oklab, var(--aqa-brand) 45%, var(--aqa-border-strong));
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--aqa-brand) 12%, transparent);
+}
+.strip-n {
+  display: grid;
+  place-items: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  flex: none;
+  border-radius: 7px;
+  font: 600 0.72rem var(--aqa-font-mono);
+  color: white;
+  background: linear-gradient(135deg, var(--aqa-brand), color-mix(in oklab, var(--aqa-brand) 55%, var(--aqa-brand-3)));
+}
+.strip-code {
+  font: 0.8rem var(--aqa-font-mono);
+  color: color-mix(in oklab, var(--aqa-brand) 65%, var(--aqa-fg));
+}
+.strip-text {
+  font-weight: 550;
+}
