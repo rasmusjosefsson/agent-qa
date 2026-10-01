@@ -162,11 +162,79 @@ pub fn run(args: &[String]) -> Result<u8> {
         );
     }
 
+    // Upload steps reference files/<name>; the extension inlines small
+    // contents on the step envelope (item.uploads[].data as a data URL).
+    // Materialize them so the upload replays end-to-end; names that
+    // arrived without data keep the manual-drop story with a warning.
+    let mut written_files = 0usize;
+    let mut missing_uploads: Vec<String> = Vec::new();
+    let files_dir = dir.join("files");
+    for item in steps_json {
+        let Some(uploads) = item["uploads"].as_array() else {
+            continue;
+        };
+        for u in uploads {
+            let Some(name) = u["name"].as_str() else {
+                continue;
+            };
+            let base = PathBuf::from(name)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .filter(|n| !n.is_empty() && n != "." && n != "..");
+            let Some(base) = base else {
+                continue;
+            };
+            match u["data"].as_str().and_then(decode_data_url) {
+                Some(bytes) => {
+                    if written_files == 0 {
+                        fs::create_dir_all(&files_dir)
+                            .with_context(|| format!("ingest: create {}", files_dir.display()))?;
+                    }
+                    let path = files_dir.join(&base);
+                    if !path.exists() {
+                        atomic_write_file(&path, &bytes)?;
+                        written_files += 1;
+                    }
+                }
+                None => {
+                    if !missing_uploads.contains(&base) {
+                        missing_uploads.push(base);
+                    }
+                }
+            }
+        }
+    }
+    if !missing_uploads.is_empty() {
+        eprintln!(
+            "ingest: warning: upload(s) arrived without contents — drop {} under {} before replaying",
+            missing_uploads.join(", "),
+            files_dir.display()
+        );
+    }
+    let files_note = if written_files > 0 {
+        format!(" + {written_files} file(s) → files/")
+    } else {
+        String::new()
+    };
+
     println!(
-        "[ingest] {sid}: {step_count} steps{har_note}\n  scenario: {}\n  replay: agent-qa replay {sid}\n  hermetic: agent-qa replay {sid} --mock-from recorded --offline",
+        "[ingest] {sid}: {step_count} steps{har_note}{files_note}\n  scenario: {}\n  replay: agent-qa replay {sid}\n  hermetic: agent-qa replay {sid} --mock-from recorded --offline",
         scenario_path.display()
     );
     Ok(0)
+}
+
+/// Decode a `data:[<type>][;base64],<payload>` URL into bytes. Only the
+/// base64 form is handled — it's what FileReader.readAsDataURL emits.
+fn decode_data_url(url: &str) -> Option<Vec<u8>> {
+    use base64::Engine;
+    let (head, payload) = url.split_once(',')?;
+    if !head.starts_with("data:") || !head.contains(";base64") {
+        return None;
+    }
+    base64::engine::general_purpose::STANDARD
+        .decode(payload.trim())
+        .ok()
 }
 
 /// Compact `a > b` into `a>b` inside `on` shorthand strings — the
@@ -461,6 +529,55 @@ mod tests {
         // And the original scenario survived — not a partial overwrite.
         let written = fs::read_to_string(tmp.path().join("mine").join("scenario.json")).unwrap();
         assert!(written.contains("\"mine\""), "original scenario intact");
+        std::env::remove_var(crate::paths::SCENARIOS_DIR_ENV);
+    }
+
+    #[test]
+    fn ingest_materializes_inlined_upload_contents() {
+        let _guard = crate::test_util::lock_env();
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::env::set_var(crate::paths::SCENARIOS_DIR_ENV, tmp.path());
+        let step = json!({
+            "kind": "do",
+            "draft": {
+                "intent": "upload report.pdf",
+                "verb": "upload",
+                "on": "css:#file",
+                "value": {"from": "literal", "literal": "files/report.txt"}
+            },
+            "uploads": [
+                {
+                    "name": "report.txt",
+                    "type": "text/plain",
+                    "data": "data:text/plain;base64,aGVsbG8gd29ybGQ="
+                },
+                {"name": "big.bin", "skipped": "too large"},
+                {"name": "../escape/evil.txt",
+                 "data": "data:;base64,bmljZQ=="}
+            ]
+        });
+        let bundle_file = tmp.path().join("bundle.json");
+        fs::write(
+            &bundle_file,
+            serde_json::to_string(&bundle(vec![step], vec![])).unwrap(),
+        )
+        .unwrap();
+        let rc = run(&[
+            bundle_file.display().to_string(),
+            "--sid".into(),
+            "up".into(),
+        ])
+        .unwrap();
+        assert_eq!(rc, 0);
+        // Inlined contents land under files/; traversal attempts are
+        // flattened to a basename inside the scenario dir.
+        let written = fs::read(tmp.path().join("up/files/report.txt")).unwrap();
+        assert_eq!(written, b"hello world");
+        let escaped = fs::read(tmp.path().join("up/files/evil.txt")).unwrap();
+        assert_eq!(escaped, b"nice");
+        assert!(!tmp.path().join("escape").exists());
+        // big.bin (skipped) is not materialized.
+        assert!(!tmp.path().join("up/files/big.bin").exists());
         std::env::remove_var(crate::paths::SCENARIOS_DIR_ENV);
     }
 
