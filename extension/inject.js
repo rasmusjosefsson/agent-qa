@@ -104,6 +104,34 @@
     return origSend.call(this, body);
   };
 
+  // alert/confirm/prompt freeze the page's JS thread, so wrap them here
+  // in the main world: after the original call returns we hold the user's
+  // real answer (confirm bool, prompt text|null) and post it for the
+  // content script to record as a check+dialog pair — the same shape the
+  // workbench emits off Page.javascriptDialogOpening. beforeunload can't
+  // be wrapped (no JS entry point).
+  const wrapDialog = (name) => {
+    const orig = window[name];
+    if (typeof orig !== "function") return;
+    window[name] = function (...args) {
+      const out = orig.apply(this, args);
+      try {
+        window.postMessage(
+          {
+            __aqDialog: {
+              type: name,
+              message: String(args[0] ?? ""),
+              result: out === undefined ? true : out,
+            },
+          },
+          "*",
+        );
+      } catch {}
+      return out;
+    };
+  };
+  ["alert", "confirm", "prompt"].forEach(wrapDialog);
+
   // Beacon so the content script (and on record:stop, the export bundle)
   // can tell capture is armed — a CSP-strict page blocks the <script src>
   // injection and without this the bundle silently exports network: [].

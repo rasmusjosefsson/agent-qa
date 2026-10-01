@@ -29,6 +29,47 @@
       if (active) send({ t: "netReady" });
       return;
     }
+    if (e.data.__aqDialog) {
+      if (!active) return;
+      const d = e.data.__aqDialog;
+      const message = String(d.message ?? "");
+      // Same pair the workbench emits off Page.javascriptDialogOpening:
+      // a check pinning the message, then the resolve step — but here the
+      // user's real answer is known, so confirm/prompt record the actual
+      // action instead of an unconditional accept.
+      send(
+        stepMsg({
+          kind: "check",
+          draft: {
+            intent: `${d.type} dialog says "${message.slice(0, 80)}"`,
+            claim: {
+              subject: { dialog: true },
+              predicate: "contains",
+              value: message,
+            },
+          },
+        }),
+      );
+      const params =
+        (d.type === "confirm" && d.result !== true) ||
+        (d.type === "prompt" && d.result === null)
+          ? { action: "dismiss" }
+          : { action: "accept" };
+      if (params.action === "accept" && d.type === "prompt") {
+        params.text = String(d.result ?? "");
+      }
+      send(
+        stepMsg({
+          kind: "do",
+          draft: {
+            intent: `${d.type} dialog → ${params.action}`,
+            verb: "dialog",
+            params,
+          },
+        }),
+      );
+      return;
+    }
     if (!e.data.__aqNet || !active) return;
     send({ t: "net", entry: e.data.__aqNet });
   });
