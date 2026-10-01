@@ -15,7 +15,7 @@ the picture shifts materially.
 | Audit | `flaky`, `slow`, `heal-chronic` (+`--all`), `verdict` (+`--all`), `cluster`, `trend` (+`--all`), `health`, run-vs-run compare (CLI + workbench) |
 | Lint | `no-visual-check`, `shot-without-baseline`, `domshot-without-baseline`, `orphan-baseline`, `brittle-locator`, `fixed-sleep`, `check-all` in smoke |
 | CI | `qa-gate` (fixture goldens + sticky verdict + run-report artifacts), `ui-goldens` (visual gate w/ embedded before/after/diff images), `qa-crawl` (draft coverage on UI PRs), `qa-adopt` + `/qa accept` commands, composite `action.yml` (+npm install mode, +app-under-test boot), `evals-nightly`, changelog-driven releases |
-| Golden suites | ~30 QA Playground pages, ~34 the-internet edge cases (six sweeps), saucedemo suite (login/sort, full 21-step purchase, negative auth, logout, cookie+storage lifecycle), expandtesting (login round-trip, dynamic table, infinite scroll), todomvc (stateful SPA), demoqa widgets, httpbin hermetic-mock loop, workbench selftest goldens, quotes.toscrape.com (pagination, HttpOnly cookie claims, scroll offsets), parabank (registration with `{{vars._unique}}`, login/logout, profile update — volatile-URL claims normalized), demoblaze (category filters, add-to-cart alert claims, cart session persistence across reload, full purchase flow), automation-exercise (signup+cart lifecycle), wikipedia (search nav, TOC, history, REST API claims), formy (full form, bootstrap modal, jQuery datepicker, JS dropdown), testpages (ajax cascade, form POST echo, native dialogs, onblur validation), coffee-cart (cart badge, promo modal, checkout form, quantity steppers), globalsqa XYZ Bank (AngularJS login, deposit/withdraw, transactions ledger, manager console), hackernews (live HN API claims), selectorshub (shadow-DOM fills + snapshot attribute reads), practicesoftwaretesting (search, cart, login + QUERY-method API claims), lambdatest OpenCart (GET-form search with percent-encoded routes, hidden sticky-bar twins, delegated jQuery cart POST, cart page quantity rows), bonigarcia selenium-webdriver-java (GET form submit, open shadow DOM text, jQuery UI mouse drag, native dialogs + Bootstrap modal, web storage seeding), petstore.octoperf.com JPetStore (Struts catalog browse, add-to-cart POST, sign-in round-trip, full order placement with `;jsessionid` matrix-param URLs), selenium.dev web-form (control echoes, checkbox/radio/select state, datalist + bootstrap-datepicker pick, range slider, disabled/readonly/hidden/file serialization), rahulshettyacademy AutomationPractice (radios, jQuery UI autocomplete, select, checkbox flips, alert/confirm, two popup classes, hide/show computed style, :hover menu, data tables, cross-origin iframe via role-locator claim) |
+| Golden suites | ~30 QA Playground pages, ~34 the-internet edge cases (six sweeps), saucedemo suite (login/sort, full 21-step purchase, negative auth, logout, cookie+storage lifecycle), expandtesting (login round-trip, dynamic table, infinite scroll), todomvc (stateful SPA), demoqa widgets, httpbin hermetic-mock loop, workbench selftest goldens, quotes.toscrape.com (pagination, HttpOnly cookie claims, scroll offsets), parabank (registration with `{{vars._unique}}`, login/logout, profile update — volatile-URL claims normalized), demoblaze (category filters, add-to-cart alert claims, cart session persistence across reload, full purchase flow), automation-exercise (signup+cart lifecycle), wikipedia (search nav, TOC, history, REST API claims), formy (full form, bootstrap modal, jQuery datepicker, JS dropdown), testpages (ajax cascade, form POST echo, native dialogs, onblur validation), coffee-cart (cart badge, promo modal, checkout form, quantity steppers), globalsqa XYZ Bank (AngularJS login, deposit/withdraw, transactions ledger, manager console), hackernews (live HN API claims), selectorshub (shadow-DOM fills + snapshot attribute reads), practicesoftwaretesting (search, cart, login + QUERY-method API claims), lambdatest OpenCart (GET-form search with percent-encoded routes, hidden sticky-bar twins, delegated jQuery cart POST, cart page quantity rows), bonigarcia selenium-webdriver-java (GET form submit, open shadow DOM text, jQuery UI mouse drag, native dialogs + Bootstrap modal, web storage seeding), petstore.octoperf.com JPetStore (Struts catalog browse, add-to-cart POST, sign-in round-trip, full order placement with `;jsessionid` matrix-param URLs), selenium.dev web-form (control echoes, checkbox/radio/select state, datalist + bootstrap-datepicker pick, range slider, disabled/readonly/hidden/file serialization), rahulshettyacademy AutomationPractice (radios, jQuery UI autocomplete, select, checkbox flips, alert/confirm, two popup classes, hide/show computed style, :hover menu, data tables, cross-origin iframe via role-locator claim), jqueryui.com (droppable/sortable/slider drags inside class-only iframes, accordion, checkboxradio labels, selectmenu portal pick) |
 
 ## Ranked gaps
 
@@ -977,3 +977,34 @@ and exited through the `frame` verb. Findings:
   locators do reach inside: the golden lib gains `assertRolePresent`
   (records the `kind:"present"` role-locator claim the translator
   already understood), and rs-tc04 claims the frame's `link "Courses"`.
+
+## Dogfood pass XXI — jqueryui.com widget sweep
+
+Four goldens on jqueryui.com demo pages (widgets live inside a
+class-only `iframe.demo-frame`): 10/10 + 12/12 + 21/21 + 28/28
+record→replay. Coverage: jQuery UI droppable (`drag` → `Dropped!` +
+`ui-state-highlight` class), sortable reorder by trusted mouse drag,
+accordion expansion (`aria-expanded` + active-class claims), slider
+handle position (`style` attribute claim), checkboxradio label-driven
+radios/checkboxes (IDL `checked` claims + group unselect), and a
+selectmenu portal pick (`nth-child` item click + button text claim).
+Findings — both were real replay gaps, and both ships in this sweep:
+
+- **`agent-browser frame` resolves only `#id` selectors and refs** —
+  any class/attribute iframe selector (`iframe.demo-frame`,
+  `iframe[src*=x]`) reported "Frame not found" even though the element
+  exists, so a recorded `frame` step could never enter it at replay.
+  `switch_frame` now falls back to the snapshot-ref path: eval the
+  selector's ordinal among the document's iframes, then `frame` the
+  nth `Iframe` ref from the a11y snapshot (DOM order is stable). The
+  golden lib's `enterFrame` got the record-side twin (temp-id assign
+  for the live `agent-browser frame` call); the recorded step keeps
+  the original selector.
+- **`drag_via_mouse` silently no-ops inside a frame** — endpoint
+  coords were resolved via eval (frame-local rect space) and fed
+  straight to trusted `mouse` events (top-viewport space): inside any
+  iframe the gesture pressed dead space and mouse-tracking widgets
+  (droppable, sortable, slider, react-dnd) never saw it. The coords
+  eval now scrolls the iframe element into the top viewport and adds
+  its rect to every returned point; the hit-test subtracts it back
+  before the frame's `elementFromPoint`.

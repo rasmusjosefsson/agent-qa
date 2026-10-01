@@ -422,7 +422,21 @@ export async function runEdgeGolden(
       await record(ctx, "wait", { condition: { kind: "duration", ms }, intent: stepIntent });
     },
     async enterFrame(selector, stepIntent) {
-      await run(ctx, `frame ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "frame", selector]);
+      // agent-browser `frame` resolves only #id selectors and snapshot
+      // refs — a class/attribute selector (`iframe.demo-frame`) fails even
+      // though the element exists. Give the iframe a temp id for the
+      // live entry; the recorded step keeps the original selector and
+      // replay resolves it via its own snapshot-ref fallback.
+      try {
+        await run(ctx, `frame ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "frame", selector]);
+      } catch {
+        const tempId = "aq-live-frame";
+        await run(ctx, `tag ${selector} for frame entry`, [
+          ctx.agentBrowser, "--session", ctx.session, "eval",
+          `(() => { const f = document.querySelector(${JSON.stringify(selector)}); if (!f) throw new Error('frame element missing'); f.id = ${JSON.stringify(tempId)}; return 'ok'; })()`,
+        ]);
+        await run(ctx, `frame #${tempId}`, [ctx.agentBrowser, "--session", ctx.session, "frame", `#${tempId}`]);
+      }
       await record(ctx, "action", { method: "enterFrame", args: [selector], intent: stepIntent });
     },
     async exitFrame(stepIntent) {
