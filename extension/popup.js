@@ -23,11 +23,31 @@ const status = async () => {
   }
 };
 
+// Is `agent-qa ingest --listen` up? The popup probes once on open so
+// the recorder knows whether Stop will send the bundle straight to the
+// CLI or download a file — same button either way, different result.
+const daemonUp = async () => {
+  try {
+    const r = await fetch("http://127.0.0.1:17321/health", {
+      signal: AbortSignal.timeout(1500),
+    });
+    const j = await r.json().catch(() => ({}));
+    return r.ok && j.ok === true;
+  } catch {
+    return false;
+  }
+};
+
 const boot = async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   tabId = tab && tab.id;
   await status();
   if (recording && !poller) poller = setInterval(status, 1000);
+  if (!recording) {
+    meta.textContent = (await daemonUp())
+      ? "agent-qa daemon online — export sends straight to it"
+      : "no daemon — export downloads a file";
+  }
 };
 
 btn.addEventListener("click", async () => {
