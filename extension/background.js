@@ -353,9 +353,36 @@ function download(filename, text) {
   });
 }
 
-// A closing tab silently drops its capture — clean up the persisted
-// entry so a reopened tab with the same id doesn't resurrect it.
+// A closing tab silently drops its capture — but the close itself IS
+// part of the flow (window.close(), a finished payment popup, the user
+// tidying up): record it as `tab close tN` so replay closes the tab too
+// instead of leaving a stale window open. Emit BEFORE deleting the
+// in-memory session — s.tabs order still mirrors the refs already
+// recorded, so tN names the right tab. Splice it out after so later
+// popups renumber consistently with replay's open-order naming.
 chrome.tabs.onRemoved.addListener((tabId) => {
+  const s = sessions.get(tabId);
+  if (s && Array.isArray(s.tabs)) {
+    const n = s.tabs.indexOf(tabId) + 1;
+    if (n > 0) {
+      s.steps.push({
+        kind: "do",
+        draft: {
+          intent: `close tab t${n}`,
+          verb: "tab",
+          value: { from: "literal", literal: `close t${n}` },
+        },
+      });
+      s.tabs = s.tabs.filter((t) => t !== tabId);
+      if (s.lastUrls) delete s.lastUrls[tabId];
+      // The next step arriving from a surviving tab needs a switch-back
+      // draft — replay is still pointed at the closed handle.
+      if (s.activeTab === tabId) s.activeTab = null;
+      // persist fans out to every s.tabs key — one call covers all
+      // remaining tabs.
+      if (s.tabs.length) persist(s.tabs[0]);
+    }
+  }
   sessions.delete(tabId);
   chrome.storage.session.remove(keyOf(tabId)).catch(() => {});
 });
