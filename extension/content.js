@@ -444,6 +444,53 @@
     true
   );
 
+  // Scrolls matter when the flow depends on revealed content — lazy
+  // lists, anchors, forms below the fold. Debounce bursts into one
+  // scrollTo per target; window scrolls replay exactly via params.y /
+  // to:"bottom", element scrolls degrade to the verb's scrollIntoView
+  // (exact scrollTop isn't expressible by the replay verb).
+  let scrollTimer = null;
+  let lastScrollEl = null;
+  document.addEventListener(
+    "scroll",
+    (e) => {
+      if (!active || !e.isTrusted) return;
+      const el =
+        e.target === document
+          ? document.scrollingElement || document.documentElement
+          : e.target;
+      if (!el || el.nodeType !== 1) return;
+      lastScrollEl = el;
+      clearTimeout(scrollTimer);
+      scrollTimer = setTimeout(() => {
+        const target = lastScrollEl;
+        lastScrollEl = null;
+        if (!target) return;
+        const isWindow =
+          target === document.scrollingElement ||
+          target === document.documentElement ||
+          target === document.body;
+        if (isWindow) {
+          const y = Math.round(window.scrollY);
+          const bottom = target.scrollHeight - target.clientHeight;
+          const params = bottom - y <= 2 ? { to: "bottom" } : { y };
+          send(stepMsg(doDraft("scroll page", "scrollTo", { params })));
+        } else {
+          // Element scrolls must use css — replay's scrollTo rejects
+          // role locators (scrollIntoView path only handles raw).
+          send(
+            stepMsg(
+              doDraft(`scroll ${label(target)}`, "scrollTo", {
+                on: `css:${cssPath(target)}`,
+              })
+            )
+          );
+        }
+      }, 400);
+    },
+    { capture: true, passive: true }
+  );
+
   // Service worker answers with the tab's recording flag so a
   // mid-recording full navigation re-arms this document.
   try {

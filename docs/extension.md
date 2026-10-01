@@ -46,6 +46,7 @@ What it captures per interaction:
 | arrow/Home/End/PageUp/PageDown on a slider/tab/listbox/menu/radio/range widget | `do/press` with the key |
 | file picked in `<input type=file>` | `do/upload` with `files/<name>` refs; contents ≤256KB are inlined into the bundle and `ingest` materializes them under `files/` — bigger/unreadable files keep the name ref and are named in the warning |
 | `alert()`/`confirm()`/`prompt()` | a `{dialog:true}` check pinning the message + `do/dialog` resolving it — confirm records your real accept/dismiss, prompt records the text you typed (wrapped in the MAIN world; the returned value is the user's actual answer) |
+| scroll (debounced ~400ms) | `do/scrollTo` — window scrolls record `params.y` (or `to:"bottom"`); element scrolls record an `on:css` target and replay as `scrollIntoView` (exact `scrollTop` isn't expressible) |
 | every fetch/XHR | `{url, method, status, body, postData, startedAt, durationMs}` (bodies capped at 256KB) |
 | interactions inside **same-origin iframes** | `do/frame` enter/exit drafts wrap the in-frame steps (nested frames handled one level at a time) |
 | interactions in a `window.open`/`target=_blank` popup | the popup joins the recording; first activity there emits `do/tab` `t2`, returning to the opener emits `do/tab` `t1` (the popup's opening nav is implied by the recorded opener click) |
@@ -53,7 +54,8 @@ What it captures per interaction:
 **Not captured (v1):** `beforeunload` dialogs (no JS entry
 point to wrap), cross-origin iframe internals (counted as a bundle
 warning — the iframe element can't be located from inside it),
-canvas drawing, real multi-touch, hover-only gestures, scrolling,
+canvas drawing, real multi-touch, hover-only gestures, exact
+element `scrollTop` (element scrolls replay as `scrollIntoView`),
 same-URL reloads, closing a popup tab. Record those flows with
 `agent-qa record` instead.
 
