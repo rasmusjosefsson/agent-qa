@@ -1,73 +1,83 @@
 - generic [ref=e1] clickable [onclick]
   - list
     - listitem [level=1]
-      - link "agent-qa QA workbench · v0.1.0" [ref=e23]
+      - link "agent-qa QA workbench · v0.1.0" [ref=e25]
         - StaticText "agent-qa"
         - StaticText "QA workbench"
         - StaticText " · v0.1.0"
-  - list
-    - listitem [level=1]
-      - link "Chat" [ref=e25]
-        - StaticText "Chat"
-    - listitem [level=1]
-      - link "Editor" [ref=e26]
-        - StaticText "Editor"
   - generic
-    - StaticText "Tests"
+    - StaticText "CREATE"
     - list
       - listitem [level=1]
-        - link "Cases" [ref=e27]
+        - link "Chat" [ref=e27]
+          - StaticText "Chat"
+      - listitem [level=1]
+        - link "Editor" [ref=e28]
+          - StaticText "Editor"
+  - generic
+    - StaticText "TEST PIPELINE"
+    - list
+      - listitem [level=1]
+        - link "Cases" [ref=e29]
           - StaticText "Cases"
+        - StaticText "1"
       - listitem [level=1]
-        - link "Sets" [ref=e28]
+        - link "Sets" [ref=e30]
           - StaticText "Sets"
+        - StaticText "2"
       - listitem [level=1]
-        - link "Plans" [ref=e29]
+        - link "Plans" [ref=e31]
           - StaticText "Plans"
+        - StaticText "3"
       - listitem [level=1]
-        - link "Runs" [ref=e30]
+        - link "Runs" [ref=e32]
           - StaticText "Runs"
+        - StaticText "4"
   - generic
-    - StaticText "Setup"
+    - StaticText "SETUP"
     - list
       - listitem [level=1]
-        - link "Personas" [ref=e31]
+        - link "Personas" [ref=e33]
           - StaticText "Personas"
       - listitem [level=1]
-        - link "Environments" [ref=e32]
+        - link "Environments" [ref=e34]
           - StaticText "Environments"
       - listitem [level=1]
-        - link "Knowledge" [ref=e33]
+        - link "Knowledge" [ref=e35]
           - StaticText "Knowledge"
       - listitem [level=1]
-        - link "Extensions" [ref=e34]
+        - link "Extensions" [ref=e36]
           - StaticText "Extensions"
+  - link "New here? Describe a test in Chat. The agent records it, then you replay it from Runs." [ref=e23]
+    - StaticText "New here?"
+    - paragraph
+      - StaticText "Describe a test in Chat. The agent records it, then you replay it from Runs."
   - list
     - listitem [level=1]
-      - link "Settings" [ref=e24]
+      - link "Settings" [ref=e26]
         - StaticText "Settings"
-  - button "Toggle Sidebar" [ref=e22]
+  - button "Toggle Sidebar" [ref=e24]
   - main
     - sectionheader
-      - button "Toggle Sidebar" [ref=e5]
+      - button "Toggle Sidebar" [ref=e4]
         - image
         - StaticText "Toggle Sidebar"
-      - StaticText "Settings"
+      - StaticText "Workspace"
       - StaticText "/"
-      - StaticText "QA workbench"
-      - button "Theme" [expanded=false, ref=e10]
-    - heading "Settings" [level=1, ref=e3]
+      - StaticText "Settings"
+      - button "Theme" [expanded=false, ref=e11]
+    - heading "Settings" [level=1, ref=e5]
     - paragraph
       - StaticText "Workbench preferences, stored in _config/settings.json next to your scenarios. Environment variables override stored values."
-    - button "Refresh" [ref=e4]
+    - button "Refresh" [ref=e6]
     - generic
       - StaticText "CHAT"
       - LabelText
         - StaticText "Agent backend"
       - paragraph
         - StaticText "Which agent the Chat tab talks to. auto picks whichever backend is installed."
-      - combobox "Agent backend" [expanded=false, ref=e6]: auto
-        - generic [ref=e11] clickable [onclick]
+      - combobox "Agent backend" [expanded=false, ref=e7]: auto
+        - generic [ref=e12] clickable [onclick]
           - StaticText "auto"
     - generic
       - StaticText "REPLAY"
@@ -75,13 +85,13 @@
         - StaticText "Headed browser by default"
       - paragraph
         - StaticText "New replays and persona connects start with a visible browser window instead of headless. Per-run toggles still win."
-      - checkbox "Headed browser by default" [checked=false, ref=e7]
+      - checkbox "Headed browser by default" [checked=false, ref=e8]
     - generic
       - StaticText "PATHS"
       - DescriptionList
         - term "Scenario root"
         - definition
-          - StaticText "/tmp/wt-domshot-selftest/evals/selftest/scenarios"
+          - StaticText "/home/ubuntu/repos/agent-qa/evals/selftest/scenarios"
         - term "Settings file"
         - definition
-          - StaticText "/tmp/wt-domshot-selftest/evals/selftest/scenarios/_config/settings.json"
+          - StaticText "/home/ubuntu/repos/agent-qa/evals/selftest/scenarios/_config/settings.json"
