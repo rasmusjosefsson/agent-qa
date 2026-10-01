@@ -213,11 +213,11 @@ so the file-based verbs and their defaults were never exercised:
 - **`record-setup` storage ops on a never-navigated session produce an
   unreplayable scenario** — `[fresh, localStorage]` with no `nav` op runs
   `localStorage` on about:blank and dies `SecurityError` at env.open.
-  #329's nav-seal fixes the common case (a `--open` session), and #337
-  added the setup-time warning ("no nav op precedes this storage op").
-  Still open: the replay env-runner could skip storage ops on opaque
-  origins with a visible warning — a residual decision, low priority
-  since the record path now warns up front.
+  #329's nav-seal fixes the common case (a `--open` session), #337
+  added the setup-time warning ("no nav op precedes this storage op"),
+  and #442 closed the replay side: env.open skips origin-bound ops on
+  pages with no origin (about:blank) and logs the skip — nothing writes
+  to the wrong place or throws anymore.
 - **Claim predicate sugar** (#333): `{"predicate":{"contains":"x"}}`
   lowers to predicate+value; unary-in-object and doubled-value are
   explicit errors. Second most-common hand-author miss after locators.
@@ -252,11 +252,13 @@ so the file-based verbs and their defaults were never exercised:
   before serde — a misplaced key inside a locator (e.g.
   `{"role":...,"attribute":"x"}`) now dies at record with the offending
   instance printed instead of a misleading predicate error later.
-- **Ad/telemetry-heavy pages flood `--auto-network`** — selectorshub
-  emits google-docs/play.google.com beacon claims on flush; the beacon
-  filter (#315) covers same-origin `/cdn-cgi/rum` but not third-party
-  hosts. For noisy pages flush `--no-auto-network` (shub-tc01 does via
-  `flushArgs`) and hand-author the claims worth keeping.
+- **Ad/telemetry-heavy pages flood `--auto-network`** — mostly closed:
+  `telemetry.rs` blocklists ~50 collector domains (analytics, ads,
+  session-replay, error-reporting) plus same-origin `/cdn-cgi/` and
+  `/_vercel/` paths, and both flush (#315) and crawl (#272) filter
+  through it. A host that isn't on the list still gets claimed — for
+  those, flush `--no-auto-network` and hand-author what matters (the
+  list grows as new collectors show up).
 - **`start` has no `--sid`; `flush` has no positional arg** — sids are
   generated (`s<ts>`); rename post-flush with `scenario rename`. Both
   flag guesses error cleanly, but agents reach for them every time —
