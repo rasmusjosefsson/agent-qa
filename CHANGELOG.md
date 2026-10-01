@@ -18,7 +18,10 @@ All notable changes to agent-qa are documented here. This project follows
 - Golden sweeps on material.angular.dev (CDK portals: select,
   autocomplete, datepicker, dialog, menu) and demowebshop.tricentis.com
   (nopCommerce: ajax cart, `{{vars._unique}}` registration, six-step
-  guest-checkout accordion).
+  guest-checkout accordion), and blazedemo.com (select-driven flight
+  search, full purchase flow, malformed-HTML row cells via
+  `nth-of-type`, canned receipt echo, positive `pageError` claim for
+  the site's broken JS).
 
 ### Fixed
 
