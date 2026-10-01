@@ -21,13 +21,14 @@ const PAGE_ICONS: Record<string, string> = {
   "docs/releasing": "code-play",
 }
 const name = PAGE_ICONS[Astro.locals.starlightRoute.id]
-const svg = name ? icon(name) : undefined
+const dark = name ? icon(name) : undefined
+const light = name ? icon(`${name}-light`) : undefined
 ---
 
 {
-  svg ? (
+  dark ? (
     <div class="aqa-page-title">
-      <span class="aqa-page-icon" aria-hidden="true" set:html={svg} />
+      <span class="aqa-page-icon" aria-hidden="true"><span class="aqa-dark-only" set:html={dark} /><span class="aqa-light-only" set:html={light} /></span>
       <Default />
     </div>
   ) : (

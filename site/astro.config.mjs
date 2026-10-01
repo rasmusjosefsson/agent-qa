@@ -13,7 +13,7 @@ export default defineConfig({
     starlight({
       title: "agent-qa",
       description: "Record a user scenario in a real browser. Replay it later. See exactly what changed.",
-      logo: { src: "./src/assets/logo.svg" },
+      logo: { dark: "./src/assets/logo.svg", light: "./src/assets/logo-light.svg" },
       favicon: "/favicon.svg",
       social: [{ icon: "github", label: "GitHub", href: "https://github.com/rasmusjosefsson/agent-qa" }],
       customCss: [
