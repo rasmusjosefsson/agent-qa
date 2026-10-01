@@ -220,9 +220,9 @@ const tree = [
           {
             loop.map((l) => (
               <li class="loop-card reveal">
-                <span class="loop-icon" aria-hidden="true"><span class="aqa-dark-only" set:html={l.icon} /><span class="aqa-light-only" set:html={l.iconLight} /></span>
                 <h3>
                   <span class="loop-n">{l.n}</span>
+                  <span class="loop-icon" aria-hidden="true"><span class="aqa-dark-only" set:html={l.icon} /><span class="aqa-light-only" set:html={l.iconLight} /></span>
                   {l.title}
                 </h3>
                 <p>{l.body}</p>
@@ -1104,7 +1104,7 @@ auth = <span class="s">"./plugins/acme-auth/agent-qa-plugin-acme-auth"</span>
   .loop-card:not(:last-child)::after {
     content: "";
     position: absolute;
-    top: 42px;
+    top: 40px;
     right: -15px;
     width: 16px;
     height: 1px;
@@ -1115,9 +1115,10 @@ auth = <span class="s">"./plugins/acme-auth/agent-qa-plugin-acme-auth"</span>
     color: var(--aqa-brand);
   }
   .loop-icon {
+    flex: none;
     display: inline-grid;
-    width: 36px;
-    height: 36px;
+    width: 32px;
+    height: 32px;
     filter: drop-shadow(0 6px 16px color-mix(in oklab, var(--aqa-brand) 30%, transparent));
   }
   .loop-icon :global(svg) {
@@ -1126,9 +1127,8 @@ auth = <span class="s">"./plugins/acme-auth/agent-qa-plugin-acme-auth"</span>
   }
   .loop-card h3 {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 10px;
-    margin-top: 18px;
     font-size: 19px;
     font-weight: 620;
   }
