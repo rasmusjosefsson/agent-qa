@@ -248,22 +248,28 @@ async function handle(msg, sender) {
           "the iframe element can't be located from inside it",
       );
     }
-    // Upload steps carry `files/<name>` references — the names survive
-    // but the contents can't cross worlds, so replay needs the files
-    // dropped in. Name them so fixing it is a copy, not a guess.
-    const uploadRefs = [];
+    // Upload steps carry `files/<name>` references. Contents ≤256KB are
+    // inlined into the bundle (item.uploads[].data) — name any that
+    // arrived without data so fixing them is a copy, not a guess.
+    const uploadMissing = [];
     for (const st of s.steps) {
       const d = st && st.draft;
       if (!d || d.verb !== "upload") continue;
       const lit = d.value && d.value.literal;
-      for (const n of Array.isArray(lit) ? lit : [lit].filter(Boolean)) {
-        uploadRefs.push(n);
+      const names = Array.isArray(lit) ? lit : [lit].filter(Boolean);
+      const got = new Set(
+        (Array.isArray(st.uploads) ? st.uploads : [])
+          .filter((u) => u && u.data)
+          .map((u) => u.name),
+      );
+      for (const n of names) {
+        if (!got.has(String(n).replace(/^files\//, ""))) uploadMissing.push(n);
       }
     }
-    if (uploadRefs.length) {
+    if (uploadMissing.length) {
       (bundle.warnings ||= []).push(
-        `file upload(s) recorded as references — contents can't be captured; ` +
-          `drop ${uploadRefs.join(", ")} under the scenario dir before replaying`,
+        `file upload(s) recorded without contents — ` +
+          `drop ${uploadMissing.join(", ")} under the scenario dir before replaying`,
       );
     }
     if (s.botWallSteps) {

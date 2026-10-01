@@ -297,26 +297,47 @@
         return;
       }
       if (type === "file") {
-        // File contents can't cross worlds, but the names can — record
-        // an upload step referencing files/<name> so the flow replays
-        // and the bundle can name which files to drop in. A silent skip
-        // here loses the interaction entirely.
-        const names = [...(el.files || [])].map((f) => f.name).filter(Boolean);
-        if (!names.length) return;
-        send(
-          stepMsg(
-            doDraft(`upload ${names.join(", ")}`, "upload", {
-              on: locator(el),
-              value: {
-                from: "literal",
-                literal:
-                  names.length === 1
-                    ? `files/${names[0]}`
-                    : names.map((n) => `files/${n}`),
-              },
-            })
-          )
+        // Record an upload step referencing files/<name> so the flow
+        // replays, and inline small file contents into the bundle —
+        // input.files IS readable from the isolated world, so ingest can
+        // materialize files/<name> and the flow replays end-to-end with
+        // no manual file drop. Oversize/unreadable files keep the
+        // name-only ref + the export warning that names them.
+        const INLINE_CAP = 256 * 1024;
+        const files = [...(el.files || [])].filter((f) => f && f.name);
+        if (!files.length) return;
+        const item = doDraft(`upload ${files.map((f) => f.name).join(", ")}`, "upload", {
+          on: locator(el),
+          value: {
+            from: "literal",
+            literal:
+              files.length === 1
+                ? `files/${files[0].name}`
+                : files.map((f) => `files/${f.name}`),
+          },
+        });
+        const reads = files.map(
+          (f) =>
+            new Promise((res) => {
+              if (f.size > INLINE_CAP) {
+                res({ name: f.name, skipped: "too large" });
+                return;
+              }
+              const r = new FileReader();
+              r.onload = () =>
+                res({ name: f.name, type: f.type || "", data: r.result });
+              r.onerror = () => res({ name: f.name, skipped: "unreadable" });
+              try {
+                r.readAsDataURL(f);
+              } catch {
+                res({ name: f.name, skipped: "unreadable" });
+              }
+            }),
         );
+        Promise.all(reads).then((uploads) => {
+          item.uploads = uploads;
+          send(stepMsg(item));
+        });
         return;
       }
       if (el.value === "") return;
