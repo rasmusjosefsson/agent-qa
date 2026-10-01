@@ -6,6 +6,32 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/cut-release.js` — release prep + cut in one step: bumps
+  `npm/agent-qa/package.json`, stamps `## [Unreleased]` into a dated
+  `## [<v>]` section, commits, tags, and pushes (`--push`, `--dry-run`,
+  `--allow-empty`; bails on a dirty tree, non-main branch, empty
+  changelog, or an existing tag). The tag push is what runs the
+  `release` workflow — cross-build, npm publish, and a GitHub release
+  whose notes are the `## [<v>]` section it just stamped.
+- Golden sweeps on material.angular.dev (CDK portals: select,
+  autocomplete, datepicker, dialog, menu) and demowebshop.tricentis.com
+  (nopCommerce: ajax cart, `{{vars._unique}}` registration, six-step
+  guest-checkout accordion).
+
+### Fixed
+
+- `frame` step can enter iframes addressed by non-`#id` selectors —
+  falls back to the nth `Iframe` snapshot ref when `agent-browser
+  frame` only resolves `#id`/refs.
+- Trusted `drag` inside an iframe now lands on the widget: endpoint
+  coords are offset by the iframe's rect into top-viewport space (and
+  the hit-test subtracts it back) instead of pressing dead space.
+- Record-side click probe no longer false-warns "no observable effect"
+  on `check`/`uncheck`/option picks — it counts capture-phase
+  `input`/`change`/`submit`/`toggle` events like the replay probe.
+
 ## [0.1.0] - 2026-09-28
 
 First tagged release. Everything under the pre-release `0.0.x` line lands

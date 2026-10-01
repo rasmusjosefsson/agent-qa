@@ -2,20 +2,39 @@
 
 Releases are cut by tagging a commit on `main` with a semver tag. The
 `release` GitHub Action handles cross-compile, per-platform npm package
-publish, and umbrella publish.
+publish, umbrella publish, and the GitHub release whose notes come from
+`CHANGELOG.md`.
 
 ## Cutting a release
 
 ```bash
-# 1. Make sure main is green
+# 1. Write entries under `## [Unreleased]` in CHANGELOG.md (Added /
+#    Changed / Fixed / Removed — Keep a Changelog style).
+
+# 2. Make sure main is green
 gh run list --workflow=ci.yml --branch=main --limit=1
 
-# 2. Tag and push
-git tag v0.0.1
-git push origin v0.0.1
+# 3. Prep + cut the release (bump / stamp / commit / tag / push)
+node scripts/cut-release.js patch --push       # or minor / major / x.y.z
 ```
 
-GitHub Actions then runs `.github/workflows/release.yml`:
+`scripts/cut-release.js` on a clean, up-to-date `main`:
+
+- computes the next version (or takes an explicit `x.y.z`),
+- moves the `## [Unreleased]` body under a dated `## [<v>] - <date>`
+  heading and bumps `npm/agent-qa/package.json` to the same version,
+- commits `chore(release): v<v>` and tags `v<v>`,
+- prints the push command; `--push` pushes `main` + the tag (which is
+  what actually ships). `--dry-run` previews without touching files or
+  git.
+
+It bails when nothing is under `## [Unreleased]` (pass `--allow-empty`
+for a mechanical bump) and when `## [<v>]` already exists — in which
+case the changelog/version are left as-is and only the tag + push
+happen. That pre-prepped path is how a release whose changelog section
+and package version were landed earlier (like `v0.1.0`) gets tagged.
+
+The tag push runs `.github/workflows/release.yml`:
 
 1. **Stamps `cli/Cargo.toml`'s `[package].version` from the tag** so
    the compiled binary's `agent-qa --version` matches the npm package
@@ -31,6 +50,9 @@ GitHub Actions then runs `.github/workflows/release.yml`:
    `scripts/build-umbrella-pkg.js` (sets `version` and aligns every
    `optionalDependencies` entry to the same version).
 6. Publishes the umbrella package.
+7. Creates the GitHub release for the tag, extracting the `## [<v>]`
+   section of `CHANGELOG.md` as the release notes (a missing section
+   falls back to a pointer at the changelog).
 
 Publish provenance is enabled (`--provenance --access public`); the workflow
 runs with `id-token: write` permission for OIDC.
