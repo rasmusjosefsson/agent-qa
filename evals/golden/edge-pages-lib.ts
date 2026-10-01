@@ -252,9 +252,8 @@ export async function runEdgeGolden(
       await record(ctx, "wait", { condition: { kind: "selector", selector: readySelector }, intent: "page rendered" });
     },
     async clickSelector(selector, stepIntent) {
-      await clickTrustedOrVisible(ctx, (n, c) => run(ctx, n, c), selector);
       await ensureHittable(ctx, selector, stepIntent);
-      await run(ctx, `click ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "click", selector]);
+      await clickTrustedOrVisible(ctx, (n, c) => run(ctx, n, c), selector);
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
     async clickRole(role, name, stepIntent) {
@@ -294,9 +293,8 @@ export async function runEdgeGolden(
       await record(ctx, "action", { method: "selectBySelector", args: [selector, value], intent: stepIntent });
     },
     async checkSelector(selector, stepIntent) {
-      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `check ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "check", selector], checkVisibleEval(selector));
       await ensureHittable(ctx, selector, stepIntent);
-      await run(ctx, `check ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "check", selector]);
+      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `check ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "check", selector], checkVisibleEval(selector));
       await record(ctx, "action", { method: "checkBySelector", args: [selector], intent: stepIntent });
     },
     async hoverSelector(selector, stepIntent) {
@@ -457,11 +455,15 @@ export async function runEdgeGolden(
     async assertElementAttribute(selector, attribute, predicate, expected, stepIntent) {
       await record(ctx, "assert", { kind: "elementAttribute", args: [selector, attribute, predicate, expected], intent: stepIntent });
     },
-    async assertElementCount(selector, count, stepIntent) {
-      await record(ctx, "assert", { kind: "elementCount", args: [selector, count], intent: stepIntent });
-    },
-    async assertElementCount(selector, predicate, count, stepIntent) {
-      await record(ctx, "assert", { kind: "elementCount", args: [selector, predicate, count], intent: stepIntent });
+    async assertElementCount(selector, predicateOrCount, countOrIntent, maybeIntent) {
+      // Both call shapes: (selector, count, intent) and
+      // (selector, predicate, count, intent) — the arg vector keeps the
+      // discriminator so record-translate sees which one was used.
+      const args = maybeIntent === undefined
+        ? [selector, predicateOrCount]
+        : [selector, predicateOrCount, countOrIntent];
+      const intent = maybeIntent === undefined ? countOrIntent : maybeIntent;
+      await record(ctx, "assert", { kind: "elementCount", args, intent });
     },
     async assertElementAbsent(selector, stepIntent) {
       await record(ctx, "assert", { kind: "elementAbsent", args: [selector], intent: stepIntent });

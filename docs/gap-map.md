@@ -893,3 +893,31 @@ param-validation surface for never-stuck / silent-loss classes.
   post-stop requests is benign, `clip()` bounds body size.
 - **`parse_draft` multi-shape** — schema `"literal": {}` is
   unconstrained, so array `files/<n>` literals validate end to end.
+
+## Dogfood pass XVIII — katalon-demo-cura (CURA) sweep + the DOM-click widening
+
+Three goldens on `katalon-demo-cura.herokuapp.com` (login → appointment
+form → book → history → logout): 15/15 + 26/26 + 30/30 record→replay.
+The sweep surfaced two real defects:
+
+- **Union-merge damage in the eval golden lib** — the same splice class
+  as claims.rs/InsertCheckDialog, this time in `edge-pages-lib.ts` +
+  `record-translate.ts`: `clickSelector`/`checkSelector` ran the live
+  action twice with `ensureHittable` *between* them (post-nav probe race
+  killed tc01; checkboxes toggled twice), `assertElementCount` shipped
+  two object-literal methods, and `record-translate.ts` carried a
+  duplicated `case "elementCount"` whose first arm mis-mapped args into
+  a replay-breaking `value:"equals"`. All merged to single definitions.
+- **agent-browser trusted clicks silently miss at scroll depth** —
+  `agent-browser click` reported "✓ Done" but moved no focus, checked no
+  radio, and submitted no form on this site once scrolled ~500px; DOM
+  `el.click()` works. Record-side workaround: `clickSelectorForce`.
+  Replay-side fix shipped here: `try_selector_native_click` now dispatches
+  the pointer/mouse/click chain for *any* element the css locator
+  resolves to (not only native controls) — that also opens
+  mousedown-bound widgets like bootstrap-datepicker, which `fillSelector`
+  cannot satisfy (typing leaves its committed value empty → the required
+  field blocks submit; the real-user path is the calendar pick).
+
+Regression spot-checks on the widened click path: tap-tc04 21/21 (slider
+handle, popup-tab round-trip) and cura-tc01 unchanged.

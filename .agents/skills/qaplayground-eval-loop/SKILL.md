@@ -145,6 +145,20 @@ into `evals/package.json` as `"golden:<site>:<tc>"`.
 - **Below-fold clicks**: `clickSelector`/`checkSelector` auto-scroll +
   record a scrollTo step via `ensureHittable` (#321) — a recorded scenario
   never silently misses an offscreen target.
+- **agent-browser trusted-click misfire at scroll depth** (CURA/
+  katalon-demo-cura): `agent-browser click <sel>` reports “✓ Done” but
+  delivers nothing once the page is scrolled — focus never moves, radios
+  stay unchecked, submits never fire. DOM `el.click()` via `eval` works.
+  Record-side workaround: `clickSelectorForce` for anything the scroll
+  reached. Replay is unaffected — its css clicks dispatch the DOM
+  pointer/mouse/click chain (verbs.rs `try_selector_native_click`), which
+  also opens mousedown-bound widgets (bootstrap-datepicker) and commits
+  their values where typing into the input leaves the widget empty —
+  drive datepickers through the calendar grid, not `fillSelector`.
+- **Union-merge damage**: after merge waves, diff-identical regions get
+  spliced into duplicated struct fields/case arms/object methods that
+  compile-fail or silently win first — sweep with `sort | uniq -d` on
+  method/case names before trusting main.
 
 ### Sweep skip list (probed, not goldenable)
 
