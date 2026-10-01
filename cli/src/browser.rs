@@ -1097,6 +1097,12 @@ pub fn wait_ms(session: &str, ms: u64) -> Result<(), AgentBrowserError> {
     Ok(())
 }
 
+/// Bound on post-navigation `networkidle` waits — an analytics/beacon-
+/// heavy page never goes idle, so an uncapped `wait --load` stalls for
+/// agent-browser's internal timeout (~30s). Same 5s bound as the crawl
+/// and doctor callers; claims retry past a slow load anyway.
+pub const LOAD_CAP_MS: u64 = 5000;
+
 /// Wait until the page reaches a load state. Soft-fail (no throw):
 /// agent-browser often returns non-zero when a page is already idle.
 pub fn wait_for_load(session: &str, state: &str) -> Result<(), AgentBrowserError> {

@@ -83,7 +83,8 @@ pub(crate) fn merge_init_scripts(existing: Option<&str>, extra: &[&Path]) -> Str
 /// is provably quiet — tap present, zero pending requests, and no
 /// navigation (same `performance.timeOrigin`) across the grace window.
 /// Anything else — no tap, in-flight requests, a crossed navigation, a
-/// failed probe — runs the same `wait --load networkidle` as before.
+/// failed probe — waits `networkidle`, bounded like every other
+/// post-navigation settle so a beacon-heavy page can't stall the run.
 pub(crate) fn settle_after_click(session: &str) -> Result<()> {
     let first = net_probe(session);
     sleep(Duration::from_millis(GRACE_MS));
@@ -91,7 +92,11 @@ pub(crate) fn settle_after_click(session: &str) -> Result<()> {
 
     match (first, second) {
         (Some((to1, p1)), Some((to2, p2))) if to1 == to2 && p1 == 0 && p2 == 0 => Ok(()),
-        _ => Ok(browser::wait_for_load(session, "networkidle")?),
+        _ => Ok(browser::wait_for_load_capped(
+            session,
+            "networkidle",
+            browser::LOAD_CAP_MS,
+        )?),
     }
 }
 

@@ -160,7 +160,11 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                         "[v2-replay] goto: already on {url} — reloading anyway (fresh document required)"
                     );
                     browser::open(ctx.session, &url)?;
-                    browser::wait_for_load(ctx.session, "networkidle")?;
+                    browser::wait_for_load_capped(
+                        ctx.session,
+                        "networkidle",
+                        browser::LOAD_CAP_MS,
+                    )?;
                 } else {
                     eprintln!(
                         "[v2-replay] goto: already on {url} — reusing warm page (skipped reload)"
@@ -168,7 +172,7 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                 }
             } else {
                 browser::open(ctx.session, &url)?;
-                browser::wait_for_load(ctx.session, "networkidle")?;
+                browser::wait_for_load_capped(ctx.session, "networkidle", browser::LOAD_CAP_MS)?;
             }
             Ok(None)
         }
@@ -344,7 +348,9 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                     browser::wait_for_idle(ctx.session, idle_ms.unwrap_or(500), timeout_ms)
                         .map_err(|e| anyhow!("step '{id}' wait idle: {e}"))?
                 }
-                _ => browser::wait_for_load(ctx.session, "networkidle")?,
+                _ => {
+                    browser::wait_for_load_capped(ctx.session, "networkidle", browser::LOAD_CAP_MS)?
+                }
             }
             Ok(None)
         }
