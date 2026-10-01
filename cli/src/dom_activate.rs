@@ -582,9 +582,16 @@ pub fn build_drag_coords_js(src: &DragEndpoint, dst: &DragEndpoint) -> String {
   if (!dst) return "dst-miss";
   try {{ src.scrollIntoView({{ block: 'center', inline: 'center', behavior: 'instant' }}); }} catch (e) {{}}
   try {{ dst.scrollIntoView({{ block: 'center', inline: 'center', behavior: 'instant' }}); }} catch (e) {{}}
+  // Inside a frame context, `document`/`window` bind to the frame but
+  // trusted `mouse` events land in TOP-viewport coordinates — offset by
+  // the iframe's own rect (brought into the top viewport first) or the
+  // gesture presses dead space. `__f` only exists in a frame wrap.
+  const __fr = (typeof __f !== 'undefined' && __f && __f.getBoundingClientRect)
+    ? (() => {{ try {{ __f.scrollIntoView({{ block: 'center', inline: 'center', behavior: 'instant' }}); }} catch (e) {{}} return __f.getBoundingClientRect(); }})()
+    : {{ left: 0, top: 0 }};
   const ctr = (el) => {{ const r = el.getBoundingClientRect(); return {{ x: r.left + r.width / 2, y: r.top + r.height / 2 }}; }};
   const s = ctr(src), dp = ctr(dst);
-  return {{ sx: s.x, sy: s.y, dx: dp.x, dy: dp.y }};
+  return {{ sx: s.x + __fr.left, sy: s.y + __fr.top, dx: dp.x + __fr.left, dy: dp.y + __fr.top }};
 }})()"#,
         prelude = activation_prelude(),
         find = scoped_find_helper_js(),
@@ -607,7 +614,13 @@ pub fn build_drag_hittest_js(src: &DragEndpoint, x: f64, y: f64) -> String {
 {finder}
   const src = __aqDragFind({src});
   if (!src) return "gone";
-  const el = document.elementFromPoint({x}, {y});
+  // Incoming coords are TOP-viewport — the frame's elementFromPoint wants
+  // frame-local, so subtract the iframe rect (`__f` exists only in a
+  // frame wrap).
+  const __fr = (typeof __f !== 'undefined' && __f && __f.getBoundingClientRect)
+    ? __f.getBoundingClientRect()
+    : {{ left: 0, top: 0 }};
+  const el = document.elementFromPoint({x} - __fr.left, {y} - __fr.top);
   return el && (el === src || src.contains(el) || el.contains(src)) ? "hit" : "miss";
 }})()"#,
         prelude = activation_prelude(),
@@ -1461,7 +1474,10 @@ mod tests {
     fn drag_hittest_js_checks_the_source_under_the_point() {
         let js = build_drag_hittest_js(&DragEndpoint::Css(".src".into()), 10.5, 20.0);
         assert!(js.contains("\".src\""), "{js}");
-        assert!(js.contains("elementFromPoint(10.5, 20)"), "{js}");
+        assert!(
+            js.contains("elementFromPoint(10.5 - __fr.left, 20 - __fr.top)"),
+            "{js}"
+        );
         assert!(js.contains("\"hit\"") && js.contains("\"miss\""), "{js}");
         assert!(js.contains("\"gone\""), "{js}");
     }

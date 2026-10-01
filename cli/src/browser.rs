@@ -1644,21 +1644,88 @@ pub fn frame_ctx(session: &str) -> Option<String> {
 /// matching the CSS selector, `None` returns to the top document.
 /// Mirrors `agent-browser --session <s> frame <selector|main>`.
 pub fn switch_frame(session: &str, selector: Option<&str>) -> Result<(), AgentBrowserError> {
-    run(
-        session,
-        vec!["frame", selector.unwrap_or("main")],
-        RunOpts::new(),
-    )?;
-    let mut map = frame_ctx_map().lock().unwrap();
     match selector {
         Some(sel) => {
+            if let Err(first) = run(session, vec!["frame", sel], RunOpts::new()) {
+                // agent-browser `frame` resolves only `#id` selectors and
+                // snapshot refs — a class/attribute selector
+                // (`iframe.demo-frame`, `iframe[src*=x]`) reports "Frame
+                // not found" even though the element exists. Fall back to
+                // entering it by its a11y ref.
+                switch_frame_via_ref(session, sel).map_err(|_| first)?;
+            }
+            let mut map = frame_ctx_map().lock().unwrap();
             map.insert(session.to_string(), sel.to_string());
         }
         None => {
+            run(session, vec!["frame", "main"], RunOpts::new())?;
+            let mut map = frame_ctx_map().lock().unwrap();
             map.remove(session);
         }
     }
     Ok(())
+}
+
+/// Enter an iframe by snapshot ref: index the selector match among the
+/// document's iframes, then pass the nth `Iframe` ref to `frame`. The
+/// a11y snapshot emits nodes in DOM order, so iframe ordinal is stable.
+fn switch_frame_via_ref(session: &str, selector: &str) -> Result<(), AgentBrowserError> {
+    let sel = serde_json::to_string(&selector).unwrap_or_else(|_| "\"\\x00\"".into());
+    let expr = format!(
+        "(() => {{ const f = document.querySelector({sel}); \
+         if (!f || f.tagName !== 'IFRAME') return -1; \
+         return Array.from(document.querySelectorAll('iframe')).indexOf(f); }})()"
+    );
+    let out = run(
+        session,
+        ["eval", &expr],
+        RunOpts::new().capture().timeout_ms(60_000),
+    )?;
+    let ordinal: i64 = out.stdout.trim().trim_matches('"').parse().unwrap_or(-1);
+    if ordinal < 0 {
+        return Err(frame_ref_err(selector, "selector matches no iframe"));
+    }
+    let snapshot = snapshot_full(session)?;
+    let refs = iframe_refs_in_snapshot(&snapshot);
+    let Some(r) = refs.get(ordinal as usize) else {
+        return Err(frame_ref_err(
+            selector,
+            "no matching Iframe node in a11y snapshot",
+        ));
+    };
+    run(session, vec!["frame", r.as_str()], RunOpts::new())?;
+    Ok(())
+}
+
+fn frame_ref_err(selector: &str, detail: &str) -> AgentBrowserError {
+    AgentBrowserError::NonZero {
+        verb: "frame".to_string(),
+        exit_code: -1,
+        stderr: format!("frame '{selector}': {detail}"),
+        hint: String::new(),
+    }
+}
+
+/// Refs of `Iframe` a11y nodes in snapshot (DOM) order. Iframe lines are
+/// nameless (`- Iframe [ref=e29]`), so `find_lines_in_snapshot` — which
+/// expects `role "name"` — can't see them.
+fn iframe_refs_in_snapshot(snapshot: &str) -> Vec<String> {
+    snapshot
+        .lines()
+        .filter_map(|line| {
+            let t = line.trim_start_matches([' ', '-', '\t']);
+            let rest = t.strip_prefix("Iframe")?;
+            if !rest.is_empty() && !rest.starts_with(' ') && !rest.starts_with('[') {
+                return None;
+            }
+            let idx = rest.find("ref=")?;
+            let tail = &rest[idx + 4..];
+            let end = tail
+                .find(|c: char| !c.is_ascii_alphanumeric())
+                .unwrap_or(tail.len());
+            (end > 0).then(|| tail[..end].to_string())
+        })
+        .collect()
 }
 
 /// Wrap an eval expression so `document`/`window` inside it bind to the
@@ -1924,6 +1991,29 @@ mod tests {
             .1
             .ends_with(": Devin Dogfood"));
         assert!(snapshot_named_lines(snap, "button").is_empty());
+    }
+
+    #[test]
+    fn iframe_refs_in_snapshot_collects_refs_in_dom_order() {
+        let snap = r#"  - heading "Demos" [level=1, ref=e1]
+  - Iframe [ref=e29]
+    - StaticText "Drag me to my target" [ref=e30]
+  - Iframe [ref=e41]
+  - link "Home" [ref=e4]
+"#;
+        assert_eq!(
+            iframe_refs_in_snapshot(snap),
+            vec!["e29".to_string(), "e41".to_string()]
+        );
+    }
+
+    #[test]
+    fn iframe_refs_in_snapshot_skips_non_iframe_and_refless() {
+        let snap = r#"  - IframeX [ref=e9]
+  - Iframe
+  - Iframe "named" [ref=e7]
+"#;
+        assert_eq!(iframe_refs_in_snapshot(snap), vec!["e7".to_string()]);
     }
 
     // Env mutation isn't thread-safe; serialize via the shared lock.
