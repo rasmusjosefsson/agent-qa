@@ -15,7 +15,7 @@ the picture shifts materially.
 | Audit | `flaky`, `slow`, `heal-chronic` (+`--all`), `verdict` (+`--all`), `cluster`, `trend` (+`--all`), `health`, run-vs-run compare (CLI + workbench) |
 | Lint | `no-visual-check`, `shot-without-baseline`, `domshot-without-baseline`, `orphan-baseline`, `brittle-locator`, `fixed-sleep`, `check-all` in smoke |
 | CI | `qa-gate` (fixture goldens + sticky verdict + run-report artifacts), `ui-goldens` (visual gate w/ embedded before/after/diff images), `qa-crawl` (draft coverage on UI PRs), `qa-adopt` + `/qa accept` commands, composite `action.yml` (+npm install mode, +app-under-test boot), `evals-nightly`, changelog-driven releases |
-| Golden suites | ~30 QA Playground pages, ~34 the-internet edge cases (six sweeps), saucedemo suite (login/sort, full 21-step purchase, negative auth, logout, cookie+storage lifecycle), expandtesting (login round-trip, dynamic table, infinite scroll), todomvc (stateful SPA), demoqa widgets, httpbin hermetic-mock loop, workbench selftest goldens, quotes.toscrape.com (pagination, HttpOnly cookie claims, scroll offsets), parabank (registration with `{{vars._unique}}`, login/logout, profile update — volatile-URL claims normalized), demoblaze (category filters, add-to-cart alert claims, cart session persistence across reload, full purchase flow), automation-exercise (signup+cart lifecycle), wikipedia (search nav, TOC, history, REST API claims), formy (full form, bootstrap modal, jQuery datepicker, JS dropdown), testpages (ajax cascade, form POST echo, native dialogs, onblur validation), coffee-cart (cart badge, promo modal, checkout form, quantity steppers), globalsqa XYZ Bank (AngularJS login, deposit/withdraw, transactions ledger, manager console), hackernews (live HN API claims), selectorshub (shadow-DOM fills + snapshot attribute reads), practicesoftwaretesting (search, cart, login + QUERY-method API claims), lambdatest OpenCart (GET-form search with percent-encoded routes, hidden sticky-bar twins, delegated jQuery cart POST, cart page quantity rows), bonigarcia selenium-webdriver-java (GET form submit, open shadow DOM text, jQuery UI mouse drag, native dialogs + Bootstrap modal, web storage seeding), petstore.octoperf.com JPetStore (Struts catalog browse, add-to-cart POST, sign-in round-trip, full order placement with `;jsessionid` matrix-param URLs), selenium.dev web-form (control echoes, checkbox/radio/select state, datalist + bootstrap-datepicker pick, range slider, disabled/readonly/hidden/file serialization), rahulshettyacademy AutomationPractice (radios, jQuery UI autocomplete, select, checkbox flips, alert/confirm, two popup classes, hide/show computed style, :hover menu, data tables, cross-origin iframe via role-locator claim), jqueryui.com (droppable/sortable/slider drags inside class-only iframes, accordion, checkboxradio labels, selectmenu portal pick) |
+| Golden suites | ~30 QA Playground pages, ~34 the-internet edge cases (six sweeps), saucedemo suite (login/sort, full 21-step purchase, negative auth, logout, cookie+storage lifecycle), expandtesting (login round-trip, dynamic table, infinite scroll), todomvc (stateful SPA), demoqa widgets, httpbin hermetic-mock loop, workbench selftest goldens, quotes.toscrape.com (pagination, HttpOnly cookie claims, scroll offsets), parabank (registration with `{{vars._unique}}`, login/logout, profile update — volatile-URL claims normalized), demoblaze (category filters, add-to-cart alert claims, cart session persistence across reload, full purchase flow), automation-exercise (signup+cart lifecycle), wikipedia (search nav, TOC, history, REST API claims), formy (full form, bootstrap modal, jQuery datepicker, JS dropdown), testpages (ajax cascade, form POST echo, native dialogs, onblur validation), coffee-cart (cart badge, promo modal, checkout form, quantity steppers), globalsqa XYZ Bank (AngularJS login, deposit/withdraw, transactions ledger, manager console), hackernews (live HN API claims), selectorshub (shadow-DOM fills + snapshot attribute reads), practicesoftwaretesting (search, cart, login + QUERY-method API claims), lambdatest OpenCart (GET-form search with percent-encoded routes, hidden sticky-bar twins, delegated jQuery cart POST, cart page quantity rows), bonigarcia selenium-webdriver-java (GET form submit, open shadow DOM text, jQuery UI mouse drag, native dialogs + Bootstrap modal, web storage seeding), petstore.octoperf.com JPetStore (Struts catalog browse, add-to-cart POST, sign-in round-trip, full order placement with `;jsessionid` matrix-param URLs), selenium.dev web-form (control echoes, checkbox/radio/select state, datalist + bootstrap-datepicker pick, range slider, disabled/readonly/hidden/file serialization), rahulshettyacademy AutomationPractice (radios, jQuery UI autocomplete, select, checkbox flips, alert/confirm, two popup classes, hide/show computed style, :hover menu, data tables, cross-origin iframe via role-locator claim), jqueryui.com (droppable/sortable/slider drags inside class-only iframes, accordion, checkboxradio labels, selectmenu portal pick), material.angular.dev (mat-select/autocomplete/datepicker/dialog/menu CDK portals, pane-scoped calendar pick, `matches`-predicate date claim) |
 
 ## Ranked gaps
 
@@ -1008,3 +1008,34 @@ Findings — both were real replay gaps, and both ships in this sweep:
   eval now scrolls the iframe element into the top viewport and adds
   its rect to every returned point; the hit-test subtracts it back
   before the frame's `elementFromPoint`.
+
+## Dogfood pass XXII — material.angular.dev (Angular Material) sweep
+
+Four goldens on material.angular.dev overview demos (select,
+autocomplete, datepicker, dialog + menu): 24/24 + 22/22 + 21/21 +
+27/27 record→replay. Coverage: mat-select portal pick
+(`.mat-mdc-select-panel` + `.mat-mdc-select-value-text` claims),
+autocomplete filter + option pick, calendar day-cell pick through
+`.cdk-overlay-pane`, `matches`-predicate regex claim on a
+run-date-dependent input value, dialog title/action round-trip, and
+menu item count + pick with portal-close claims.
+
+Findings — all test-design this wave, no framework gap:
+
+- **mat-datepicker ignores programmatic text entry** — a `fill`
+  lands the string in the input (the `value` claim passes) but the
+  datepicker model never parses it even with `input`/`change`/`blur`
+  dispatched by hand: the calendar opens on today with no
+  `mat-calendar-body-selected`. The real input path is the calendar
+  itself; the golden picks the always-enabled today cell and claims
+  the dynamic input value with a `matches` regex.
+- **material.angular.dev keeps a hidden prerendered calendar** — a
+  second `.mat-calendar` lives ~10k px offscreen (its today cell is
+  a duplicate `button.mat-calendar-body-cell`), so unscoped calendar
+  selectors hit dead elements: a `.click()` landed on the offscreen
+  copy and produced nothing, and a trusted click reported the cell
+  covered by its twin. Every portal selector scopes to
+  `.cdk-overlay-pane` (detached on close, so it is also the honest
+  open/close signal).
+- **`mat-select` textContent contains every option** — value claims
+  belong on `.mat-mdc-select-value-text`, not the trigger element.
