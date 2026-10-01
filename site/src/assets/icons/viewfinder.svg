@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+  <linearGradient id="aqa-vf" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+  <stop stop-color="#22d3ee"/>
+  <stop offset="1" stop-color="#6d5ff5"/>
+  </linearGradient>
+  <linearGradient id="aqa-vf-b" x1="23" y1="23" x2="41" y2="41" gradientUnits="userSpaceOnUse">
+  <stop stop-color="#8b5cf6"/>
+  <stop offset="1" stop-color="#e04fb0"/>
+  </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="#12121f"/>
+  <g stroke="url(#aqa-vf)" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M13 24v-5a6 6 0 0 1 6-6h5"/>
+  <path d="M40 13h5a6 6 0 0 1 6 6v5"/>
+  <path d="M51 40v5a6 6 0 0 1-6 6h-5"/>
+  <path d="M24 51h-5a6 6 0 0 1-6-6v-5"/>
+  </g>
+  <circle cx="32" cy="32" r="9.5" fill="url(#aqa-vf-b)"/>
+  <circle cx="32" cy="32" r="14.5" stroke="#fff" stroke-opacity=".18" stroke-width="2"/>
+</svg>

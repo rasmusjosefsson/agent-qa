@@ -44,3 +44,13 @@
   --aqa-shadow: 250 30% 30%;
   color-scheme: light;
 }
+
+/* Theme-paired artwork: render both variants, show the one matching the theme. */
+.aqa-dark-only,
+.aqa-light-only {
+  display: contents;
+}
+:root[data-theme="light"] .aqa-dark-only,
+:root:not([data-theme="light"]) .aqa-light-only {
+  display: none;
+}

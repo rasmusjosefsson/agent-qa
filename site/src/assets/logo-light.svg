@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+  <linearGradient id="aqa-logo-l" x1="10" y1="10" x2="54" y2="54" gradientUnits="userSpaceOnUse">
+  <stop stop-color="#22d3ee"/>
+  <stop offset="1" stop-color="#8b5cf6"/>
+  </linearGradient>
+  <linearGradient id="aqa-logo-b-l" x1="20" y1="16" x2="44" y2="48" gradientUnits="userSpaceOnUse">
+  <stop stop-color="#a78bfa"/>
+  <stop offset="1" stop-color="#f472b6"/>
+  </linearGradient>
+  </defs>
+  <rect x=".75" y=".75" width="62.5" height="62.5" rx="15.25" fill="#f4f3fb" stroke="#12121f" stroke-opacity=".08" stroke-width="1.5"/>
+  <path d="M32 10.5 49 17v13.5c0 11-7.3 19.5-17 23-9.7-3.5-17-12-17-23V17Z" stroke="url(#aqa-logo-l)" stroke-width="3.6" stroke-linejoin="round"/>
+  <path d="M32 19.5c1.1 6.2 3.6 8.9 9.5 10-5.9 1.1-8.4 3.8-9.5 10.5-1.1-6.7-3.6-9.4-9.5-10.5 5.9-1.1 8.4-3.8 9.5-10Z" fill="url(#aqa-logo-b-l)"/>
+</svg>
