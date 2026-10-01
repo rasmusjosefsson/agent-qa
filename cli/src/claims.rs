@@ -1125,10 +1125,13 @@ fn check_domshot(
 }
 
 /// Normalize an ARIA snapshot for comparison: drop lines matching any
-/// `skip` regex, strip `@eN` element refs (numbering shifts across runs),
-/// and trim trailing whitespace.
+/// `skip` regex, strip element refs (numbering shifts across runs —
+/// both the `ref=eN` spelling the daemon emits and the `ref=@eN` /
+/// standalone `@eN` spellings in older captures), and trim trailing
+/// whitespace.
 fn normalize_snapshot(text: &str, skip: &[String]) -> Result<String> {
-    let ref_re = regex::Regex::new(r"@{1,2}e\d+")?;
+    let ref_re = regex::Regex::new(r"ref=@{0,2}e\d+")?;
+    let at_re = regex::Regex::new(r"@{1,2}e\d+")?;
     let skip_res: Vec<regex::Regex> = skip
         .iter()
         .map(|p| regex::Regex::new(p).map_err(|e| anyhow!("domshot skip pattern {p:?}: {e}")))
@@ -1139,7 +1142,8 @@ fn normalize_snapshot(text: &str, skip: &[String]) -> Result<String> {
         if skip_res.iter().any(|r| r.is_match(line)) {
             continue;
         }
-        out.push_str(&ref_re.replace_all(line, "@e"));
+        let line = ref_re.replace_all(line, "ref=e");
+        out.push_str(&at_re.replace_all(&line, "@e"));
         out.push('\n');
     }
     Ok(out)
@@ -3590,6 +3594,42 @@ mod tests {
         fs::write(
             run_dir.join("snapshots/s1.txt"),
             "- heading \"Login\" [ref=@e9]\n- textbox \"User\" [ref=@e7]\n- button \"Go\" [ref=@e4]\n",
+        )
+        .unwrap();
+
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "domshot": "s1" },
+            "predicate": "matches"
+        }))
+        .unwrap();
+        let mut scope = ValueScope::default();
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: &sid_dir,
+            run_dir: Some(&run_dir),
+        };
+        dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+    }
+
+    #[test]
+    fn domshot_normalizes_plain_ref_en_spelling() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let sid_dir = tmp.path().join("scenario");
+        let run_dir = tmp.path().join("run");
+        fs::create_dir_all(sid_dir.join("baselines")).unwrap();
+        fs::create_dir_all(run_dir.join("snapshots")).unwrap();
+
+        // The daemon's real spelling is `ref=eN` (no @) — numbering still
+        // shifts across session reuse, so it must normalize identically.
+        fs::write(
+            sid_dir.join("baselines/s1.snap.txt"),
+            "- generic [ref=e1] clickable\n  - link \"Chat\" [ref=e27]\n  - link \"Editor\" [ref=e28]\n",
+        )
+        .unwrap();
+        fs::write(
+            run_dir.join("snapshots/s1.txt"),
+            "- generic [ref=e101] clickable\n  - link \"Chat\" [ref=e145]\n  - link \"Editor\" [ref=e146]\n",
         )
         .unwrap();
 
