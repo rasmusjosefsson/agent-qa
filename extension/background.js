@@ -118,6 +118,28 @@ async function handle(msg, sender) {
       // Focus may have moved to an attached popup tab — emit the tab
       // switch before frame transitions so replay follows focus first.
       ensureActiveTab(s, tabId);
+      if (msg.merge === "dblclick") {
+        // The click,click pair a real dblclick produces already landed
+        // as two click drafts — swap them for this dblclick draft at
+        // the earliest removed position so replay performs one
+        // double-click, not two activations.
+        const idx = [];
+        for (
+          let i = s.steps.length - 1;
+          i >= 0 && i > s.steps.length - 10 && idx.length < 2;
+          i--
+        ) {
+          const it = s.steps[i];
+          if (it && it.kind === "do" && it.draft && it.draft.verb === "click") {
+            idx.push(i);
+          }
+        }
+        const at = idx.length ? idx[idx.length - 1] : s.steps.length;
+        for (const i of idx) s.steps.splice(i, 1);
+        s.steps.splice(at, 0, msg.item);
+        persist(tabId);
+        return undefined;
+      }
       const frame = msg.frame || [];
       if (msg.wall) {
         s.botWallSteps = (s.botWallSteps || 0) + 1;
@@ -141,6 +163,30 @@ async function handle(msg, sender) {
           s.currentFrame = frame;
         }
         s.steps.push(msg.item);
+      }
+      persist(tabId);
+    }
+    return undefined;
+  }
+  if (msg.t === "augment" && tabId != null) {
+    const s = await getSession(tabId);
+    if (s) {
+      // The upload draft already landed in interaction order — attach
+      // the file contents the page finished reading since then. Match
+      // by augmentId so two racing uploads can't swap contents.
+      for (let i = s.steps.length - 1; i >= 0; i--) {
+        const it = s.steps[i];
+        if (
+          it &&
+          it.kind === "do" &&
+          it.draft &&
+          it.draft.verb === "upload" &&
+          it.augmentId === msg.id
+        ) {
+          it.uploads = msg.uploads;
+          delete it.augmentId;
+          break;
+        }
       }
       persist(tabId);
     }
@@ -423,6 +469,24 @@ async function recordNav(tabId, url, transitionType) {
         },
       });
       persist(tabId);
+    } else if (transitionType === "form_submit") {
+      // A click/press-driven submit needs no step — replaying the
+      // recorded interaction resubmits live. A JS form.submit() leaves
+      // nothing recorded, so without this the nav vanishes silently;
+      // do/reload re-sends the POST — the closest replayable shape.
+      const last = s.steps[s.steps.length - 1];
+      if (!(last && last.kind === "do")) {
+        ensureActiveTab(s, tabId);
+        s.currentFrame = [];
+        s.steps.push({
+          kind: "do",
+          draft: {
+            intent: "form submission reloaded the page",
+            verb: "reload",
+          },
+        });
+        persist(tabId);
+      }
     }
     return;
   }
