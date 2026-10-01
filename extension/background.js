@@ -77,8 +77,13 @@ async function handle(msg, sender) {
       // those steps are skipped + counted for the bundle warning
       // rather than recorded against the wrong document.
       const frame = msg.frame || [];
+      if (msg.wall) {
+        s.botWallSteps = (s.botWallSteps || 0) + 1;
+      }
       if (frame === "cross-origin") {
-        s.frameSkips = (s.frameSkips || 0) + 1;
+        // A challenge widget's own iframe is cross-origin — count those
+        // taps as wall interactions, not generic frame skips.
+        if (!msg.wall) s.frameSkips = (s.frameSkips || 0) + 1;
       } else {
         const cur = s.currentFrame || [];
         if (JSON.stringify(cur) !== JSON.stringify(frame)) {
@@ -216,6 +221,14 @@ async function handle(msg, sender) {
       (bundle.warnings ||= []).push(
         `${s.popupTabs} new tab/window opened during recording — capture is ` +
           "per-tab, so interactions in the popup are not in this bundle",
+      );
+    }
+    if (s.botWallSteps) {
+      (bundle.warnings ||= []).push(
+        `${s.botWallSteps} interaction(s) captured while the site showed a ` +
+          "security-verification page (Cloudflare class) — those steps drive a " +
+          "challenge widget that won't exist at replay; delete them after ingest " +
+          "or re-record past the wall",
       );
     }
     const host = safeHost(s.url) || "page";
