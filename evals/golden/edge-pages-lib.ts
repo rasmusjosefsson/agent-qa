@@ -122,6 +122,10 @@ export interface EdgeGolden extends GoldenContext {
   typeRole(role: string, name: string, value: string, intent: string): Promise<void>;
   clickRoleLocator(role: string, name: string, intent: string): Promise<void>;
   assertRoleAttribute(role: string, name: string, attribute: string, expected: string, intent: string): Promise<void>;
+  // Role-locator presence claims also read the a11y snapshot — they are
+  // the only claims that resolve inside a cross-origin iframe, where
+  // eval-based selector claims cannot run.
+  assertRolePresent(role: string, name: string, intent: string): Promise<void>;
 }
 
 function createContext(tc: string, intent: string, keepDialogs: boolean, label = "edge"): GoldenContext {
@@ -627,6 +631,13 @@ export async function runEdgeGolden(
       await record(ctx, "assert", {
         kind: "roleAttribute",
         args: [role, name, attribute, expected],
+        intent: stepIntent,
+      });
+    },
+    async assertRolePresent(role, name, stepIntent) {
+      await record(ctx, "assert", {
+        kind: "present",
+        args: [role, name],
         intent: stepIntent,
       });
     },

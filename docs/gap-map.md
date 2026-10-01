@@ -15,7 +15,7 @@ the picture shifts materially.
 | Audit | `flaky`, `slow`, `heal-chronic` (+`--all`), `verdict` (+`--all`), `cluster`, `trend` (+`--all`), `health`, run-vs-run compare (CLI + workbench) |
 | Lint | `no-visual-check`, `shot-without-baseline`, `domshot-without-baseline`, `orphan-baseline`, `brittle-locator`, `fixed-sleep`, `check-all` in smoke |
 | CI | `qa-gate` (fixture goldens + sticky verdict + run-report artifacts), `ui-goldens` (visual gate w/ embedded before/after/diff images), `qa-crawl` (draft coverage on UI PRs), `qa-adopt` + `/qa accept` commands, composite `action.yml` (+npm install mode, +app-under-test boot), `evals-nightly`, changelog-driven releases |
-| Golden suites | ~30 QA Playground pages, ~34 the-internet edge cases (six sweeps), saucedemo suite (login/sort, full 21-step purchase, negative auth, logout, cookie+storage lifecycle), expandtesting (login round-trip, dynamic table, infinite scroll), todomvc (stateful SPA), demoqa widgets, httpbin hermetic-mock loop, workbench selftest goldens, quotes.toscrape.com (pagination, HttpOnly cookie claims, scroll offsets), parabank (registration with `{{vars._unique}}`, login/logout, profile update — volatile-URL claims normalized), demoblaze (category filters, add-to-cart alert claims, cart session persistence across reload, full purchase flow), automation-exercise (signup+cart lifecycle), wikipedia (search nav, TOC, history, REST API claims), formy (full form, bootstrap modal, jQuery datepicker, JS dropdown), testpages (ajax cascade, form POST echo, native dialogs, onblur validation), coffee-cart (cart badge, promo modal, checkout form, quantity steppers), globalsqa XYZ Bank (AngularJS login, deposit/withdraw, transactions ledger, manager console), hackernews (live HN API claims), selectorshub (shadow-DOM fills + snapshot attribute reads), practicesoftwaretesting (search, cart, login + QUERY-method API claims), lambdatest OpenCart (GET-form search with percent-encoded routes, hidden sticky-bar twins, delegated jQuery cart POST, cart page quantity rows), bonigarcia selenium-webdriver-java (GET form submit, open shadow DOM text, jQuery UI mouse drag, native dialogs + Bootstrap modal, web storage seeding), petstore.octoperf.com JPetStore (Struts catalog browse, add-to-cart POST, sign-in round-trip, full order placement with `;jsessionid` matrix-param URLs), selenium.dev web-form (control echoes, checkbox/radio/select state, datalist + bootstrap-datepicker pick, range slider, disabled/readonly/hidden/file serialization) |
+| Golden suites | ~30 QA Playground pages, ~34 the-internet edge cases (six sweeps), saucedemo suite (login/sort, full 21-step purchase, negative auth, logout, cookie+storage lifecycle), expandtesting (login round-trip, dynamic table, infinite scroll), todomvc (stateful SPA), demoqa widgets, httpbin hermetic-mock loop, workbench selftest goldens, quotes.toscrape.com (pagination, HttpOnly cookie claims, scroll offsets), parabank (registration with `{{vars._unique}}`, login/logout, profile update — volatile-URL claims normalized), demoblaze (category filters, add-to-cart alert claims, cart session persistence across reload, full purchase flow), automation-exercise (signup+cart lifecycle), wikipedia (search nav, TOC, history, REST API claims), formy (full form, bootstrap modal, jQuery datepicker, JS dropdown), testpages (ajax cascade, form POST echo, native dialogs, onblur validation), coffee-cart (cart badge, promo modal, checkout form, quantity steppers), globalsqa XYZ Bank (AngularJS login, deposit/withdraw, transactions ledger, manager console), hackernews (live HN API claims), selectorshub (shadow-DOM fills + snapshot attribute reads), practicesoftwaretesting (search, cart, login + QUERY-method API claims), lambdatest OpenCart (GET-form search with percent-encoded routes, hidden sticky-bar twins, delegated jQuery cart POST, cart page quantity rows), bonigarcia selenium-webdriver-java (GET form submit, open shadow DOM text, jQuery UI mouse drag, native dialogs + Bootstrap modal, web storage seeding), petstore.octoperf.com JPetStore (Struts catalog browse, add-to-cart POST, sign-in round-trip, full order placement with `;jsessionid` matrix-param URLs), selenium.dev web-form (control echoes, checkbox/radio/select state, datalist + bootstrap-datepicker pick, range slider, disabled/readonly/hidden/file serialization), rahulshettyacademy AutomationPractice (radios, jQuery UI autocomplete, select, checkbox flips, alert/confirm, two popup classes, hide/show computed style, :hover menu, data tables, cross-origin iframe via role-locator claim) |
 
 ## Ranked gaps
 
@@ -948,4 +948,32 @@ New golden helpers `clickXpath` + `uncheckSelector`. Findings:
 - **`check`/`uncheck` replay logs a false "no observable effect"** —
   the native DOM click toggles `checked` but the post-click probe
   doesn't count property changes. Steps pass; the warning is noise
-  (minor — noted for a later pass).
+  (fixed — the replay probe counts capture-phase form events).
+
+## Dogfood pass XX — rahulshettyacademy AutomationPractice sweep
+
+Four goldens on `rahulshettyacademy.com/AutomationPractice` (the classic
+practice page): 25/25 + 21/21 + 23/23 + 25/25 record→replay. Coverage:
+radios, a jQuery UI autocomplete picked by xpath, a native select,
+check+uncheck, alert/confirm round-trips both ways, `target=_blank` and
+`window.open` popup tab round-trips, hide/show computed-style claims, a
+CSS `:hover` menu, two data tables, and a cross-origin iframe entered
+and exited through the `frame` verb. Findings:
+
+- **The record-side inert-click probe false-positives on form-control
+  flips** — same gap the replay ClickProbe had before the form-event
+  fix: `check`/`uncheck` toggle `checked` (an IDL property) so the
+  `__aqFx` mutation/resource/focus diff reads zero and warns "no
+  observable effect" while the step worked. The record probe now counts
+  capture-phase `input`/`change`/`submit`/`toggle` events too, matching
+  the replay side; warning text updated to mention the field event.
+- **`agent-browser` tab ids are monotonic, not positional** — after
+  `tab close t2` the next popup registers as `t3`, so a second popup
+  round-trip must name the new id (golden-side fix in rs-tc03).
+- **Eval-based claims can't pierce a cross-origin iframe** — inside
+  `#courses-iframe` (legacy.rahulshettyacademy.com) every `check` with a
+  css/text locator fails "frame not found (or cross-origin — eval-based
+  steps cannot pierce it; element commands still work)". A11y-backed
+  locators do reach inside: the golden lib gains `assertRolePresent`
+  (records the `kind:"present"` role-locator claim the translator
+  already understood), and rs-tc04 claims the frame's `link "Courses"`.
