@@ -23,7 +23,7 @@ export default defineConfig({
         "./src/styles/starlight.css",
         "./src/styles/diagrams.css",
       ],
-      components: { Head: "./src/components/DocsHead.astro" },
+      components: { Head: "./src/components/DocsHead.astro", PageTitle: "./src/components/PageTitle.astro" },
       expressiveCode: {
         themes: ["github-dark-default", "github-light-default"],
         styleOverrides: { borderRadius: "0.75rem", codeFontFamily: "var(--aqa-font-mono)" },

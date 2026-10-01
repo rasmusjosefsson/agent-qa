@@ -5,6 +5,10 @@ import "../styles/tokens.css"
 import "../styles/diagrams.css"
 import { loop as loopDiagram } from "../../scripts/diagrams.mjs"
 import logo from "../assets/logo.svg?raw"
+import iconCompare from "../assets/icons/diff-frames.svg?raw"
+import iconHeal from "../assets/icons/step-trace.svg?raw"
+import iconRecord from "../assets/icons/viewfinder.svg?raw"
+import iconReplay from "../assets/icons/replay-loop.svg?raw"
 import { siClaude, siCursor, siGithubcopilot, siGooglegemini, siOpencode, siPi, siWindsurf } from "simple-icons"
 
 const base = import.meta.env.BASE_URL.replace(/\/$/, "")
@@ -27,10 +31,10 @@ const agents: { name: string; path?: string }[] = [
 ]
 
 const loop = [
-  { n: "01", title: "Record", body: "Drive the page yourself or let an agent do it. Each step is observed on the settled page and written with its evidence." },
-  { n: "02", title: "Replay", body: "The sealed scenario.json runs deterministically, as one profile per run. No LLM in the loop." },
-  { n: "03", title: "Compare", body: "Diff a recording against a replay, or one profile against another. ARIA text diffs, pixel diffs, JSON deltas." },
-  { n: "04", title: "Heal", body: "When a step breaks, a bounded patch with a diagnosis goes on the audit trail. Assertions are never healed away." },
+  { n: "01", title: "Record", icon: iconRecord, body: "Drive the page yourself or let an agent do it. Each step is observed on the settled page and written with its evidence." },
+  { n: "02", title: "Replay", icon: iconReplay, body: "The sealed scenario.json runs deterministically, as one profile per run. No LLM in the loop." },
+  { n: "03", title: "Compare", icon: iconCompare, body: "Diff a recording against a replay, or one profile against another. ARIA text diffs, pixel diffs, JSON deltas." },
+  { n: "04", title: "Heal", icon: iconHeal, body: "When a step breaks, a bounded patch with a diagnosis goes on the audit trail. Assertions are never healed away." },
 ]
 
 const steps = [
@@ -212,6 +216,7 @@ const tree = [
             loop.map((l) => (
               <li class="loop-card reveal">
                 <span class="loop-n">{l.n}</span>
+                <span class="loop-icon" aria-hidden="true" set:html={l.icon} />
                 <h3>{l.title}</h3>
                 <p>{l.body}</p>
               </li>
@@ -1108,6 +1113,18 @@ auth = <span class="s">"./plugins/acme-auth/agent-qa-plugin-acme-auth"</span>
     color: white;
     background: linear-gradient(135deg, var(--aqa-brand), color-mix(in oklab, var(--aqa-brand) 55%, var(--aqa-brand-3)));
     box-shadow: 0 6px 18px -6px color-mix(in oklab, var(--aqa-brand) 70%, transparent);
+  }
+  .loop-icon {
+    position: absolute;
+    top: 22px;
+    right: 22px;
+    display: inline-grid;
+    width: 36px;
+    height: 36px;
+  }
+  .loop-icon :global(svg) {
+    width: 100%;
+    height: 100%;
   }
   .loop-card h3 {
     margin-top: 18px;
