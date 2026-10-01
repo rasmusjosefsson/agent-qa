@@ -15,7 +15,7 @@ the picture shifts materially.
 | Audit | `flaky`, `slow`, `heal-chronic` (+`--all`), `verdict` (+`--all`), `cluster`, `trend` (+`--all`), `health`, run-vs-run compare (CLI + workbench) |
 | Lint | `no-visual-check`, `shot-without-baseline`, `domshot-without-baseline`, `orphan-baseline`, `brittle-locator`, `fixed-sleep`, `check-all` in smoke |
 | CI | `qa-gate` (fixture goldens + sticky verdict + run-report artifacts), `ui-goldens` (visual gate w/ embedded before/after/diff images), `qa-crawl` (draft coverage on UI PRs), `qa-adopt` + `/qa accept` commands, composite `action.yml` (+npm install mode, +app-under-test boot), `evals-nightly`, changelog-driven releases |
-| Golden suites | ~30 QA Playground pages, ~34 the-internet edge cases (six sweeps), saucedemo suite (login/sort, full 21-step purchase, negative auth, logout, cookie+storage lifecycle), expandtesting (login round-trip, dynamic table, infinite scroll), todomvc (stateful SPA), demoqa widgets, httpbin hermetic-mock loop, workbench selftest goldens, quotes.toscrape.com (pagination, HttpOnly cookie claims, scroll offsets), parabank (registration with `{{vars._unique}}`, login/logout, profile update — volatile-URL claims normalized), demoblaze (category filters, add-to-cart alert claims, cart session persistence across reload, full purchase flow), automation-exercise (signup+cart lifecycle), wikipedia (search nav, TOC, history, REST API claims), formy (full form, bootstrap modal, jQuery datepicker, JS dropdown), testpages (ajax cascade, form POST echo, native dialogs, onblur validation), coffee-cart (cart badge, promo modal, checkout form, quantity steppers), globalsqa XYZ Bank (AngularJS login, deposit/withdraw, transactions ledger, manager console), hackernews (live HN API claims), selectorshub (shadow-DOM fills + snapshot attribute reads), practicesoftwaretesting (search, cart, login + QUERY-method API claims), lambdatest OpenCart (GET-form search with percent-encoded routes, hidden sticky-bar twins, delegated jQuery cart POST, cart page quantity rows), bonigarcia selenium-webdriver-java (GET form submit, open shadow DOM text, jQuery UI mouse drag, native dialogs + Bootstrap modal, web storage seeding), petstore.octoperf.com JPetStore (Struts catalog browse, add-to-cart POST, sign-in round-trip, full order placement with `;jsessionid` matrix-param URLs), selenium.dev web-form (control echoes, checkbox/radio/select state, datalist + bootstrap-datepicker pick, range slider, disabled/readonly/hidden/file serialization), rahulshettyacademy AutomationPractice (radios, jQuery UI autocomplete, select, checkbox flips, alert/confirm, two popup classes, hide/show computed style, :hover menu, data tables, cross-origin iframe via role-locator claim), jqueryui.com (droppable/sortable/slider drags inside class-only iframes, accordion, checkboxradio labels, selectmenu portal pick), material.angular.dev (mat-select/autocomplete/datepicker/dialog/menu CDK portals, pane-scoped calendar pick, `matches`-predicate date claim) |
+| Golden suites | ~30 QA Playground pages, ~34 the-internet edge cases (six sweeps), saucedemo suite (login/sort, full 21-step purchase, negative auth, logout, cookie+storage lifecycle), expandtesting (login round-trip, dynamic table, infinite scroll), todomvc (stateful SPA), demoqa widgets, httpbin hermetic-mock loop, workbench selftest goldens, quotes.toscrape.com (pagination, HttpOnly cookie claims, scroll offsets), parabank (registration with `{{vars._unique}}`, login/logout, profile update — volatile-URL claims normalized), demoblaze (category filters, add-to-cart alert claims, cart session persistence across reload, full purchase flow), automation-exercise (signup+cart lifecycle), wikipedia (search nav, TOC, history, REST API claims), formy (full form, bootstrap modal, jQuery datepicker, JS dropdown), testpages (ajax cascade, form POST echo, native dialogs, onblur validation), coffee-cart (cart badge, promo modal, checkout form, quantity steppers), globalsqa XYZ Bank (AngularJS login, deposit/withdraw, transactions ledger, manager console), hackernews (live HN API claims), selectorshub (shadow-DOM fills + snapshot attribute reads), practicesoftwaretesting (search, cart, login + QUERY-method API claims), lambdatest OpenCart (GET-form search with percent-encoded routes, hidden sticky-bar twins, delegated jQuery cart POST, cart page quantity rows), bonigarcia selenium-webdriver-java (GET form submit, open shadow DOM text, jQuery UI mouse drag, native dialogs + Bootstrap modal, web storage seeding), petstore.octoperf.com JPetStore (Struts catalog browse, add-to-cart POST, sign-in round-trip, full order placement with `;jsessionid` matrix-param URLs), selenium.dev web-form (control echoes, checkbox/radio/select state, datalist + bootstrap-datepicker pick, range slider, disabled/readonly/hidden/file serialization), rahulshettyacademy AutomationPractice (radios, jQuery UI autocomplete, select, checkbox flips, alert/confirm, two popup classes, hide/show computed style, :hover menu, data tables, cross-origin iframe via role-locator claim), jqueryui.com (droppable/sortable/slider drags inside class-only iframes, accordion, checkboxradio labels, selectmenu portal pick), material.angular.dev (mat-select/autocomplete/datepicker/dialog/menu CDK portals, pane-scoped calendar pick, `matches`-predicate date claim), demowebshop.tricentis.com nopCommerce (ajax add-to-cart, `{{vars._unique}}` registration, cart lifecycle, six-step guest-checkout accordion to a minted order number) |
 
 ## Ranked gaps
 
@@ -1039,3 +1039,30 @@ Findings — all test-design this wave, no framework gap:
   open/close signal).
 - **`mat-select` textContent contains every option** — value claims
   belong on `.mat-mdc-select-value-text`, not the trigger element.
+
+## Dogfood pass XXIII — demowebshop.tricentis.com (nopCommerce) sweep
+
+Four goldens on Tricentis Demo Web Shop (nopCommerce store): 16/16 +
+16/16 + 20/20 + 48/48 record→replay. Coverage: catalog browse with a
+product-count claim, search round-trip, ajax add-to-cart
+(`.bar-notification.success` wait + `.cart-qty` badge claims),
+registration with `{{vars._unique}}` email/password (re-runnable on
+the live site — each replay mints a fresh account), cart quantity
+bump + row removal with an empty-cart claim, and the marquee flow —
+guest checkout through the six-step ajax accordion (billing →
+shipping address → shipping method → payment method → payment info →
+confirm) ending at `/checkout/completed/` with a `matches`-predicate
+claim on the minted order number. The accordion's OpcSave* POSTs are
+each covered by network claims.
+
+Findings — all test-design, no framework gap:
+
+- **Accordion radio option 0 is pre-checked** on both the shipping and
+  payment steps — picking it is an honest no-op the replay click probe
+  correctly warns on ("no observable effect"). The golden picks option
+  1 (Next Day Air, Check/Money Order) so the click really flips.
+- **Billing save silently bounces on invalid data** — no
+  `validation-summary-errors` banner appears when a field fails (e.g. a
+  non-email); the step just stays `active`. Probing showed `.field-error`
+  texts (e.g. "Wrong email") — worth asserting on when a checkout golden
+  does negative testing.
