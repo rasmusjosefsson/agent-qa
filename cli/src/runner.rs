@@ -4216,7 +4216,10 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             &jfile,
             r#"{
                 "schema": "scenario/2", "id": "x", "intent": "y",
-                "env": { "open": [{ "kind": "cookie", "name": "c", "value": "v" }] },
+                "env": { "open": [
+                    { "kind": "nav", "url": "https://example.com/" },
+                    { "kind": "cookie", "name": "c", "value": "v" }
+                ] },
                 "steps": [
                     { "id": "s1", "intent": "noop check", "kind": "check",
                       "claim": { "subject": { "url": true }, "predicate": "exists" } }
