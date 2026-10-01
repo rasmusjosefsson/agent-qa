@@ -1776,50 +1776,66 @@ fn read_element_attribute(
                     bail!("element attribute claims do not support raw locator kind {other:?}")
                 }
             };
-            // `text` reads textContent; value/checked/disabled/selected/readOnly
-            // read the live IDL property (getAttribute would return the stale
-            // default value, and boolean states often have no attribute at all);
-            // `focused` is `document.activeElement === el`; `style:<prop>`
-            // reads getComputedStyle; any other name is a getAttribute read
-            // (missing attributes read as the empty string).
-            let prop_attrs = [
-                "value", "checked", "disabled", "selected", "readOnly", "required",
-            ];
-            let expr = if attribute == "text" {
-                format!(
-                    "(() => {{ const el = document.querySelector({q}); if (!el) throw new Error('selector not found: ' + {q}); return (el.textContent || '').trim(); }})()",
-                    q = serde_json::to_string(&selector).expect("string serializes")
-                )
-            } else if attribute == "focused" {
-                format!(
-                    "(() => {{ const el = document.querySelector({q}); if (!el) throw new Error('selector not found: ' + {q}); return String(document.activeElement === el); }})()",
-                    q = serde_json::to_string(&selector).expect("string serializes")
-                )
-            } else if let Some(prop) = attribute.strip_prefix("style:") {
-                // style:<css-property> reads getComputedStyle — assertions
-                // on rendered styles (color, display, ...) that neither
-                // getAttribute nor IDL properties can express.
-                format!(
-                    "(() => {{ const el = document.querySelector({q}); if (!el) throw new Error('selector not found: ' + {q}); return getComputedStyle(el).getPropertyValue({a}) || ''; }})()",
-                    q = serde_json::to_string(&selector).expect("string serializes"),
-                    a = serde_json::to_string(prop).expect("string serializes")
-                )
-            } else if prop_attrs.contains(&attribute) {
-                format!(
-                    "(() => {{ const el = document.querySelector({q}); if (!el) throw new Error('selector not found: ' + {q}); const v = el[{a}]; return v === undefined || v === null ? '' : String(v); }})()",
-                    q = serde_json::to_string(&selector).expect("string serializes"),
-                    a = serde_json::to_string(attribute).expect("string serializes")
-                )
-            } else {
-                format!(
-                    "(() => {{ const el = document.querySelector({q}); if (!el) throw new Error('selector not found: ' + {q}); return el.getAttribute({a}) || ''; }})()",
-                    q = serde_json::to_string(&selector).expect("string serializes"),
-                    a = serde_json::to_string(attribute).expect("string serializes")
-                )
-            };
+            let expr = element_attribute_read_expr(&selector, attribute);
             let raw = browser::eval_expression(session, &expr)?;
             Ok(decode_json_string(raw.trim()))
         }
+    }
+}
+
+/// `text` reads textContent; value/checked/disabled/selected/readOnly/
+/// required/tabIndex/maxLength/minLength read the live IDL property
+/// (getAttribute would return the stale default, and boolean states
+/// often have no attribute at all); `focused` is
+/// `document.activeElement === el`; `style:<prop>` reads
+/// getComputedStyle; any other name is a getAttribute read (missing
+/// attributes read as the empty string). Attribute spellings are
+/// case-insensitive — `readonly` resolves to the `readOnly` IDL
+/// property, `Checked` to `checked`, etc.
+fn element_attribute_read_expr(selector: &str, attribute: &str) -> String {
+    let idl_prop = match attribute.to_ascii_lowercase().as_str() {
+        "value" => Some("value"),
+        "checked" => Some("checked"),
+        "disabled" => Some("disabled"),
+        "selected" => Some("selected"),
+        "readonly" => Some("readOnly"),
+        "required" => Some("required"),
+        "tabindex" => Some("tabIndex"),
+        "maxlength" => Some("maxLength"),
+        "minlength" => Some("minLength"),
+        _ => None,
+    };
+    if attribute == "text" {
+        format!(
+            "(() => {{ const el = document.querySelector({q}); if (!el) throw new Error('selector not found: ' + {q}); return (el.textContent || '').trim(); }})()",
+            q = serde_json::to_string(selector).expect("string serializes")
+        )
+    } else if attribute == "focused" {
+        format!(
+            "(() => {{ const el = document.querySelector({q}); if (!el) throw new Error('selector not found: ' + {q}); return String(document.activeElement === el); }})()",
+            q = serde_json::to_string(selector).expect("string serializes")
+        )
+    } else if let Some(prop) = attribute.strip_prefix("style:") {
+        // style:<css-property> reads getComputedStyle — assertions
+        // on rendered styles (color, display, ...) that neither
+        // getAttribute nor IDL properties can express.
+        format!(
+            "(() => {{ const el = document.querySelector({q}); if (!el) throw new Error('selector not found: ' + {q}); return getComputedStyle(el).getPropertyValue({a}) || ''; }})()",
+            q = serde_json::to_string(selector).expect("string serializes"),
+            a = serde_json::to_string(prop).expect("string serializes")
+        )
+    } else if let Some(prop) = idl_prop {
+        format!(
+            "(() => {{ const el = document.querySelector({q}); if (!el) throw new Error('selector not found: ' + {q}); const v = el[{a}]; return v === undefined || v === null ? '' : String(v); }})()",
+            q = serde_json::to_string(selector).expect("string serializes"),
+            a = serde_json::to_string(prop).expect("string serializes")
+        )
+    } else {
+        format!(
+            "(() => {{ const el = document.querySelector({q}); if (!el) throw new Error('selector not found: ' + {q}); return el.getAttribute({a}) || ''; }})()",
+            q = serde_json::to_string(selector).expect("string serializes"),
+            a = serde_json::to_string(attribute).expect("string serializes")
+        )
     }
 }
 
@@ -2292,6 +2308,41 @@ mod tests {
 
     fn pred_from_json(j: serde_json::Value) -> Predicate {
         serde_json::from_value(j).unwrap()
+    }
+
+    #[test]
+    fn element_attribute_expr_attribute_spellings_resolve_idl() {
+        // The HTML spelling `readonly` must hit the `readOnly` IDL
+        // property — getAttribute would return "" for a bare attribute.
+        let expr = element_attribute_read_expr("#x", "readonly");
+        assert!(expr.contains(r#"el["readOnly"]"#), "expr={expr}");
+        // IDL spellings and any-case spellings resolve the same way.
+        let expr = element_attribute_read_expr("#x", "readOnly");
+        assert!(expr.contains(r#"el["readOnly"]"#), "expr={expr}");
+        let expr = element_attribute_read_expr("#x", "Checked");
+        assert!(expr.contains(r#"el["checked"]"#), "expr={expr}");
+        let expr = element_attribute_read_expr("#x", "tabindex");
+        assert!(expr.contains(r#"el["tabIndex"]"#), "expr={expr}");
+        let expr = element_attribute_read_expr("#x", "MAXLENGTH");
+        assert!(expr.contains(r#"el["maxLength"]"#), "expr={expr}");
+    }
+
+    #[test]
+    fn element_attribute_expr_unknown_names_read_getattribute() {
+        let expr = element_attribute_read_expr("#x", "data-foo");
+        assert!(expr.contains(r#"getAttribute("data-foo")"#), "expr={expr}");
+        let expr = element_attribute_read_expr("#x", "href");
+        assert!(expr.contains(r#"getAttribute("href")"#), "expr={expr}");
+    }
+
+    #[test]
+    fn element_attribute_expr_special_subjects() {
+        let expr = element_attribute_read_expr("#x", "text");
+        assert!(expr.contains("textContent"), "expr={expr}");
+        let expr = element_attribute_read_expr("#x", "focused");
+        assert!(expr.contains("activeElement"), "expr={expr}");
+        let expr = element_attribute_read_expr("#x", "style:color");
+        assert!(expr.contains(r#"getPropertyValue("color")"#), "expr={expr}");
     }
 
     #[test]

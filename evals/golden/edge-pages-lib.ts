@@ -1,5 +1,5 @@
 import { toRecordDraft } from "./record-translate";
-import { checkVisibleEval, clickTrustedOrVisible, clickVisibleEval, fillVisibleEval, hoverVisibleEval, selectVisibleEval, trustedOrVisible } from "./visible";
+import { checkVisibleEval, clickTrustedOrVisible, clickVisibleEval, fillVisibleEval, hoverVisibleEval, selectVisibleEval, trustedOrVisible, uncheckVisibleEval } from "./visible";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -47,6 +47,7 @@ interface GoldenContext {
 export interface EdgeGolden extends GoldenContext {
   openPage(): Promise<void>;
   clickSelector(selector: string, intent: string): Promise<void>;
+  clickXpath(xpath: string, intent: string): Promise<void>;
   clickRole(role: string, name: string, intent: string): Promise<void>;
   fillSelector(selector: string, value: string, intent: string): Promise<void>;
   fillSelectorReplayValue(selector: string, liveValue: string, replayValue: string, intent: string): Promise<void>;
@@ -57,6 +58,7 @@ export interface EdgeGolden extends GoldenContext {
   clearSelector(selector: string, intent: string): Promise<void>;
   selectOption(selector: string, value: string, intent: string): Promise<void>;
   checkSelector(selector: string, intent: string): Promise<void>;
+  uncheckSelector(selector: string, intent: string): Promise<void>;
   dblclickSelector(selector: string, intent: string): Promise<void>;
   hoverSelector(selector: string, intent: string): Promise<void>;
   pressKey(key: string, intent: string): Promise<void>;
@@ -256,6 +258,14 @@ export async function runEdgeGolden(
       await clickTrustedOrVisible(ctx, (n, c) => run(ctx, n, c), selector);
       await record(ctx, "action", { method: "clickSelector", args: [selector], intent: stepIntent });
     },
+    async clickXpath(xpath, stepIntent) {
+      // Label-scoped widgets (Vue selects, radio groups) have no stable css
+      // handle — xpath is the locator. Live-drive mirrors replay's DOM
+      // pointer/mouse/click chain so open-on-mousedown widgets respond.
+      const expr = `(() => { const el = document.evaluate(${JSON.stringify(xpath)}, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue; if (!el) throw new Error("xpath not found: " + ${JSON.stringify(xpath)}); el.scrollIntoView({ block: "center" }); const mouse = { bubbles: true, cancelable: true, view: window }; el.dispatchEvent(new PointerEvent("pointerdown", mouse)); el.dispatchEvent(new MouseEvent("mousedown", mouse)); el.dispatchEvent(new PointerEvent("pointerup", mouse)); el.dispatchEvent(new MouseEvent("mouseup", mouse)); el.click(); return true; })()`;
+      await run(ctx, `jsclick ${xpath.slice(0, 60)}`, [ctx.agentBrowser, "--session", ctx.session, "eval", expr]);
+      await record(ctx, "action", { method: "clickXpath", args: [xpath], intent: stepIntent });
+    },
     async clickRole(role, name, stepIntent) {
       await run(ctx, `click ${role} '${name}'`, [ctx.agentBrowser, "--session", ctx.session, "find", "role", role, "click", "--name", name]);
       await record(ctx, "action", { method: "clickRole", args: [role, name], intent: stepIntent });
@@ -296,6 +306,11 @@ export async function runEdgeGolden(
       await ensureHittable(ctx, selector, stepIntent);
       await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `check ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "check", selector], checkVisibleEval(selector));
       await record(ctx, "action", { method: "checkBySelector", args: [selector], intent: stepIntent });
+    },
+    async uncheckSelector(selector, stepIntent) {
+      await ensureHittable(ctx, selector, stepIntent);
+      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `uncheck ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "uncheck", selector], uncheckVisibleEval(selector));
+      await record(ctx, "action", { method: "uncheckBySelector", args: [selector], intent: stepIntent });
     },
     async hoverSelector(selector, stepIntent) {
       await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `hover ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "hover", selector], hoverVisibleEval(selector));

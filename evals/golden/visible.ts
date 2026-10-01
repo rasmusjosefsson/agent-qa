@@ -35,6 +35,11 @@ export function checkVisibleEval(selector: string): string {
   return `(() => { const el = ${pickVisible(selector)} ?? document.querySelector(${JSON.stringify(selector)}); if (!el) throw new Error("selector not found: " + ${JSON.stringify(selector)}); if (!el.checked) { el.checked = true; el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); } return true; })()`;
 }
 
+/** eval: uncheck a checkbox/radio on the first visible match. */
+export function uncheckVisibleEval(selector: string): string {
+  return `(() => { const el = ${pickVisible(selector)} ?? document.querySelector(${JSON.stringify(selector)}); if (!el) throw new Error("selector not found: " + ${JSON.stringify(selector)}); if (el.checked) { el.checked = false; el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); } return true; })()`;
+}
+
 /** eval: hover the first visible match (scroll + pointer chain). */
 export function hoverVisibleEval(selector: string): string {
   return `(() => { const el = ${pickVisible(selector)} ?? document.querySelector(${JSON.stringify(selector)}); if (!el) throw new Error("selector not found: " + ${JSON.stringify(selector)}); try { el.scrollIntoView({ block: "center", inline: "nearest" }); } catch (e) {} const o = { bubbles: true, cancelable: true, view: window }; el.dispatchEvent(new PointerEvent("pointerover", o)); el.dispatchEvent(new MouseEvent("mouseover", o)); el.dispatchEvent(new MouseEvent("mousemove", o)); return true; })()`;
