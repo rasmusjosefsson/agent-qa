@@ -1877,9 +1877,14 @@ fn try_text_native_click(session: &str, text: &str) -> anyhow::Result<bool> {
 }
 
 /// agent-browser's top-level `click <selector>` can report success for a
-/// submit button without dispatching the form's submit path. Prefer the
-/// browser-native mouse/click sequence for native controls, then let the
-/// caller fall back to agent-browser for ordinary DOM targets.
+/// submit button without dispatching the form's submit path — and its
+/// coordinate dispatch can silently miss on scrolled pages, so widgets
+/// that open on mousedown/focus (datepicker, combobox, autocomplete) or
+/// non-control click targets (day cells, cards, rows) never activate.
+/// Prefer the browser-native pointer/mouse/click sequence for any element
+/// the selector resolves to — `el.click()` does not need a hit-testable
+/// point — and let the caller fall back to agent-browser only when
+/// nothing matched, so its own miss error still reports.
 fn try_selector_native_click(session: &str, selector: &str) -> anyhow::Result<bool> {
     let expr = format!(
         r#"(() => {{
@@ -1888,12 +1893,9 @@ fn try_selector_native_click(session: &str, selector: &str) -> anyhow::Result<bo
   if (!el) return false;
   const tag = el.tagName;
   const type = (el.getAttribute('type') || '').toLowerCase();
-  const role = (el.getAttribute('role') || '').toLowerCase();
-  const isNativeControl = tag === 'BUTTON'
-    || tag === 'A'
-    || (tag === 'INPUT' && ['submit', 'button', 'reset', 'checkbox', 'radio'].includes(type))
-    || ['button', 'checkbox', 'radio', 'link'].includes(role);
-  if (!isNativeControl) return false;
+  // File inputs route through the upload verb's chooser path — a DOM
+  // click on one neither opens a picker nor carries file data.
+  if (tag === 'INPUT' && type === 'file') return false;
   try {{ el.focus(); }} catch (e) {{}}
   // Defer the activation chain past the eval's response window: an onclick
   // alert/confirm/prompt blocks the page's JS thread, which stops the daemon
@@ -1906,8 +1908,11 @@ fn try_selector_native_click(session: &str, selector: &str) -> anyhow::Result<bo
     try {{
       const els2 = Array.from(document.querySelectorAll({selector_lit}));
       const el2 = els2.find((n) => n.getClientRects().length > 0) || els2[0] || el;
-      el2.dispatchEvent(new MouseEvent('mousedown', {{ bubbles: true, cancelable: true, view: window }}));
-      el2.dispatchEvent(new MouseEvent('mouseup', {{ bubbles: true, cancelable: true, view: window }}));
+      const mouse = {{ bubbles: true, cancelable: true, view: window }};
+      el2.dispatchEvent(new PointerEvent('pointerdown', mouse));
+      el2.dispatchEvent(new MouseEvent('mousedown', mouse));
+      el2.dispatchEvent(new PointerEvent('pointerup', mouse));
+      el2.dispatchEvent(new MouseEvent('mouseup', mouse));
       el2.click();
     }} catch (e) {{}}
   }}, 150);

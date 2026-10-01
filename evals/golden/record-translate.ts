@@ -221,14 +221,6 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
             verb: "frame",
             params: { main: true },
           });
-        case "scrollTop": {
-          // args[0] is the pixel offset — a huge sentinel means "bottom".
-          const y = typeof args[0] === "number" ? args[0] : 0;
-          return doStep(intent, {
-            verb: "scrollTo",
-            params: y >= 99999 ? { to: "bottom" } : { y },
-          });
-        }
         case "dragBySelector":
           // args[0] = source css, args[1] = target css — drives do/drag.
           return doStep(intent, {
@@ -389,22 +381,18 @@ export function toRecordDraft(kind: string, payload: unknown): RecordDraft {
             args[2] ?? "equals",
             args[3],
           );
-        case "elementCount":
+        case "elementCount": {
+          // args: [selector, count] or [selector, predicate, count] — the
+          // count compares document.querySelectorAll(sel).length to the
+          // expected value under the given predicate.
+          const withPred = args.length >= 3;
           return checkStep(
             intent,
             { element: css(args[0]), ofKind: "count" },
-            "equals",
-            args[1],
+            withPred ? args[1] ?? "equals" : "equals",
+            withPred ? args[2] : args[1],
           );
-        case "elementCount":
-          // args: [selector, predicate, count] — numeric predicates compare
-          // document.querySelectorAll(sel).length to the expected count.
-          return checkStep(
-            intent,
-            { element: css(args[0]), ofKind: "count" },
-            args[1] ?? "equals",
-            args[2],
-          );
+        }
         case "fileExists":
           return checkStep(intent, { file: args[0] }, "exists");
         case "fileAbsent":
