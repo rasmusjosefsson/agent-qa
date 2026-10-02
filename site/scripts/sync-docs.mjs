@@ -28,6 +28,7 @@ const DOCS = {
   "github-action": { file: "github-action.md", description: "Replay your scenarios on every PR." },
   extension: { file: "extension.md", description: "One-click capture → ingest → replay." },
   "lint-rules": { file: "lint-rules.md", description: "Scenario lint rule catalogue." },
+  "process-hygiene": { file: "process-hygiene.md", description: "Track and reap agent-browser daemons, Chrome trees, and stray profiles." },
   releasing: { file: "releasing.md", description: "Cross-compile, package, and publish." },
 }
 

@@ -375,9 +375,9 @@
       "verb": "goto",
       "value": {
         "from": "literal",
-        "literal": "http://127.0.0.1:4399/agent-qa/docs/quickstart/"
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/process-hygiene/"
       },
-      "intent": "docs/quickstart (light)"
+      "intent": "docs/process-hygiene (light)"
     },
     {
       "id": "s28",
@@ -408,7 +408,7 @@
           "pixels": 0.05
         }
       },
-      "intent": "docs/quickstart golden (light)"
+      "intent": "docs/process-hygiene golden (light)"
     },
     {
       "id": "s30",
@@ -416,9 +416,9 @@
       "verb": "goto",
       "value": {
         "from": "literal",
-        "literal": "http://127.0.0.1:4399/agent-qa/docs/releasing/"
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/quickstart/"
       },
-      "intent": "docs/releasing (light)"
+      "intent": "docs/quickstart (light)"
     },
     {
       "id": "s31",
@@ -449,7 +449,7 @@
           "pixels": 0.05
         }
       },
-      "intent": "docs/releasing golden (light)"
+      "intent": "docs/quickstart golden (light)"
     },
     {
       "id": "s33",
@@ -457,9 +457,9 @@
       "verb": "goto",
       "value": {
         "from": "literal",
-        "literal": "http://127.0.0.1:4399/agent-qa/docs/templates/"
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/releasing/"
       },
-      "intent": "docs/templates (light)"
+      "intent": "docs/releasing (light)"
     },
     {
       "id": "s34",
@@ -490,7 +490,7 @@
           "pixels": 0.05
         }
       },
-      "intent": "docs/templates golden (light)"
+      "intent": "docs/releasing golden (light)"
     },
     {
       "id": "s36",
@@ -498,9 +498,9 @@
       "verb": "goto",
       "value": {
         "from": "literal",
-        "literal": "http://127.0.0.1:4399/agent-qa/docs/verbs/"
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/templates/"
       },
-      "intent": "docs/verbs (light)"
+      "intent": "docs/templates (light)"
     },
     {
       "id": "s37",
@@ -531,7 +531,7 @@
           "pixels": 0.05
         }
       },
-      "intent": "docs/verbs golden (light)"
+      "intent": "docs/templates golden (light)"
     },
     {
       "id": "s39",
@@ -539,9 +539,9 @@
       "verb": "goto",
       "value": {
         "from": "literal",
-        "literal": "http://127.0.0.1:4399/agent-qa/docs/visual-testing/"
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/verbs/"
       },
-      "intent": "docs/visual-testing (light)"
+      "intent": "docs/verbs (light)"
     },
     {
       "id": "s40",
@@ -572,7 +572,7 @@
           "pixels": 0.05
         }
       },
-      "intent": "docs/visual-testing golden (light)"
+      "intent": "docs/verbs golden (light)"
     },
     {
       "id": "s42",
@@ -580,9 +580,9 @@
       "verb": "goto",
       "value": {
         "from": "literal",
-        "literal": "http://127.0.0.1:4399/agent-qa/"
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/visual-testing/"
       },
-      "intent": "index (light)"
+      "intent": "docs/visual-testing (light)"
     },
     {
       "id": "s43",
@@ -613,31 +613,20 @@
           "pixels": 0.05
         }
       },
-      "intent": "index golden (light)"
+      "intent": "docs/visual-testing golden (light)"
     },
     {
       "id": "s45",
       "kind": "do",
-      "verb": "state",
-      "params": {
-        "localStorage": {
-          "starlight-theme": "dark"
-        }
-      },
-      "intent": "theme → dark (read by the theme bootstrap on next nav)"
-    },
-    {
-      "id": "s46",
-      "kind": "do",
       "verb": "goto",
       "value": {
         "from": "literal",
-        "literal": "http://127.0.0.1:4399/agent-qa/docs/architecture/"
+        "literal": "http://127.0.0.1:4399/agent-qa/"
       },
-      "intent": "docs/architecture (dark)"
+      "intent": "index (light)"
     },
     {
-      "id": "s47",
+      "id": "s46",
       "kind": "check",
       "claim": {
         "subject": {
@@ -654,18 +643,29 @@
       "intent": "content rendered"
     },
     {
-      "id": "s48",
+      "id": "s47",
       "kind": "check",
       "claim": {
         "subject": {
-          "shot": "s47"
+          "shot": "s46"
         },
         "predicate": "matches",
         "tolerance": {
           "pixels": 0.05
         }
       },
-      "intent": "docs/architecture golden (dark)"
+      "intent": "index golden (light)"
+    },
+    {
+      "id": "s48",
+      "kind": "do",
+      "verb": "state",
+      "params": {
+        "localStorage": {
+          "starlight-theme": "dark"
+        }
+      },
+      "intent": "theme → dark (read by the theme bootstrap on next nav)"
     },
     {
       "id": "s49",
@@ -673,9 +673,9 @@
       "verb": "goto",
       "value": {
         "from": "literal",
-        "literal": "http://127.0.0.1:4399/agent-qa/docs/configuration/"
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/architecture/"
       },
-      "intent": "docs/configuration (dark)"
+      "intent": "docs/architecture (dark)"
     },
     {
       "id": "s50",
@@ -706,7 +706,7 @@
           "pixels": 0.05
         }
       },
-      "intent": "docs/configuration golden (dark)"
+      "intent": "docs/architecture golden (dark)"
     },
     {
       "id": "s52",
@@ -714,9 +714,9 @@
       "verb": "goto",
       "value": {
         "from": "literal",
-        "literal": "http://127.0.0.1:4399/agent-qa/docs/extension/"
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/configuration/"
       },
-      "intent": "docs/extension (dark)"
+      "intent": "docs/configuration (dark)"
     },
     {
       "id": "s53",
@@ -747,7 +747,7 @@
           "pixels": 0.05
         }
       },
-      "intent": "docs/extension golden (dark)"
+      "intent": "docs/configuration golden (dark)"
     },
     {
       "id": "s55",
@@ -755,9 +755,9 @@
       "verb": "goto",
       "value": {
         "from": "literal",
-        "literal": "http://127.0.0.1:4399/agent-qa/docs/github-action/"
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/extension/"
       },
-      "intent": "docs/github-action (dark)"
+      "intent": "docs/extension (dark)"
     },
     {
       "id": "s56",
@@ -788,7 +788,7 @@
           "pixels": 0.05
         }
       },
-      "intent": "docs/github-action golden (dark)"
+      "intent": "docs/extension golden (dark)"
     },
     {
       "id": "s58",
@@ -796,9 +796,9 @@
       "verb": "goto",
       "value": {
         "from": "literal",
-        "literal": "http://127.0.0.1:4399/agent-qa/docs/lint-rules/"
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/github-action/"
       },
-      "intent": "docs/lint-rules (dark)"
+      "intent": "docs/github-action (dark)"
     },
     {
       "id": "s59",
@@ -829,7 +829,7 @@
           "pixels": 0.05
         }
       },
-      "intent": "docs/lint-rules golden (dark)"
+      "intent": "docs/github-action golden (dark)"
     },
     {
       "id": "s61",
@@ -837,9 +837,9 @@
       "verb": "goto",
       "value": {
         "from": "literal",
-        "literal": "http://127.0.0.1:4399/agent-qa/docs/network/"
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/lint-rules/"
       },
-      "intent": "docs/network (dark)"
+      "intent": "docs/lint-rules (dark)"
     },
     {
       "id": "s62",
@@ -870,7 +870,7 @@
           "pixels": 0.05
         }
       },
-      "intent": "docs/network golden (dark)"
+      "intent": "docs/lint-rules golden (dark)"
     },
     {
       "id": "s64",
@@ -878,9 +878,9 @@
       "verb": "goto",
       "value": {
         "from": "literal",
-        "literal": "http://127.0.0.1:4399/agent-qa/docs/overview/"
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/network/"
       },
-      "intent": "docs/overview (dark)"
+      "intent": "docs/network (dark)"
     },
     {
       "id": "s65",
@@ -911,7 +911,7 @@
           "pixels": 0.05
         }
       },
-      "intent": "docs/overview golden (dark)"
+      "intent": "docs/network golden (dark)"
     },
     {
       "id": "s67",
@@ -919,9 +919,9 @@
       "verb": "goto",
       "value": {
         "from": "literal",
-        "literal": "http://127.0.0.1:4399/agent-qa/docs/plugins/"
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/overview/"
       },
-      "intent": "docs/plugins (dark)"
+      "intent": "docs/overview (dark)"
     },
     {
       "id": "s68",
@@ -952,7 +952,7 @@
           "pixels": 0.05
         }
       },
-      "intent": "docs/plugins golden (dark)"
+      "intent": "docs/overview golden (dark)"
     },
     {
       "id": "s70",
@@ -960,9 +960,9 @@
       "verb": "goto",
       "value": {
         "from": "literal",
-        "literal": "http://127.0.0.1:4399/agent-qa/docs/quickstart/"
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/plugins/"
       },
-      "intent": "docs/quickstart (dark)"
+      "intent": "docs/plugins (dark)"
     },
     {
       "id": "s71",
@@ -993,7 +993,7 @@
           "pixels": 0.05
         }
       },
-      "intent": "docs/quickstart golden (dark)"
+      "intent": "docs/plugins golden (dark)"
     },
     {
       "id": "s73",
@@ -1001,9 +1001,9 @@
       "verb": "goto",
       "value": {
         "from": "literal",
-        "literal": "http://127.0.0.1:4399/agent-qa/docs/releasing/"
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/process-hygiene/"
       },
-      "intent": "docs/releasing (dark)"
+      "intent": "docs/process-hygiene (dark)"
     },
     {
       "id": "s74",
@@ -1034,7 +1034,7 @@
           "pixels": 0.05
         }
       },
-      "intent": "docs/releasing golden (dark)"
+      "intent": "docs/process-hygiene golden (dark)"
     },
     {
       "id": "s76",
@@ -1042,9 +1042,9 @@
       "verb": "goto",
       "value": {
         "from": "literal",
-        "literal": "http://127.0.0.1:4399/agent-qa/docs/templates/"
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/quickstart/"
       },
-      "intent": "docs/templates (dark)"
+      "intent": "docs/quickstart (dark)"
     },
     {
       "id": "s77",
@@ -1075,7 +1075,7 @@
           "pixels": 0.05
         }
       },
-      "intent": "docs/templates golden (dark)"
+      "intent": "docs/quickstart golden (dark)"
     },
     {
       "id": "s79",
@@ -1083,9 +1083,9 @@
       "verb": "goto",
       "value": {
         "from": "literal",
-        "literal": "http://127.0.0.1:4399/agent-qa/docs/verbs/"
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/releasing/"
       },
-      "intent": "docs/verbs (dark)"
+      "intent": "docs/releasing (dark)"
     },
     {
       "id": "s80",
@@ -1116,7 +1116,7 @@
           "pixels": 0.05
         }
       },
-      "intent": "docs/verbs golden (dark)"
+      "intent": "docs/releasing golden (dark)"
     },
     {
       "id": "s82",
@@ -1124,9 +1124,9 @@
       "verb": "goto",
       "value": {
         "from": "literal",
-        "literal": "http://127.0.0.1:4399/agent-qa/docs/visual-testing/"
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/templates/"
       },
-      "intent": "docs/visual-testing (dark)"
+      "intent": "docs/templates (dark)"
     },
     {
       "id": "s83",
@@ -1157,7 +1157,7 @@
           "pixels": 0.05
         }
       },
-      "intent": "docs/visual-testing golden (dark)"
+      "intent": "docs/templates golden (dark)"
     },
     {
       "id": "s85",
@@ -1165,9 +1165,9 @@
       "verb": "goto",
       "value": {
         "from": "literal",
-        "literal": "http://127.0.0.1:4399/agent-qa/"
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/verbs/"
       },
-      "intent": "index (dark)"
+      "intent": "docs/verbs (dark)"
     },
     {
       "id": "s86",
@@ -1192,6 +1192,88 @@
       "claim": {
         "subject": {
           "shot": "s86"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/verbs golden (dark)"
+    },
+    {
+      "id": "s88",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/visual-testing/"
+      },
+      "intent": "docs/visual-testing (dark)"
+    },
+    {
+      "id": "s89",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s90",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s89"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/visual-testing golden (dark)"
+    },
+    {
+      "id": "s91",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/"
+      },
+      "intent": "index (dark)"
+    },
+    {
+      "id": "s92",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s93",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s92"
         },
         "predicate": "matches",
         "tolerance": {

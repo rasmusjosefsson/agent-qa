@@ -46,6 +46,7 @@ export default defineConfig({
             { label: "Network claims", slug: "docs/network" },
             { label: "Browser extension", slug: "docs/extension" },
             { label: "GitHub Action", slug: "docs/github-action" },
+            { label: "Session hygiene", slug: "docs/process-hygiene" },
           ],
         },
         {
