@@ -5,7 +5,7 @@
  * per-scenario pass/fail. Baselines must be minted first:
  * `bun evals/docsite/accept.ts` (or `/docs-goldens accept` on the PR).
  */
-import { bootPreview, env, lint, replay, report, scenarioIds } from "./lib.ts";
+import { bootPreview, closeSessions, env, lint, replay, report, scenarioIds } from "./lib.ts";
 
 const e = env();
 const { stop } = await bootPreview();
@@ -28,6 +28,7 @@ try {
   }
 } finally {
   stop();
+  await closeSessions(e);
 }
 report("docsite", rows);
 for (const r of rows) console.log(`${r.ok ? "PASS" : "FAIL"} ${r.sid}${r.error ? `\n${r.error.slice(0, 400)}` : ""}`);

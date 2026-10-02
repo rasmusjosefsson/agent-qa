@@ -126,6 +126,19 @@ export async function bootPreview(): Promise<{ base: string; stop: () => void }>
   return serveDist();
 }
 
+/** Close the `docsite-<sid>` agent-browser sessions the replays opened —
+ *  the daemon + Chrome tree stay alive (and hold ~1.4 GB) long after the
+ *  run ends otherwise. Best-effort: a failed close shouldn't fail the suite. */
+export async function closeSessions(e: Record<string, string>): Promise<void> {
+  for (const sid of scenarioIds()) {
+    await sh(
+      [agentBrowser, "close", "--session", `docsite-${sid}`],
+      e,
+      `close docsite-${sid}`,
+    ).catch(() => {});
+  }
+}
+
 export async function replay(sid: string, e: Record<string, string>): Promise<void> {
   await sh(
     // --keep-going: a missing/stale baseline fails the first shot claim, but

@@ -6,7 +6,7 @@
  * `scenarios/<sid>/baselines/` — or let `/docs-goldens accept` do it on the
  * PR head, since baselines are environment-bound.
  */
-import { accept, bootPreview, env, replay, report, scenarioIds } from "./lib.ts";
+import { accept, bootPreview, closeSessions, env, replay, report, scenarioIds } from "./lib.ts";
 
 const e = env();
 const { stop } = await bootPreview();
@@ -25,6 +25,7 @@ try {
   }
 } finally {
   stop();
+  await closeSessions(e);
 }
 report("docsite-accept", rows);
 for (const r of rows) console.log(`${r.ok ? "MINTED" : "FAIL"} ${r.sid}`);
