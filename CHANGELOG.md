@@ -8,6 +8,19 @@ All notable changes to agent-qa are documented here. This project follows
 
 ### Added
 
+- Workbench chat header shows which backend, model, and cumulative
+  usage is active (`pi · claude-haiku-4-5 · $0.0123`). `GET
+  /api/chat/c/:id/state` now reports `usage` — pi reads
+  `getSessionStats()` (`cost` + `tokens`), opencode sums per-message
+  `info.cost`/`info.tokens` — and the badge refreshes on rehydrate,
+  model/thinking changes, and after each turn (`agent_end` triggers
+  a state re-fetch).
+- The opencode backend defaults new sessions to the cheapest chat
+  model — `AGENT_QA_CHAT_MODEL` substring match first, else the
+  first `/haiku/` entry in the model list (pi already applied it on
+  every create).
+- Workbench sidebar uses the Agent Spark mark (theme-aware light +
+  dark variants) instead of the old placeholder icon.
 - Workbench chat: "No sign-in" guest mode. The sign-in select now offers
   "No sign-in", which clears any connected persona binding
   (`POST /api/chat/c/:id/disconnect`) and marks the chat as guest so the
@@ -53,6 +66,26 @@ All notable changes to agent-qa are documented here. This project follows
 
 ### Fixed
 
+- Workbench: a dead replay no longer hangs on "IN FLIGHT" forever.
+  `status.json` has no heartbeat, so a killed run still read
+  `state: "running"`; a run whose status mtime is older than
+  `AGENT_QA_RUN_STALE_MS` (default 5 min) now reports `state:
+  "stale"`, which the Runs UI renders as "interrupted" (sidebar
+  badge, run banner, non-terminal no more).
+- Workbench chat keeps its history across the 15-minute idle
+  teardown: the pi backend now persists sessions as JSONL under
+  `<recordDir>/agent-session/` (`SessionManager.create/open` with a
+  `current.path` marker), and the opencode backend reuses its
+  `sessionID` across recreates since the serve child outlives the
+  adapter. "New chat" sets a one-shot `fresh` flag so it still
+  starts from scratch instead of resuming.
+- Workbench live pane no longer goes blank ("Browser ready") while
+  the agent is recording — the blank-tab guard (`blankTab`) now
+  stays live when `autoRecording` is on, so the canvas shows the
+  recorded browser during the pre-navigation phase.
+- Recorded-step keyframes no longer capture a black frame:
+  `capture_recording_sidecars` waits 350ms after the recorded action
+  before `browser::screenshot`, letting SPA paints land.
 - `agent-qa cleanup` no longer leaks a wedged session: when `close
   --session` fails, the recorded daemon pid is terminated directly
   instead of only deleting the registry files (which orphaned the

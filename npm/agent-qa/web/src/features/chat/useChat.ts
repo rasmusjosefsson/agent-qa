@@ -4,6 +4,7 @@ import { use, useCallback, useEffect, useReducer, useRef } from 'react'
 import type { AgentEvent, SessionEvent } from '@/lib/types'
 import {
   createChatEventSource,
+  getChatState,
   postPrompt,
   postAbort,
   postNew,
@@ -38,7 +39,17 @@ export function useChat(cid: string) {
     esRef.current = es
     es.addEventListener('agent', (e) => {
       try {
-        dispatch({ type: 'agent_event', event: JSON.parse((e as MessageEvent).data) as AgentEvent })
+        const ev = JSON.parse((e as MessageEvent).data) as AgentEvent
+        dispatch({ type: 'agent_event', event: ev })
+        // Turn finished — re-pull /state so the usage badge (and any model
+        // switch the agent made) reflects this turn's accounting. The turn's
+        // last SSE frame has already landed when agent_end arrives, so the
+        // fetch races nothing.
+        if ((ev as { type?: string }).type === 'agent_end') {
+          void getChatState(cid)
+            .then((body) => dispatch({ type: 'patch_meta', payload: body }))
+            .catch(() => {})
+        }
       } catch {
         /* ignore malformed frame */
       }

@@ -11,11 +11,11 @@ import {
   PlugIcon,
   Settings2Icon,
   SquarePenIcon,
-  TestTubeDiagonalIcon,
   UsersIcon,
 } from "lucide-react"
 
 import type { Tab } from "../AppShell"
+import { cn } from "@/lib/utils"
 import { SpaLink as SpaAnchor } from "@/components/spa-link"
 import {
   Sidebar,
@@ -30,6 +30,45 @@ import {
   SidebarMenuItem,
   SidebarRail,
 } from "@/components/ui/sidebar"
+
+// The agent-qa "spark" mark — same shield + spark as the site's logo.svg,
+// inlined so the workbench brand matches the docs. The tile is dark on light
+// sidebars and light on dark (mirroring logo.svg / logo-light.svg).
+function AgentSparkMark({ className }: { className?: string }) {
+  const variants = [
+    { tile: '#12121f', gradIds: ['aqa-wm', 'aqa-wm-b'], cls: 'dark:hidden' },
+    { tile: '#f4f3fb', gradIds: ['aqa-wm-l', 'aqa-wm-lb'], cls: 'hidden dark:block' },
+  ]
+  return (
+    <>
+      {variants.map((v) => (
+        <svg key={v.tile} viewBox="0 0 64 64" fill="none" className={cn(className, v.cls)} aria-hidden>
+          <defs>
+            <linearGradient id={v.gradIds[0]} x1="10" y1="10" x2="54" y2="54" gradientUnits="userSpaceOnUse">
+              <stop stopColor="#22d3ee" />
+              <stop offset="1" stopColor="#8b5cf6" />
+            </linearGradient>
+            <linearGradient id={v.gradIds[1]} x1="20" y1="16" x2="44" y2="48" gradientUnits="userSpaceOnUse">
+              <stop stopColor="#a78bfa" />
+              <stop offset="1" stopColor="#f472b6" />
+            </linearGradient>
+          </defs>
+          <rect width="64" height="64" rx="16" fill={v.tile} />
+          <path
+            d="M32 10.5 49 17v13.5c0 11-7.3 19.5-17 23-9.7-3.5-17-12-17-23V17Z"
+            stroke={`url(#${v.gradIds[0]})`}
+            strokeWidth="3.6"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M32 19.5c1.1 6.2 3.6 8.9 9.5 10-5.9 1.1-8.4 3.8-9.5 10.5-1.1-6.7-3.6-9.4-9.5-10.5 5.9-1.1 8.4-3.8 9.5-10Z"
+            fill={`url(#${v.gradIds[1]})`}
+          />
+        </svg>
+      ))}
+    </>
+  )
+}
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>
 
@@ -127,9 +166,7 @@ export function AppSidebar({ tab, ...props }: { tab: Tab } & ComponentProps<type
           <SidebarMenuItem>
             <SidebarMenuButton asChild size="lg" tooltip={version ? `agent-qa v${version}` : 'agent-qa'}>
               <SpaAnchor href="/cases">
-                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                  <TestTubeDiagonalIcon className="size-4" />
-                </div>
+                <AgentSparkMark className="size-8 shrink-0 rounded-lg" />
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-semibold tracking-tight text-foreground">agent-qa</span>
                   <span data-qa-volatile className="truncate text-xs text-muted-foreground">

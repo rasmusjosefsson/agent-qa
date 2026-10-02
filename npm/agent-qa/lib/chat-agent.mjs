@@ -18,6 +18,7 @@
 import { createRequire } from 'node:module';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { existsSync, statSync, realpathSync, readFileSync } from 'node:fs';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, delimiter } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
@@ -96,6 +97,9 @@ export function createChatHub({
   let creating = null;
   let disposed = false;
   let idleTimer = null;
+  // Set by newSession() so the next createSession starts a clean conversation
+  // rather than resuming the persisted one.
+  let nextFresh = false;
 
   function touch() {
     if (idleTimer) timers.clear(idleTimer);
@@ -135,8 +139,12 @@ export function createChatHub({
     if (disposed) throw new Error('chat hub disposed');
     if (session) return session;
     if (!creating) {
+      // `fresh` = the caller asked for a brand-new conversation (New chat) —
+      // backends skip their persisted session resume for this one create.
+      const fresh = nextFresh;
+      nextFresh = false;
       creating = Promise.resolve()
-        .then(() => createSession())
+        .then(() => createSession({ fresh }))
         .then((s) => {
           if (disposed) {
             try {
@@ -207,6 +215,24 @@ export function createChatHub({
     subscribers.delete(res);
   }
 
+  // Usage/cost accounting for the chat's model badge. pi's AgentSession
+  // exposes getSessionStats(); the opencode adapter accumulates a compatible
+  // shape on .usage from the server's per-message accounting.
+  function sessionUsage(s) {
+    try {
+      if (s && typeof s.getSessionStats === 'function') {
+        const st = s.getSessionStats();
+        if (st && typeof st === 'object') {
+          return { cost: st.cost ?? null, tokens: st.tokens || null };
+        }
+      }
+      if (s && s.usage && typeof s.usage === 'object') return s.usage;
+    } catch {
+      /* best-effort */
+    }
+    return null;
+  }
+
   async function getState() {
     const models = currentModels();
     if (!session) {
@@ -220,6 +246,7 @@ export function createChatHub({
         thinkingLevels: [],
         models,
         sessionId: null,
+        usage: null,
       };
     }
     const state = session.agent && session.agent.state ? session.agent.state : {};
@@ -233,6 +260,7 @@ export function createChatHub({
       thinkingLevels: availableThinkingLevels(session),
       models,
       sessionId: session.sessionId ?? null,
+      usage: sessionUsage(session),
     };
   }
 
@@ -310,6 +338,7 @@ export function createChatHub({
 
   // Drop the current conversation and let the next prompt spawn a fresh one.
   async function newSession() {
+    nextFresh = true;
     teardownSession();
     if (!disposed) touch();
     broadcast('session', { type: 'session_reset' });
@@ -664,6 +693,41 @@ function resolveAgentQaSkillDirs(cwd) {
   return dirs;
 }
 
+// Session persistence for the pi backend. sessionDir holds the
+// SessionManager's JSONL files; `current.path` inside it marks the file the
+// last live session wrote, so a session recreated after idle teardown (or a
+// server restart) reopens the same conversation instead of starting blank.
+async function openOrCreateSessionManager({ SessionManager, cwd, sessionDir, remembered, fresh }) {
+  const fallback = () => ({ manager: SessionManager.inMemory(cwd), file: null });
+  if (!sessionDir || !SessionManager || typeof SessionManager.create !== 'function') return fallback();
+  try {
+    await mkdir(sessionDir, { recursive: true });
+    const marker = join(sessionDir, 'current.path');
+    let prior = fresh ? null : remembered;
+    if (!prior && !fresh) {
+      try {
+        prior = (await readFile(marker, 'utf8')).trim() || null;
+      } catch {
+        prior = null;
+      }
+    }
+    let manager = null;
+    if (prior && existsSync(prior) && typeof SessionManager.open === 'function') {
+      try {
+        manager = SessionManager.open(prior, sessionDir, cwd);
+      } catch {
+        manager = null; // corrupt/moved file → fall through to a fresh session
+      }
+    }
+    if (!manager) manager = SessionManager.create(cwd, sessionDir);
+    const file = typeof manager.getSessionFile === 'function' ? manager.getSessionFile() : null;
+    if (file) await writeFile(marker, file);
+    return { manager, file };
+  } catch {
+    return fallback();
+  }
+}
+
 // Build a createSession() that mints a fresh in-memory AgentSession bound to
 // the repo cwd, inheriting skills/extensions/models/keys via the SDK's default
 // resource loader + auth storage — i.e. the same agent as the terminal.
@@ -691,8 +755,11 @@ function makeSessionFactory(sdk, config = {}, shared = {}) {
   // dedicated AGENT_BROWSER_SESSION so this chat's browsing + recording land in
   // its own browser). Read lazily so a New-chat session rotation is picked up.
   const bashEnv = typeof config.bashEnv === 'function' ? config.bashEnv : null;
+  // JSONL file of the session this factory most recently opened — lets a
+  // session recreated after idle teardown resume the same conversation.
+  let rememberedSessionFile = null;
 
-  return async function createSession() {
+  return async function createSession({ fresh } = {}) {
     // Share one AuthStorage + ModelRegistry with the hub's model picker so the
     // model listed in /state is the same object setModel() resolves against.
     const authStorage = shared.authStorage || AuthStorage.create();
@@ -701,7 +768,6 @@ function makeSessionFactory(sdk, config = {}, shared = {}) {
       cwd,
       authStorage,
       modelRegistry,
-      sessionManager: SessionManager.inMemory(cwd),
     };
     if (agentDir) opts.agentDir = agentDir;
 
@@ -752,6 +818,21 @@ function makeSessionFactory(sdk, config = {}, shared = {}) {
         createWriteToolDefinition(cwd),
       ];
     }
+
+    // Persist the conversation so the idle teardown (DEFAULT_IDLE_MS) doesn't
+    // lose history: with config.sessionDir the SessionManager writes an
+    // append-only JSONL file there, and the next lazy session reopens it.
+    // `current.path` marks the file the last session wrote — SessionManager
+    // picks its own filename, so we track it ourselves.
+    const sessionManager = await openOrCreateSessionManager({
+      SessionManager,
+      cwd,
+      sessionDir: config.sessionDir,
+      remembered: fresh ? null : rememberedSessionFile,
+      fresh,
+    });
+    if (sessionManager.file) rememberedSessionFile = sessionManager.file;
+    opts.sessionManager = sessionManager.manager;
 
     const { session } = await createAgentSession(opts);
 
@@ -1032,6 +1113,7 @@ function makeOpencodeSessionAdapter({ client, sessionID, models, cwd }) {
   let streaming = false;
   let messages = [];
   let messagesFetched = false;
+  let usage = null;
   let model = null;
   let onSessionEvent = () => {};
 
@@ -1091,6 +1173,7 @@ function makeOpencodeSessionAdapter({ client, sessionID, models, cwd }) {
   Object.defineProperty(adapter, 'isStreaming', { get: () => streaming });
   Object.defineProperty(adapter, 'messages', { get: () => messages });
   Object.defineProperty(adapter, 'model', { get: () => model });
+  Object.defineProperty(adapter, 'usage', { get: () => usage });
 
   function emit(ev) {
     if (!ev) return;
@@ -1108,8 +1191,23 @@ function makeOpencodeSessionAdapter({ client, sessionID, models, cwd }) {
       const res = await client.session.messages({ sessionID, order: 'asc' });
       const rows = (res && (res.data?.data ?? res.data)) || [];
       const out = [];
-      for (const m of rows) out.push(...mapOpencodeMessage(m));
+      // Sum per-message cost/token accounting the server reports on each
+      // assistant message — exposed via /state for the chat's usage badge.
+      let cost = 0;
+      let input = 0;
+      let output = 0;
+      let reasoning = 0;
+      for (const m of rows) {
+        out.push(...mapOpencodeMessage(m));
+        const info = (m && (m.info || m)) || {};
+        if (info.type !== 'assistant') continue;
+        cost += Number(info.cost) || 0;
+        input += Number(info.tokens && info.tokens.input) || 0;
+        output += Number(info.tokens && info.tokens.output) || 0;
+        reasoning += Number(info.tokens && info.tokens.reasoning) || 0;
+      }
       messages = out;
+      usage = { cost, tokens: { input, output, reasoning, total: input + output + reasoning } };
       messagesFetched = true;
     } catch {
       /* keep last snapshot */
@@ -1226,11 +1324,21 @@ export async function createOpencodeBackend(config = {}) {
   // non-fatal (opencode can also pick a default model server-side).
   await listModels();
 
-  const createSession = async () => {
-    const res = await client.session.create({ location: { directory: cwd } });
-    const info = res && (res.data ?? res);
-    const sessionID = info && (info.id || info.sessionID);
-    if (!sessionID) throw new Error('opencode session.create returned no session id');
+  // The `opencode serve` child outlives any one adapter — idle teardown only
+  // disposes the adapter (its event pump), not the server-side session. Keep
+  // the sessionID so a recreated session RESUMES the same conversation
+  // (init() re-pulls messages) instead of starting blank; `fresh` (New chat)
+  // deliberately drops it and opens a new one.
+  let sessionID = null;
+  const createSession = async ({ fresh } = {}) => {
+    let isNew = false;
+    if (fresh || !sessionID) {
+      const res = await client.session.create({ location: { directory: cwd } });
+      const info = res && (res.data ?? res);
+      sessionID = info && (info.id || info.sessionID);
+      if (!sessionID) throw new Error('opencode session.create returned no session id');
+      isNew = true;
+    }
     const adapter = makeOpencodeSessionAdapter({
       client,
       sessionID,
@@ -1238,6 +1346,20 @@ export async function createOpencodeBackend(config = {}) {
       cwd,
     });
     await adapter.init();
+    // Same cheap-default rule the pi path applies: on a NEW session only,
+    // prefer AGENT_QA_CHAT_MODEL (substring match), else the first Haiku — a
+    // resumed session keeps whatever model it already runs.
+    if (isNew) {
+      try {
+        const avail = modelCache || [];
+        const want = (process.env.AGENT_QA_CHAT_MODEL || '').toLowerCase();
+        const key = (m) => `${m?.provider || ''}/${m?.id || ''} ${m?.label || ''}`.toLowerCase();
+        const pick = avail.find((m) => (want ? key(m).includes(want) : /haiku/.test(key(m))));
+        if (pick) await adapter.setModel({ provider: pick.provider, id: pick.id, label: pick.label });
+      } catch {
+        /* keep the server default */
+      }
+    }
     return adapter;
   };
 

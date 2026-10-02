@@ -72,7 +72,9 @@ export function RunsPage() {
     d &&
     d.sid === runs.sel.sid &&
     !d.audit?.summary &&
-    d.status?.state !== 'done'
+    d.status?.state !== 'done' &&
+    // 'stale' = dead-but-flagged-running — must NOT hold the Replay button.
+    d.status?.state !== 'stale'
   )
   const busy = viewedRunActive || replayingSid === runs.sel.sid
   useEffect(() => {

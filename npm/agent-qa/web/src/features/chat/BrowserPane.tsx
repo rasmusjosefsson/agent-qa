@@ -212,8 +212,11 @@ export function BrowserPane({ available, chatId, navigate, initialSession }: Bro
     }
   }, [available, effective])
 
-  // Connected, but the tab has no address yet (about:blank).
-  const blankTab = phase === 'live' && !url.trim()
+  // Connected, but the tab has no address yet (about:blank). While a recording
+  // is in progress, keep the canvas live anyway — the recorder's blank
+  // pre-navigation frame is honest feedback, and hiding it made "record a
+  // page" look like the browser never opened.
+  const blankTab = phase === 'live' && !url.trim() && !autoRecording
 
   async function browserAction(payload: Record<string, unknown>) {
     try {
