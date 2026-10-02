@@ -146,21 +146,7 @@ jobs:
       - name: verify published umbrella
         run: |
           VERSION="${GITHUB_REF#refs/tags/v}"
-          node -e '
-            const version = process.argv[1];
-            const { execFileSync } = require("node:child_process");
-            const deps = JSON.parse(execFileSync("npm", [
-              "view", `@rasmusjosefsson/agent-qa@${version}`, "optionalDependencies",
-              "--json", "--loglevel=error",
-            ], { encoding: "utf8" }));
-            const bad = Object.entries(deps || {})
-              .filter(([k]) => /^@rasmusjosefsson\/agent-qa-/.test(k) && deps[k] !== version);
-            if (bad.length) {
-              console.error(`published umbrella has unstamped platform deps:`, bad);
-              process.exit(1);
-            }
-            console.log(`registry optionalDependencies all stamped ${version}`);
-          ' "$VERSION"
+          node scripts/check-umbrella-deps.js --published "$VERSION"
 
   github-release:
     name: github release
