@@ -1,4 +1,4 @@
-# Visual testing — golden screenshots
+# Visual testing
 
 agent-qa ships a pixel-diff golden framework: every do-step already captures a
 screenshot during replay, so a `{"shot"}` claim compares that capture against a

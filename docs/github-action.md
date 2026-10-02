@@ -1,4 +1,4 @@
-# GitHub Action — replay your scenarios on every PR
+# GitHub Action
 
 This repository doubles as a composite GitHub Action. In an app repo that
 keeps agent-qa scenarios under `scenarios/`:

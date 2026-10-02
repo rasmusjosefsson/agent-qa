@@ -68,7 +68,7 @@ h1#_top {
 }
 
 h1#_top {
-  background-image: linear-gradient(100deg, var(--aqa-fg) 30%, var(--aqa-brand) 80%, var(--aqa-brand-3) 110%);
+  background-image: linear-gradient(100deg, var(--aqa-fg) 0%, var(--aqa-brand) 70%, var(--aqa-brand-3) 105%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
