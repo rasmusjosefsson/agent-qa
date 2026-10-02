@@ -8,6 +8,11 @@ All notable changes to agent-qa are documented here. This project follows
 
 ### Added
 
+- `docs/process-hygiene` — new docs page covering `agent-qa ps`
+  (live/orphan/stale sessions, unowned Chrome + daemons, stray
+  profile dirs) and `agent-qa cleanup` (`--all`, `--session`,
+  `--older-than`, `--dry-run`, `--json`), wired into the site sidebar
+  and synced via `sync-docs.mjs`.
 - Docs-site visual goldens (`evals/docsite` + `docs-goldens.yml`): the
   docs site is shot-claimed end-to-end — every built page in light and
   dark — using the same baseline/diff/accept loop as the workbench
