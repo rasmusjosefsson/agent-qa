@@ -6,6 +6,7 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-02
 ### Fixed
 
 - Launcher `agent-qa update` now verifies the platform binary after
