@@ -227,6 +227,27 @@ function updateSelf(force) {
     ['install', '-g', `${pkg.name}@${latest}`, '--no-audit', '--no-fund', '--loglevel=error'],
     { stdio: 'inherit' },
   );
+  // Verify the platform binary actually landed. npm silently skips
+  // optionalDependencies that don't resolve (e.g. pinned to an unpublished
+  // version), which would leave the launcher on <latest> driving a stale or
+  // missing binary — surface that instead of reporting a clean update. Spawn
+  // a fresh process so binary resolution isn't cached from this launcher's
+  // require cache.
+  let cliV = null;
+  try {
+    const out = execFileSync(process.execPath, [__filename, '--version', '--json'], {
+      encoding: 'utf8',
+      timeout: 20000,
+    }).trim();
+    cliV = JSON.parse(out).cli; // null when the binary can't be resolved
+  } catch { /* resolution errors already print below as missing */ }
+  if (cliV !== latest) {
+    console.warn(
+      `warning: updated to ${latest} but the platform binary is ${cliV || 'missing'} —\n` +
+        `the optionalDependencies were skipped by npm. Reinstall with:\n` +
+        `  npm install -g --force ${pkg.name}@${latest}`,
+    );
+  }
   console.log(`Updated agent-qa from ${pkg.version} to ${latest}.`);
 }
 
