@@ -8,6 +8,15 @@ All notable changes to agent-qa are documented here. This project follows
 
 ### Added
 
+- `agent-qa ps` + `agent-qa cleanup` — visibility and reaping for
+  agent-browser zombies. `ps` correlates the socket-dir session
+  registry with the process table into `live`/`orphan`/`stale` rows
+  (daemon pid, age, tree RSS, last URL) plus unowned Chrome processes
+  and stray `/tmp/agent-browser-chrome-*` profile dirs. `cleanup`
+  removes stale/orphan registry files, kills unowned Chrome, and
+  deletes stray profile dirs; `--all` also closes live sessions
+  gracefully, `--session <n>` scopes, `--older-than <dur>` filters,
+  `--dry-run` prints the plan, `--json` for automation.
 - `scripts/cut-release.js` — release prep + cut in one step: bumps
   `npm/agent-qa/package.json`, stamps `## [Unreleased]` into a dated
   `## [<v>]` section, commits, tags, and pushes (`--push`, `--dry-run`,
