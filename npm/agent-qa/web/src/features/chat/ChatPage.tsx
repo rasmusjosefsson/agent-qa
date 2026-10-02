@@ -60,6 +60,7 @@ import {
   getEnvironments,
   getChatConnection,
   connectPersonaToChat,
+  disconnectChat,
   remediateChatAuth,
   type AuthRemediation,
   type ChatConnection,
@@ -734,12 +735,27 @@ function ConnectBar({ cid }: { cid: string }) {
     )
   }
 
+  // "No sign-in" picked — drop any persona binding and stop the background
+  // auto-connect for this chat; the poll loop then shows the guest state.
+  const optOut = async () => {
+    setPersonaId('')
+    setEnvId('')
+    setMsg({ tone: 'ok', text: 'No sign-in — browsing anonymously.' })
+    try {
+      await disconnectChat(cid)
+    } catch {
+      /* best-effort; the connection poll re-shows whatever state remains */
+    }
+  }
+
   useEffect(() => {
     let alive = true
     let timer: number | undefined
     let shownPersonaId: string | null = null
     let shownEnvironmentId: string | null = null
-    let shownState: ChatConnection['state'] | null = null
+    // Guest is folded into the state key so a disconnect→connect cycle that
+    // returns to the same state still re-renders its message.
+    let shownKey: string | null = null
 
     const showConnection = (connection: ChatConnection) => {
       if (
@@ -751,9 +767,13 @@ function ConnectBar({ cid }: { cid: string }) {
         setPersonaId(connection.personaId)
         if (connection.environmentId) setEnvId(connection.environmentId)
       }
-      if (connection.state === shownState) return
-      shownState = connection.state
-      if (connection.state === 'connecting') {
+      const key = `${connection.state}:${connection.guest ? 'guest' : ''}`
+      if (key === shownKey) return
+      shownKey = key
+      if (connection.guest) {
+        setBusy(false)
+        setMsg({ tone: 'ok', text: 'No sign-in — browsing anonymously.' })
+      } else if (connection.state === 'connecting') {
         setBusy(true)
         setMsg({ tone: 'busy', text: 'Signing in…' })
       } else if (connection.state === 'connected') {
@@ -830,8 +850,14 @@ function ConnectBar({ cid }: { cid: string }) {
       <span>Sign in as</span>
       <ChatSelect
         value={personaId}
-        onChange={setPersonaId}
-        placeholder="persona"
+        onChange={(v) => {
+          if (v) {
+            setPersonaId(v)
+          } else {
+            void optOut()
+          }
+        }}
+        placeholder="No sign-in"
         options={personas.map((p) => ({ value: p.id, label: p.name }))}
       />
       {environments.length > 0 && (

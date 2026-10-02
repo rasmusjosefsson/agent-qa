@@ -161,6 +161,8 @@ export interface ChatConnection {
   personaId: string | null
   environmentId: string | null
   profile: string | null
+  // True after the user picks "No sign-in" — auto-connect won't re-fire.
+  guest?: boolean
   remediation?: AuthRemediation
 }
 
@@ -183,6 +185,12 @@ export function connectPersonaToChat(
     ...(environmentId ? { environmentId } : {}),
     headed,
   })
+}
+
+// Opt this chat out of sign-in: drops any connected persona binding and
+// stops the background default-persona auto-connect for this chat.
+export function disconnectChat(chatId: string): Promise<{ state: string; guest: boolean }> {
+  return postJson(`/api/chat/c/${encodeURIComponent(chatId)}/disconnect`, {})
 }
 
 export function remediateChatAuth(

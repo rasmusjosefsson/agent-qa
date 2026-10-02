@@ -1515,6 +1515,45 @@ test("POST /api/chat/c/:id/connect bootstraps auth into THAT chat's own session"
   assert.equal((await j('POST', `/api/chat/c/${created.id}/connect`, {})).status, 400);
 });
 
+test('POST /api/chat/c/:id/disconnect drops the persona binding into guest mode', async (t) => {
+  const fx = makeFixture();
+  const deps = {
+    chat: { hub: {} },
+    prepareBrowserSession: async () => {},
+    runCli: async (args) => {
+      if (args[0] === 'profile-status') return { code: 0, stdout: 'admin-user: authenticated', stderr: '' };
+      return { code: 0, stdout: 'ok', stderr: '' };
+    },
+  };
+  const booted = await boot(fx.root, deps);
+  t.after(() => booted.server.close());
+  const j = (m, p, b) =>
+    fetch(`${booted.base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  const created = await (await j('POST', '/api/chat/create')).json();
+  await j('POST', '/api/personas/admin', { name: 'Admin', profile: 'admin-user' });
+  await j('POST', '/api/environments/staging', { name: 'Staging', auth: { plugin: 'agent-qa-plugin-acme' } });
+  await j('POST', `/api/chat/c/${created.id}/connect`, { personaId: 'admin', environmentId: 'staging' });
+  assert.equal((await (await j('GET', `/api/chat/c/${created.id}/connection`)).json()).state, 'connected');
+
+  const out = await (await j('POST', `/api/chat/c/${created.id}/disconnect`)).json();
+  assert.deepEqual(out, { state: 'disconnected', guest: true });
+  const connection = await (await j('GET', `/api/chat/c/${created.id}/connection`)).json();
+  assert.deepEqual(connection, {
+    state: 'disconnected',
+    personaId: null,
+    environmentId: null,
+    profile: null,
+    guest: true,
+  });
+
+  // A later connect still works and clears guest.
+  await j('POST', `/api/chat/c/${created.id}/connect`, { personaId: 'admin', environmentId: 'staging' });
+  const again = await (await j('GET', `/api/chat/c/${created.id}/connection`)).json();
+  assert.equal(again.state, 'connected');
+  assert.equal(again.guest, undefined);
+});
+
 test('POST /api/chat/c/:id/replay re-auths via the connected persona, in its session', async (t) => {
   const fx = makeFixture();
   const calls = [];
