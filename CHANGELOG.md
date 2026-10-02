@@ -8,6 +8,14 @@ All notable changes to agent-qa are documented here. This project follows
 
 ### Added
 
+- Workbench chat: "No sign-in" guest mode. The sign-in select now offers
+  "No sign-in", which clears any connected persona binding
+  (`POST /api/chat/c/:id/disconnect`) and marks the chat as guest so the
+  background default-persona auto-connect never re-fires for it.
+  `GET /api/chat/c/:id/connection` reports `"guest": true` in that
+  state, and the chat agent primer tells the agent to browse and record
+  anonymously — a sign-in screen on the site under test is the page,
+  not a problem. Connecting a persona later clears guest mode.
 - `docs/process-hygiene` — new docs page covering `agent-qa ps`
   (live/orphan/stale sessions, unowned Chrome + daemons, stray
   profile dirs) and `agent-qa cleanup` (`--all`, `--session`,

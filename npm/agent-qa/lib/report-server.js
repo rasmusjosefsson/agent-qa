@@ -1610,6 +1610,7 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
         opts.entry.connectedProfile = profile;
         opts.entry.connectedPersonaId = personaId;
         opts.entry.connectedEnvironmentId = (env && env.id) || null;
+        opts.entry.guest = false;
       }
       if (opts.recordDir) await bindRecordingProfile(deps.runCli, profile);
     }
@@ -2920,6 +2921,7 @@ function makeCaptureRes() {
 // (which makes `agent-qa start` record a useProfile baseline automatically).
 async function autoConnectDefault(root, entry, deps) {
   try {
+    if (entry && entry.guest) return; // user opted out of sign-in for this chat
     if (!root || !deps || typeof deps.runCli !== 'function') return;
     const [persona, env] = await Promise.all([pickDefaultPersona(root), pickDefaultEnvironment(root)]);
     if (!persona || !env) return;
@@ -2951,6 +2953,13 @@ async function autoConnectDefault(root, entry, deps) {
       remediation: parsed.authenticated ? undefined : publicAuthRemediation(remediation),
       at: Date.now(),
     };
+    // The user may have hit "No sign-in" while this connect was in flight —
+    // the disconnect already ran, so undo the binding it just raced past.
+    if (entry.guest) {
+      entry.connectedProfile = null;
+      entry.connectedPersonaId = null;
+      entry.connectedEnvironmentId = null;
+    }
   } catch {
     if (entry) entry.autoConnect = { state: 'failed', at: Date.now() };
   }
@@ -3235,6 +3244,8 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
       personaId: entry.connectedPersonaId || auto.personaId || null,
       environmentId: entry.connectedEnvironmentId || auto.environmentId || null,
       profile: entry.connectedProfile || null,
+      // Present only after the user picks "No sign-in" for this chat.
+      ...(entry.guest ? { guest: true } : {}),
       remediation: entry.connectedProfile ? undefined : auto.remediation,
     });
   }
@@ -3373,6 +3384,20 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
       recordDir: entry.recordDir(),
       entry,
     });
+  }
+
+  // Opt OUT of sign-in for this chat: clears the connected persona binding
+  // (recorded scenarios replay anonymously, the agent's bash gets no
+  // AGENT_QA_PROFILE) and marks the chat guest so the background
+  // auto-connect never re-fires. Cookies already in the browser session are
+  // left alone — they're per-origin and harmless for free browsing.
+  if (sub === 'disconnect' && req.method === 'POST') {
+    entry.connectedProfile = null;
+    entry.connectedPersonaId = null;
+    entry.connectedEnvironmentId = null;
+    entry.guest = true;
+    entry.autoConnect = { state: 'disconnected', at: Date.now() };
+    return sendJson(res, 200, { state: 'disconnected', guest: true });
   }
 
   // Replay a scenario the chat recorded, re-authenticating via the connected
