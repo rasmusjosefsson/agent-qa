@@ -34,6 +34,15 @@ All notable changes to agent-qa are documented here. This project follows
 
 ### Fixed
 
+- `agent-qa cleanup` no longer leaks a wedged session: when `close
+  --session` fails, the recorded daemon pid is terminated directly
+  instead of only deleting the registry files (which orphaned the
+  whole Chrome tree). `ps` now also reports **unowned agent-browser
+  daemons** — bare daemon procs whose registry entries vanished — and
+  `cleanup` reaps them. Stray profile dirs are now dirs no Chrome
+  process uses at all (an orphan Chrome's own dir no longer
+  misreports as stray), and `cleanup` does a post-close rescan to
+  sweep Chrome children orphaned mid-sweep, plus their profile dirs.
 - `frame` step can enter iframes addressed by non-`#id` selectors —
   falls back to the nth `Iframe` snapshot ref when `agent-browser
   frame` only resolves `#id`/refs.
