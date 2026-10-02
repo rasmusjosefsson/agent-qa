@@ -1,0 +1,291 @@
+name: docs-goldens
+# The visual-validation loop on PRs that touch the docs site: replay the
+# committed docsite scenarios (shot claims per built page, light + dark) against
+# the PR's own build, then comment the verdict and upload diff maps + fresh
+# screenshots for before/after review.
+#
+# Baselines are environment-bound: mint them with CI rendering, not on a dev
+# machine — comment `/docs-goldens accept` on the PR (mint + push to the head
+# branch) or dispatch this workflow with update_goldens (mint on main, opens a
+# PR). Same loop as ui-goldens / `/qa accept`.
+on:
+  pull_request:
+    paths:
+      - "site/**"
+      - "docs/**"
+      - "evals/docsite/**"
+      - ".github/workflows/docs-goldens.yml"
+  workflow_dispatch:
+    inputs:
+      update_goldens:
+        description: "Re-mint docs goldens in CI and open a PR"
+        required: true
+        default: true
+        type: boolean
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  verify:
+    name: docs goldens
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # push diff images to the docs-goldens-diffs scratch branch
+      pull-requests: write  # post the verdict comment
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+      - name: build cli
+        working-directory: cli
+        run: cargo build --locked
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: launcher install (resolves agent-browser)
+        working-directory: npm/agent-qa
+        run: npm install --no-audit --no-fund
+      - name: browser install
+        working-directory: npm/agent-qa
+        env:
+          AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+        run: ./node_modules/.bin/agent-browser install
+      - uses: oven-sh/setup-bun@v2
+      - name: scenario is regenerated for every built page
+        working-directory: evals
+        run: |
+          bun docsite/gen.ts
+          git diff --exit-code -- evals/docsite/scenarios/ || {
+            echo "::error::evals/docsite/scenarios/ drifted from the built page list — run 'bun evals/docsite/gen.ts' and commit"
+            exit 1
+          }
+      - name: replay docs goldens
+        id: docsite
+        working-directory: evals
+        env:
+          AGENT_QA_EVAL_AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
+          AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
+          AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+        run: bun docsite/run.ts
+      - name: upload goldens evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: docs-goldens
+          path: |
+            evals/docsite/results/
+            evals/docsite/scenarios/*/replays/*/screenshots/
+            evals/docsite/scenarios/*/replays/*/shots-diff/
+          retention-days: 30
+      - name: publish diff images to the scratch branch
+        if: always()
+        id: diffs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -u
+          STAGE="$(mktemp -d)/pr-$PR_NUMBER"
+          mkdir -p "$STAGE"
+          found=0
+          for sid_dir in evals/docsite/scenarios/*/; do
+            sid="$(basename "$sid_dir")"
+            latest="$(cat "$sid_dir/replays/latest.txt" 2>/dev/null || true)"
+            [ -n "$latest" ] || continue
+            run_dir="$sid_dir/replays/$latest"
+            for d in "$run_dir"/shots-diff/*.diff.png; do
+              [ -f "$d" ] || continue
+              found=1
+              step="$(basename "$d" .diff.png)"
+              mkdir -p "$STAGE/$sid"
+              cp "$d" "$STAGE/$sid/$step.diff.png"
+              [ -f "$run_dir/screenshots/$step.png" ] && cp "$run_dir/screenshots/$step.png" "$STAGE/$sid/$step.current.png"
+              [ -f "$sid_dir/baselines/$step.png" ] && cp "$sid_dir/baselines/$step.png" "$STAGE/$sid/$step.baseline.png"
+            done
+          done
+          if [ "$found" = 0 ]; then
+            echo "no shot diffs — nothing to publish"
+            exit 0
+          fi
+          WORK="$(mktemp -d)"
+          git -C "$WORK" init -q
+          git -C "$WORK" config user.email "agent-qa-ci@users.noreply.github.com"
+          git -C "$WORK" config user.name "agent-qa ci"
+          git -C "$WORK" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          if git -C "$WORK" fetch -q --depth 1 origin docs-goldens-diffs; then
+            git -C "$WORK" checkout -q -B docs-goldens-diffs FETCH_HEAD
+          else
+            git -C "$WORK" checkout -q --orphan docs-goldens-diffs
+          fi
+          rm -rf "$WORK/pr-$PR_NUMBER"
+          cp -r "$STAGE" "$WORK/"
+          git -C "$WORK" add -A
+          git -C "$WORK" commit -qm "docs-goldens diffs for PR #$PR_NUMBER (run ${{ github.run_id }})" || exit 0
+          git -C "$WORK" push -q origin docs-goldens-diffs
+          echo "base=https://raw.githubusercontent.com/${REPO}/docs-goldens-diffs/pr-${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+      - name: comment the goldens verdict
+        if: always()
+        working-directory: evals
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DIFF_BASE: ${{ steps.diffs.outputs.base }}
+        run: |
+          bun docsite/pr-comment.ts --run-url "$RUN_URL" ${DIFF_BASE:+--diff-base "$DIFF_BASE"} --out /tmp/docs-goldens.md
+          gh pr comment "$PR_NUMBER" --body-file /tmp/docs-goldens.md
+
+  update-goldens:
+    name: re-mint docs goldens in CI
+    if: github.event_name == 'workflow_dispatch' && inputs.update_goldens
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+      - name: build cli
+        working-directory: cli
+        run: cargo build --locked
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: launcher install (resolves agent-browser)
+        working-directory: npm/agent-qa
+        run: npm install --no-audit --no-fund
+      - name: browser install
+        working-directory: npm/agent-qa
+        env:
+          AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+        run: ./node_modules/.bin/agent-browser install
+      - uses: oven-sh/setup-bun@v2
+      - name: regenerate scenario + mint baselines
+        working-directory: evals
+        env:
+          AGENT_QA_EVAL_AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
+          AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
+          AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+        run: |
+          bun docsite/gen.ts
+          bun docsite/accept.ts
+      - name: open goldens PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          branch="bot/docs-goldens-${{ github.run_id }}"
+          git checkout -b "$branch"
+          git add evals/docsite/scenarios/
+          if git diff --cached --quiet; then
+            echo "baselines unchanged — nothing to mint"
+            exit 0
+          fi
+          git commit -m "chore(evals): re-mint docs goldens in CI rendering
+
+          Baselines are environment-bound — these were captured by the
+          docs-goldens workflow's own ubuntu-latest + headless Chrome, the
+          same image that gates PRs. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          git push -u origin "$branch"
+          gh pr create --title "chore(evals): CI-minted docs goldens" \
+            --body "Baselines re-minted by the \`docs-goldens\` dispatch job (run ${{ github.run_id }}). Merging this makes the PR gate use CI-rendered references — inspect the diff images before merging." \
+            --head "$branch" --base main
+
+  accept:
+    name: accept docs goldens on PR
+    # `/docs-goldens accept` — mint on the PR head and push, so the gate goes
+    # green on the same image that produces the goldens.
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/docs-goldens accept') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: resolve the PR head
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          info=$(gh pr view ${{ github.event.issue.number }} --json headRefName,headRefOid,isCrossRepository)
+          echo "head_ref=$(echo "$info" | jq -r .headRefName)" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$(echo "$info" | jq -r .headRefOid)" >> "$GITHUB_OUTPUT"
+          echo "cross_repo=$(echo "$info" | jq -r .isCrossRepository)" >> "$GITHUB_OUTPUT"
+      - name: refuse forked PRs
+        if: steps.pr.outputs.cross_repo == 'true'
+        run: |
+          echo "::error::cannot push goldens to a fork branch — run the docs-goldens dispatch job instead"
+          exit 1
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.pr.outputs.head_sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+      - name: build cli
+        working-directory: cli
+        run: cargo build --locked
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: launcher install (resolves agent-browser)
+        working-directory: npm/agent-qa
+        run: npm install --no-audit --no-fund
+      - name: browser install
+        working-directory: npm/agent-qa
+        env:
+          AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+        run: ./node_modules/.bin/agent-browser install
+      - uses: oven-sh/setup-bun@v2
+      - name: regenerate scenario + mint baselines
+        working-directory: evals
+        env:
+          AGENT_QA_EVAL_AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
+          AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
+          AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+        run: |
+          bun docsite/gen.ts
+          bun docsite/accept.ts
+      - name: push the new goldens to the PR branch
+        env:
+          HEAD_REF: ${{ steps.pr.outputs.head_ref }}
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add evals/docsite/scenarios/
+          if git diff --cached --quiet; then
+            echo "baselines unchanged — nothing to commit"
+            exit 0
+          fi
+          git commit -m "chore(evals): accept docs goldens via /docs-goldens accept
+
+          Minted by the docs-goldens workflow on the PR head — the same image
+          the gate replays against. Requested by comment ${{ github.event.comment.html_url }}."
+          git push origin "HEAD:${HEAD_REF}"
+      - name: comment the result
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          gh pr comment "$PR_NUMBER" --body "🏅 \`/docs-goldens accept\` — replays finished; any baseline changes were pushed to this branch in a \`chore(evals)\` commit. [Run log](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"

@@ -1,0 +1,1204 @@
+{
+  "schema": "scenario/2",
+  "id": "docs-pages",
+  "intent": "Docs site renders every page identically to baseline in light + dark",
+  "env": {
+    "open": [
+      {
+        "kind": "fresh"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "id": "s0",
+      "kind": "do",
+      "verb": "viewport",
+      "params": {
+        "width": 1280,
+        "height": 800
+      },
+      "intent": "pin desktop viewport"
+    },
+    {
+      "id": "s1",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/"
+      },
+      "intent": "land on origin so `state` can seed localStorage"
+    },
+    {
+      "id": "s2",
+      "kind": "do",
+      "verb": "state",
+      "params": {
+        "localStorage": {
+          "starlight-theme": "light"
+        }
+      },
+      "intent": "theme → light (read by the theme bootstrap on next nav)"
+    },
+    {
+      "id": "s3",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/architecture/"
+      },
+      "intent": "docs/architecture (light)"
+    },
+    {
+      "id": "s4",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s5",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s4"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/architecture golden (light)"
+    },
+    {
+      "id": "s6",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/configuration/"
+      },
+      "intent": "docs/configuration (light)"
+    },
+    {
+      "id": "s7",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s8",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s7"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/configuration golden (light)"
+    },
+    {
+      "id": "s9",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/extension/"
+      },
+      "intent": "docs/extension (light)"
+    },
+    {
+      "id": "s10",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s11",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s10"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/extension golden (light)"
+    },
+    {
+      "id": "s12",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/github-action/"
+      },
+      "intent": "docs/github-action (light)"
+    },
+    {
+      "id": "s13",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s14",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s13"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/github-action golden (light)"
+    },
+    {
+      "id": "s15",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/lint-rules/"
+      },
+      "intent": "docs/lint-rules (light)"
+    },
+    {
+      "id": "s16",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s17",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s16"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/lint-rules golden (light)"
+    },
+    {
+      "id": "s18",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/network/"
+      },
+      "intent": "docs/network (light)"
+    },
+    {
+      "id": "s19",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s20",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s19"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/network golden (light)"
+    },
+    {
+      "id": "s21",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/overview/"
+      },
+      "intent": "docs/overview (light)"
+    },
+    {
+      "id": "s22",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s23",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s22"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/overview golden (light)"
+    },
+    {
+      "id": "s24",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/plugins/"
+      },
+      "intent": "docs/plugins (light)"
+    },
+    {
+      "id": "s25",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s26",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s25"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/plugins golden (light)"
+    },
+    {
+      "id": "s27",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/quickstart/"
+      },
+      "intent": "docs/quickstart (light)"
+    },
+    {
+      "id": "s28",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s29",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s28"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/quickstart golden (light)"
+    },
+    {
+      "id": "s30",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/releasing/"
+      },
+      "intent": "docs/releasing (light)"
+    },
+    {
+      "id": "s31",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s32",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s31"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/releasing golden (light)"
+    },
+    {
+      "id": "s33",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/templates/"
+      },
+      "intent": "docs/templates (light)"
+    },
+    {
+      "id": "s34",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s35",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s34"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/templates golden (light)"
+    },
+    {
+      "id": "s36",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/verbs/"
+      },
+      "intent": "docs/verbs (light)"
+    },
+    {
+      "id": "s37",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s38",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s37"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/verbs golden (light)"
+    },
+    {
+      "id": "s39",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/visual-testing/"
+      },
+      "intent": "docs/visual-testing (light)"
+    },
+    {
+      "id": "s40",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s41",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s40"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/visual-testing golden (light)"
+    },
+    {
+      "id": "s42",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/"
+      },
+      "intent": "index (light)"
+    },
+    {
+      "id": "s43",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s44",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s43"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "index golden (light)"
+    },
+    {
+      "id": "s45",
+      "kind": "do",
+      "verb": "state",
+      "params": {
+        "localStorage": {
+          "starlight-theme": "dark"
+        }
+      },
+      "intent": "theme → dark (read by the theme bootstrap on next nav)"
+    },
+    {
+      "id": "s46",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/architecture/"
+      },
+      "intent": "docs/architecture (dark)"
+    },
+    {
+      "id": "s47",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s48",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s47"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/architecture golden (dark)"
+    },
+    {
+      "id": "s49",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/configuration/"
+      },
+      "intent": "docs/configuration (dark)"
+    },
+    {
+      "id": "s50",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s51",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s50"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/configuration golden (dark)"
+    },
+    {
+      "id": "s52",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/extension/"
+      },
+      "intent": "docs/extension (dark)"
+    },
+    {
+      "id": "s53",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s54",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s53"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/extension golden (dark)"
+    },
+    {
+      "id": "s55",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/github-action/"
+      },
+      "intent": "docs/github-action (dark)"
+    },
+    {
+      "id": "s56",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s57",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s56"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/github-action golden (dark)"
+    },
+    {
+      "id": "s58",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/lint-rules/"
+      },
+      "intent": "docs/lint-rules (dark)"
+    },
+    {
+      "id": "s59",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s60",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s59"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/lint-rules golden (dark)"
+    },
+    {
+      "id": "s61",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/network/"
+      },
+      "intent": "docs/network (dark)"
+    },
+    {
+      "id": "s62",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s63",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s62"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/network golden (dark)"
+    },
+    {
+      "id": "s64",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/overview/"
+      },
+      "intent": "docs/overview (dark)"
+    },
+    {
+      "id": "s65",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s66",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s65"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/overview golden (dark)"
+    },
+    {
+      "id": "s67",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/plugins/"
+      },
+      "intent": "docs/plugins (dark)"
+    },
+    {
+      "id": "s68",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s69",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s68"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/plugins golden (dark)"
+    },
+    {
+      "id": "s70",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/quickstart/"
+      },
+      "intent": "docs/quickstart (dark)"
+    },
+    {
+      "id": "s71",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s72",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s71"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/quickstart golden (dark)"
+    },
+    {
+      "id": "s73",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/releasing/"
+      },
+      "intent": "docs/releasing (dark)"
+    },
+    {
+      "id": "s74",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s75",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s74"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/releasing golden (dark)"
+    },
+    {
+      "id": "s76",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/templates/"
+      },
+      "intent": "docs/templates (dark)"
+    },
+    {
+      "id": "s77",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s78",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s77"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/templates golden (dark)"
+    },
+    {
+      "id": "s79",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/verbs/"
+      },
+      "intent": "docs/verbs (dark)"
+    },
+    {
+      "id": "s80",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s81",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s80"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/verbs golden (dark)"
+    },
+    {
+      "id": "s82",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/docs/visual-testing/"
+      },
+      "intent": "docs/visual-testing (dark)"
+    },
+    {
+      "id": "s83",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s84",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s83"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "docs/visual-testing golden (dark)"
+    },
+    {
+      "id": "s85",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:4399/agent-qa/"
+      },
+      "intent": "index (dark)"
+    },
+    {
+      "id": "s86",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "css",
+              "value": "main"
+            },
+            "reason": "docsite"
+          }
+        },
+        "predicate": "isVisible"
+      },
+      "intent": "content rendered"
+    },
+    {
+      "id": "s87",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s86"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.05
+        }
+      },
+      "intent": "index golden (dark)"
+    }
+  ]
+}
