@@ -1,7 +1,7 @@
 <img width="2912" height="1464" alt="Gemini_Generated_Image_9pyfu69pyfu69pyf" src="https://github.com/user-attachments/assets/529aa43e-ff10-4c37-98d3-fa83f8d7ac42" />
 
 
-# <picture><source media="(prefers-color-scheme: light)" srcset="site/src/assets/logo-light.svg" /><img src="site/src/assets/logo.svg" width="40" height="40" style="vertical-align: -8px" alt="agent-qa logo" /></picture> agent-qa
+# <picture><source media="(prefers-color-scheme: light)" srcset="site/src/assets/logo-light.svg" /><img src="site/src/assets/logo.svg" width="36" height="36" align="absbottom" alt="agent-qa logo" /></picture> agent-qa
 
 Record a user scenario in a real browser. Replay it later. See exactly what
 changed.
