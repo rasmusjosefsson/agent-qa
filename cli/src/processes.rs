@@ -81,6 +81,13 @@ impl ProcRow {
         self.args.contains("agent-browser")
     }
 
+    /// Session daemon: the bare binary with no subcommand (daemonized
+    /// `agent-browser-linux-x64`). CLI invocations always carry a verb
+    /// (close/eval/…), so a bare-args proc is a daemon.
+    fn is_daemon(&self) -> bool {
+        self.is_agent_browser() && self.args.split_whitespace().count() == 1
+    }
+
     fn chrome_profile_dir(&self) -> Option<String> {
         let marker = "--user-data-dir=";
         let idx = self.args.find(marker)?;
@@ -97,8 +104,19 @@ pub struct Inventory {
     pub sessions: Vec<SessionInfo>,
     /// Chrome processes not owned by any live daemon.
     pub orphan_chromes: Vec<OrphanChrome>,
-    /// `/tmp/agent-browser-chrome-*` dirs no live process uses.
+    /// Bare agent-browser daemon procs no live session's pid points at —
+    /// their registry files are gone (or were never written).
+    pub orphan_daemons: Vec<OrphanDaemon>,
+    /// `/tmp/agent-browser-chrome-*` dirs no chrome process uses.
     pub stray_dirs: Vec<PathBuf>,
+}
+
+#[derive(Debug)]
+pub struct OrphanDaemon {
+    pub pid: u32,
+    /// Seconds since process start.
+    pub age_secs: u64,
+    pub rss_kb: u64,
 }
 
 #[derive(Debug)]
@@ -362,14 +380,28 @@ pub fn collect() -> Option<Inventory> {
         .filter_map(|s| (s.state == SessionState::Live).then_some(s.pid).flatten())
         .collect();
     let mut orphan_chromes = Vec::new();
-    let mut used_dirs = Vec::new();
+    // Daemon procs not registered by any live session — their registry
+    // files vanished under them (killed replay, manual rm), so nothing
+    // else in the inventory sees them.
+    let mut orphan_daemons: Vec<OrphanDaemon> = Vec::new();
+    for r in &procs {
+        if r.is_daemon() && !live_pids.contains(&r.pid) {
+            orphan_daemons.push(OrphanDaemon {
+                pid: r.pid,
+                age_secs: r.etimes,
+                rss_kb: r.rss_kb,
+            });
+        }
+    }
+    // Dirs referenced by ANY chrome process (owned or orphan) — a stray dir
+    // is one no running chrome uses at all.
+    let mut chrome_dirs = Vec::new();
     for r in &procs {
         let Some(dir) = r.chrome_profile_dir() else {
             continue;
         };
-        if owned_by(r, &live_pids, &by_pid) {
-            used_dirs.push(dir);
-        } else {
+        chrome_dirs.push(dir.clone());
+        if !owned_by(r, &live_pids, &by_pid) {
             orphan_chromes.push(OrphanChrome {
                 pid: r.pid,
                 rss_kb: r.rss_kb,
@@ -385,7 +417,7 @@ pub fn collect() -> Option<Inventory> {
                 .file_name()
                 .and_then(|s| s.to_str())
                 .is_some_and(|n| n.starts_with("agent-browser-chrome-"));
-            if is_profile && !used_dirs.iter().any(|d| Path::new(d) == path) {
+            if is_profile && !chrome_dirs.iter().any(|d| Path::new(d) == path) {
                 stray_dirs.push(path);
             }
         }
@@ -394,6 +426,7 @@ pub fn collect() -> Option<Inventory> {
         socket_dir: dir,
         sessions,
         orphan_chromes,
+        orphan_daemons,
         stray_dirs,
     })
 }
@@ -442,7 +475,7 @@ pub fn ps(args: &[String]) -> Result<u8> {
     let Some(inv) = collect() else {
         if json_out {
             println!(
-                "{{\"socketDir\":null,\"sessions\":[],\"orphanChromes\":[],\"strayDirs\":[]}}"
+                "{{\"socketDir\":null,\"sessions\":[],\"orphanChromes\":[],\"orphanDaemons\":[],\"strayDirs\":[]}}"
             );
         } else {
             println!("No agent-browser state dir found — nothing running, nothing to track.");
@@ -464,6 +497,9 @@ pub fn ps(args: &[String]) -> Result<u8> {
             "orphanChromes": inv.orphan_chromes.iter().map(|c| json!({
                 "pid": c.pid, "rssKb": c.rss_kb, "profileDir": c.profile_dir,
             })).collect::<Vec<_>>(),
+            "orphanDaemons": inv.orphan_daemons.iter().map(|d| json!({
+                "pid": d.pid, "ageSecs": d.age_secs, "rssKb": d.rss_kb,
+            })).collect::<Vec<_>>(),
             "strayDirs": inv.stray_dirs,
         });
         println!("{}", serde_json::to_string_pretty(&body)?);
@@ -474,7 +510,11 @@ pub fn ps(args: &[String]) -> Result<u8> {
         "agent-browser sessions  (state dir: {})",
         inv.socket_dir.display()
     );
-    if inv.sessions.is_empty() && inv.orphan_chromes.is_empty() && inv.stray_dirs.is_empty() {
+    if inv.sessions.is_empty()
+        && inv.orphan_chromes.is_empty()
+        && inv.orphan_daemons.is_empty()
+        && inv.stray_dirs.is_empty()
+    {
         println!("  all clean — no sessions, no residue.");
         return Ok(0);
     }
@@ -510,6 +550,23 @@ pub fn ps(args: &[String]) -> Result<u8> {
                 c.pid,
                 human_kb(c.rss_kb),
                 c.profile_dir
+            );
+        }
+    }
+    if !inv.orphan_daemons.is_empty() {
+        let total: u64 = inv.orphan_daemons.iter().map(|d| d.rss_kb).sum();
+        println!();
+        println!(
+            "  unowned agent-browser daemons: {} ({} total)",
+            inv.orphan_daemons.len(),
+            human_kb(total)
+        );
+        for d in &inv.orphan_daemons {
+            println!(
+                "    pid {}  {}  {}",
+                d.pid,
+                human_age(d.age_secs),
+                human_kb(d.rss_kb)
             );
         }
     }
@@ -572,6 +629,8 @@ struct CleanupPlan {
     remove_files: Vec<String>,
     /// Orphan chrome pids to terminate.
     kill_chromes: Vec<u32>,
+    /// Unowned agent-browser daemon pids to terminate.
+    kill_daemons: Vec<u32>,
     /// Stray profile dirs to delete.
     remove_dirs: Vec<PathBuf>,
 }
@@ -586,6 +645,7 @@ fn plan_cleanup(
         close: Vec::new(),
         remove_files: Vec::new(),
         kill_chromes: Vec::new(),
+        kill_daemons: Vec::new(),
         remove_dirs: Vec::new(),
     };
     let in_scope = |s: &&SessionInfo| {
@@ -624,7 +684,17 @@ fn plan_cleanup(
     };
     if reap_chromes {
         plan.kill_chromes = inv.orphan_chromes.iter().map(|c| c.pid).collect();
-        plan.remove_dirs = inv.stray_dirs.clone();
+        plan.kill_daemons = inv.orphan_daemons.iter().map(|d| d.pid).collect();
+        // Stray dirs plus the profile dirs of the orphans being killed —
+        // the dir is trash once its chrome is dead.
+        let mut dirs = inv.stray_dirs.clone();
+        for c in &inv.orphan_chromes {
+            let p = PathBuf::from(&c.profile_dir);
+            if !dirs.contains(&p) {
+                dirs.push(p);
+            }
+        }
+        plan.remove_dirs = dirs;
     }
     plan
 }
@@ -705,12 +775,16 @@ pub fn cleanup(args: &[String]) -> Result<u8> {
             for p in &plan.kill_chromes {
                 println!("  kill orphan chrome pid {p}");
             }
+            for p in &plan.kill_daemons {
+                println!("  kill orphan daemon pid {p}");
+            }
             for d in &plan.remove_dirs {
                 println!("  remove {}", d.display());
             }
             if plan.close.is_empty()
                 && plan.remove_files.is_empty()
                 && plan.kill_chromes.is_empty()
+                && plan.kill_daemons.is_empty()
                 && plan.remove_dirs.is_empty()
             {
                 println!("  nothing to do — already clean.");
@@ -724,7 +798,20 @@ pub fn cleanup(args: &[String]) -> Result<u8> {
         if crate::browser::close_session(name) {
             closed.push(name.clone());
         } else {
-            eprintln!("agent-qa cleanup: close --session {name} failed; removing files anyway");
+            eprintln!(
+                "agent-qa cleanup: close --session {name} failed; killing the daemon directly"
+            );
+            // A wedged daemon ignores the socket close — SIGTERM/SIGKILL the
+            // recorded pid so its chrome tree doesn't leak headless. The
+            // children reparent to init and the rescan below sweeps them.
+            if let Some(pid) = inv
+                .sessions
+                .iter()
+                .find(|s| s.name == *name)
+                .and_then(|s| s.pid)
+            {
+                term_then_kill(pid);
+            }
         }
     }
     let mut removed_files = 0usize;
@@ -742,8 +829,40 @@ pub fn cleanup(args: &[String]) -> Result<u8> {
     for pid in &plan.kill_chromes {
         term_then_kill(*pid);
     }
+    for pid in &plan.kill_daemons {
+        term_then_kill(*pid);
+    }
+    // Re-scan once closes/removals land: a live session's chrome children
+    // only become unowned AFTER the daemon dies, so the plan-time orphan
+    // list can't see them (the registry files are already gone here, so
+    // remaining live sessions still own their trees and stay untouched).
+    if !plan.close.is_empty() {
+        std::thread::sleep(std::time::Duration::from_millis(900));
+    }
+    let mut killed_pids = plan.kill_chromes.clone();
+    let mut extra_dirs: Vec<PathBuf> = Vec::new();
+    if let Some(fresh) = collect() {
+        for c in &fresh.orphan_chromes {
+            if !killed_pids.contains(&c.pid) {
+                term_then_kill(c.pid);
+                killed_pids.push(c.pid);
+                extra_dirs.push(PathBuf::from(&c.profile_dir));
+            }
+        }
+        for d in &fresh.orphan_daemons {
+            if !killed_pids.contains(&d.pid) {
+                term_then_kill(d.pid);
+                killed_pids.push(d.pid);
+            }
+        }
+        for d in &fresh.stray_dirs {
+            if !plan.remove_dirs.contains(d) && !extra_dirs.contains(d) {
+                extra_dirs.push(d.clone());
+            }
+        }
+    }
     let mut removed_dirs = 0usize;
-    for d in &plan.remove_dirs {
+    for d in plan.remove_dirs.iter().chain(extra_dirs.iter()) {
         if fs::remove_dir_all(d).is_ok() {
             removed_dirs += 1;
         }
@@ -755,16 +874,12 @@ pub fn cleanup(args: &[String]) -> Result<u8> {
             serde_json::to_string_pretty(&json!({
                 "closed": closed,
                 "removedFiles": removed_files,
-                "killedChromes": plan.kill_chromes,
+                "killedChromes": killed_pids,
                 "removedDirs": removed_dirs,
             }))?
         );
     } else {
-        if closed.is_empty()
-            && removed_files == 0
-            && plan.kill_chromes.is_empty()
-            && removed_dirs == 0
-        {
+        if closed.is_empty() && removed_files == 0 && killed_pids.is_empty() && removed_dirs == 0 {
             println!("Already clean — nothing reaped.");
         } else {
             if !closed.is_empty() {
@@ -773,11 +888,8 @@ pub fn cleanup(args: &[String]) -> Result<u8> {
             if removed_files > 0 {
                 println!("removed {removed_files} registry files");
             }
-            if !plan.kill_chromes.is_empty() {
-                println!(
-                    "killed {} orphan chrome process(es)",
-                    plan.kill_chromes.len()
-                );
+            if !killed_pids.is_empty() {
+                println!("killed {} orphan process(es)", killed_pids.len());
             }
             if removed_dirs > 0 {
                 println!("removed {removed_dirs} stray profile dirs");
@@ -874,13 +986,15 @@ mod tests {
                 rss_kb: 1,
                 profile_dir: "/tmp/agent-browser-chrome-x".into(),
             }],
+            orphan_daemons: vec![],
             stray_dirs: vec![PathBuf::from("/tmp/agent-browser-chrome-y")],
         };
         let plan = plan_cleanup(&inv, false, None, None);
         assert!(plan.close.is_empty());
         assert_eq!(plan.remove_files, vec!["dead1", "stale1"]);
         assert_eq!(plan.kill_chromes, vec![9]);
-        assert_eq!(plan.remove_dirs.len(), 1);
+        // Stray dir plus the killed orphan's own profile dir.
+        assert_eq!(plan.remove_dirs.len(), 2);
 
         let plan = plan_cleanup(&inv, true, None, None);
         assert_eq!(plan.close, vec!["live1"]);
@@ -909,6 +1023,7 @@ mod tests {
             socket_dir: PathBuf::from("/x"),
             sessions: vec![mk("new", 10), mk("old", 7200)],
             orphan_chromes: vec![],
+            orphan_daemons: vec![],
             stray_dirs: vec![],
         };
         let plan = plan_cleanup(&inv, false, None, Some(3600));
