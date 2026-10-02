@@ -57,11 +57,10 @@ The tag push runs `.github/workflows/release.yml`:
 Publish provenance is enabled (`--provenance --access public`); the workflow
 runs with `id-token: write` permission for OIDC.
 
-## Required secrets
+## Who releases
 
-- `NPM_TOKEN` — npm automation token with publish permissions for
-  `agent-qa` and every `agent-qa-<platform>` package. Set in the repo's
-  GitHub Actions secrets.
+Releases are cut by the repository owner only. The npm credentials live
+in the owner's GitHub Actions secrets; contributors do not publish.
 
 ## First release prerequisites
 
