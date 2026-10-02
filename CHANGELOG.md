@@ -15,8 +15,10 @@ All notable changes to agent-qa are documented here. This project follows
 - Publishing: new `prepublishOnly` guard
   (`scripts/check-umbrella-deps.js`) fails `npm publish` when the
   own-scope platform optionalDependencies don't match the umbrella
-  version — a manual publish can no longer ship a launcher with no
-  resolvable binary.
+  version OR when the pinned platform versions aren't on the registry
+  yet — a manual publish can no longer ship a launcher with no
+  resolvable binary. `release.yml` also verifies the published
+  umbrella's registry optionalDependencies match the tag.
 
 ## [0.1.1] - 2026-10-02
 
