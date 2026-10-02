@@ -123,6 +123,8 @@ reload with `params.reload: true`.
 | `doctor` | Probe local install: agent-browser, plugins, paths. `--json`. |
 | `info` | Version + paths + scenario/profile counts (no external probes). `--json`. |
 | `byo-doctor` | Read-only BYO browser enumeration via agent-browser. `--json`. |
+| `ps` | Correlated view of agent-browser residue: `live`/`orphan`/`stale` sessions from the socket-dir registry, unowned Chrome processes, stray `/tmp/agent-browser-chrome-*` profile dirs. `--json`. |
+| `cleanup` | Reap the residue `ps` reports: deletes stale/orphan registry files, kills unowned Chrome, removes stray profile dirs. `--all` also closes live sessions; `--session <n>`, `--older-than <dur>`, `--dry-run`, `--json`. |
 | `perf-snapshot` | One-shot perf trace via agent-browser, persisted under `<sid>/perf/` |
 | `config show` | Resolve the active `agent-qa.toml` + paths + plugin discovery |
 

@@ -49,6 +49,7 @@ mod paths;
 mod perf_snapshot;
 mod plan;
 mod plugin;
+mod processes;
 mod profile_add;
 mod profile_bootstrap;
 mod profile_list;
@@ -113,6 +114,8 @@ fn main() -> ExitCode {
         "replay" => runner::cli(rest),
         "run-report" => run_report::run(rest),
         "doctor" => doctor::run(rest),
+        "ps" => processes::ps(rest),
+        "cleanup" => processes::cleanup(rest),
         "info" => info::run(rest),
         "config" => config::run(rest),
         "list" => list::run(rest),
@@ -234,6 +237,9 @@ Verbs:
   profile-list                  List registered profiles (id, adapter, default, registeredAt)
   replay <sid | path>           Re-execute a scenario/2 document
   doctor [--json]               Diagnose the local install (agent-browser + plugins)
+  ps [--json]                   List live/orphan/stale agent-browser sessions + zombie Chrome
+  cleanup [--all|--session <n>] [--older-than <dur>] [--dry-run] [--json]
+                                Reap stale session files, orphan Chrome, stray profiles
   info [--json]                 Version + paths + scenario/profile counts
   config show [--json]          Resolve config (toml file, paths, discovered plugins)
   list [<sid|path>] [--json]    Show scenario directory contents + replay history
