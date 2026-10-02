@@ -6,7 +6,20 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Launcher `agent-qa update` now verifies the platform binary after
+  reinstalling and warns when npm silently skipped the
+  optionalDependencies (launcher newer than `cli`, or binary missing)
+  instead of reporting a clean update.
+- Publishing: new `prepublishOnly` guard
+  (`scripts/check-umbrella-deps.js`) fails `npm publish` when the
+  own-scope platform optionalDependencies don't match the umbrella
+  version — a manual publish can no longer ship a launcher with no
+  resolvable binary.
+
 ## [0.1.1] - 2026-10-02
+
 ### Added
 
 - Workbench chat header shows which backend, model, and cumulative

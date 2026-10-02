@@ -18,7 +18,8 @@
     "test": "node --test test/*.test.js",
     "build:web": "npm --prefix web ci && npm --prefix web run build",
     "build:cli": "node ../../scripts/build-local-cli.js",
-    "prepack": "npm run build:web"
+    "prepack": "npm run build:web",
+    "prepublishOnly": "node ../../scripts/check-umbrella-deps.js"
   },
   "files": [
     "bin/",
