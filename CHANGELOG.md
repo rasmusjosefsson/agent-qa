@@ -6,6 +6,7 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-02
 ### Added
 
 - Workbench chat header shows which backend, model, and cumulative
