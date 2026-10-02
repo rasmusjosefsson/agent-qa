@@ -32,12 +32,12 @@ import {
 } from "@/components/ui/sidebar"
 
 // The agent-qa "spark" mark — same shield + spark as the site's logo.svg,
-// inlined so the workbench brand matches the docs. The tile is dark on light
-// sidebars and light on dark (mirroring logo.svg / logo-light.svg).
+// inlined so the workbench brand matches the docs. Light tile in light mode,
+// dark tile in dark mode.
 function AgentSparkMark({ className }: { className?: string }) {
   const variants = [
-    { tile: '#12121f', gradIds: ['aqa-wm', 'aqa-wm-b'], cls: 'dark:hidden' },
-    { tile: '#f4f3fb', gradIds: ['aqa-wm-l', 'aqa-wm-lb'], cls: 'hidden dark:block' },
+    { tile: '#f4f3fb', gradIds: ['aqa-wm-l', 'aqa-wm-lb'], cls: 'dark:hidden' },
+    { tile: '#12121f', gradIds: ['aqa-wm', 'aqa-wm-b'], cls: 'hidden dark:block' },
   ]
   return (
     <>
