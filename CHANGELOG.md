@@ -8,6 +8,12 @@ All notable changes to agent-qa are documented here. This project follows
 
 ### Added
 
+- Docs-site visual goldens (`evals/docsite` + `docs-goldens.yml`): the
+  docs site is shot-claimed end-to-end — every built page in light and
+  dark — using the same baseline/diff/accept loop as the workbench
+  goldens. `bun evals/docsite/gen.ts` regenerates the scenario from the
+  built page list (CI fails when it drifts); `/docs-goldens accept`
+  mints baselines on the PR head with CI rendering.
 - `agent-qa ps` + `agent-qa cleanup` — visibility and reaping for
   agent-browser zombies. `ps` correlates the socket-dir session
   registry with the process table into `live`/`orphan`/`stale` rows
