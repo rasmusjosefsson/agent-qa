@@ -1,4 +1,4 @@
-# Browser extension — one-click capture → ingest → replay
+# Browser extension
 
 A Chrome (MV3) extension that records a web flow with a single button
 press and exports everything — the steps you performed *and* the

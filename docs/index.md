@@ -1,4 +1,4 @@
-# agent-qa: the whole system in one read
+# How it works
 
 Read this when the pieces feel disconnected and you want the mental model in one pass. About 10 minutes.
 

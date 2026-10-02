@@ -25,8 +25,8 @@ const DOCS = {
   templates: { file: "templates.md", description: "Reusable sub-scenarios loaded by runTemplate." },
   "visual-testing": { file: "visual-testing.md", description: "Golden screenshots: shot claims, baselines, re-mint loop." },
   network: { file: "network.md", description: "Network and console claims behind the UI." },
-  "github-action": { file: "github-action.md", description: "Replay scenarios on every pull request." },
-  extension: { file: "extension.md", description: "Chrome recorder: one-click capture, ingest, replay." },
+  "github-action": { file: "github-action.md", description: "Replay your scenarios on every PR." },
+  extension: { file: "extension.md", description: "One-click capture → ingest → replay." },
   "lint-rules": { file: "lint-rules.md", description: "Scenario lint rule catalogue." },
   releasing: { file: "releasing.md", description: "Cross-compile, package, and publish." },
 }

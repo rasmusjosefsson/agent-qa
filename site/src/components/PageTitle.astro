@@ -23,18 +23,22 @@ const PAGE_ICONS: Record<string, string> = {
 const name = PAGE_ICONS[Astro.locals.starlightRoute.id]
 const dark = name ? icon(name) : undefined
 const light = name ? icon(`${name}-light`) : undefined
+// Frontmatter `description` doubles as the visible subtitle under the
+// title, so page titles stay on one line.
+const subtitle = Astro.locals.starlightRoute.entry.data.description
 ---
 
-{
-  dark ? (
-    <div class="aqa-page-title">
+<div class="aqa-page-title">
+  {
+    dark && (
       <span class="aqa-page-icon" aria-hidden="true"><span class="aqa-dark-only" set:html={dark} /><span class="aqa-light-only" set:html={light} /></span>
-      <Default />
-    </div>
-  ) : (
+    )
+  }
+  <div class="aqa-page-title-text">
     <Default />
-  )
-}
+    {subtitle && <p class="aqa-page-subtitle">{subtitle}</p>}
+  </div>
+</div>
 
 <style>
   .aqa-page-title {
@@ -45,6 +49,12 @@ const light = name ? icon(`${name}-light`) : undefined
   }
   .aqa-page-title :global(h1) {
     margin-top: 0;
+  }
+  .aqa-page-subtitle {
+    margin: 0.4rem 0 0;
+    font-size: var(--sl-text-lg);
+    line-height: 1.45;
+    color: var(--aqa-muted-fg);
   }
   .aqa-page-icon {
     flex: none;
