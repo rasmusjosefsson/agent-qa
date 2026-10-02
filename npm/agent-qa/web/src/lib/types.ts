@@ -67,6 +67,21 @@ export interface RootInfo {
   liveBrowser?: boolean;
 }
 
+// Usage/cost accounting reported by the chat backend (pi session stats, or
+// opencode's per-message accounting summed server-side). All fields optional —
+// a backend may report tokens without cost.
+export interface ChatUsage {
+  cost?: number | null;
+  tokens?: {
+    input?: number;
+    output?: number;
+    reasoning?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+  } | null;
+}
+
 export interface ChatState {
   available: boolean;
   started?: boolean;
@@ -83,4 +98,6 @@ export interface ChatState {
   // unavailable, the install command the setup nudge offers to copy.
   backend?: string;
   install?: string;
+  // Cumulative session usage (cost $ + tokens) for the model badge.
+  usage?: ChatUsage | null;
 }

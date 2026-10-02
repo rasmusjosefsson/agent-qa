@@ -230,8 +230,16 @@ export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
                   {list &&
                     [...list].reverse().map((r) => {
                       const selected = sel.sid === sc.sid && sel.runId === r.runId
-                      const tone = r.state === 'running' ? 'running' : verdictTone(r.summary, r.state)
-                      const label = r.state === 'running' ? 'running' : r.summary ? cleanSummary(r.summary) : 'in flight'
+                      const tone =
+                        r.state === 'running' ? 'running' : r.state === 'stale' ? 'stopped' : verdictTone(r.summary, r.state)
+                      const label =
+                        r.state === 'running'
+                          ? 'running'
+                          : r.state === 'stale'
+                            ? 'interrupted'
+                            : r.summary
+                              ? cleanSummary(r.summary)
+                              : 'in flight'
                       return (
                         <div
                           key={r.runId}

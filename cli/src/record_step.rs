@@ -367,6 +367,12 @@ fn capture_recording_sidecars(
         crate::sidecar::step_sidecar_path(&run, crate::sidecar::SidecarKind::Screenshots, step_id)
     {
         let _ = crate::sidecar::ensure_kind_dir(&run, crate::sidecar::SidecarKind::Screenshots);
+        // Give the renderer a beat to paint the frame the recorded action
+        // triggered — the action itself may already have settled (nav done,
+        // network quiet) while the SPA still paints black for a few hundred
+        // ms, and a keyframe captured then shows as a black rectangle in the
+        // workbench's step preview.
+        std::thread::sleep(std::time::Duration::from_millis(350));
         if let Err(e) = browser::screenshot(session, &path, true, None) {
             eprintln!("[record-step] screenshot {step_id} failed: {e}");
         }

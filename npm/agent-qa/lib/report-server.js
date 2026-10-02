@@ -227,6 +227,31 @@ async function latestRunId(scenarioDir) {
 
 // -------- run enumeration --------
 
+// status.json is rewritten on every step boundary and finalized at the end.
+// A replay killed mid-step (SIGKILL, a crashed server, or a replay spawned
+// outside this process that the host finalizer never saw) leaves
+// `state: "running"` forever and the UI reports it "in flight" permanently.
+// If a "running" status.json has not been touched in RUN_STALE_MS, report
+// `stale` instead — the UI renders it "interrupted" and nothing treats it as
+// live. AGENT_QA_RUN_STALE_MS overrides (test hooks need a short window).
+const RUN_STALE_MS = Math.max(
+  10_000,
+  Number(process.env.AGENT_QA_RUN_STALE_MS) || 5 * 60 * 1000,
+);
+
+// Resolve the effective state of a run: raw `status.state`, except 'running'
+// past the staleness window → 'stale'.
+async function runState(statusPath, status) {
+  if (!status || status.state !== 'running') return status?.state ?? null;
+  try {
+    const st = await fsp.stat(statusPath);
+    if (Date.now() - st.mtimeMs > RUN_STALE_MS) return 'stale';
+  } catch {
+    /* stat failed → report what the file says */
+  }
+  return 'running';
+}
+
 async function listRuns(scenarioDir) {
   const replaysDir = path.join(scenarioDir, 'replays');
   let entries;
@@ -240,9 +265,10 @@ async function listRuns(scenarioDir) {
     if (!ent.isDirectory()) continue;
     const runId = ent.name;
     if (!isSafeSegment(runId)) continue;
+    const statusPath = path.join(replaysDir, runId, 'status.json');
     const [audit, status] = await Promise.all([
       readJson(path.join(replaysDir, runId, 'audit.json')),
-      readJson(path.join(replaysDir, runId, 'status.json')),
+      readJson(statusPath),
     ]);
     runs.push({
       runId,
@@ -254,7 +280,8 @@ async function listRuns(scenarioDir) {
       tag: audit?.tag ?? null,
       // Live cursor — lets the UI render a "running" badge before audit.json
       // gains its final summary (audit.json is written empty-ish at start).
-      state: status?.state ?? null,
+      // 'stale' = was 'running' but no write within the staleness window.
+      state: await runState(statusPath, status),
       ok: status?.ok ?? null,
       // Steps the auto-heal loop recovered (audit.autoHealed is a step-id list
       // written by the runner) — surfaced so a healed run stands out even when
@@ -286,8 +313,9 @@ async function findActiveRunId(scenarioDir) {
   let active = null;
   for (const ent of entries) {
     if (!ent.isDirectory() || !isSafeSegment(ent.name)) continue;
-    const status = await readJson(path.join(replaysDir, ent.name, 'status.json'));
-    if (status?.state === 'running' && (active == null || ent.name > active)) {
+    const statusPath = path.join(replaysDir, ent.name, 'status.json');
+    const status = await readJson(statusPath);
+    if ((await runState(statusPath, status)) === 'running' && (active == null || ent.name > active)) {
       active = ent.name;
     }
   }
@@ -365,9 +393,10 @@ async function scenarioSummary(root, sid) {
   let latestRun = null;
   if (currentRunId && isSafeSegment(currentRunId)) {
     const runDir = path.join(dir, 'replays', currentRunId);
+    const statusPath = path.join(runDir, 'status.json');
     const [audit, status] = await Promise.all([
       readJson(path.join(runDir, 'audit.json')),
-      readJson(path.join(runDir, 'status.json')),
+      readJson(statusPath),
     ]);
     latestRun = {
       runId: currentRunId,
@@ -375,7 +404,7 @@ async function scenarioSummary(root, sid) {
       exitCode: typeof audit?.exitCode === 'number' ? audit.exitCode : null,
       startedAt: audit?.startedAt ?? null,
       finishedAt: audit?.finishedAt ?? null,
-      state: status?.state ?? null,
+      state: await runState(statusPath, status),
       currentIdx: typeof status?.currentIdx === 'number' ? status.currentIdx : null,
       total: typeof status?.total === 'number' ? status.total : null,
       ok: status?.ok ?? null,
@@ -1672,9 +1701,10 @@ async function bindRecordingProfile(runCli, profile) {
 
 async function runDetail(root, sid, runId) {
   const runDir = path.join(root, sid, 'replays', runId);
+  const statusPath = path.join(runDir, 'status.json');
   const [audit, status, events, latest, healRows, network] = await Promise.all([
     readJson(path.join(runDir, 'audit.json')),
-    readJson(path.join(runDir, 'status.json')),
+    readJson(statusPath),
     readEvents(path.join(runDir, 'events.jsonl')),
     latestRunId(path.join(root, sid)),
     readEvents(path.join(runDir, 'heal.jsonl')),
@@ -1706,7 +1736,9 @@ async function runDetail(root, sid, runId) {
     runId,
     isLatest: latest === runId,
     audit,
-    status,
+    // Same staleness mapping the runs list applies — a dead 'running' run
+    // reads 'stale' here so the detail view stops calling it "in flight".
+    status: status ? { ...status, state: await runState(statusPath, status) } : status,
     events,
     heals,
     shotDiffs,
@@ -3006,6 +3038,13 @@ function createChatManager(deps, root) {
             // own browser. Read lazily so New-chat rotation is picked up.
             const cfg = {
               ...chat.config,
+              // Per-chat pi session file dir — the conversation survives the
+              // 15-min idle teardown and server restarts (JSONL session
+              // resume). Under this chat's record scratch dir.
+              sessionDir: (() => {
+                const d = entry.recordDir();
+                return d ? path.join(d, 'agent-session') : null;
+              })(),
               bashEnv: () => {
                 const env = { AGENT_BROWSER_SESSION: browser.name };
                 const dir = entry.recordDir();

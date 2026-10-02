@@ -12,6 +12,7 @@ import type {
   ChatItem,
   ChatMessage,
   ChatState,
+  ChatUsage,
   ModelInfo,
   SessionEvent,
 } from '@/lib/types';
@@ -34,6 +35,8 @@ export interface ChatUIState {
   thinkingLevels: string[];
   sessionId?: string;
   sessionNote?: string;
+  // Cumulative cost/token usage the backend reported (null when unavailable).
+  usage?: ChatUsage | null;
   // Streaming cursors: indices into `items` for the currently-open assistant
   // text / thinking bubbles (null = closed, next delta opens a fresh bubble).
   curAssistant: number | null;
@@ -394,6 +397,7 @@ export function rehydrate(payload: ChatState): ChatUIState {
     thinkingLevel: payload.thinkingLevel,
     thinkingLevels: payload.thinkingLevels || [],
     sessionId: payload.sessionId,
+    usage: payload.usage ?? null,
     streaming: !!payload.streaming,
   };
   for (const m of payload.messages || []) s = renderSaved(s, m);
@@ -420,6 +424,7 @@ export function reducer(state: ChatUIState, action: Action): ChatUIState {
         reason: p.reason ?? state.reason,
         backend: p.backend ?? state.backend,
         install: p.install ?? state.install,
+        usage: p.usage !== undefined ? p.usage : state.usage,
       };
     }
 

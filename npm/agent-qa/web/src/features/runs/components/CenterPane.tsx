@@ -207,8 +207,11 @@ export function CenterPane({
     const live = isRunLive(detail)
     const a = detail.audit || {}
     const s = detail.status || {}
-    const summary = a.summary || (live ? `running ${s.currentIdx || 0}/${s.total || '?'}` : 'in flight')
-    const tone = /PASS/.test(summary) ? 'pass' : /FAIL/.test(summary) ? 'fail' : 'running'
+    // 'stale' = status.json still says "running" but hasn't been touched in
+    // the staleness window — the replay process is dead. Not a verdict.
+    const stale = s.state === 'stale'
+    const summary = a.summary || (live ? `running ${s.currentIdx || 0}/${s.total || '?'}` : stale ? 'interrupted' : 'in flight')
+    const tone = /PASS/.test(summary) ? 'pass' : /FAIL/.test(summary) ? 'fail' : stale ? 'stopped' : 'running'
     const events = collapseEvents(detail.events || [])
     const currentIdx = typeof s.currentIdx === 'number' ? s.currentIdx : -1
     const liveCurrent = live ? currentIdx : -1
@@ -219,7 +222,7 @@ export function CenterPane({
     // its two invisible states so the run never looks silently stuck/broken:
     //   • signing in  — started, no step has begun, not terminal yet
     //   • setup failed — a `setup` event errored (e.g. no credentials)
-    const terminal = !!a.summary || s.state === 'done'
+    const terminal = !!a.summary || s.state === 'done' || stale
     const stepStarted = (detail.events || []).some((e) => e.status && e.status !== 'pending')
     const signingIn = !terminal && !stepStarted
     const setupStartedAt = Date.parse(String(a.startedAt || ''))
@@ -236,7 +239,7 @@ export function CenterPane({
     // Other finished runs of this scenario, newest first — the baseline
     // choices the Compare picker offers.
     const otherRuns = ((sel.sid && runsBySid[sel.sid]) || [])
-      .filter((r) => r.runId !== detail.runId && r.state !== 'running')
+      .filter((r) => r.runId !== detail.runId && r.state !== 'running' && r.state !== 'stale')
       .sort((a, b) => (a.runId < b.runId ? 1 : -1))
     const baseRun = otherRuns.some((r) => r.runId === baseline)
       ? baseline
@@ -279,7 +282,8 @@ export function CenterPane({
                 'inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide before:size-1.5 before:rounded-full before:bg-current',
                 tone === 'pass' && 'bg-success/15 text-success',
                 tone === 'fail' && 'bg-destructive/15 text-destructive',
-                tone === 'running' && 'bg-warning/15 text-warning'
+                tone === 'running' && 'bg-warning/15 text-warning',
+                tone === 'stopped' && 'bg-muted text-muted-foreground'
               )}
             >
               {cleanSummary(summary)}
@@ -379,6 +383,14 @@ export function CenterPane({
               {setupSlow
                 ? 'No replay progress for over a minute. Setup may be stuck; the host watchdog will stop it and mark it failed if this continues.'
                 : 'Signing in… authenticating the persona in a fresh browser — this can take ~30s.'}
+            </div>
+          )}
+          {stale && (
+            <div className="mt-2 rounded-lg border border-border bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+              <div className="font-medium text-foreground">Replay interrupted — the process stopped before finishing.</div>
+              <div className="mt-0.5 text-muted-foreground">
+                The run's status file went quiet mid-run (killed or crashed). Replay again to rerun it.
+              </div>
             </div>
           )}
           {setupError && (

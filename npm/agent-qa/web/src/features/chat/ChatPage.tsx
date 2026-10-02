@@ -27,7 +27,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { useChat } from './useChat'
-import type { ChatItem } from '@/lib/types'
+import type { ChatItem, ChatUsage, ModelInfo } from '@/lib/types'
 import { WorkingIndicator } from '@/components/working-indicator'
 import BrowserPane from './BrowserPane'
 import { Message } from './components/Message'
@@ -537,13 +537,22 @@ function ChatConversation({
           {state.hydrated && !state.available && (
             <ChatSetupNotice reason={state.reason} install={state.install} backend={state.backend} />
           )}
-          <div className="flex items-center justify-end border-b border-border px-2 py-1">
+          <div className="flex items-center justify-between gap-2 border-b border-border px-2 py-1">
+            {/* Which backend is actually under the hood (pi vs opencode), the
+                active model, and cumulative usage — answers "am I on the
+                cheap model?" at a glance. */}
+            <span
+              className="min-w-0 truncate px-1 text-[11px] text-muted-foreground"
+              title={backendUsageTitle(state.backend, state.model, state.usage)}
+            >
+              {backendUsageLabel(state.backend, state.model, state.usage)}
+            </span>
             <button
               type="button"
               onClick={() => void copyTranscript()}
               disabled={empty}
               title="Copy the whole conversation (markdown) to share"
-              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+              className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
             >
               {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
               {copied ? 'Copied' : 'Copy chat'}
@@ -908,6 +917,40 @@ function ConnectBar({ cid }: { cid: string }) {
 // pi command stays as fallback for older servers.
 const PI_INSTALL_CMD = 'npm i -g @earendil-works/pi-coding-agent'
 const BACKEND_LABELS: Record<string, string> = { pi: 'pi', opencode: 'opencode' }
+
+function fmtTokens(n?: number | null): string {
+  if (n == null || !Number.isFinite(n)) return ''
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
+}
+
+function fmtCost(c?: number | null): string {
+  if (c == null || !Number.isFinite(c)) return ''
+  return `$${c < 0.01 ? c.toFixed(4) : c.toFixed(2)}`
+}
+
+// One-line "who's under the hood" for the chat header: backend · model · usage.
+function backendUsageLabel(backend?: string, model?: ModelInfo, usage?: ChatUsage | null): string {
+  const parts: string[] = []
+  if (backend) parts.push(BACKEND_LABELS[backend] || backend)
+  if (model) parts.push(model.label || model.id)
+  const cost = fmtCost(usage?.cost)
+  const total = usage?.tokens?.total ?? ((usage?.tokens?.input || 0) + (usage?.tokens?.output || 0))
+  if (cost) parts.push(cost)
+  else if (total) parts.push(`${fmtTokens(total)} tok`)
+  return parts.join(' · ')
+}
+
+function backendUsageTitle(backend?: string, model?: ModelInfo, usage?: ChatUsage | null): string {
+  const bits = [
+    backend ? `backend: ${BACKEND_LABELS[backend] || backend}` : null,
+    model ? `model: ${model.provider ? `${model.provider}/` : ''}${model.id}` : null,
+    usage?.tokens?.total != null ? `tokens: ${usage.tokens.total.toLocaleString()}` : null,
+    usage?.cost != null ? `cost: ${fmtCost(usage.cost)}` : null,
+  ].filter(Boolean)
+  return bits.length ? bits.join('\n') : 'chat backend'
+}
 
 function ChatSetupNotice({
   reason,
