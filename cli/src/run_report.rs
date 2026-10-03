@@ -179,6 +179,7 @@ const ARTIFACT_FILES: &[&str] = &[
     "network.json",
     "console.json",
     "junit.xml",
+    "run.mp4",
     "run.webm",
     "junit.html",
 ];

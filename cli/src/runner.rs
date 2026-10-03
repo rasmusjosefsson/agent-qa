@@ -144,7 +144,7 @@ pub struct RunOptions {
 
     /// `--record-video [path]` — record the browser to video for the
     /// whole run (agent-browser `record start/stop`; needs ffmpeg on the
-    /// runner). Bare flag writes `<run>/run.webm`; `=<path>` writes that
+    /// runner). Bare flag writes `<run>/run.mp4`; `=<path>` writes that
     /// path (.webm/.mp4). Start happens right before the step loop so
     /// env.open navigation is captured; stop after env.close.
     pub record_video: Option<PathBuf>,
@@ -822,11 +822,12 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             }
         };
         // `--record-video`: start filming before the first step so the
-        // whole interaction lands in <run>/run.webm. Best-effort — a
-        // missing ffmpeg is a warning, not a failed run.
+        // whole interaction lands in <run>/run.mp4 (mp4 renders inline
+        // in GitHub comments; webm does not). Best-effort — a missing
+        // ffmpeg is a warning, not a failed run.
         if let Some(vid) = &opts.record_video {
             let dest = if vid.as_os_str().is_empty() {
-                run.run_root.join("run.webm")
+                run.run_root.join("run.mp4")
             } else {
                 vid.clone()
             };
@@ -3262,7 +3263,7 @@ replays/latest.txt.
                          it on every navigation; warm sessions get the
                          current document only
 --record-video [path]    Record the browser to video for the whole run
-                         (needs ffmpeg). Bare flag → <run>/run.webm;
+                         (needs ffmpeg). Bare flag → <run>/run.mp4;
                          =<path> picks the file (.webm/.mp4). Covers
                          env.open navigation through env.close.
 --auto-promote           Self-healing write-back: when the run passed AND
@@ -4395,7 +4396,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
 
     #[test]
     fn parse_args_record_video() {
-        // bare flag → empty-path sentinel (runner resolves to <run>/run.webm)
+        // bare flag → empty-path sentinel (runner resolves to <run>/run.mp4)
         let o = parse_args(&["./j.json".into(), "--record-video".into()]).unwrap();
         assert_eq!(o.record_video.as_deref(), Some(std::path::Path::new("")));
         let o = parse_args(&["./j.json".into(), "--record-video=/tmp/x.mp4".into()]).unwrap();
