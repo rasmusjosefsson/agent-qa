@@ -6,6 +6,7 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-10-03
 ### Added
 
 - Replay video pointer: a fake cursor glides to each step's target with a
