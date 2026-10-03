@@ -133,7 +133,10 @@ jobs:
         id: publish
         if: failure() && github.event_name == 'pull_request'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Set a QA_COMMENT_TOKEN secret (a PAT) to get real inline video
+          # players in the drift comment — user tokens may upload
+          # attachments; the workflow token cannot.
+          GH_TOKEN: ${{ secrets.QA_COMMENT_TOKEN || secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -e
@@ -190,11 +193,13 @@ jobs:
           run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           body="**agent-qa golden drift** — shot claims differed from baseline. [Open the run]($run_url) — artifact \`agent-qa-runs\` has every step screenshot."$'\n\n'
           # gh --attach uploads the mp4 as a user-attachment → GitHub
-          # renders a real video player inline. Local-path references in
-          # the body are rewritten to the upload URL. Older gh has no
-          # --attach — fall back to an inline gif + mp4 link.
+          # renders a real video player inline — but the upload endpoint
+          # only accepts user tokens (PAT/OAuth), not the workflow's
+          # GITHUB_TOKEN (ghs_*). Attach only for user tokens; the default
+          # falls back to an inline gif + mp4 link.
           attach_args=()
-          if gh pr comment --help 2>/dev/null | grep -q -- '--attach'; then attach_ok=1; else attach_ok=0; fi
+          if gh pr comment --help 2>/dev/null | grep -q -- '--attach' && \
+             case "$GH_TOKEN" in ghp_*|github_pat_*|gho_*|ghu_*) true;; *) false;; esac; then attach_ok=1; else attach_ok=0; fi
           for sdir in "$staging"/*/; do
             sid=$(basename "$sdir")
             body+="### $sid"$'\n'
