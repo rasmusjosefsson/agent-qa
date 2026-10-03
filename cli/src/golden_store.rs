@@ -471,7 +471,12 @@ fn hrana_str(v: &Json) -> Option<&str> {
 
 fn hrana_blob(v: &Json) -> Option<Vec<u8>> {
     let b64 = v.get("base64").and_then(|v| v.as_str())?;
-    B64.decode(b64).ok()
+    // sqld/libsql-server omits '=' padding; the STANDARD engine requires it.
+    let mut padded = b64.to_string();
+    while padded.len() % 4 != 0 {
+        padded.push('=');
+    }
+    B64.decode(padded).ok()
 }
 
 fn turso_pipeline(url: &str, token: &str, sql: &str, args: Vec<Json>) -> Result<Vec<Vec<Json>>> {
@@ -844,7 +849,7 @@ mod tests {
         fs::write(sdir.join("scenario.json"), "{}").unwrap();
 
         let (stub, bodies) = Stub::start();
-        let sha = sha256(b"blob-data");
+        let sha = sha256(b"blob-data!");
         // pull: ensure-schema exec → query rows
         bodies.lock().unwrap().push(turso_reply(vec![]));
         bodies.lock().unwrap().push(turso_reply(vec![vec![
@@ -853,7 +858,8 @@ mod tests {
         ]]));
         bodies.lock().unwrap().push(turso_reply(vec![]));
         bodies.lock().unwrap().push(turso_reply(vec![vec![
-            json!({"type":"blob","base64": B64.encode(b"blob-data")}),
+            // sqld serves blob base64 without padding — exercise that path.
+            json!({"type":"blob","base64": B64.encode(b"blob-data!").trim_end_matches('=')}),
         ]]));
         write_cfg(
             root.path(),
@@ -866,6 +872,6 @@ mod tests {
         std::env::set_current_dir(cwd).unwrap();
         std::env::remove_var("TURSO_AUTH_TOKEN");
         assert_eq!(pull.moved, vec!["s1.png"]);
-        assert_eq!(fs::read(bdir.join("s1.png")).unwrap(), b"blob-data");
+        assert_eq!(fs::read(bdir.join("s1.png")).unwrap(), b"blob-data!");
     }
 }
