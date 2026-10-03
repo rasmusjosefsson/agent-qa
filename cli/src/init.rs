@@ -88,6 +88,7 @@ permissions:
 jobs:
   replay:
     name: replay goldens
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # strategy:
