@@ -7,7 +7,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 
 | Verb | What it does |
 | --- | --- |
-| `init [dir] [--force] [--ci]` | Bootstrap a directory: `agent-qa.toml` (`scenarios_root = ./scenarios`), a `scenarios/hello` smoke scenario, `.gitignore` for run artifacts. `--ci` also writes `.github/workflows/agent-qa.yml` (a PR gate running `replay --all`). Idempotent. |
+| `init [dir] [--force] [--ci] [--store <local\|github\|turso>] [--repo owner/name] [--url libsql://…] [--token-env NAME]` | Bootstrap a directory: `agent-qa.toml` (`scenarios_root = ./scenarios`), a `scenarios/hello` smoke scenario, `.gitignore` for run artifacts. `--ci` also writes `.github/workflows/agent-qa.yml` — the full golden loop (replay gate, drift image/video comment on `shot-diffs`, env-gated + comment `goldens apply` re-mint). `--store` writes an active `[baselines]` table: `github` detects `owner/name` from `git remote` (or `--repo`), `turso` needs `--url`. Idempotent. |
 | `start` | Mint a new scenario directory + skeleton `scenario.json` |
 | `record-step` | Append one step to the in-flight scenario via the recorder |
 | `record pause \| resume \| status` | Freeze capture while you set up page state — record append paths (`record-step`, `smart-click`, `fill-unique`, the editor's auto-record) drop steps while paused instead of writing them. `status --json` emits `{sid, intent, session, paused, steps, startedAt}`. |

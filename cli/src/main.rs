@@ -257,7 +257,9 @@ Verbs:
                                 is ok or accepted against current design bytes
   design verdict <sid> --step <id> (--ok | --accepted --reason <t> | --fail --reason <t> | --ask)
                                 Record a design decision in designs/verdicts.json
-  init [dir] [--force] [--ci]   Bootstrap a dir: toml + scenarios/hello + .gitignore (+ --ci PR gate)
+  init [dir] [--force] [--ci] [--store <local|github|turso>]
+                                Bootstrap a dir: toml + scenarios/hello + .gitignore
+                                (+ --ci golden-loop workflow, + [baselines] store)
   ingest <bundle.json> [--sid <name>]
                                 Turn a browser-extension capture bundle
                                 (steps + traffic) into scenario.json +

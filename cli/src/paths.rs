@@ -35,13 +35,13 @@ pub const DEFAULT_SCENARIOS_SUBDIR: &str = "tmp/agent-qa-scenarios";
 const CONFIG_FILES: &[&str] = &["agent-qa.toml", ".agent-qa.toml"];
 
 #[derive(Debug, Default, Deserialize)]
-struct ConfigFile {
+pub(crate) struct ConfigFile {
     #[serde(default)]
     paths: Option<PathsTable>,
     #[serde(default)]
     browser: Option<BrowserConfig>,
     #[serde(default)]
-    baselines: Option<BaselinesTable>,
+    pub(crate) baselines: Option<BaselinesTable>,
 }
 
 #[derive(Debug, Default, Deserialize)]
