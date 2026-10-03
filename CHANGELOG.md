@@ -5,6 +5,8 @@ All notable changes to agent-qa are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.1.7] - 2026-10-03
 ### Changed
 
 - Replay video pointer: cursor 18px → 32px and the click pulse is a
