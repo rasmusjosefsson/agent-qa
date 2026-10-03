@@ -6,6 +6,15 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-10-03
+### Changed
+
+- Replay video pointer: cursor 18px → 32px and the click pulse is a
+  96px radial glow + ring — click moments read clearly on CI video.
+- Emitted workflow (`agent-qa init --ci`): the drift comment transcodes
+  `run.mp4` → `run.gif` and embeds it inline so the replay plays in the
+  PR comment (GitHub never embeds repo-linked mp4s); mp4 stays linked.
+
 ## [0.1.6] - 2026-10-03
 ### Added
 
