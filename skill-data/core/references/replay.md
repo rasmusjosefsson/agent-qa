@@ -58,7 +58,7 @@ contract; a missing file or key fails the step with the available keys.
 
 `--har` records the run's traffic as `<run>/network.har` (HAR 1.2 — open in
 DevTools/Charles when a claim needs the full payload); `--record-video [path]`
-films the run as webm and `--junit [path]` writes JUnit XML for CI ingestion.
+films the run as mp4 and `--junit [path]` writes JUnit XML for CI ingestion.
 `--mock-from <runId>` replays hermetically off a recorded HAR — add `--offline`
 to reject any fetch/XHR no mock rule matches, and `--freeze` pins the clock +
 RNG so goldens are deterministic. `--keep-going` dispatches every step past the

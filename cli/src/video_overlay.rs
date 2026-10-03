@@ -232,18 +232,18 @@ var doc=document;try{
 var rail=doc.getElementById('__aq_rail');
 if(!rail){
  rail=doc.createElement('div');rail.id='__aq_rail';
- rail.setAttribute('style','position:fixed;left:0;top:0;bottom:0;z-index:2147483647;width:230px;background:rgba(15,23,42,.88);color:#cbd5e1;font:500 11px/1.6 ui-monospace,monospace;padding:8px 6px;pointer-events:none;overflow:hidden;border-right:1px solid rgba(148,163,184,.3);');
+ rail.setAttribute('style','position:fixed;left:0;top:0;bottom:0;z-index:2147483647;width:196px;background:linear-gradient(180deg,rgba(9,13,20,.94),rgba(9,13,20,.88));backdrop-filter:blur(8px);color:#cbd5e1;font:500 10.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;padding:10px 8px;pointer-events:none;overflow:hidden;border-right:1px solid rgba(148,163,184,.14);box-shadow:2px 0 16px rgba(0,0,0,.3);');
  (doc.documentElement||doc.body||doc).appendChild(rail);
 }
-var html='';
+var html='<div style="font:700 9px/1 ui-monospace,monospace;letter-spacing:.16em;color:#5b6a82;text-transform:uppercase;padding:1px 6px 8px;border-bottom:1px solid rgba(148,163,184,.12);margin-bottom:6px">replay</div>';
 for(var i=0;i<labels.length;i++){
- var st=outcomes[i]||'',glyph='·',col='#64748b',op=.45,bg='transparent';
+ var st=outcomes[i]||'',glyph='·',col='#64748b',op=.38,bg='transparent',edge='';
  var n=i+1;
- if(st==='pass'){glyph='✓';col='#4ade80';op=.75}
- else if(st==='fail'){glyph='✗';col='#f87171';op=1;bg='rgba(248,113,113,.12)'}
+ if(st==='pass'){glyph='✓';col='#34d399';op=.7}
+ else if(st==='fail'){glyph='✗';col='#fb7185';op=1;bg='rgba(251,113,133,.1)'}
  else if(st==='skip'){glyph='–';col='#94a3b8';op=.5}
- else if(n===cur){glyph='▸';col='#f8fafc';op=1;bg='rgba(244,63,94,.25)'}
- html+='<div style="opacity:'+op+';background:'+bg+';border-radius:4px;padding:1px 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:'+col+'"><span style="display:inline-block;width:24px;color:#64748b">'+(n<10?' '+n:n)+'</span> '+glyph+' <span style="color:'+(n===cur||st?col:'#94a3b8')+'">'+labels[i]+'</span></div>';
+ else if(n===cur){glyph='▸';col='#f8fafc';op=1;bg='rgba(244,63,94,.16)';edge='box-shadow:inset 2px 0 0 #f43f5e;'}
+ html+='<div style="opacity:'+op+';background:'+bg+';'+edge+'border-radius:5px;padding:2px 6px;margin:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:'+col+'"><span style="display:inline-block;width:19px;color:#4b586e;font-size:9.5px">'+(n<10?'0'+n:n)+'</span> '+glyph+' <span style="color:'+(n===cur||st?col:'#8b98ab')+'">'+labels[i]+'</span></div>';
 }
 rail.innerHTML=html;
 var rows=rail.children;var at=cur-1;
