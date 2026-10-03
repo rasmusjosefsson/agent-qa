@@ -75,6 +75,15 @@ references for design context only; nothing vendor-specific enters core code.
 5. **Coverage-by-crawl** — Assrt's a11y crawl as a *recording bootstrap*: walk
    the app, emit candidate scenarios for the flows it finds, let the human
    prune. Turns "write scenarios" into "approve scenarios".
+6. **Migration playbooks** — TesterArmy ships per-framework `/migrate` pages
+   whose core is a copy-paste prompt a coding agent executes (discover specs →
+   map → verify → report). Mechanical mapping lands in
+   `docs/migrating.md`; the equivalent `agent-qa migrate <dir>` importer is
+   the follow-up.
+7. **MCP surface** — TesterArmy ships `e2e mcp`, a stdio server exposing its
+   CLI to agent clients (record/replay/lint as MCP tools). agent-qa's skills
+   already put the verbs in context; a thin `agent-qa mcp` wrapper would put
+   them in scope for MCP-native agents that never read a skill file.
 
 Non-goals learned from the field: don't adopt AI-tuned diffing (opaque in a
 gate), don't abandon stored scenarios for pure intent-execution (unreviewable),
