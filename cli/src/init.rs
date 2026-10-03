@@ -103,6 +103,9 @@ jobs:
           npm install --no-audit --no-fund @rasmusjosefsson/agent-qa
           sudo apt-get install -y ffmpeg >/dev/null
           ./node_modules/.bin/agent-browser install
+      # Scenarios replaying against a local app? Start it before replay:
+      # - name: start the app
+      #   run: (npm run dev &) && sleep 5
       - name: lint scenarios
         run: ./node_modules/.bin/agent-qa scenario check-all
       - name: replay suite
@@ -215,6 +218,7 @@ jobs:
         run: |
           npm install --no-audit --no-fund @rasmusjosefsson/agent-qa
           ./node_modules/.bin/agent-browser install
+      # Start your app here too if scenarios need it running.
       - name: re-mint baselines + push to the store
         env:
           AGENT_BROWSER_BIN: ${{ github.workspace }}/node_modules/.bin/agent-browser
@@ -267,6 +271,7 @@ jobs:
         run: |
           npm install --no-audit --no-fund @rasmusjosefsson/agent-qa
           ./node_modules/.bin/agent-browser install
+      # Start your app here too if scenarios need it running.
       - name: re-mint baselines + push to the store
         env:
           AGENT_BROWSER_BIN: ${{ github.workspace }}/node_modules/.bin/agent-browser
