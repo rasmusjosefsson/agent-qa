@@ -62,7 +62,8 @@ films the run as webm and `--junit [path]` writes JUnit XML for CI ingestion.
 `--mock-from <runId>` replays hermetically off a recorded HAR — add `--offline`
 to reject any fetch/XHR no mock rule matches, and `--freeze` pins the clock +
 RNG so goldens are deterministic. `--keep-going` dispatches every step past the
-first failure (a repair sweep wants the full failure list), `--retry <N>`
+first failure — golden shot/domshot misses never abort regardless —
+(a repair sweep wants the full failure list), `--retry <N>`
 re-runs until pass keeping the flake evidence, `params.retry` retries one step
 inline, and `--base-url <url>` retargets the scenario onto another deploy (a PR
 preview URL). Harnesses and CI jobs
