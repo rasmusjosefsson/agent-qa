@@ -832,6 +832,11 @@ pub enum Step {
         id: String,
         intent: String,
         claim: Claim,
+        /// `false` = the claim is kept in the scenario but skipped at replay
+        /// (a disabled golden stays in the file until re-enabled). Absent
+        /// means enabled — the field only serializes when it disables.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        enabled: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         context: Option<StepContext>,
     },
@@ -1362,6 +1367,43 @@ mod tests {
             back["steps"][0]["claim"]["subject"]["mask"],
             json!([".ts", "[data-qa-volatile]"])
         );
+    }
+
+    #[test]
+    fn check_enabled_roundtrips() {
+        let parsed: Scenario = serde_json::from_value(json!({
+            "schema": "scenario/2",
+            "id": "j1",
+            "intent": "golden toggles",
+            "steps": [
+                {
+                    "id": "s1",
+                    "intent": "off",
+                    "kind": "check",
+                    "enabled": false,
+                    "claim": { "subject": { "url": true }, "predicate": "exists" }
+                },
+                {
+                    "id": "s2",
+                    "intent": "on",
+                    "kind": "check",
+                    "claim": { "subject": { "url": true }, "predicate": "exists" }
+                }
+            ]
+        }))
+        .unwrap();
+        assert!(matches!(
+            parsed.steps[0],
+            Step::Check {
+                enabled: Some(false),
+                ..
+            }
+        ));
+        assert!(matches!(parsed.steps[1], Step::Check { enabled: None, .. }));
+        let back = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(back["steps"][0]["enabled"], json!(false));
+        // Enabled-by-default stays absent — no noise in committed scenarios.
+        assert!(back["steps"][1].get("enabled").is_none());
     }
 
     #[test]
