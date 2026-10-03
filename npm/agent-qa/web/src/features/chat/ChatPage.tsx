@@ -471,6 +471,32 @@ function ChatConversation({
     document.body.style.cursor = 'col-resize'
   }
 
+  // Vertical split inside the right column: how much the recording steps
+  // panel gets vs. the live browser. Draggable — the steps list is dense and
+  // the default 40% is too shallow to scan or click through comfortably.
+  const rightColRef = useRef<HTMLDivElement | null>(null)
+  const [stepsPct, setStepsPct] = useState(40)
+  const onRowDividerDown = (e: ReactPointerEvent) => {
+    e.preventDefault()
+    const col = rightColRef.current
+    if (!col) return
+    const rect = col.getBoundingClientRect()
+    const onMove = (ev: PointerEvent) => {
+      const pct = ((rect.bottom - ev.clientY) / rect.height) * 100
+      setStepsPct(Math.min(80, Math.max(15, pct)))
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'row-resize'
+  }
+
   const onScroll = () => {
     const el = threadRef.current
     if (!el) return
@@ -684,12 +710,29 @@ function ChatConversation({
         {/* Right column: live browser, with the recording steps stacked
             underneath once a recording exists (the browser letterboxes, so the
             leftover vertical space goes to the steps). */}
-        <div className="flex h-[60vh] min-h-0 min-w-0 shrink-0 flex-col lg:h-auto lg:flex-1 lg:shrink">
-          <div className={cn('min-h-0', hasRecording ? 'flex-[3]' : 'flex-1')}>{liveBrowserPane}</div>
+        <div ref={rightColRef} className="flex h-[60vh] min-h-0 min-w-0 shrink-0 flex-col lg:h-auto lg:flex-1 lg:shrink">
+          <div
+            className="min-h-0"
+            style={{ flex: hasRecording ? `${100 - stepsPct} 1 0%` : '1 1 0%' }}
+          >
+            {liveBrowserPane}
+          </div>
           {hasRecording && (
-            <div className="flex min-h-0 flex-[2] flex-col overflow-hidden border-t border-border">
-              <RecordingView cid={cid} rec={rec} onChanged={() => void getRecording(cid).then(setRec)} />
-            </div>
+            <>
+              <div
+                onPointerDown={onRowDividerDown}
+                role="separator"
+                aria-orientation="horizontal"
+                className="group relative h-px shrink-0 cursor-row-resize bg-border transition-colors hover:bg-primary"
+                title="Drag to resize"
+              >
+                {/* invisible taller grab zone over the flush 1px line */}
+                <span className="absolute inset-x-0 -top-1.5 -bottom-1.5" />
+              </div>
+              <div className="flex min-h-0 flex-col overflow-hidden" style={{ flex: `${stepsPct} 1 0%` }}>
+                <RecordingView cid={cid} rec={rec} onChanged={() => void getRecording(cid).then(setRec)} />
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -724,6 +767,9 @@ function ConnectBar({ cid }: { cid: string }) {
   const [envId, setEnvId] = useState('')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<{ tone: 'busy' | 'ok' | 'err'; text: string; remediation?: AuthRemediation } | null>(null)
+  // True once the user picks a persona by hand — a guest-state poll must not
+  // wipe their selection before they press Connect.
+  const pickedRef = useRef(false)
 
   const showConnectResult = (result: ConnectResult, afterPreparing = false) => {
     setMsg(
@@ -747,6 +793,7 @@ function ConnectBar({ cid }: { cid: string }) {
   // "No sign-in" picked — drop any persona binding and stop the background
   // auto-connect for this chat; the poll loop then shows the guest state.
   const optOut = async () => {
+    pickedRef.current = false
     setPersonaId('')
     setEnvId('')
     setMsg({ tone: 'ok', text: 'No sign-in — browsing anonymously.' })
@@ -767,7 +814,15 @@ function ConnectBar({ cid }: { cid: string }) {
     let shownKey: string | null = null
 
     const showConnection = (connection: ChatConnection) => {
+      // Guest binding wins over the persona select: a refresh must restore
+      // "No sign-in", not re-seed the stored/default profile.
+      if (connection.guest && !pickedRef.current) {
+        shownPersonaId = null
+        setPersonaId('')
+        setEnvId('')
+      }
       if (
+        !connection.guest &&
         connection.personaId &&
         (connection.personaId !== shownPersonaId || connection.environmentId !== shownEnvironmentId)
       ) {
@@ -813,7 +868,9 @@ function ConnectBar({ cid }: { cid: string }) {
         if (!alive) return
         setPersonas(pe.personas)
         setEnvironments(en.environments)
-        if (pe.personas.length === 1) setPersonaId(pe.personas[0].id)
+        // Preselect a lone persona only when the user hasn't explicitly
+        // chosen guest mode — the connection poll clears this if guest.
+        if (pe.personas.length === 1 && !pickedRef.current) setPersonaId(pe.personas[0].id)
       } catch {
         /* personas optional — bar stays hidden */
       }
@@ -861,6 +918,7 @@ function ConnectBar({ cid }: { cid: string }) {
         value={personaId}
         onChange={(v) => {
           if (v) {
+            pickedRef.current = true
             setPersonaId(v)
           } else {
             void optOut()

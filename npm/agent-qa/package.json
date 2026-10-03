@@ -3,7 +3,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Record and replay user scenarios against any web app via CDP.",
   "license": "MIT",
   "repository": {
@@ -18,12 +18,14 @@
     "test": "node --test test/*.test.js",
     "build:web": "npm --prefix web ci && npm --prefix web run build",
     "build:cli": "node ../../scripts/build-local-cli.js",
-    "prepack": "npm run build:web"
+    "prepack": "npm run build:web",
+    "prepublishOnly": "node ../../scripts/check-umbrella-deps.js"
   },
   "files": [
     "bin/",
     "lib/",
     "skills/",
+    "extension/",
     "README.md"
   ],
   "dependencies": {

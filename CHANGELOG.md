@@ -18,8 +18,55 @@ All notable changes to agent-qa are documented here. This project follows
   `agent-qa baselines pull|push|status` verb for manual sync, and a
   workbench Settings "Golden storage" card to pick the backend and
   run sync (`/api/baselines/config|status|sync`).
+- Workbench chat prompts are annotated with the page the chat's browser
+  pane is currently on (`[workbench context: ...currently on <url>]`), so
+  "record this page" works without re-stating the URL. The chat primer
+  also teaches the agent to read the live URL itself
+  (`agent-browser get url`) instead of asking.
+- The Chrome extension is downloadable without a repo checkout: the
+  workbench's Extensions page serves it as `/api/extension.zip` (the
+  sources ship inside the npm tarball), and each GitHub release attaches
+  `agent-qa-extension.zip`.
+
+### Fixed
+
+- Chat agent reliability: the primer now front-loads the rules that were
+  previously easy to miss — load `agent-qa skills get core` before the
+  first agent-qa command, use `smart-click`/`smart-fill`/`fill-unique`
+  (they perform AND record) instead of performing a gesture with
+  `agent-browser` and then guessing a `record-step` draft, and the
+  `record-step` draft grammar (`on` locator, not `target`/`element`).
+- Run dirs minted without `status.json` (a replay that died during
+  startup) resolved `state: null`, so the Runs page showed "in flight"
+  — and the detail pane showed a phantom "Signing in…" banner —
+  forever. `runState` now falls back to freshest-artifact freshness:
+  nothing written within the staleness window → `stale` (interrupted),
+  and the sign-in banner is gated to genuinely live runs.
+- Workbench sidebar logo enlarged to 44px so the mark reads at the same
+  height as the title text.
+- Chat right column: the recording steps panel now has a draggable divider
+  against the live browser pane (was a fixed 60/40 split), so the steps
+  list can be grown to most of the column.
+- "No sign-in" now survives a page refresh: the persona select no longer
+  re-seeds a profile while the chat is bound guest.
+
+## [0.1.2] - 2026-10-02
+### Fixed
+
+- Launcher `agent-qa update` now verifies the platform binary after
+  reinstalling and warns when npm silently skipped the
+  optionalDependencies (launcher newer than `cli`, or binary missing)
+  instead of reporting a clean update.
+- Publishing: new `prepublishOnly` guard
+  (`scripts/check-umbrella-deps.js`) fails `npm publish` when the
+  own-scope platform optionalDependencies don't match the umbrella
+  version OR when the pinned platform versions aren't on the registry
+  yet — a manual publish can no longer ship a launcher with no
+  resolvable binary. `release.yml` also verifies the published
+  umbrella's registry optionalDependencies match the tag.
 
 ## [0.1.1] - 2026-10-02
+
 ### Added
 
 - Workbench chat header shows which backend, model, and cumulative

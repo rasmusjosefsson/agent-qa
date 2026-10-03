@@ -166,7 +166,7 @@ export function AppSidebar({ tab, ...props }: { tab: Tab } & ComponentProps<type
           <SidebarMenuItem>
             <SidebarMenuButton asChild size="lg" tooltip={version ? `agent-qa v${version}` : 'agent-qa'}>
               <SpaAnchor href="/cases">
-                <AgentSparkMark className="size-8 shrink-0 rounded-lg" />
+                <AgentSparkMark className="size-11 shrink-0 rounded-lg" />
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-semibold tracking-tight text-foreground">agent-qa</span>
                   <span data-qa-volatile className="truncate text-xs text-muted-foreground">

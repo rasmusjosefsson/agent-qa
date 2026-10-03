@@ -214,6 +214,26 @@ export function PluginsPage() {
       )}
 
       <div className="min-h-0 flex-1 overflow-auto">
+        <div className="px-5 pt-5">
+          <div className="flex items-center gap-2 px-1 pb-2 text-[10.5px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">
+            <DownloadIcon className="size-3.5 text-primary" /> Browser extension
+          </div>
+          <div className="aqa-table-card aqa-elevated flex flex-wrap items-center gap-4 p-4">
+            <div className="min-w-0 flex-1 basis-64">
+              <div className="text-sm font-medium text-foreground">agent-qa recorder (Chrome)</div>
+              <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                One-click capture of a web flow — steps + network — exported as an agent-qa bundle.
+                Download the zip, unzip it, then <span className="font-mono">chrome://extensions</span> →
+                Developer mode → Load unpacked → pin it.
+              </div>
+            </div>
+            <Button size="sm" asChild>
+              <a href="/api/extension.zip" download="agent-qa-extension.zip">
+                <DownloadIcon /> Download .zip
+              </a>
+            </Button>
+          </div>
+        </div>
         {packages.length > 0 && (
           <div className="px-5 pt-5">
             <div className="flex items-center gap-2 px-1 pb-2 text-[10.5px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">
