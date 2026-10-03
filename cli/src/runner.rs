@@ -975,6 +975,17 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             } else {
                 step.clone()
             };
+            // Video overlay: while recording, paint a step caption + a ring
+            // around the target element so the video shows what replay does.
+            if opts.record_video.is_some() && !opts.dry_run {
+                crate::video_overlay::annotate(
+                    &opts.session_name,
+                    idx,
+                    total,
+                    &patched_step,
+                    &mut scope,
+                );
+            }
             let result = match &patched_step {
                 Step::Do { save_as, .. } => {
                     let mut outcome = dispatch_do(&patched_step, &do_ctx, &mut scope);
