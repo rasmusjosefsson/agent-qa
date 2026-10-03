@@ -154,6 +154,9 @@ jobs:
             if [ -f "$run_dir/screenshots/$shot.png" ]; then cp "$run_dir/screenshots/$shot.png" "$staging/$sid/$shot.actual.png"; fi
             if [ -f "$run_dir/run.webm" ]; then cp "$run_dir/run.webm" "$staging/$sid/run.webm"; fi
           done
+          # npm install churns package-lock.json — restore tracked files so
+          # the branch switch below isn't refused.
+          git checkout -- . 2>/dev/null || true
           # APPEND to shot-diffs — a force-pushed orphan would orphan earlier
           # runs' commits and every image link in older comments would 404.
           if git fetch origin shot-diffs:shot-diffs 2>/dev/null; then
@@ -169,19 +172,21 @@ jobs:
           git add -A
           git commit -m "shot diffs for run $stamp" -q
           git push origin HEAD:shot-diffs -q || { git pull --rebase origin shot-diffs -q && git push origin HEAD:shot-diffs -q; }
-          base="https://raw.githubusercontent.com/${{ github.repository }}/shot-diffs/$stamp"
+          # blob/…?raw=1 renders inline in comments for private repos too —
+          # raw.githubusercontent.com 404s on private repos regardless of login.
+          base="${{ github.server_url }}/${{ github.repository }}/blob/shot-diffs/$stamp"
           run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           body="**agent-qa golden drift** — shot claims differed from baseline. [Open the run]($run_url) — artifact \`agent-qa-runs\` has every step screenshot."$'\n\n'
           for sdir in "$staging"/*/; do
             sid=$(basename "$sdir")
             body+="### $sid"$'\n'
-            if [ -f "$stamp/$sid/run.webm" ]; then body+="[replay video]($base/$sid/run.webm)"$'\n\n'; fi
+            if [ -f "$stamp/$sid/run.webm" ]; then body+="[replay video]($base/$sid/run.webm?raw=1)"$'\n\n'; fi
             for d in "$sdir"*.diff.png; do
               shot=$(basename "$d" .diff.png)
               body+="**$shot** — baseline · actual · diff"$'\n\n'
-              if [ -f "$stamp/$sid/$shot.baseline.png" ]; then body+="![baseline]($base/$sid/$shot.baseline.png)"$'\n'; fi
-              if [ -f "$stamp/$sid/$shot.actual.png" ]; then body+="![actual]($base/$sid/$shot.actual.png)"$'\n'; fi
-              body+="![diff]($base/$sid/$shot.diff.png)"$'\n\n'
+              if [ -f "$stamp/$sid/$shot.baseline.png" ]; then body+="![baseline]($base/$sid/$shot.baseline.png?raw=1)"$'\n'; fi
+              if [ -f "$stamp/$sid/$shot.actual.png" ]; then body+="![actual]($base/$sid/$shot.actual.png?raw=1)"$'\n'; fi
+              body+="![diff]($base/$sid/$shot.diff.png?raw=1)"$'\n\n'
             done
           done
           body+="If this is the intended UI, comment \`goldens apply\` to re-mint the stored baselines — or approve the waiting \`goldens apply\` job below (previous versions stay in the store — \`agent-qa baselines revert <sid>\` rolls back). To fix instead, push a commit; replay reruns on the new head."
