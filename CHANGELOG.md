@@ -6,6 +6,15 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+
+- `agent-qa init --store <local|github|turso>` writes an active
+  `[baselines]` table (github detects `owner/name` from `git remote`,
+  turso takes `--url`), and `--ci` now emits the full golden loop:
+  replay gate publishing baseline/actual/diff images + replay video to
+  a `shot-diffs` branch with an inline PR comment, an environment-gated
+  `goldens apply` job, and the comment-triggered `goldens apply` mint.
+
 ## [0.1.3] - 2026-10-03
 ### Added
 
