@@ -318,6 +318,60 @@ jobs:
           PR_NUMBER: ${{ github.event.issue.number }}
         run: |
           gh pr comment "$PR_NUMBER" --body "Goldens re-minted from this head and pushed to the store — replay will pass on the next run. Revert with \`agent-qa baselines revert <sid>\` if this was a mistake."
+
+  # Mint-on-merge: goldens track the default branch, so a drifting PR
+  # that merges leaves the store stale — the push run's replay fails and
+  # this job adopts the merged render. No approval needed: merged =
+  # adopted. `baselines revert <sid>` rolls back a bad adopt; the store
+  # keeps every version.
+  mint_on_push:
+    name: mint goldens on default-branch failure
+    needs: replay
+    if: >-
+      always() &&
+      needs.replay.result == 'failure' &&
+      github.event_name == 'push' &&
+      github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: install agent-qa + browser
+        run: |
+          npm install --no-audit --no-fund @rasmusjosefsson/agent-qa
+          ./node_modules/.bin/agent-browser install
+      # Start your app here too if scenarios need it running.
+      - name: re-mint baselines + push to the store
+        env:
+          AGENT_BROWSER_BIN: ${{ github.workspace }}/node_modules/.bin/agent-browser
+          TURSO_API_KEY: ${{ secrets.TURSO_API_KEY }}
+        run: |
+          ./node_modules/.bin/agent-qa replay --all --quiet --update-baselines || true
+          # A store push failure leaves goldens stale — every later PR
+          # falsely drifts. Retry once, then fail loudly.
+          ./node_modules/.bin/agent-qa baselines push --all || {
+            sleep 10
+            ./node_modules/.bin/agent-qa baselines push --all
+          }
+      - name: commit local-store goldens back
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "agent-qa-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add scenarios/*/baselines/
+          if git diff --cached --quiet; then
+            echo "remote store or no local baseline change — nothing to commit"
+          else
+            git commit -m "goldens: adopt merged render" -q
+            git push origin "HEAD:${{ github.ref_name }}"
+          fi
+      - name: flag stale store on failure
+        if: failure()
+        run: echo "::error::golden mint failed — the store is now stale; re-run this job or push baselines manually"
 "####;
 
 pub fn cli(args: &[String]) -> Result<u8> {
