@@ -1,14 +1,15 @@
 //! In-page overlay painted during `--record-video` replays: a Cypress-style
 //! left rail listing every step — pending dimmed, current highlighted,
-//! pass/fail colored — plus a red ring around the current step's target
-//! element, so the recorded video shows what the replay is doing instead of
-//! a bare page. Injected per-step via `eval` — navigation wipes the DOM, so
-//! each call re-adds the elements; best-effort only, never fails a step.
+//! pass/fail colored — a ring around the step's target (rose for actions,
+//! sky for assertions, flashing green/red with the outcome), and a fake
+//! cursor that glides to the target and ripples on click verbs. Injected
+//! per-step via `eval` — navigation wipes the DOM, so each call re-adds
+//! the elements; best-effort only, never fails a step.
 
 use serde_json::{json, Value as Json};
 
 use crate::browser;
-use crate::scenario::{Locator, NameMatch, RawLocatorKind, Step};
+use crate::scenario::{ClaimSubject, Locator, NameMatch, RawLocatorKind, Step, Verb};
 use crate::value::{substitute_scenario_vars, ValueScope};
 
 /// Hide/show the overlay around a screenshot capture — `shot` claims
@@ -18,7 +19,8 @@ use crate::value::{substitute_scenario_vars, ValueScope};
 pub fn set_visible(session: &str, visible: bool) {
     let vis = if visible { "" } else { "none" };
     let expr = format!(
-        "try{{document.querySelectorAll('#__aq_rail,#__aq_ring').forEach(function(e){{e.style.display='{vis}'}})}}catch(e){{}}"
+        "try{{document.querySelectorAll('#__aq_rail,#__aq_ring,#__aq_cursor,#__aq_pulse').forEach(function(e){{e.style.display='{vis}'}})}}catch(e){{}}"
+        , vis = vis
     );
     let _ = browser::eval_expression(session, &expr);
 }
@@ -35,11 +37,37 @@ pub fn annotate(
     step: &Step,
     scope: &mut ValueScope,
 ) {
-    let target = match step {
-        Step::Do { on, .. } => on.as_ref(),
-        Step::Check { .. } => None,
-    }
-    .and_then(|loc| locator_query(loc, scope));
+    let (target, kind, click) = match step {
+        Step::Do { on, verb, .. } => (
+            on.as_ref(),
+            "do",
+            matches!(
+                verb,
+                Verb::Click
+                    | Verb::DblClick
+                    | Verb::RightClick
+                    | Verb::Check
+                    | Verb::Uncheck
+                    | Verb::Select
+                    | Verb::Download
+                    | Verb::Dismiss
+            ),
+        ),
+        Step::Check { claim, .. } => {
+            let loc = match &claim.subject {
+                ClaimSubject::Element { element, .. } => Some(element),
+                ClaimSubject::Shot { clip, .. } => clip.as_ref(),
+                _ => None,
+            };
+            (loc, "check", false)
+        }
+    };
+    let target = target.and_then(|loc| locator_query(loc, scope));
+    // Fresh outcome for this step (set post-dispatch; None while running).
+    let st = outcomes
+        .get(cur.saturating_sub(1) as usize)
+        .copied()
+        .flatten();
     let expr = format!(
         "({OVERLAY_FN})({},{},{})",
         serde_json::to_string(labels).unwrap_or_else(|_| "[]".into()),
@@ -47,16 +75,14 @@ pub fn annotate(
         serde_json::to_string(&outcomes).unwrap_or_else(|_| "[]".into()),
     );
     let _ = browser::eval_expression(session, &expr);
-    let ring = match target {
-        Some(t) => format!(
-            "(function(q){{{RESOLVE}\n{RING_BODY}}})({})",
-            serde_json::to_string(&t).unwrap_or_default()
-        ),
-        None => {
-            "(function(){var o=document.getElementById('__aq_ring');if(o)o.remove()})()".to_string()
-        }
-    };
-    let _ = browser::eval_expression(session, &ring);
+    let painter = format!(
+        "(function(q,kind,click,st){{{RESOLVE}\n{POINTER_BODY}}})({},{},{},{})",
+        serde_json::to_string(&target).unwrap_or_else(|_| "null".into()),
+        serde_json::to_string(kind).unwrap_or_default(),
+        click,
+        serde_json::to_string(&st).unwrap_or_else(|_| "null".into()),
+    );
+    let _ = browser::eval_expression(session, &painter);
 }
 
 /// Concise label for one rail row — verb + accessible name for targeted
@@ -153,19 +179,47 @@ if(q.role){try{
 return null;
 }"#;
 
-/// Ring painter body — runs inside `function(q){...}` after `RESOLVE`.
-const RING_BODY: &str = r#"var doc=document;try{
+/// Pointer painter body — runs inside `function(q,kind,click,st){...}`
+/// after `RESOLVE`. Paints the target ring (rose for actions, sky for
+/// assertions; flips green/red once the outcome lands), glides the fake
+/// cursor to the target's center, and ripples on click verbs. With no
+/// resolvable target the ring comes down but the cursor stays parked —
+/// jumping it off-screen between steps reads as flicker in the video.
+const POINTER_BODY: &str = r##"var doc=document;try{
 var old=doc.getElementById('__aq_ring');if(old)old.remove();
 var el=resolve(doc,q);
-if(el&&el.getBoundingClientRect){
- var r=el.getBoundingClientRect();
- if((r.width>0||r.height>0)&&r.bottom>0&&r.right>0&&r.top<window.innerHeight&&r.left<window.innerWidth){
-  var ring=doc.createElement('div');ring.id='__aq_ring';
-  ring.setAttribute('style','position:fixed;z-index:2147483646;left:'+(r.left-4)+'px;top:'+(r.top-4)+'px;width:'+(r.width+8)+'px;height:'+(r.height+8)+'px;border:3px solid #f43f5e;border-radius:5px;box-shadow:0 0 0 4px rgba(244,63,94,.25),0 0 18px rgba(244,63,94,.55);pointer-events:none;');
-  (doc.documentElement||doc.body||doc).appendChild(ring);
- }
+if(!el||!el.getBoundingClientRect)return;
+var r=el.getBoundingClientRect();
+if(!(r.width>0||r.height>0)||r.bottom<=0||r.right<=0||r.top>=window.innerHeight||r.left>=window.innerWidth)return;
+var cx=r.left+r.width/2,cy=r.top+r.height/2;
+var col=kind==='check'?'#38bdf8':'#f43f5e',dash=kind==='check';
+if(st==='pass'){col='#22c55e';dash=false}
+else if(st==='fail'||st==='skip'){col='#ef4444';dash=false}
+var ring=doc.createElement('div');ring.id='__aq_ring';
+ring.setAttribute('style','position:fixed;z-index:2147483646;left:'+(r.left-4)+'px;top:'+(r.top-4)+'px;width:'+(r.width+8)+'px;height:'+(r.height+8)+'px;border:'+(dash?'3px dashed':'3px solid')+' '+col+';border-radius:5px;box-shadow:0 0 0 4px '+col+'40,0 0 18px '+col+'8c;pointer-events:none;');
+(doc.documentElement||doc.body||doc).appendChild(ring);
+var cur=doc.getElementById('__aq_cursor');
+if(!cur){
+ cur=doc.createElement('div');cur.id='__aq_cursor';
+ cur.setAttribute('style','position:fixed;z-index:2147483647;width:18px;height:18px;pointer-events:none;transition:left .28s ease,top .28s ease;left:'+cx+'px;top:'+cy+'px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.55));');
+ cur.innerHTML='<svg width="18" height="18" viewBox="0 0 24 24"><path d="M4 2 L20 12 L13 13 L17 20 L14 21.5 L10 14.5 L4 19 Z" fill="#fff" stroke="#0f172a" stroke-width="1.6"/></svg>';
+ (doc.documentElement||doc.body||doc).appendChild(cur);
+ // Let it mount at the target before any transition kicks in.
+ cur.getBoundingClientRect();
 }
-}catch(e){}"#;
+cur.style.left=(cx-4)+'px';cur.style.top=(cy-6)+'px';
+if(click){
+ var old2=doc.getElementById('__aq_pulse');if(old2)old2.remove();
+ var p=doc.createElement('div');p.id='__aq_pulse';
+ p.setAttribute('style','position:fixed;z-index:2147483646;left:'+(cx-11)+'px;top:'+(cy-11)+'px;width:22px;height:22px;border:3px solid #f43f5e;border-radius:50%;pointer-events:none;animation:__aq_ripple .45s ease-out forwards;');
+ if(!doc.getElementById('__aq_style')){
+  var s=doc.createElement('style');s.id='__aq_style';
+  s.textContent='@keyframes __aq_ripple{from{transform:scale(.35);opacity:1}to{transform:scale(2.1);opacity:0}}';
+  (doc.documentElement||doc.body||doc).appendChild(s);
+ }
+ (doc.documentElement||doc.body||doc).appendChild(p);
+}
+}catch(e){}"##;
 
 /// (labels, cur, outcomes) → paints the step rail. cur is 1-based.
 const OVERLAY_FN: &str = r#"function(labels,cur,outcomes){
