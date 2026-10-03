@@ -91,6 +91,8 @@ jobs:
     if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      drifted: ${{ steps.publish.outputs.drifted }}
     # strategy:
     #   matrix:
     #     shard: [1, 2]
@@ -126,6 +128,7 @@ jobs:
           path: scenarios/*/replays/
           retention-days: 14
       - name: publish shot diffs + comment on the PR
+        id: publish
         if: failure() && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -140,6 +143,7 @@ jobs:
             gh pr comment "$PR_NUMBER" --body "agent-qa replay failed on a non-visual claim — see the workflow log and the \`agent-qa-runs\` artifact (video included)."
             exit 0
           fi
+          echo "drifted=1" >> "$GITHUB_OUTPUT"
           stamp="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           # Collect BEFORE switching branches — checkout drops the
           # committed baselines from the working tree.
@@ -206,10 +210,13 @@ jobs:
   # Approve/deny gate: on a golden failure this job waits on the `goldens`
   # environment. Create it in Settings → Environments with a required
   # reviewer — without it the job runs immediately when a replay fails.
+  # Only offered when shot claims actually drifted — approving a mint
+  # on a non-visual failure would store baselines rendered from a
+  # broken page.
   goldens_apply:
     name: goldens apply (approve to re-mint)
     needs: replay
-    if: always() && needs.replay.result == 'failure' && github.event_name == 'pull_request'
+    if: always() && needs.replay.result == 'failure' && needs.replay.outputs.drifted == '1' && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: goldens
