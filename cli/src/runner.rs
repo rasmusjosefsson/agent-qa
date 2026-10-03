@@ -39,9 +39,7 @@ use crate::browser;
 use crate::claims::{dispatch_check, CheckContext};
 use crate::env_ops;
 use crate::paths;
-use crate::scenario::{
-    ClaimSubject, InputDecl, InputType, Locator, NameMatch, Scenario, Step,
-};
+use crate::scenario::{ClaimSubject, InputDecl, InputType, Locator, NameMatch, Scenario, Step};
 use crate::schema;
 use crate::sidecar::{
     append_event, hash_scenario_bytes, mint_run_id, prepare_run_root, update_latest_pointer,
@@ -1310,7 +1308,11 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                     }
                     eprintln!(
                         "[v2-replay] continuing after step {id}'s failure ({})",
-                        if golden_miss { "golden miss" } else { "--keep-going" }
+                        if golden_miss {
+                            "golden miss"
+                        } else {
+                            "--keep-going"
+                        }
                     );
                 }
             }
