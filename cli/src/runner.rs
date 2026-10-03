@@ -898,6 +898,40 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             };
             // A concise, vendor-neutral label for the progress line.
             let label = progress_label(step);
+            // Disabled check (`enabled: false` — e.g. a golden turned off in
+            // the workbench): no dispatch, a terminal `skip` event, and a
+            // <skipped/> junit case so the step is visible, not silently gone.
+            if let Step::Check {
+                enabled: Some(false),
+                ..
+            } = step
+            {
+                emit_step_done(
+                    progress_mode,
+                    idx,
+                    total,
+                    true,
+                    &format!("{label} (disabled)"),
+                    0,
+                );
+                let _ = append_event(
+                    &run,
+                    &StepEvent {
+                        idx,
+                        total,
+                        id: id.to_string(),
+                        intent: intent.to_string(),
+                        kind: kind_label.clone(),
+                        status: "skip".to_string(),
+                        ms: Some(0),
+                        error: None,
+                        screenshot: None,
+                        snapshot: None,
+                    },
+                );
+                skipped_step_ids.push(id.to_string());
+                continue;
+            }
             // Live progress — a `…` running line in pretty/TTY mode
             // (overwritten in place by the terminal line), nothing in
             // plain/quiet mode. Replaces the old flat `[v2-replay] step`

@@ -595,6 +595,10 @@
         "intent": { "type": "string", "minLength": 1 },
         "kind": { "const": "check" },
         "claim": { "$ref": "#/$defs/Claim" },
+        "enabled": {
+          "type": "boolean",
+          "description": "false skips the claim at replay (a disabled golden/check stays in the file until re-enabled). Absent = enabled."
+        },
         "context": { "$ref": "#/$defs/StepContext" }
       }
     },

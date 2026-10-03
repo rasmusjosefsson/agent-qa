@@ -96,6 +96,8 @@ const STATIC_FILES = {
   '/settings.html': 'index.html',
   '/plugins': 'index.html',
   '/plugins.html': 'index.html',
+  '/goldens': 'index.html',
+  '/goldens.html': 'index.html',
 };
 
 // -------- path safety --------
@@ -221,6 +223,25 @@ function writeBaselinesTable(tomlPath, fields) {
   }
   const next = kept.join('\n').replace(/\n*$/, '\n') + '\n' + block;
   fs.writeFileSync(tomlPath, next);
+}
+
+// stepId → false for every scenario.json check step carrying
+// `"enabled": false` — used by the Goldens page to show golden toggles.
+async function goldenClaimsEnabled(root, sid) {
+  const out = {};
+  try {
+    const scn = JSON.parse(await fsp.readFile(path.join(root, sid, 'scenario.json'), 'utf8'));
+    for (const st of scn.steps || []) {
+      if (st.kind !== 'check' || !st.claim || !st.claim.subject) continue;
+      const subj = st.claim.subject;
+      for (const key of ['shot', 'domshot']) {
+        if (typeof subj[key] === 'string' && st.enabled === false) out[subj[key]] = false;
+      }
+    }
+  } catch {
+    /* no/invalid scenario.json */
+  }
+  return out;
 }
 
 // Priority (first hit wins), matching cli/src/paths.rs::scenarios_root:
@@ -4195,6 +4216,147 @@ function createRequestHandler(root, deps, chat) {
           stdout: String(r.stdout || ''),
           stderr: String(r.stderr || ''),
         });
+      }
+
+      // Goldens gallery — per-scenario baseline files + the configured store.
+      // Pure fs reads, so it works without a resolved CLI; the file route
+      // serves baseline bytes for thumbnails/text previews. Local files are
+      // the pulled copy of whatever [baselines] store is configured.
+      if (segAll[0] === 'api' && segAll[1] === 'goldens' && segAll.length === 2 && req.method === 'GET') {
+        const tomlPath = deps && deps.cwd ? findConfigToml(deps.cwd) : null;
+        const table = tomlPath && fs.existsSync(tomlPath) ? readBaselinesTable(tomlPath) : null;
+        const scenarios = [];
+        let dirs = [];
+        try {
+          dirs = (await fsp.readdir(root, { withFileTypes: true }))
+            .filter((e) => e.isDirectory() && isSafeSegment(e.name))
+            .map((e) => e.name)
+            .sort();
+        } catch {
+          /* no scenarios root yet */
+        }
+        for (const sid of dirs) {
+          const bdir = path.join(root, sid, 'baselines');
+          let files;
+          try {
+            files = (await fsp.readdir(bdir, { withFileTypes: true }))
+              .filter((e) => e.isFile() && isSafeSegment(e.name) && e.name !== '.store.json')
+              .map((e) => e.name)
+              .sort();
+          } catch {
+            continue;
+          }
+          // Which shot claims a check step enables — scenario.json check steps
+          // whose shot/domshot subject matches the baseline filename.
+          const enabledByStep = await goldenClaimsEnabled(root, sid);
+          const latestRun = await latestRunId(path.join(root, sid));
+          const out = [];
+          for (const name of files) {
+            const stepId = name.replace(/\.(png|snap\.txt)$/, '');
+            const entry = {
+              name,
+              stepId,
+              enabled: enabledByStep[stepId] !== false,
+            };
+            try {
+              const st = await fsp.stat(path.join(bdir, name));
+              entry.size = st.size;
+              entry.mtime = st.mtimeMs;
+            } catch { /* keep name/stepId/enabled only */ }
+            if (latestRun) {
+              const diffs = await fsp
+                .readdir(path.join(root, sid, 'replays', latestRun, 'shots-diff'))
+                .catch(() => []);
+              entry.hasDiff = diffs.includes(`${stepId}.diff.png`);
+            }
+            out.push(entry);
+          }
+          scenarios.push({ sid, files: out });
+        }
+        return sendJson(res, 200, {
+          store: (table && table.store) || 'local',
+          scenarios,
+        });
+      }
+      // Compare assets for one golden: the stored baseline, the latest run's
+      // actual screenshot, and the pixel-diff map when the claim failed.
+      if (segAll[0] === 'api' && segAll[1] === 'goldens' && segAll.length === 5 && req.method === 'GET') {
+        const sid = decodeURIComponent(segAll[2]);
+        const name = decodeURIComponent(segAll[3]);
+        const which = segAll[4];
+        if (!isSafeSegment(sid) || !isSafeSegment(name)) return badRequest(res, 'unsafe path');
+        if (which !== 'actual' && which !== 'diff') return badRequest(res, 'unknown asset');
+        const stepId = name.replace(/\.(png|snap\.txt)$/, '');
+        const latestRun = await latestRunId(path.join(root, sid));
+        if (!latestRun) return notFound(res, 'no runs yet');
+        const rel = which === 'actual'
+          ? path.join('screenshots', `${stepId}.png`)
+          : path.join('shots-diff', `${stepId}.diff.png`);
+        const file = path.join(root, sid, 'replays', latestRun, rel);
+        try {
+          const data = await fsp.readFile(file);
+          res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-cache' });
+          res.end(data);
+          return undefined;
+        } catch {
+          return notFound(res, `no ${which} image for ${name} in run ${latestRun}`);
+        }
+      }
+      // Toggle the check claim behind a golden: writes `"enabled": false` on
+      // the scenario.json check step whose shot/domshot subject is this
+      // baseline (and removes it when re-enabling).
+      if (segAll[0] === 'api' && segAll[1] === 'goldens' && segAll.length === 5 && req.method === 'POST' && segAll[4] === 'enabled') {
+        const sid = decodeURIComponent(segAll[2]);
+        const name = decodeURIComponent(segAll[3]);
+        if (!isSafeSegment(sid) || !isSafeSegment(name)) return badRequest(res, 'unsafe path');
+        let body;
+        try {
+          body = await readJsonBody(req);
+        } catch (e) {
+          return badRequest(res, String((e && e.message) || e));
+        }
+        const stepId = name.replace(/\.(png|snap\.txt)$/, '');
+        const scnPath = path.join(root, sid, 'scenario.json');
+        let scn;
+        try {
+          scn = JSON.parse(await fsp.readFile(scnPath, 'utf8'));
+        } catch {
+          return notFound(res, 'no scenario.json');
+        }
+        const want = body && body.enabled === false ? false : true;
+        let touched = 0;
+        for (const st of scn.steps || []) {
+          if (st.kind !== 'check' || !st.claim || !st.claim.subject) continue;
+          const subj = st.claim.subject;
+          if (subj.shot === stepId || subj.domshot === stepId) {
+            if (want) delete st.enabled;
+            else st.enabled = false;
+            touched += 1;
+          }
+        }
+        if (!touched) return notFound(res, `no check claim for step ${stepId}`);
+        await fsp.writeFile(scnPath, JSON.stringify(scn, null, 2) + '\n');
+        return sendJson(res, 200, { sid, stepId, enabled: want, touched });
+      }
+      if (segAll[0] === 'api' && segAll[1] === 'goldens' && segAll.length === 4 && req.method === 'GET') {
+        const sid = decodeURIComponent(segAll[2]);
+        const name = decodeURIComponent(segAll[3]);
+        if (!isSafeSegment(sid) || !isSafeSegment(name)) return badRequest(res, 'unsafe path');
+        const file = path.join(root, sid, 'baselines', name);
+        const type = name.endsWith('.png')
+          ? 'image/png'
+          : 'text/plain; charset=utf-8';
+        try {
+          const data = await fsp.readFile(file);
+          res.writeHead(200, {
+            'content-type': type,
+            'cache-control': 'no-cache',
+          });
+          res.end(data);
+          return undefined;
+        } catch {
+          return notFound(res, 'no such baseline');
+        }
       }
 
       // Trigger a replay of a recorded scenario (POST). Spawns the Rust CLI

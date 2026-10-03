@@ -7,6 +7,7 @@ import {
   CirclePlayIcon,
   FolderTreeIcon,
   GlobeIcon,
+  ImagesIcon,
   LayersIcon,
   PlugIcon,
   Settings2Icon,
@@ -94,6 +95,7 @@ const TESTS: NavItem[] = [
   { label: "Sets", icon: LayersIcon, tab: "sets", href: "/sets" },
   { label: "Plans", icon: FolderTreeIcon, tab: "plans", href: "/plans" },
   { label: "Runs", icon: CirclePlayIcon, tab: "runs", href: "/" },
+  { label: "Goldens", icon: ImagesIcon, tab: "goldens", href: "/goldens" },
 ]
 
 // Setup — identities, targets, knowledge, and extension packages.

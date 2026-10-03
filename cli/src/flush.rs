@@ -396,6 +396,7 @@ fn insert_auto_shot_claims(steps: &mut Vec<crate::scenario::Step>) {
                         serde_json::json!(0.05),
                     )])),
                 },
+                enabled: None,
                 context: None,
             });
         } else {
@@ -494,6 +495,7 @@ fn insert_auto_network_claims(
                 value: None,
                 tolerance: None,
             },
+            enabled: None,
             context: None,
         });
     }
@@ -514,6 +516,7 @@ fn append_auto_error_claims(steps: &mut Vec<crate::scenario::Step>) {
             value: None,
             tolerance: None,
         },
+        enabled: None,
         context: None,
     });
     crate::buffer::normalize_ids(steps);

@@ -316,6 +316,22 @@ fn remote_put(
         }
         Backend::Turso { url, token } => {
             let sha = sha256(data);
+            // Version log: every pushed version appended per file so
+            // `baselines revert` can roll back — the newest history row for a
+            // (sid, name) mirrors the live `baselines` row.
+            turso_exec(
+                url,
+                token,
+                "INSERT INTO baseline_history (sid, name, seq, sha, data) VALUES (?1, ?2, \
+                 (SELECT COALESCE(MAX(seq), 0) + 1 FROM baseline_history \
+                  WHERE sid = ?1 AND name = ?2), ?3, ?4)",
+                vec![
+                    turso_text(sid),
+                    turso_text(name),
+                    turso_text(&sha),
+                    turso_blob(data),
+                ],
+            )?;
             turso_exec(
                 url,
                 token,
@@ -521,7 +537,71 @@ fn turso_query(url: &str, token: &str, sql: &str, args: Vec<Json>) -> Result<Vec
             data BLOB NOT NULL, PRIMARY KEY (sid, name))",
         vec![],
     )?;
+    turso_exec(
+        url,
+        token,
+        "CREATE TABLE IF NOT EXISTS baseline_history (\
+            sid TEXT NOT NULL, name TEXT NOT NULL, seq INTEGER NOT NULL, \
+            sha TEXT NOT NULL, data BLOB NOT NULL, \
+            PRIMARY KEY (sid, name, seq))",
+        vec![],
+    )?;
     turso_pipeline(url, token, sql, args)
+}
+
+/// Roll every file of `sid` back one pushed version: drop the newest history
+/// row per name, then set the live `baselines` row to whatever history row is
+/// left (or delete it if the file's first push is being undone).
+fn turso_revert(url: &str, token: &str, sid: &str) -> Result<usize> {
+    let rows = turso_query(
+        url,
+        token,
+        "SELECT name, seq FROM baseline_history WHERE sid = ?1 \
+         ORDER BY name, seq DESC",
+        vec![turso_text(sid)],
+    )?;
+    // Newest seq per name → the entry to roll back.
+    let mut reverted: Vec<(String, i64)> = Vec::new();
+    for row in rows {
+        let name = hrana_str(&row[0]).unwrap_or_default().to_string();
+        let seq = hrana_str(&row[1])
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(0);
+        if reverted.iter().any(|(n, _)| n == &name) {
+            continue;
+        }
+        reverted.push((name, seq));
+    }
+    for (name, seq) in &reverted {
+        turso_exec(
+            url,
+            token,
+            "DELETE FROM baseline_history WHERE sid = ?1 AND name = ?2 AND seq = ?3",
+            vec![
+                turso_text(sid),
+                turso_text(name),
+                json!({"type": "integer", "value": seq.to_string()}),
+            ],
+        )?;
+        // Whatever is now the newest history row becomes live; none → file
+        // didn't exist before the reverted push, so it stays deleted.
+        turso_exec(
+            url,
+            token,
+            "DELETE FROM baselines WHERE sid = ?1 AND name = ?2",
+            vec![turso_text(sid), turso_text(name)],
+        )?;
+        turso_exec(
+            url,
+            token,
+            "INSERT INTO baselines (sid, name, sha, data) \
+             SELECT sid, name, sha, data FROM baseline_history \
+             WHERE sid = ?1 AND name = ?2 \
+             ORDER BY seq DESC LIMIT 1",
+            vec![turso_text(sid), turso_text(name)],
+        )?;
+    }
+    Ok(reverted.len())
 }
 
 // ---------- `baselines` verb ----------
@@ -548,11 +628,12 @@ pub fn cli(args: &[String]) -> Result<u8> {
         Some("status") => status(json_out),
         Some("pull") => sync_many(sid, all, Direction::Pull, json_out),
         Some("push") => sync_many(sid, all, Direction::Push, json_out),
+        Some("revert") => revert(sid, all, json_out),
         Some("-h" | "--help" | "help") | None => {
             print_help();
             Ok(0)
         }
-        Some(other) => bail!("baselines: unknown subverb {other:?} — pull, push, status"),
+        Some(other) => bail!("baselines: unknown subverb {other:?} — pull, push, revert, status"),
     }
 }
 
@@ -567,10 +648,13 @@ fn print_help() {
          Usage:\n\
          \x20 agent-qa baselines status [--json]        Show configured store + per-sid counts\n\
          \x20 agent-qa baselines pull [<sid> | --all]   Download remote baselines into scenario dirs\n\
-         \x20 agent-qa baselines push [<sid> | --all]   Upload local baselines to the store\n\n\
+         \x20 agent-qa baselines push [<sid> | --all]   Upload local baselines to the store\n\
+         \x20 agent-qa baselines revert [<sid> | --all] Roll remote goldens back one pushed version\n\n\
          Configure in agent-qa.toml — [baselines] store = \"local\" | \"github\" | \"turso\".\n\
          Replay pulls before the step loop (--no-baseline-sync opts out); shot-accept,\n\
-         domshot-accept and replay --update-baselines push after minting."
+         domshot-accept and replay --update-baselines push after minting.\n\
+         Revert needs the turso store (every pushed version is logged); for the\n\
+         github/local stores roll the goldens repo back with git instead."
     );
 }
 
@@ -629,6 +713,39 @@ fn sync_many(sid: Option<String>, all: bool, dir: Direction, json_out: bool) -> 
             r.unchanged,
             r.store
         );
+    }
+    Ok(0)
+}
+
+/// Roll remote goldens back one pushed version per file, then pull so the
+/// local `<sid>/baselines/` and manifest reflect the restored state.
+fn revert(sid: Option<String>, all: bool, json_out: bool) -> Result<u8> {
+    let Some(b) = resolve()? else {
+        bail!("baselines revert: local store — roll the goldens dir back with git instead");
+    };
+    let Backend::Turso { ref url, ref token } = b else {
+        bail!(
+            "baselines revert: '{}' store — roll the goldens repo back with git instead",
+            b.describe()
+        );
+    };
+    let sids = match (sid, all) {
+        (Some(s), _) => vec![s],
+        (None, true) => all_sids(),
+        (None, false) => bail!("baselines revert: pass a sid or --all"),
+    };
+    let mut rows = Vec::new();
+    for sid in &sids {
+        let n = turso_revert(url, token, sid).with_context(|| format!("baselines revert {sid}"))?;
+        let sdir = paths::scenario_dir(sid)?;
+        let _ = sync_in(&sdir).with_context(|| format!("baselines pull {sid}"))?;
+        rows.push(json!({"sid": sid, "revertedFiles": n}));
+        if !json_out {
+            println!("baselines {sid}: reverted {n} file(s) — pulled restored state");
+        }
+    }
+    if json_out {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
     }
     Ok(0)
 }
@@ -850,12 +967,14 @@ mod tests {
 
         let (stub, bodies) = Stub::start();
         let sha = sha256(b"blob-data!");
-        // pull: ensure-schema exec → query rows
+        // pull: 2 schema execs → list rows, then 2 schema execs → data row
+        bodies.lock().unwrap().push(turso_reply(vec![]));
         bodies.lock().unwrap().push(turso_reply(vec![]));
         bodies.lock().unwrap().push(turso_reply(vec![vec![
             json!({"type":"text","value":"s1.png"}),
             json!({"type":"text","value":sha}),
         ]]));
+        bodies.lock().unwrap().push(turso_reply(vec![]));
         bodies.lock().unwrap().push(turso_reply(vec![]));
         bodies.lock().unwrap().push(turso_reply(vec![vec![
             // sqld serves blob base64 without padding — exercise that path.
@@ -873,5 +992,40 @@ mod tests {
         std::env::remove_var("TURSO_AUTH_TOKEN");
         assert_eq!(pull.moved, vec!["s1.png"]);
         assert_eq!(fs::read(bdir.join("s1.png")).unwrap(), b"blob-data!");
+    }
+
+    #[test]
+    fn turso_revert_drops_newest_version() {
+        let _g = crate::test_util::lock_env();
+        let (stub, bodies) = Stub::start();
+        // SELECT name,seq: 2 schema execs + the query (seq DESC → 2 is newest)
+        bodies.lock().unwrap().push(turso_reply(vec![]));
+        bodies.lock().unwrap().push(turso_reply(vec![]));
+        bodies.lock().unwrap().push(turso_reply(vec![
+            vec![
+                json!({"type":"text","value":"s1.png"}),
+                json!({"type":"integer","value":"2"}),
+            ],
+            vec![
+                json!({"type":"text","value":"s1.png"}),
+                json!({"type":"integer","value":"1"}),
+            ],
+        ]));
+        // per file: delete history seq2, delete baselines, insert-select
+        bodies.lock().unwrap().push(turso_reply(vec![]));
+        bodies.lock().unwrap().push(turso_reply(vec![]));
+        bodies.lock().unwrap().push(turso_reply(vec![]));
+
+        let n = turso_revert(&stub.url, "tok", "s-tur").unwrap();
+        assert_eq!(n, 1);
+        let reqs = stub.requests.lock().unwrap();
+        let sql: Vec<&str> = reqs.iter().map(|(_, _, b)| b.as_str()).collect();
+        assert!(sql
+            .iter()
+            .any(|b| b.contains("DELETE FROM baseline_history") && b.contains("\"2\"")));
+        assert!(sql.iter().any(|b| b.contains("DELETE FROM baselines")));
+        assert!(sql
+            .iter()
+            .any(|b| b.contains("INSERT INTO baselines") && b.contains("FROM baseline_history")));
     }
 }
