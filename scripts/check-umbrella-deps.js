@@ -29,24 +29,38 @@ if (bad.length) {
 // Stamped deps still fail at install time if the platform packages were never
 // published (npm skips unresolvable optionalDependencies silently). Check each
 // pinned version exists on the registry — publish order is platforms first,
-// umbrella second.
+// umbrella second. npm's CDN takes a few minutes to index a fresh publish, so
+// poll instead of failing on the first 404 (the release workflow's umbrella
+// job ran seconds behind the platform jobs and raced this every time).
 const { execFileSync } = require('node:child_process');
-const missing = [];
-for (const [name, v] of own) {
-  if (String(v).startsWith('file:')) continue;
+
+function onRegistry(name, v) {
   try {
     execFileSync('npm', ['view', `${name}@${v}`, 'version', '--loglevel=error'], {
       stdio: 'pipe',
       timeout: 20000,
     });
+    return true;
   } catch {
-    missing.push(`${name}@${v}`);
+    return false;
   }
 }
-if (missing.length) {
-  console.error('check-umbrella-deps: platform packages not on the registry yet:');
-  for (const m of missing) console.error(`  ${m}`);
-  console.error('Publish the platform packages first (release.yml does this before the umbrella).');
-  process.exit(1);
+
+const deadline = Date.now() + 10 * 60 * 1000; // npm indexing can take minutes
+let missing = [];
+for (;;) {
+  missing = own
+    .filter(([, v]) => !String(v).startsWith('file:'))
+    .filter(([name, v]) => !onRegistry(name, v))
+    .map(([name, v]) => `${name}@${v}`);
+  if (!missing.length) break;
+  if (Date.now() > deadline) {
+    console.error('check-umbrella-deps: platform packages not on the registry after 10 min:');
+    for (const m of missing) console.error(`  ${m}`);
+    console.error('Publish the platform packages first (release.yml does this before the umbrella).');
+    process.exit(1);
+  }
+  console.log(`check-umbrella-deps: waiting on registry index for ${missing.length} package(s)…`);
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20000);
 }
 console.log(`check-umbrella-deps: platform deps match ${pkg.version} and exist on the registry`);
