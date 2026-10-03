@@ -6,6 +6,15 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-10-03
+### Added
+
+- Replay video pointer: a fake cursor glides to each step's target with a
+  ClickLight-style glow on click verbs; check steps that assert an element
+  bound it with a dashed sky ring that flips green/red on the outcome.
+  Element borders on action steps were dropped — the cursor carries them.
+  (0.1.6)
+
 ## [0.1.5] - 2026-10-03
 ### Added
 
