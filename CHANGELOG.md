@@ -6,6 +6,7 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-10-03
 ### Added
 
 - `agent-qa init --store <local|github|turso>` writes an active
