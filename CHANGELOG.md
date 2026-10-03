@@ -21,6 +21,11 @@ All notable changes to agent-qa are documented here. This project follows
   (they perform AND record) instead of performing a gesture with
   `agent-browser` and then guessing a `record-step` draft, and the
   `record-step` draft grammar (`on` locator, not `target`/`element`).
+- Workbench sidebar logo enlarged to 44px so the mark reads at the same
+  height as the title text.
+- Chat right column: the recording steps panel now has a draggable divider
+  against the live browser pane (was a fixed 60/40 split), so the steps
+  list can be grown to most of the column.
 
 ## [0.1.1] - 2026-10-02
 ### Added
