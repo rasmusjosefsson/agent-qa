@@ -3148,6 +3148,27 @@ function createChatManager(deps, root) {
   };
 }
 
+// Best-effort context so "record this page" works without the user re-stating
+// the URL: the live bridge tracks which page this chat's browser pane is on.
+// Skipped when the pane has never streamed (no bridge / no URL seen yet); the
+// bridge keeps its last URL after the pane closes, which is still the page.
+function annotatePromptWithPage(deps, entry, text) {
+  try {
+    if (!deps || typeof deps.liveForSession !== 'function' || !entry || !entry.browser) {
+      return text;
+    }
+    const url = deps.liveForSession(entry.browser.name).currentUrl;
+    if (!url || typeof url !== 'string') return text;
+    return (
+      `[workbench context: this chat's browser pane is currently on ${url} — ` +
+      `treat "this page" / "here" / "the page" as that URL unless the user says otherwise]` +
+      `\n\n${text}`
+    );
+  } catch {
+    return text;
+  }
+}
+
 async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
   // seg: path segments after ['api','chat']
   const route = seg.join('/');
@@ -3572,7 +3593,7 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
       }
       // Fire-and-forget: the answer streams over SSE. Errors are broadcast to
       // subscribers by the hub, so swallow the rejection here.
-      Promise.resolve(hub.prompt(text, opts)).catch(() => {});
+      Promise.resolve(hub.prompt(annotatePromptWithPage(deps, entry, text), opts)).catch(() => {});
       return sendJson(res, 202, { ok: true });
     }
     case 'abort': {

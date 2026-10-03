@@ -1515,6 +1515,37 @@ test("POST /api/chat/c/:id/connect bootstraps auth into THAT chat's own session"
   assert.equal((await j('POST', `/api/chat/c/${created.id}/connect`, {})).status, 400);
 });
 
+test("POST /api/chat/c/:id/prompt annotates the text with the pane's current page", async (t) => {
+  const fx = makeFixture();
+  const prompts = [];
+  const bridge = { currentUrl: 'https://example.com/docs' };
+  const { server, base } = await boot(fx.root, {
+    chat: { hub: { prompt: async (text) => prompts.push(text) } },
+    liveForSession: () => bridge,
+  });
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, {
+      method: m,
+      headers: { 'content-type': 'application/json' },
+      body: b ? JSON.stringify(b) : undefined,
+    });
+  const chat = await (await j('POST', '/api/chat/create')).json();
+
+  const res = await j('POST', `/api/chat/c/${chat.id}/prompt`, { text: 'record this page' });
+  assert.equal(res.status, 202);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(prompts.length, 1);
+  assert.match(prompts[0], /browser pane is currently on https:\/\/example\.com\/docs/);
+  assert.match(prompts[0], /record this page$/);
+
+  // No tracked page → the text goes through verbatim.
+  bridge.currentUrl = null;
+  await j('POST', `/api/chat/c/${chat.id}/prompt`, { text: 'record this page' });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(prompts[1], 'record this page');
+});
+
 test('POST /api/chat/c/:id/disconnect drops the persona binding into guest mode', async (t) => {
   const fx = makeFixture();
   const deps = {

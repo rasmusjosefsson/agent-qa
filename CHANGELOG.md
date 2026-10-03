@@ -5,6 +5,22 @@ All notable changes to agent-qa are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+
+- Workbench chat prompts are annotated with the page the chat's browser
+  pane is currently on (`[workbench context: ...currently on <url>]`), so
+  "record this page" works without re-stating the URL. The chat primer
+  also teaches the agent to read the live URL itself
+  (`agent-browser get url`) instead of asking.
+
+### Fixed
+
+- Chat agent reliability: the primer now front-loads the rules that were
+  previously easy to miss — load `agent-qa skills get core` before the
+  first agent-qa command, use `smart-click`/`smart-fill`/`fill-unique`
+  (they perform AND record) instead of performing a gesture with
+  `agent-browser` and then guessing a `record-step` draft, and the
+  `record-step` draft grammar (`on` locator, not `target`/`element`).
 
 ## [0.1.1] - 2026-10-02
 ### Added
