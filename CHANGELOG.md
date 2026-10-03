@@ -5,6 +5,27 @@ All notable changes to agent-qa are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+
+- `gh pr comment --attach` support in the emitted CI workflow: when
+  `GH_TOKEN` is a user token (or a `QA_COMMENT_TOKEN` PAT secret is
+  set), replay videos attach as a real GitHub player; otherwise the
+  inline gif fallback is used.
+- `check_shot` dimension mismatches now write a padded diff map to
+  `shots-diff/` (magenta fill for the grown/shrunk region) so size
+  changes are reviewable in drift comments instead of producing a
+  bare FAIL.
+
+### Changed
+
+- Shot/domshot golden misses no longer abort a replay by default —
+  the run continues and reports failures at the end (functional
+  failures still stop unless `--keep-going`).
+- Replay video step rail restyled: slimmer dark-glass rail, "replay"
+  header row, accent bar on the current step.
+- docsite CI: the replay step streams per-scenario progress, and the
+  verdict comment always embeds diffs when images were staged
+  (previously a no-op republish dropped the base URL).
 
 ## [0.1.7] - 2026-10-03
 ### Changed
