@@ -130,8 +130,13 @@ jobs:
           rm -rf "$WORK/pr-$PR_NUMBER"
           cp -r "$STAGE" "$WORK/"
           git -C "$WORK" add -A
-          git -C "$WORK" commit -qm "docs-goldens diffs for PR #$PR_NUMBER (run ${{ github.run_id }})" || exit 0
-          git -C "$WORK" push -q origin docs-goldens-diffs
+          # A no-op commit (identical diffs re-published by a rerun) is not a
+          # failure — the images are already on the branch and the comment
+          # still needs the base URL to embed them.
+          if ! git -C "$WORK" diff --cached --quiet; then
+            git -C "$WORK" commit -qm "docs-goldens diffs for PR #$PR_NUMBER (run ${{ github.run_id }})"
+            git -C "$WORK" push -q origin docs-goldens-diffs
+          fi
           echo "base=https://raw.githubusercontent.com/${REPO}/docs-goldens-diffs/pr-${PR_NUMBER}" >> "$GITHUB_OUTPUT"
       - name: comment the goldens verdict
         if: always()
