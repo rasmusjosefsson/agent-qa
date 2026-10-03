@@ -163,11 +163,6 @@ jobs:
             if [ -f "$sid_dir/baselines/$shot.png" ]; then cp "$sid_dir/baselines/$shot.png" "$staging/$sid/$shot.baseline.png"; fi
             if [ -f "$run_dir/screenshots/$shot.png" ]; then cp "$run_dir/screenshots/$shot.png" "$staging/$sid/$shot.actual.png"; fi
             for v in mp4 webm; do if [ -f "$run_dir/run.$v" ]; then cp "$run_dir/run.$v" "$staging/$sid/run.$v"; fi; done
-            # GitHub renders images inline in comments but never embeds a
-            # repo-linked mp4 — transcode a gif so the video plays in place.
-            if [ -f "$run_dir/run.mp4" ]; then
-              ffmpeg -y -v error -i "$run_dir/run.mp4" -vf "fps=8,scale=640:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=128[p];[s1][p]paletteuse=dither=bayer" "$staging/$sid/run.gif" || true
-            fi
           done
           # npm install churns package-lock.json — restore tracked files so
           # the branch switch below isn't refused.
@@ -196,7 +191,7 @@ jobs:
           # renders a real video player inline — but the upload endpoint
           # only accepts user tokens (PAT/OAuth), not the workflow's
           # GITHUB_TOKEN (ghs_*). Attach only for user tokens; the default
-          # falls back to an inline gif + mp4 link.
+          # falls back to a plain mp4 link (repo-linked mp4s never embed).
           attach_args=()
           if gh pr comment --help 2>/dev/null | grep -q -- '--attach' && \
              case "$GH_TOKEN" in ghp_*|github_pat_*|gho_*|ghu_*) true;; *) false;; esac; then attach_ok=1; else attach_ok=0; fi
@@ -207,8 +202,7 @@ jobs:
               body+="[replay video]($sdir/run.mp4)"$'\n\n'
               attach_args+=(--attach "$sdir/run.mp4")
             else
-              if [ -f "$stamp/$sid/run.gif" ]; then body+="![replay video]($base/$sid/run.gif?raw=1)"$'\n\n'; fi
-              for v in mp4 webm; do if [ -f "$stamp/$sid/run.$v" ]; then body+="[full video ($v)]($base/$sid/run.$v?raw=1)"$'\n\n'; break; fi; done
+              for v in mp4 webm; do if [ -f "$stamp/$sid/run.$v" ]; then body+="[replay video ($v)]($base/$sid/run.$v?raw=1)"$'\n\n'; break; fi; done
             fi
             for d in "$sdir"*.diff.png; do
               shot=$(basename "$d" .diff.png)
