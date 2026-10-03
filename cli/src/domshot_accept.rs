@@ -70,6 +70,15 @@ pub fn run(args: &[String]) -> Result<u8> {
     if dry_run {
         return Ok(0);
     }
+    // Push minted goldens to the configured [baselines] remote store —
+    // warn-only so a remote outage never fails a successful mint.
+    match crate::golden_store::sync_out(&sdir) {
+        Ok(Some(r)) if !r.moved.is_empty() => {
+            eprintln!("baselines: pushed {} file(s) to {}", r.moved.len(), r.store)
+        }
+        Ok(_) => {}
+        Err(e) => eprintln!("baselines: push skipped ({e:#})"),
+    }
 
     if json {
         println!("{}", serde_json::to_string(&minted)?);

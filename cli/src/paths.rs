@@ -40,6 +40,8 @@ struct ConfigFile {
     paths: Option<PathsTable>,
     #[serde(default)]
     browser: Option<BrowserConfig>,
+    #[serde(default)]
+    baselines: Option<BaselinesTable>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -53,6 +55,30 @@ pub(crate) struct BrowserConfig {
 struct PathsTable {
     scenarios_root: Option<String>,
     record_root: Option<String>,
+}
+
+/// `[baselines]` — remote golden store config. `store` picks the backend:
+/// absent or "local" = `<sid>/baselines/` lives only in the scenario dir
+/// (today's behaviour); "github" = a second repository's Contents API;
+/// "turso" = a libSQL/Turso database over its HTTP pipeline. Remote refs are
+/// never embedded in the toml — tokens come from `token_env`'s env var.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct BaselinesTable {
+    pub(crate) store: Option<String>,
+    pub(crate) repo: Option<String>,
+    pub(crate) branch: Option<String>,
+    pub(crate) prefix: Option<String>,
+    pub(crate) url: Option<String>,
+    pub(crate) token_env: Option<String>,
+}
+
+/// The `[baselines]` section of the active `agent-qa.toml` (None when the
+/// table — or any config file — is absent).
+pub(crate) fn baselines_config() -> Option<(PathBuf, BaselinesTable)> {
+    let cwd = env::current_dir().ok()?;
+    let (cfg_path, cfg) = load_config(&cwd)?;
+    cfg.baselines.map(|t| (cfg_path, t))
 }
 
 fn load_config(start: &Path) -> Option<(PathBuf, ConfigFile)> {

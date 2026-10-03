@@ -7,6 +7,17 @@ All notable changes to agent-qa are documented here. This project follows
 ## [Unreleased]
 ### Added
 
+- Pluggable golden storage: `[baselines] store` in agent-qa.toml —
+  `local` (default, committed with the repo), `github` (a second repo
+  via the contents API), `turso` (libSQL db). Replay pulls remote
+  goldens into `<sid>/baselines/` before the step loop
+  (`--no-baseline-sync` opts out); `shot-accept`, `domshot-accept` and
+  `replay --update-baselines` push after minting. A `.store.json`
+  manifest tracks local/remote hashes so only changed files move;
+  sync is additive (nothing is ever deleted remotely). New
+  `agent-qa baselines pull|push|status` verb for manual sync, and a
+  workbench Settings "Golden storage" card to pick the backend and
+  run sync (`/api/baselines/config|status|sync`).
 - Workbench chat prompts are annotated with the page the chat's browser
   pane is currently on (`[workbench context: ...currently on <url>]`), so
   "record this page" works without re-stating the URL. The chat primer

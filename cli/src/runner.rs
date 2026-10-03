@@ -136,6 +136,12 @@ pub struct RunOptions {
     /// re-running once per step.
     pub keep_going: bool,
 
+    /// Pull this scenario's goldens from the configured `[baselines]`
+    /// remote store before the step loop (default true; a `local` store
+    /// is a no-op). `--no-baseline-sync` opts out — e.g. offline runs on
+    /// a machine with no remote access.
+    pub baseline_sync: bool,
+
     /// `--record-video [path]` — record the browser to video for the
     /// whole run (agent-browser `record start/stop`; needs ffmpeg on the
     /// runner). Bare flag writes `<run>/run.webm`; `=<path>` writes that
@@ -499,6 +505,25 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         }
     }
     let hash = hash_scenario_bytes(&bytes);
+
+    // Materialize goldens from the configured [baselines] remote store so
+    // shot/domshot claims have local files to diff. Warn-only: a remote
+    // outage surfaces as the usual "no baseline" claim error, not a new
+    // failure class. `local` store → resolve() returns None → no-op.
+    if opts.baseline_sync && !opts.dry_run {
+        match crate::golden_store::sync_in(&scenario_dir) {
+            Ok(Some(r)) if !r.moved.is_empty() => {
+                eprintln!(
+                    "[v2-replay] baselines: pulled {} file(s) for {} ({})",
+                    r.moved.len(),
+                    r.sid,
+                    r.store
+                );
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("[v2-replay] baseline sync skipped: {e:#}"),
+        }
+    }
 
     if !opts.dry_run {
         refuse_if_recording_active(&opts.session_name)?;
@@ -1375,6 +1400,13 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 minted.join(", ")
             ),
             Err(err) => eprintln!("domshot baselines: skipped ({err})"),
+        }
+        match crate::golden_store::sync_out(&scenario_dir) {
+            Ok(Some(r)) if !r.moved.is_empty() => {
+                eprintln!("baselines: pushed {} file(s) to {}", r.moved.len(), r.store)
+            }
+            Ok(_) => {}
+            Err(err) => eprintln!("baselines: push skipped ({err:#})"),
         }
     }
 
@@ -2831,6 +2863,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut from_step: Option<String> = None;
     let mut until_step: Option<String> = None;
     let mut update_baselines = false;
+    let mut baseline_sync = true;
     let mut keep_going = false;
     let mut record_video: Option<PathBuf> = None;
     let mut junit: Option<PathBuf> = None;
@@ -2899,6 +2932,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             s if s.starts_with("--until=") => until_step = Some(s["--until=".len()..].to_string()),
             "--update-baselines" => update_baselines = true,
             "--keep-going" => keep_going = true,
+            "--no-baseline-sync" => baseline_sync = false,
 
             "--record-video" => record_video = Some(PathBuf::new()),
             s if s.starts_with("--record-video=") => {
@@ -2978,6 +3012,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         until_step,
         update_baselines,
         keep_going,
+        baseline_sync,
         record_video,
         junit,
         base_url: normalize_base_url(base_url)?,
@@ -3373,6 +3408,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            baseline_sync: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -3445,6 +3481,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            baseline_sync: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -3520,6 +3557,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            baseline_sync: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -3590,6 +3628,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            baseline_sync: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -3663,6 +3702,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            baseline_sync: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -3729,6 +3769,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            baseline_sync: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -3795,6 +3836,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            baseline_sync: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -3847,6 +3889,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            baseline_sync: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -3923,6 +3966,7 @@ esac\nexit 0\n",
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            baseline_sync: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -4187,6 +4231,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            baseline_sync: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -4267,6 +4312,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            baseline_sync: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -5136,6 +5182,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            baseline_sync: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -5234,6 +5281,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            baseline_sync: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -5490,6 +5538,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            baseline_sync: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -5590,6 +5639,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            baseline_sync: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -5669,6 +5719,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            baseline_sync: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -5726,6 +5777,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            baseline_sync: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -5920,6 +5972,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            baseline_sync: false,
             record_video: None,
             junit: None,
             base_url: None,
@@ -6043,6 +6096,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            baseline_sync: false,
             record_video: None,
             junit: None,
             base_url: None,

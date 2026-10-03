@@ -1,62 +1,62 @@
 - generic [ref=e1] clickable [onclick]
   - list
     - listitem [level=1]
-      - link "agent-qa QA workbench · v0.1.0" [ref=e25]
+      - link "agent-qa QA workbench · v0.1.2" [ref=e28]
         - StaticText "agent-qa"
         - StaticText "QA workbench"
-        - StaticText " · v0.1.0"
+        - StaticText " · v0.1.2"
   - generic
     - StaticText "CREATE"
     - list
       - listitem [level=1]
-        - link "Chat" [ref=e27]
+        - link "Chat" [ref=e30]
           - StaticText "Chat"
       - listitem [level=1]
-        - link "Editor" [ref=e28]
+        - link "Editor" [ref=e31]
           - StaticText "Editor"
   - generic
     - StaticText "TEST PIPELINE"
     - list
       - listitem [level=1]
-        - link "Cases" [ref=e29]
+        - link "Cases" [ref=e32]
           - StaticText "Cases"
         - StaticText "1"
       - listitem [level=1]
-        - link "Sets" [ref=e30]
+        - link "Sets" [ref=e33]
           - StaticText "Sets"
         - StaticText "2"
       - listitem [level=1]
-        - link "Plans" [ref=e31]
+        - link "Plans" [ref=e34]
           - StaticText "Plans"
         - StaticText "3"
       - listitem [level=1]
-        - link "Runs" [ref=e32]
+        - link "Runs" [ref=e35]
           - StaticText "Runs"
         - StaticText "4"
   - generic
     - StaticText "SETUP"
     - list
       - listitem [level=1]
-        - link "Personas" [ref=e33]
+        - link "Personas" [ref=e36]
           - StaticText "Personas"
       - listitem [level=1]
-        - link "Environments" [ref=e34]
+        - link "Environments" [ref=e37]
           - StaticText "Environments"
       - listitem [level=1]
-        - link "Knowledge" [ref=e35]
+        - link "Knowledge" [ref=e38]
           - StaticText "Knowledge"
       - listitem [level=1]
-        - link "Extensions" [ref=e36]
+        - link "Extensions" [ref=e39]
           - StaticText "Extensions"
-  - link "New here? Describe a test in Chat. The agent records it, then you replay it from Runs." [ref=e23]
+  - link "New here? Describe a test in Chat. The agent records it, then you replay it from Runs." [ref=e26]
     - StaticText "New here?"
     - paragraph
       - StaticText "Describe a test in Chat. The agent records it, then you replay it from Runs."
   - list
     - listitem [level=1]
-      - link "Settings" [ref=e26]
+      - link "Settings" [ref=e29]
         - StaticText "Settings"
-  - button "Toggle Sidebar" [ref=e24]
+  - button "Toggle Sidebar" [ref=e27]
   - main
     - sectionheader
       - button "Toggle Sidebar" [ref=e4]
@@ -65,7 +65,7 @@
       - StaticText "Workspace"
       - StaticText "/"
       - StaticText "Settings"
-      - button "Theme" [expanded=false, ref=e11]
+      - button "Theme" [expanded=false, ref=e13]
     - heading "Settings" [level=1, ref=e5]
     - paragraph
       - StaticText "Workbench preferences, stored in _config/settings.json next to your scenarios. Environment variables override stored values."
@@ -77,7 +77,7 @@
       - paragraph
         - StaticText "Which agent the Chat tab talks to. auto picks whichever backend is installed."
       - combobox "Agent backend" [expanded=false, ref=e7]: auto
-        - generic [ref=e12] clickable [onclick]
+        - generic [ref=e14] clickable [onclick]
           - StaticText "auto"
     - generic
       - StaticText "REPLAY"
@@ -86,6 +86,18 @@
       - paragraph
         - StaticText "New replays and persona connects start with a visible browser window instead of headless. Per-run toggles still win."
       - checkbox "Headed browser by default" [checked=false, ref=e8]
+    - generic
+      - StaticText "GOLDEN STORAGE"
+      - LabelText
+        - StaticText "Store backend"
+      - paragraph
+        - StaticText "Where shot/domshot goldens live. local keeps them in the scenario repo (default); github and turso sync them to a remote store."
+      - combobox "Golden store backend" [expanded=false, ref=e9]: local (repo)
+        - generic [ref=e15] clickable [onclick]
+          - StaticText "local (repo)"
+      - paragraph
+        - StaticText "Store: local"
+      - button "Save" [ref=e10]
     - generic
       - StaticText "PATHS"
       - DescriptionList

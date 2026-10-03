@@ -149,6 +149,80 @@ function resolveRelative(value, base) {
   return path.isAbsolute(value) ? value : path.resolve(base, value);
 }
 
+// Same upward walk the Rust CLI's load_config performs: nearest
+// agent-qa.toml / .agent-qa.toml from cwd wins.
+function findConfigToml(cwd) {
+  let dir = cwd;
+  for (;;) {
+    for (const name of ['agent-qa.toml', '.agent-qa.toml']) {
+      const candidate = path.join(dir, name);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+const BASELINE_STORE_KEYS = ['store', 'repo', 'branch', 'prefix', 'url', 'token_env'];
+
+// Minimal reader for the [baselines] table — flat key = "value" pairs only.
+function readBaselinesTable(tomlPath) {
+  let text;
+  try {
+    text = fs.readFileSync(tomlPath, 'utf8');
+  } catch {
+    return null;
+  }
+  let inTable = false;
+  const out = {};
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/#.*$/, '').trim();
+    if (!line) continue;
+    const section = line.match(/^\[(.+)\]$/);
+    if (section) {
+      inTable = section[1].trim() === 'baselines';
+      continue;
+    }
+    if (!inTable) continue;
+    const m = line.match(/^([a-z_]+)\s*=\s*"(.*)"$/);
+    if (m && BASELINE_STORE_KEYS.includes(m[1])) out[m[1]] = m[2];
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+// Replace the [baselines] table in-place (or append it). Creates the file
+// when missing. Returns the new table text.
+function writeBaselinesTable(tomlPath, fields) {
+  const block =
+    '[baselines]\n' +
+    BASELINE_STORE_KEYS.filter((k) => fields[k])
+      .map((k) => `${k} = "${String(fields[k]).replace(/"/g, '\\"')}"`)
+      .join('\n') +
+    '\n';
+  let text = '';
+  try {
+    text = fs.readFileSync(tomlPath, 'utf8');
+  } catch {
+    /* create */
+  }
+  // Strip an existing [baselines] section: from its header to the next
+  // table header or EOF.
+  const lines = text.split(/\r?\n/);
+  const kept = [];
+  let skipping = false;
+  for (const line of lines) {
+    const section = line.match(/^\s*\[(.+)\]\s*$/);
+    if (section) {
+      skipping = section[1].trim() === 'baselines';
+      if (skipping) continue;
+    }
+    if (!skipping) kept.push(line);
+  }
+  const next = kept.join('\n').replace(/\n*$/, '\n') + '\n' + block;
+  fs.writeFileSync(tomlPath, next);
+}
+
 // Priority (first hit wins), matching cli/src/paths.rs::scenarios_root:
 //   1. explicit `--root` (cwd-relative)
 //   2. AGENT_QA_SCENARIOS_DIR env (cwd-relative)
@@ -4012,6 +4086,117 @@ function createRequestHandler(root, deps, chat) {
         return sendJson(res, 405, { error: 'method not allowed' });
       }
 
+      // Golden-store config + sync. The [baselines] table lives in the
+      // agent-qa.toml the CLI discovers from the workbench cwd; sync shells
+      // out to `agent-qa baselines pull|push` so CLI + UI share one path.
+      if (segAll[0] === 'api' && segAll[1] === 'baselines' && segAll[2] === 'config' && segAll.length === 3) {
+        if (!deps || typeof deps.runCli !== 'function') {
+          return sendJson(res, 503, { error: 'baselines unavailable: agent-qa CLI not resolved' });
+        }
+        const tomlPath = findConfigToml(deps.cwd) || path.join(deps.cwd, 'agent-qa.toml');
+        if (req.method === 'GET') {
+          const table = tomlPath && fs.existsSync(tomlPath) ? readBaselinesTable(tomlPath) : null;
+          return sendJson(res, 200, {
+            configPath: tomlPath,
+            store: (table && table.store) || 'local',
+            repo: (table && table.repo) || '',
+            branch: (table && table.branch) || '',
+            prefix: (table && table.prefix) || '',
+            url: (table && table.url) || '',
+            tokenEnv: (table && table.token_env) || '',
+          });
+        }
+        if (req.method === 'POST') {
+          let body;
+          try {
+            body = await readJsonBody(req);
+          } catch (e) {
+            return badRequest(res, String((e && e.message) || e));
+          }
+          const store = String((body && body.store) || 'local');
+          if (!['local', 'github', 'turso'].includes(store)) {
+            return badRequest(res, 'store must be local, github, or turso');
+          }
+          if (store === 'github' && !/^[\w.-]+\/[\w.-]+$/.test(String(body.repo || ''))) {
+            return badRequest(res, 'github store needs repo = "owner/name"');
+          }
+          if (store === 'turso' && !body.url) {
+            return badRequest(res, 'turso store needs url');
+          }
+          try {
+            writeBaselinesTable(tomlPath, {
+              store,
+              repo: body.repo,
+              branch: body.branch,
+              prefix: body.prefix,
+              url: body.url,
+              token_env: body.tokenEnv,
+            });
+          } catch (e) {
+            return sendJson(res, 500, { error: String((e && e.message) || e) });
+          }
+          return sendJson(res, 200, { ok: true, configPath: tomlPath });
+        }
+        return sendJson(res, 405, { error: 'method not allowed' });
+      }
+
+      if (
+        req.method === 'GET' &&
+        segAll[0] === 'api' &&
+        segAll[1] === 'baselines' &&
+        segAll[2] === 'status' &&
+        segAll.length === 3
+      ) {
+        if (!deps || typeof deps.runCli !== 'function') {
+          return sendJson(res, 503, { error: 'baselines unavailable: agent-qa CLI not resolved' });
+        }
+        const r = await deps.runCli(['baselines', 'status', '--json']);
+        if (r.code !== 0) {
+          return sendJson(res, 502, {
+            error: String(r.stderr || r.stdout || 'baselines status failed').trim(),
+          });
+        }
+        let parsed;
+        try {
+          parsed = JSON.parse(r.stdout);
+        } catch {
+          parsed = { store: 'local' };
+        }
+        return sendJson(res, 200, parsed);
+      }
+
+      if (
+        req.method === 'POST' &&
+        segAll[0] === 'api' &&
+        segAll[1] === 'baselines' &&
+        segAll[2] === 'sync' &&
+        segAll.length === 3
+      ) {
+        if (!deps || typeof deps.runCli !== 'function') {
+          return sendJson(res, 503, { error: 'baselines unavailable: agent-qa CLI not resolved' });
+        }
+        let body;
+        try {
+          body = await readJsonBody(req);
+        } catch (e) {
+          return badRequest(res, String((e && e.message) || e));
+        }
+        const direction = body && body.direction === 'push' ? 'push' : 'pull';
+        const args = ['baselines', direction];
+        if (body && typeof body.sid === 'string' && body.sid) {
+          if (!isSafeSegment(body.sid)) return badRequest(res, 'unsafe sid');
+          args.push(body.sid);
+        } else {
+          args.push('--all');
+        }
+        const r = await deps.runCli(args);
+        return sendJson(res, 200, {
+          code: r.code,
+          stdout: String(r.stdout || ''),
+          stderr: String(r.stderr || ''),
+        });
+      }
+
       // Trigger a replay of a recorded scenario (POST). Spawns the Rust CLI
       // `replay <sid>` detached; the viewer's live poll then auto-follows the
       // new run. Requires the launcher-resolved CLI (deps.replay).
@@ -4610,6 +4795,7 @@ function start(opts = {}) {
     const closeSession = makeBrowserSessionCloser({ bin: agentBrowserBin, env: childEnv, cwd });
     deps = {
       recordRoot,
+      cwd,
       agentBrowserBin,
       runCli: makeCliRunner({ bin, env: childEnv, cwd }),
       runAuthRemediation: makeAuthRemediationRunner({ env: childEnv, cwd }),
