@@ -75,6 +75,8 @@ const CI_WORKFLOW: &str = r####"name: agent-qa
 # shot-diffs branch and comments them inline; re-mint by approving the
 # `goldens apply` job on the PR checks, or by commenting `goldens apply`.
 on:
+  push:
+    branches: [main]   # mint_on_push only — branch pushes run via pull_request
   pull_request:
   issue_comment:
     types: [created]
@@ -673,6 +675,8 @@ mod tests {
         let wf = tmp.path().join(".github/workflows/agent-qa.yml");
         let body = fs::read_to_string(&wf).unwrap();
         assert!(body.contains("pull_request:") && body.contains("replay --all"));
+        // push is scoped to main so branch pushes don't double-run with pull_request
+        assert!(body.contains("branches: [main]"));
         assert!(body.contains("goldens_apply") && body.contains("shot-diffs"));
         assert!(body.contains("@rasmusjosefsson/agent-qa"));
         // second run leaves it alone
