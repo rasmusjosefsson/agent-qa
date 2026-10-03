@@ -351,6 +351,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            baseline_sync: false,
             record_video: None,
             junit: None,
             base_url: None,

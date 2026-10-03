@@ -5,6 +5,19 @@ All notable changes to agent-qa are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+
+- Pluggable golden storage: `[baselines] store` in agent-qa.toml —
+  `local` (default, committed with the repo), `github` (a second repo
+  via the contents API), `turso` (libSQL db). Replay pulls remote
+  goldens into `<sid>/baselines/` before the step loop
+  (`--no-baseline-sync` opts out); `shot-accept`, `domshot-accept` and
+  `replay --update-baselines` push after minting. A `.store.json`
+  manifest tracks local/remote hashes so only changed files move;
+  sync is additive (nothing is ever deleted remotely). New
+  `agent-qa baselines pull|push|status` verb for manual sync, and a
+  workbench Settings "Golden storage" card to pick the backend and
+  run sync (`/api/baselines/config|status|sync`).
 
 ## [0.1.1] - 2026-10-02
 ### Added

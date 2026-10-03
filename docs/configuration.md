@@ -57,6 +57,39 @@ directory; absolute paths pass through.
 Env vars always win over the toml. The toml always wins over the
 default.
 
+### `[baselines]`
+
+Where shot/domshot goldens live — a sync layer over
+`<sid>/baselines/`. `local` (the default) keeps goldens as committed
+repo files. `github` and `turso` sync them to a remote store: replay
+pulls remote files into the local dir before the step loop
+(`--no-baseline-sync` opts out), and `shot-accept`,
+`domshot-accept`, and `replay --update-baselines` push after
+minting. `agent-qa baselines pull|push|status` syncs manually.
+
+```toml
+# Second repo via the contents API — keeps PNGs out of source history.
+[baselines]
+store = "github"
+repo = "org/agent-qa-goldens"     # owner/name
+branch = "main"                   # default "main"
+prefix = "baselines"              # default "baselines"
+token_env = "GOLDENS_TOKEN"       # default: AGENT_QA_GH_TOKEN → GITHUB_TOKEN → GH_TOKEN
+```
+
+```toml
+# Turso/libSQL — free tier, one table auto-created per db.
+[baselines]
+store = "turso"
+url = "libsql://db-org.turso.io"  # https:// works too
+token_env = "TURSO_AUTH_TOKEN"    # default TURSO_AUTH_TOKEN
+```
+
+Sync is **additive**: a file missing on one side is never deleted on
+the other, and a `.store.json` manifest under `baselines/` tracks
+local/remote hashes so only changed files move. The workbench
+Settings page edits the same table under "Golden storage".
+
 ## Personas and environments
 
 Credentialed replays draw from two record kinds under the scenarios
