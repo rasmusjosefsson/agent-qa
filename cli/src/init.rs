@@ -160,6 +160,11 @@ jobs:
             if [ -f "$sid_dir/baselines/$shot.png" ]; then cp "$sid_dir/baselines/$shot.png" "$staging/$sid/$shot.baseline.png"; fi
             if [ -f "$run_dir/screenshots/$shot.png" ]; then cp "$run_dir/screenshots/$shot.png" "$staging/$sid/$shot.actual.png"; fi
             for v in mp4 webm; do if [ -f "$run_dir/run.$v" ]; then cp "$run_dir/run.$v" "$staging/$sid/run.$v"; fi; done
+            # GitHub renders images inline in comments but never embeds a
+            # repo-linked mp4 — transcode a gif so the video plays in place.
+            if [ -f "$run_dir/run.mp4" ]; then
+              ffmpeg -y -v error -i "$run_dir/run.mp4" -vf "fps=8,scale=640:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=128[p];[s1][p]paletteuse=dither=bayer" "$staging/$sid/run.gif" || true
+            fi
           done
           # npm install churns package-lock.json — restore tracked files so
           # the branch switch below isn't refused.
@@ -187,7 +192,8 @@ jobs:
           for sdir in "$staging"/*/; do
             sid=$(basename "$sdir")
             body+="### $sid"$'\n'
-            for v in mp4 webm; do if [ -f "$stamp/$sid/run.$v" ]; then body+="[replay video]($base/$sid/run.$v?raw=1)"$'\n\n'; break; fi; done
+            if [ -f "$stamp/$sid/run.gif" ]; then body+="![replay video]($base/$sid/run.gif?raw=1)"$'\n\n'; fi
+            for v in mp4 webm; do if [ -f "$stamp/$sid/run.$v" ]; then body+="[full video ($v)]($base/$sid/run.$v?raw=1)"$'\n\n'; break; fi; done
             for d in "$sdir"*.diff.png; do
               shot=$(basename "$d" .diff.png)
               body+="**$shot** — baseline · actual · diff"$'\n\n'

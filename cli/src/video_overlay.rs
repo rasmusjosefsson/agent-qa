@@ -206,20 +206,20 @@ ring.setAttribute('style','position:fixed;z-index:2147483646;left:'+(r.left-4)+'
 var cur=doc.getElementById('__aq_cursor');
 if(!cur){
  cur=doc.createElement('div');cur.id='__aq_cursor';
- cur.setAttribute('style','position:fixed;z-index:2147483647;width:18px;height:18px;pointer-events:none;transition:left .28s ease,top .28s ease;left:'+cx+'px;top:'+cy+'px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.55));');
- cur.innerHTML='<svg width="18" height="18" viewBox="0 0 24 24"><path d="M4 2 L20 12 L13 13 L17 20 L14 21.5 L10 14.5 L4 19 Z" fill="#fff" stroke="#0f172a" stroke-width="1.6"/></svg>';
+ cur.setAttribute('style','position:fixed;z-index:2147483647;width:32px;height:32px;pointer-events:none;transition:left .28s ease,top .28s ease;left:'+cx+'px;top:'+cy+'px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.65));');
+ cur.innerHTML='<svg width="32" height="32" viewBox="0 0 24 24"><path d="M4 2 L20 12 L13 13 L17 20 L14 21.5 L10 14.5 L4 19 Z" fill="#fff" stroke="#0f172a" stroke-width="2.2"/></svg>';
  (doc.documentElement||doc.body||doc).appendChild(cur);
  // Let it mount at the target before any transition kicks in.
  cur.getBoundingClientRect();
 }
-cur.style.left=(cx-4)+'px';cur.style.top=(cy-6)+'px';
+cur.style.left=(cx-5)+'px';cur.style.top=(cy-3)+'px';
 if(click){
  var old2=doc.getElementById('__aq_pulse');if(old2)old2.remove();
  var p=doc.createElement('div');p.id='__aq_pulse';
- p.setAttribute('style','position:fixed;z-index:2147483646;left:'+(cx-11)+'px;top:'+(cy-11)+'px;width:22px;height:22px;border:3px solid #f43f5e;border-radius:50%;pointer-events:none;animation:__aq_ripple .45s ease-out forwards;');
+ p.setAttribute('style','position:fixed;z-index:2147483646;left:'+(cx-48)+'px;top:'+(cy-48)+'px;width:96px;height:96px;border:4px solid rgba(244,63,94,.95);border-radius:50%;background:radial-gradient(circle,rgba(244,63,94,.85) 0%,rgba(244,63,94,.4) 38%,rgba(244,63,94,0) 68%);pointer-events:none;animation:__aq_glow .8s ease-out forwards;');
  if(!doc.getElementById('__aq_style')){
   var s=doc.createElement('style');s.id='__aq_style';
-  s.textContent='@keyframes __aq_ripple{from{transform:scale(.35);opacity:1}to{transform:scale(2.1);opacity:0}}';
+  s.textContent='@keyframes __aq_glow{0%{transform:scale(.3);opacity:0}12%{opacity:1}60%{opacity:.9}100%{transform:scale(1.45);opacity:0}}';
   (doc.documentElement||doc.body||doc).appendChild(s);
  }
  (doc.documentElement||doc.body||doc).appendChild(p);
