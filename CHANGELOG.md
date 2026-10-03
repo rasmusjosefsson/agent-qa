@@ -6,6 +6,15 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-10-03
+### Added
+
+- Replay video overlay: with `--record-video`, each step paints a
+  Cypress-style step rail (pending dimmed, current highlighted, pass/fail
+  colored) plus a highlight ring on the target element. Hidden during
+  sidecar screenshot capture so `shot` goldens never diff the overlay.
+  (0.1.5)
+
 ## [0.1.4] - 2026-10-03
 ### Added
 
