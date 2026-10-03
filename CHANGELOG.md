@@ -5,6 +5,8 @@ All notable changes to agent-qa are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.1.3] - 2026-10-03
 ### Added
 
 - Pluggable golden storage: `[baselines] store` in agent-qa.toml —
@@ -27,6 +29,22 @@ All notable changes to agent-qa are documented here. This project follows
   workbench's Extensions page serves it as `/api/extension.zip` (the
   sources ship inside the npm tarball), and each GitHub release attaches
   `agent-qa-extension.zip`.
+- Workbench Goldens page (Test pipeline nav): every scenario's baselines
+  — `shot` PNGs as thumbnails, `domshot`/text files as entries — with
+  the configured store in the header, a per-golden enable switch
+  (`POST /api/goldens/<sid>/<name>/enabled`), a `diff` badge when the
+  latest run produced a shots-diff map, and a click-to-compare dialog:
+  draggable before/after split (baseline vs the latest run's screenshot)
+  plus the red-on-faded diff overlay. `GET /api/goldens` and
+  `/api/goldens/<sid>/<name>[/{actual,diff}]` serve the data.
+- Revertible goldens (turso store): `remote_put` logs every pushed
+  version to an append-only `baseline_history` table, and new verb
+  `agent-qa baselines revert <sid>|--all` rolls each file back one
+  version and pulls the restored state. `local`/`github` stores bail
+  with a pointer to git history, which already versions goldens.
+- `Step::Check` gains optional `enabled` — `"enabled": false` in
+  scenario.json skips the claim at replay (`status: "skip"` event +
+  `<skipped/>` junit case). The Goldens page switch writes this.
 
 ### Fixed
 
