@@ -1,7 +1,7 @@
 - generic [ref=e1] clickable [onclick]
   - list
     - listitem [level=1]
-      - link "agent-qa QA workbench · v0.1.2" [ref=e28]
+      - link "agent-qa QA workbench · v0.1.2" [ref=e29]
         - StaticText "agent-qa"
         - StaticText "QA workbench"
         - StaticText " · v0.1.2"
@@ -9,54 +9,58 @@
     - StaticText "CREATE"
     - list
       - listitem [level=1]
-        - link "Chat" [ref=e30]
+        - link "Chat" [ref=e31]
           - StaticText "Chat"
       - listitem [level=1]
-        - link "Editor" [ref=e31]
+        - link "Editor" [ref=e32]
           - StaticText "Editor"
   - generic
     - StaticText "TEST PIPELINE"
     - list
       - listitem [level=1]
-        - link "Cases" [ref=e32]
+        - link "Cases" [ref=e33]
           - StaticText "Cases"
         - StaticText "1"
       - listitem [level=1]
-        - link "Sets" [ref=e33]
+        - link "Sets" [ref=e34]
           - StaticText "Sets"
         - StaticText "2"
       - listitem [level=1]
-        - link "Plans" [ref=e34]
+        - link "Plans" [ref=e35]
           - StaticText "Plans"
         - StaticText "3"
       - listitem [level=1]
-        - link "Runs" [ref=e35]
+        - link "Runs" [ref=e36]
           - StaticText "Runs"
         - StaticText "4"
+      - listitem [level=1]
+        - link "Goldens" [ref=e37]
+          - StaticText "Goldens"
+        - StaticText "5"
   - generic
     - StaticText "SETUP"
     - list
       - listitem [level=1]
-        - link "Personas" [ref=e36]
+        - link "Personas" [ref=e38]
           - StaticText "Personas"
       - listitem [level=1]
-        - link "Environments" [ref=e37]
+        - link "Environments" [ref=e39]
           - StaticText "Environments"
       - listitem [level=1]
-        - link "Knowledge" [ref=e38]
+        - link "Knowledge" [ref=e40]
           - StaticText "Knowledge"
       - listitem [level=1]
-        - link "Extensions" [ref=e39]
+        - link "Extensions" [ref=e41]
           - StaticText "Extensions"
-  - link "New here? Describe a test in Chat. The agent records it, then you replay it from Runs." [ref=e26]
+  - link "New here? Describe a test in Chat. The agent records it, then you replay it from Runs." [ref=e27]
     - StaticText "New here?"
     - paragraph
       - StaticText "Describe a test in Chat. The agent records it, then you replay it from Runs."
   - list
     - listitem [level=1]
-      - link "Settings" [ref=e29]
+      - link "Settings" [ref=e30]
         - StaticText "Settings"
-  - button "Toggle Sidebar" [ref=e27]
+  - button "Toggle Sidebar" [ref=e28]
   - main
     - sectionheader
       - button "Toggle Sidebar" [ref=e4]

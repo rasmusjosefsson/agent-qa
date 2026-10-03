@@ -9,6 +9,7 @@ import ChatPage from "./features/chat/ChatPage"
 import PersonasPage from "./features/personas/PersonasPage"
 import EnvironmentsPage from "./features/environments/EnvironmentsPage"
 import KnowledgePage from "./features/knowledge/KnowledgePage"
+import GoldensPage from "./features/goldens/GoldensPage"
 import PluginsPage from "./features/plugins/PluginsPage"
 import { SettingsPage } from "./features/settings/SettingsPage"
 
@@ -38,6 +39,9 @@ function tabForPath(pathname: string): Tab {
     case "/knowledge":
     case "/knowledge.html":
       return "knowledge"
+    case "/goldens":
+    case "/goldens.html":
+      return "goldens"
     case "/plugins":
     case "/plugins.html":
       return "plugins"
@@ -71,6 +75,7 @@ export function App() {
         {tab === "personas" && <PersonasPage />}
         {tab === "environments" && <EnvironmentsPage />}
         {tab === "knowledge" && <KnowledgePage />}
+        {tab === "goldens" && <GoldensPage />}
                 {tab === "plugins" && <PluginsPage />}
         {tab === "settings" && <SettingsPage />}
       </div>

@@ -96,6 +96,8 @@ const STATIC_FILES = {
   '/settings.html': 'index.html',
   '/plugins': 'index.html',
   '/plugins.html': 'index.html',
+  '/goldens': 'index.html',
+  '/goldens.html': 'index.html',
 };
 
 // -------- path safety --------
@@ -4195,6 +4197,71 @@ function createRequestHandler(root, deps, chat) {
           stdout: String(r.stdout || ''),
           stderr: String(r.stderr || ''),
         });
+      }
+
+      // Goldens gallery — per-scenario baseline files + the configured store.
+      // Pure fs reads, so it works without a resolved CLI; the file route
+      // serves baseline bytes for thumbnails/text previews. Local files are
+      // the pulled copy of whatever [baselines] store is configured.
+      if (segAll[0] === 'api' && segAll[1] === 'goldens' && segAll.length === 2 && req.method === 'GET') {
+        const tomlPath = deps && deps.cwd ? findConfigToml(deps.cwd) : null;
+        const table = tomlPath && fs.existsSync(tomlPath) ? readBaselinesTable(tomlPath) : null;
+        const scenarios = [];
+        let dirs = [];
+        try {
+          dirs = (await fsp.readdir(root, { withFileTypes: true }))
+            .filter((e) => e.isDirectory() && isSafeSegment(e.name))
+            .map((e) => e.name)
+            .sort();
+        } catch {
+          /* no scenarios root yet */
+        }
+        for (const sid of dirs) {
+          const bdir = path.join(root, sid, 'baselines');
+          let files;
+          try {
+            files = (await fsp.readdir(bdir, { withFileTypes: true }))
+              .filter((e) => e.isFile() && isSafeSegment(e.name) && e.name !== '.store.json')
+              .map((e) => e.name)
+              .sort();
+          } catch {
+            continue;
+          }
+          const out = [];
+          for (const name of files) {
+            try {
+              const st = await fsp.stat(path.join(bdir, name));
+              out.push({ name, size: st.size, mtime: st.mtimeMs });
+            } catch {
+              out.push({ name });
+            }
+          }
+          scenarios.push({ sid, files: out });
+        }
+        return sendJson(res, 200, {
+          store: (table && table.store) || 'local',
+          scenarios,
+        });
+      }
+      if (segAll[0] === 'api' && segAll[1] === 'goldens' && segAll.length === 4 && req.method === 'GET') {
+        const sid = decodeURIComponent(segAll[2]);
+        const name = decodeURIComponent(segAll[3]);
+        if (!isSafeSegment(sid) || !isSafeSegment(name)) return badRequest(res, 'unsafe path');
+        const file = path.join(root, sid, 'baselines', name);
+        const type = name.endsWith('.png')
+          ? 'image/png'
+          : 'text/plain; charset=utf-8';
+        try {
+          const data = await fsp.readFile(file);
+          res.writeHead(200, {
+            'content-type': type,
+            'cache-control': 'no-cache',
+          });
+          res.end(data);
+          return undefined;
+        } catch {
+          return notFound(res, 'no such baseline');
+        }
       }
 
       // Trigger a replay of a recorded scenario (POST). Spawns the Rust CLI

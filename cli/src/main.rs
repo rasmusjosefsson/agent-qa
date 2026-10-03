@@ -294,7 +294,7 @@ Verbs:
   heal-chronic <sid> [--min-runs N] [--json] [--issue]  Flag steps that self-heal across runs
   shot-accept <sid> [--run <id>] [--steps <…>] [--json]   Mint screenshot baselines for shot claims
   domshot-accept <sid> [--run <id>] [--steps <…>] [--json]   Mint ARIA-snapshot baselines for domshot claims
-  baselines pull|push|status [<sid>|--all] [--json]   Sync goldens with the [baselines] remote store
+  baselines pull|push|revert|status [<sid>|--all] [--json]   Sync goldens with the [baselines] remote store
 
 Step dispatch covers `do` verbs and `check` claims."
     );

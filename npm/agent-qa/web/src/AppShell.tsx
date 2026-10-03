@@ -6,6 +6,7 @@ import {
   ClipboardListIcon,
   FolderTreeIcon,
   GlobeIcon,
+  ImagesIcon,
   LayersIcon,
   PlugIcon,
   Settings2Icon,
@@ -32,6 +33,7 @@ export type Tab =
   | "environments"
   | "knowledge"
   | "plugins"
+  | "goldens"
   | "settings"
 
 const LABELS: Record<Tab, string> = {
@@ -45,6 +47,7 @@ const LABELS: Record<Tab, string> = {
   environments: "Environments",
   knowledge: "Knowledge",
   plugins: "Extensions",
+  goldens: "Goldens",
   settings: "Settings",
 }
 
@@ -59,6 +62,7 @@ const ICONS: Record<Tab, ComponentType<SVGProps<SVGSVGElement>>> = {
   environments: GlobeIcon,
   knowledge: BookOpenIcon,
   plugins: PlugIcon,
+  goldens: ImagesIcon,
   settings: Settings2Icon,
 }
 
@@ -73,6 +77,7 @@ const GROUP: Record<Tab, string> = {
   environments: "Setup",
   knowledge: "Setup",
   plugins: "Setup",
+  goldens: "Test pipeline",
   settings: "Workspace",
 }
 
