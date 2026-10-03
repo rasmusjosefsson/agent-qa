@@ -6,6 +6,7 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-10-03
 ### Added
 
 - `agent-qa init --store <local|github|turso>` writes an active
@@ -13,7 +14,23 @@ All notable changes to agent-qa are documented here. This project follows
   turso takes `--url`), and `--ci` now emits the full golden loop:
   replay gate publishing baseline/actual/diff images + replay video to
   a `shot-diffs` branch with an inline PR comment, an environment-gated
-  `goldens apply` job, and the comment-triggered `goldens apply` mint.
+  `goldens apply` job, the comment-triggered `goldens apply` mint, and
+  a `mint_on_push` job that adopts a merged drift into the store on
+  default-branch replay failures.
+
+### Changed
+
+- `--record-video` bare flag writes `<run>/run.mp4` (was `run.webm`) —
+  MP4 renders inline in GitHub comments; `=<path>` still honors its
+  extension.
+
+### Fixed
+
+- Emitted workflow: the replay job no longer runs on `issue_comment`
+  events (every `goldens apply` comment burned a full replay on the
+  default branch), and the `goldens apply` env gate is only offered
+  when shot claims actually drifted — a non-visual failure no longer
+  offers to overwrite goldens with broken-render bytes.
 
 ## [0.1.3] - 2026-10-03
 ### Added
