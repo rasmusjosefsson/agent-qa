@@ -25,6 +25,7 @@ const { createReadStream } = require('node:fs');
 const { execFile } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 const { createLiveBridge } = require('./live-bridge.js');
+const { findExtensionDir, zipExtensionDir } = require('./extension-zip.js');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
@@ -239,17 +240,30 @@ const RUN_STALE_MS = Math.max(
   Number(process.env.AGENT_QA_RUN_STALE_MS) || 5 * 60 * 1000,
 );
 
-// Resolve the effective state of a run: raw `status.state`, except 'running'
-// past the staleness window → 'stale'.
+// Resolve the effective state of a run: raw `status.state` for a terminal
+// state; anything that still looks active ('running', or status.json
+// missing/stateless — a run dir minted but abandoned before the runner
+// wrote anything) is judged by the freshest artifact mtime in the run dir.
+// Nothing written within RUN_STALE_MS → 'stale' (dead), else 'running'.
 async function runState(statusPath, status) {
-  if (!status || status.state !== 'running') return status?.state ?? null;
-  try {
-    const st = await fsp.stat(statusPath);
-    if (Date.now() - st.mtimeMs > RUN_STALE_MS) return 'stale';
-  } catch {
-    /* stat failed → report what the file says */
+  const state = status && status.state;
+  if (state && state !== 'running') return state;
+  const runDir = path.dirname(statusPath);
+  let newest = 0;
+  for (const f of [
+    statusPath,
+    path.join(runDir, 'events.jsonl'),
+    path.join(runDir, 'audit.json'),
+    runDir,
+  ]) {
+    try {
+      newest = Math.max(newest, (await fsp.stat(f)).mtimeMs);
+    } catch {
+      /* absent file — skip */
+    }
   }
-  return 'running';
+  if (!newest) return state ?? null;
+  return Date.now() - newest > RUN_STALE_MS ? 'stale' : 'running';
 }
 
 async function listRuns(scenarioDir) {
@@ -1738,7 +1752,9 @@ async function runDetail(root, sid, runId) {
     audit,
     // Same staleness mapping the runs list applies — a dead 'running' run
     // reads 'stale' here so the detail view stops calling it "in flight".
-    status: status ? { ...status, state: await runState(statusPath, status) } : status,
+    // Built even when status.json is absent: a dir minted then abandoned
+    // resolves 'stale' by artifact freshness.
+    status: { ...(status || {}), state: await runState(statusPath, status) },
     events,
     heals,
     shotDiffs,
@@ -3148,6 +3164,27 @@ function createChatManager(deps, root) {
   };
 }
 
+// Best-effort context so "record this page" works without the user re-stating
+// the URL: the live bridge tracks which page this chat's browser pane is on.
+// Skipped when the pane has never streamed (no bridge / no URL seen yet); the
+// bridge keeps its last URL after the pane closes, which is still the page.
+function annotatePromptWithPage(deps, entry, text) {
+  try {
+    if (!deps || typeof deps.liveForSession !== 'function' || !entry || !entry.browser) {
+      return text;
+    }
+    const url = deps.liveForSession(entry.browser.name).currentUrl;
+    if (!url || typeof url !== 'string') return text;
+    return (
+      `[workbench context: this chat's browser pane is currently on ${url} — ` +
+      `treat "this page" / "here" / "the page" as that URL unless the user says otherwise]` +
+      `\n\n${text}`
+    );
+  } catch {
+    return text;
+  }
+}
+
 async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
   // seg: path segments after ['api','chat']
   const route = seg.join('/');
@@ -3572,7 +3609,7 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
       }
       // Fire-and-forget: the answer streams over SSE. Errors are broadcast to
       // subscribers by the hub, so swallow the rejection here.
-      Promise.resolve(hub.prompt(text, opts)).catch(() => {});
+      Promise.resolve(hub.prompt(annotatePromptWithPage(deps, entry, text), opts)).catch(() => {});
       return sendJson(res, 202, { ok: true });
     }
     case 'abort': {
@@ -3626,6 +3663,21 @@ function createRequestHandler(root, deps, chat) {
       // App version for the sidebar. Works without a resolved CLI.
       if (segAll[0] === 'api' && segAll[1] === 'version' && req.method === 'GET') {
         return sendJson(res, 200, { version: await resolveAppVersion(deps) });
+      }
+
+      // Downloadable browser extension — the same sources as the repo's
+      // extension/ dir, zipped on the fly for chrome://extensions →
+      // "Load unpacked". Works without a resolved CLI.
+      if (segAll[0] === 'api' && segAll[1] === 'extension.zip' && req.method === 'GET') {
+        const dir = await findExtensionDir(__dirname);
+        const zip = dir && (await zipExtensionDir(dir));
+        if (!zip) return notFound(res, 'extension sources not bundled with this install');
+        res.writeHead(200, {
+          'content-type': 'application/zip',
+          'content-length': zip.length,
+          'content-disposition': 'attachment; filename="agent-qa-extension.zip"',
+        });
+        return res.end(zip);
       }
 
       // In-app chat surface (pi SDK). Handles its own methods (GET + POST).

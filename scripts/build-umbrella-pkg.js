@@ -66,3 +66,13 @@ if (existsSync(skillsSrc)) {
   cpSync(skillsSrc, skillsDst, { recursive: true });
   console.log(`copied ${skillsSrc}/ -> ${skillsDst}/`);
 }
+
+// Same for `extension/` — the Chrome extension sources ship inside the
+// tarball so the installed workbench can serve them as /api/extension.zip.
+const extSrc = 'extension';
+const extDst = join('npm', 'agent-qa', 'extension');
+if (existsSync(extSrc)) {
+  if (existsSync(extDst)) rmSync(extDst, { recursive: true, force: true });
+  cpSync(extSrc, extDst, { recursive: true });
+  console.log(`copied ${extSrc}/ -> ${extDst}/`);
+}

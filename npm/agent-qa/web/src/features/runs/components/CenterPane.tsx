@@ -224,7 +224,9 @@ export function CenterPane({
     //   • setup failed — a `setup` event errored (e.g. no credentials)
     const terminal = !!a.summary || s.state === 'done' || stale
     const stepStarted = (detail.events || []).some((e) => e.status && e.status !== 'pending')
-    const signingIn = !terminal && !stepStarted
+    // Only a genuinely-live run can be mid-sign-in — an abandoned run dir
+    // (no steps, no summary) must not wear the "Signing in…" banner.
+    const signingIn = live && !terminal && !stepStarted
     const setupStartedAt = Date.parse(String(a.startedAt || ''))
     const setupSlow = signingIn && Number.isFinite(setupStartedAt) && Date.now() - setupStartedAt > 60_000
     const setupFail = (detail.events || []).find((e) => e.kind === 'setup' && e.status === 'fail')

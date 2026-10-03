@@ -21,13 +21,20 @@ answers with the scenario id (`sent to agent-qa — <sid>`) and nothing
 ever hits the downloads folder. No daemon listening? It falls back to
 the download automatically, so the button behaves the same either way.
 
-## Install (dev / unpacked)
+## Install (unpacked)
 
-```
-chrome://extensions → Developer mode → Load unpacked → extension/
-```
+Get the zip:
 
-Pin it to the toolbar for the one-button UX.
+- **Workbench** → Extensions → Browser extension → **Download .zip**
+  (served by your installed agent-qa at `/api/extension.zip`).
+- **GitHub** →
+  [latest release](https://github.com/rasmusjosefsson/agent-qa/releases/latest/download/agent-qa-extension.zip).
+- **Repo checkout** → the `extension/` directory directly (no download
+  needed).
+
+Unzip, then `chrome://extensions` → **Developer mode** → **Load
+unpacked** → pick the unzipped `extension/` folder. Pin it to the
+toolbar for the one-button UX.
 
 ## Use
 
