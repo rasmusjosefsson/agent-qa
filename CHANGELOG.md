@@ -26,6 +26,8 @@ All notable changes to agent-qa are documented here. This project follows
 - Chat right column: the recording steps panel now has a draggable divider
   against the live browser pane (was a fixed 60/40 split), so the steps
   list can be grown to most of the column.
+- "No sign-in" now survives a page refresh: the persona select no longer
+  re-seeds a profile while the chat is bound guest.
 
 ## [0.1.1] - 2026-10-02
 ### Added

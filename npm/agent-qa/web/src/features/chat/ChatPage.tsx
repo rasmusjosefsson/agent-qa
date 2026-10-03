@@ -767,6 +767,9 @@ function ConnectBar({ cid }: { cid: string }) {
   const [envId, setEnvId] = useState('')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<{ tone: 'busy' | 'ok' | 'err'; text: string; remediation?: AuthRemediation } | null>(null)
+  // True once the user picks a persona by hand — a guest-state poll must not
+  // wipe their selection before they press Connect.
+  const pickedRef = useRef(false)
 
   const showConnectResult = (result: ConnectResult, afterPreparing = false) => {
     setMsg(
@@ -790,6 +793,7 @@ function ConnectBar({ cid }: { cid: string }) {
   // "No sign-in" picked — drop any persona binding and stop the background
   // auto-connect for this chat; the poll loop then shows the guest state.
   const optOut = async () => {
+    pickedRef.current = false
     setPersonaId('')
     setEnvId('')
     setMsg({ tone: 'ok', text: 'No sign-in — browsing anonymously.' })
@@ -810,7 +814,15 @@ function ConnectBar({ cid }: { cid: string }) {
     let shownKey: string | null = null
 
     const showConnection = (connection: ChatConnection) => {
+      // Guest binding wins over the persona select: a refresh must restore
+      // "No sign-in", not re-seed the stored/default profile.
+      if (connection.guest && !pickedRef.current) {
+        shownPersonaId = null
+        setPersonaId('')
+        setEnvId('')
+      }
       if (
+        !connection.guest &&
         connection.personaId &&
         (connection.personaId !== shownPersonaId || connection.environmentId !== shownEnvironmentId)
       ) {
@@ -856,7 +868,9 @@ function ConnectBar({ cid }: { cid: string }) {
         if (!alive) return
         setPersonas(pe.personas)
         setEnvironments(en.environments)
-        if (pe.personas.length === 1) setPersonaId(pe.personas[0].id)
+        // Preselect a lone persona only when the user hasn't explicitly
+        // chosen guest mode — the connection poll clears this if guest.
+        if (pe.personas.length === 1 && !pickedRef.current) setPersonaId(pe.personas[0].id)
       } catch {
         /* personas optional — bar stays hidden */
       }
@@ -904,6 +918,7 @@ function ConnectBar({ cid }: { cid: string }) {
         value={personaId}
         onChange={(v) => {
           if (v) {
+            pickedRef.current = true
             setPersonaId(v)
           } else {
             void optOut()
