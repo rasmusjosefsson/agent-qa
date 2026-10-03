@@ -29,7 +29,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          info=$(gh pr view ${{ github.event.issue.number }} --json headRefName,headRefOid,isCrossRepository)
+          info=$(gh pr view ${{ github.event.issue.number }} --repo ${{ github.repository }} --json headRefName,headRefOid,isCrossRepository)
           echo "$info"
           echo "head_ref=$(echo "$info" | jq -r .headRefName)" >> "$GITHUB_OUTPUT"
           echo "head_sha=$(echo "$info" | jq -r .headRefOid)" >> "$GITHUB_OUTPUT"
