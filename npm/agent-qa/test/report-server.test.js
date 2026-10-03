@@ -1041,6 +1041,59 @@ test('in-flight run is surfaced before latest.txt flips', async (t) => {
   assert.equal(activeRow.summary, null);
 });
 
+test('run dir with no status.json resolves stale vs running by freshness', async (t) => {
+  // A replay that minted its dir then died before writing status.json used
+  // to report state null → the UI showed "in flight" (and the "signing in"
+  // banner) forever. Now: nothing written within the staleness window →
+  // 'stale' (interrupted); a fresh dir may still be starting → 'running'.
+  const fx = makeFixture();
+  const deadRun = '2026-06-20T10-00-00-000Z__deadbeef';
+  const deadDir = path.join(fx.root, fx.sid, 'replays', deadRun);
+  fs.mkdirSync(deadDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(deadDir, 'audit.json'),
+    JSON.stringify({ schema: 'scenario-replay-audit/v1', runId: deadRun, startedAt: '2026-06-20T10:00:00.000Z' }),
+  );
+  // Backdate every artifact + the dir itself past the staleness window.
+  const old = new Date(Date.now() - 60 * 60 * 1000);
+  fs.utimesSync(path.join(deadDir, 'audit.json'), old, old);
+  fs.utimesSync(deadDir, old, old);
+
+  const { server, base } = await boot(fx.root);
+  t.after(() => server.close());
+
+  const runs = (await (await fetch(`${base}/api/scenarios/${fx.sid}/runs`)).json()).replays;
+  const deadRow = runs.find((r) => r.runId === deadRun);
+  assert.equal(deadRow.state, 'stale');
+
+  const detail = await (await fetch(`${base}/api/scenarios/${fx.sid}/runs/${deadRun}`)).json();
+  assert.equal(detail.status && detail.status.state, 'stale');
+
+  // Same shape, fresh — a run that just started and hasn't written
+  // status.json yet must still read 'running'.
+  const freshRun = '2026-06-24T16-30-00-000Z__cafebabe';
+  fs.mkdirSync(path.join(fx.root, fx.sid, 'replays', freshRun), { recursive: true });
+  const runs2 = (await (await fetch(`${base}/api/scenarios/${fx.sid}/runs`)).json()).replays;
+  assert.equal(runs2.find((r) => r.runId === freshRun).state, 'running');
+});
+
+test('GET /api/extension.zip downloads the bundled extension sources', async (t) => {
+  const fx = makeFixture();
+  const { server, base } = await boot(fx.root);
+  t.after(() => server.close());
+
+  const res = await fetch(`${base}/api/extension.zip`);
+  // In a repo checkout the sources resolve from <repo>/extension/.
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'application/zip');
+  assert.match(res.headers.get('content-disposition') || '', /agent-qa-extension\.zip/);
+  const buf = Buffer.from(await res.arrayBuffer());
+  assert.ok(buf.length > 500);
+  assert.deepEqual(buf.subarray(0, 4), Buffer.from('PK\x03\x04'));
+  // Central directory names carry the extension/ prefix; manifest is required for MV3.
+  assert.ok(buf.includes('extension/manifest.json'), 'zip contains extension/manifest.json');
+});
+
 test('serves the React app at /, /editor, /chat with hashed /assets', async (t) => {
   const fx = makeFixture();
   const { server, base } = await boot(fx.root);

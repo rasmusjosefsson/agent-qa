@@ -49,7 +49,7 @@ describe('CenterPane scenario controls', () => {
         sid: 's-stalled',
         runId: '2026-08-13T15-00-00-000Z__feedface',
         audit: { startedAt: '2020-01-01T00:00:00.000Z' },
-        status: null,
+        status: { state: 'running' },
         events: [],
       },
       scenarioDef: null,

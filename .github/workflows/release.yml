@@ -165,7 +165,11 @@ jobs:
           notes = m.group(1).strip() if m else "See CHANGELOG.md for what's in this release."
           open('release-notes.md', 'w').write(notes + "\n")
           PY
+      - name: package the browser extension
+        run: |
+          mkdir -p dist-assets
+          zip -qr dist-assets/agent-qa-extension.zip extension
       - name: create github release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --notes-file release-notes.md
+        run: gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --notes-file release-notes.md dist-assets/agent-qa-extension.zip

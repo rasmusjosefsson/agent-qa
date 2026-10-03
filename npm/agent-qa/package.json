@@ -24,6 +24,7 @@
     "bin/",
     "lib/",
     "skills/",
+    "extension/",
     "README.md"
   ],
   "dependencies": {

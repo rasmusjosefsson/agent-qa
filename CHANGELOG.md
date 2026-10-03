@@ -12,6 +12,10 @@ All notable changes to agent-qa are documented here. This project follows
   "record this page" works without re-stating the URL. The chat primer
   also teaches the agent to read the live URL itself
   (`agent-browser get url`) instead of asking.
+- The Chrome extension is downloadable without a repo checkout: the
+  workbench's Extensions page serves it as `/api/extension.zip` (the
+  sources ship inside the npm tarball), and each GitHub release attaches
+  `agent-qa-extension.zip`.
 
 ### Fixed
 
@@ -21,6 +25,12 @@ All notable changes to agent-qa are documented here. This project follows
   (they perform AND record) instead of performing a gesture with
   `agent-browser` and then guessing a `record-step` draft, and the
   `record-step` draft grammar (`on` locator, not `target`/`element`).
+- Run dirs minted without `status.json` (a replay that died during
+  startup) resolved `state: null`, so the Runs page showed "in flight"
+  — and the detail pane showed a phantom "Signing in…" banner —
+  forever. `runState` now falls back to freshest-artifact freshness:
+  nothing written within the staleness window → `stale` (interrupted),
+  and the sign-in banner is gated to genuinely live runs.
 - Workbench sidebar logo enlarged to 44px so the mark reads at the same
   height as the title text.
 - Chat right column: the recording steps panel now has a draggable divider
