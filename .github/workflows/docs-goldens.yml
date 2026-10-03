@@ -40,6 +40,26 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: pick changed doc pages
+        id: pick
+        run: |
+          BASE=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+          CHANGED=$(git diff --name-status "$BASE" HEAD)
+          echo "$CHANGED"
+          # Selective replay is only safe for pure content edits: added or
+          # removed pages change every page's sidebar, and site/evals/workflow
+          # changes can alter any page's chrome — those all take the full run.
+          if echo "$CHANGED" | grep -qE '^[ADR][0-9]*\s' || \
+             echo "$CHANGED" | grep -qE '^M\s+(site/|evals/docsite/|\.github/workflows/docs-goldens\.yml)'; then
+            echo "only=" >> "$GITHUB_OUTPUT"
+            echo "[pick] shared inputs changed — full replay"
+          else
+            SLUGS=$(echo "$CHANGED" | grep -oE '^M\s+docs/[a-zA-Z0-9/._-]+\.md$' | awk '{print $2}' | sed 's/\.md$//' | paste -sd, -)
+            echo "only=$SLUGS" >> "$GITHUB_OUTPUT"
+            echo "[pick] replaying only: ${SLUGS:-<all>}"
+          fi
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -74,6 +94,7 @@ jobs:
           AGENT_QA_EVAL_AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
           AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
           AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+          DOCS_ONLY: ${{ steps.pick.outputs.only }}
         run: bun docsite/run.ts
       - name: upload goldens evidence
         if: always()
