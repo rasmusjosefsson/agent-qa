@@ -39,7 +39,7 @@ use crate::browser;
 use crate::claims::{dispatch_check, CheckContext};
 use crate::env_ops;
 use crate::paths;
-use crate::scenario::{InputDecl, InputType, Locator, NameMatch, Scenario, Step};
+use crate::scenario::{ClaimSubject, InputDecl, InputType, Locator, NameMatch, Scenario, Step};
 use crate::schema;
 use crate::sidecar::{
     append_event, hash_scenario_bytes, mint_run_id, prepare_run_root, update_latest_pointer,
@@ -133,7 +133,9 @@ pub struct RunOptions {
     /// of stopping at the first one (the default). Later steps often
     /// cascade-fail from the broken page state, but a repair sweep wants
     /// the complete failure list in one run's events/audit rather than
-    /// re-running once per step.
+    /// re-running once per step. Golden (shot/domshot) misses never
+    /// abort regardless — the page still works; the drift is what
+    /// we're reporting.
     pub keep_going: bool,
 
     /// Pull this scenario's goldens from the configured `[baselines]`
@@ -1289,10 +1291,29 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                         },
                     );
                     first_failure.get_or_insert_with(|| format!("step {id}: {e}"));
-                    if !opts.keep_going {
+                    // A golden diff (shot/domshot claim) never aborts the
+                    // run — the page itself still works; continuing
+                    // exercises the rest of the flow and reports every
+                    // drift at once.
+                    let golden_miss = matches!(
+                        &patched_step,
+                        Step::Check { claim, .. }
+                            if matches!(
+                                claim.subject,
+                                ClaimSubject::Shot { .. } | ClaimSubject::Domshot { .. }
+                            )
+                    );
+                    if !opts.keep_going && !golden_miss {
                         break;
                     }
-                    eprintln!("[v2-replay] --keep-going: continuing after step {id}'s failure");
+                    eprintln!(
+                        "[v2-replay] continuing after step {id}'s failure ({})",
+                        if golden_miss {
+                            "golden miss"
+                        } else {
+                            "--keep-going"
+                        }
+                    );
                 }
             }
         }
@@ -3352,10 +3373,12 @@ replays/latest.txt.
                          patterns are left untouched — use inputs for
                          scenario-authored variability.
 --keep-going             Dispatch every step even after a failure
-                         (default: stop at the first). Later steps often
-                         cascade-fail from the broken page state, but a
-                         repair sweep wants the complete failure list in
-                         one run's audit rather than one re-run per step.
+                         (default: stop at the first non-golden failure —
+                         shot/domshot misses always continue). Later
+                         steps often cascade-fail from the broken page
+                         state, but a repair sweep wants the complete
+                         failure list in one run's audit rather than one
+                         re-run per step.
 
 --junit [path]           Write the run's terminal step outcomes as JUnit
                          XML — one <testcase> per step. Bare flag writes

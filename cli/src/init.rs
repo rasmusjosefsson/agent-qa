@@ -133,7 +133,10 @@ jobs:
         id: publish
         if: failure() && github.event_name == 'pull_request'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Set a QA_COMMENT_TOKEN secret (a PAT) to get real inline video
+          # players in the drift comment — user tokens may upload
+          # attachments; the workflow token cannot.
+          GH_TOKEN: ${{ secrets.QA_COMMENT_TOKEN || secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -e
@@ -189,11 +192,24 @@ jobs:
           base="${{ github.server_url }}/${{ github.repository }}/blob/shot-diffs/$stamp"
           run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           body="**agent-qa golden drift** — shot claims differed from baseline. [Open the run]($run_url) — artifact \`agent-qa-runs\` has every step screenshot."$'\n\n'
+          # gh --attach uploads the mp4 as a user-attachment → GitHub
+          # renders a real video player inline — but the upload endpoint
+          # only accepts user tokens (PAT/OAuth), not the workflow's
+          # GITHUB_TOKEN (ghs_*). Attach only for user tokens; the default
+          # falls back to an inline gif + mp4 link.
+          attach_args=()
+          if gh pr comment --help 2>/dev/null | grep -q -- '--attach' && \
+             case "$GH_TOKEN" in ghp_*|github_pat_*|gho_*|ghu_*) true;; *) false;; esac; then attach_ok=1; else attach_ok=0; fi
           for sdir in "$staging"/*/; do
             sid=$(basename "$sdir")
             body+="### $sid"$'\n'
-            if [ -f "$stamp/$sid/run.gif" ]; then body+="![replay video]($base/$sid/run.gif?raw=1)"$'\n\n'; fi
-            for v in mp4 webm; do if [ -f "$stamp/$sid/run.$v" ]; then body+="[full video ($v)]($base/$sid/run.$v?raw=1)"$'\n\n'; break; fi; done
+            if [ "$attach_ok" = 1 ] && [ -f "$sdir/run.mp4" ]; then
+              body+="[replay video]($sdir/run.mp4)"$'\n\n'
+              attach_args+=(--attach "$sdir/run.mp4")
+            else
+              if [ -f "$stamp/$sid/run.gif" ]; then body+="![replay video]($base/$sid/run.gif?raw=1)"$'\n\n'; fi
+              for v in mp4 webm; do if [ -f "$stamp/$sid/run.$v" ]; then body+="[full video ($v)]($base/$sid/run.$v?raw=1)"$'\n\n'; break; fi; done
+            fi
             for d in "$sdir"*.diff.png; do
               shot=$(basename "$d" .diff.png)
               body+="**$shot** — baseline · actual · diff"$'\n\n'
@@ -203,7 +219,7 @@ jobs:
             done
           done
           body+="If this is the intended UI, comment \`goldens apply\` to re-mint the stored baselines — or approve the waiting \`goldens apply\` job below (previous versions stay in the store — \`agent-qa baselines revert <sid>\` rolls back). To fix instead, push a commit; replay reruns on the new head."
-          gh pr comment "$PR_NUMBER" --body "$body"
+          gh pr comment "$PR_NUMBER" --body "$body" "${attach_args[@]}"
           echo "## agent-qa golden drift" >> "$GITHUB_STEP_SUMMARY"
           echo "[Diff images + video]($base/) · [run]($run_url)" >> "$GITHUB_STEP_SUMMARY"
       - name: comment verdict on the PR

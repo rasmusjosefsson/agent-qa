@@ -1035,10 +1035,29 @@ fn check_shot(
         })?;
     }
     if a.dimensions() != b.dimensions() {
+        // No pixel compare across mismatched bounds — but still leave a
+        // visual diff for reviewers: pad both to the larger bounds with a
+        // loud fill and diff that, so the size change shows up in red.
+        let max_w = a.width().max(b.width());
+        let max_h = a.height().max(b.height());
+        let pad = |img: &image::RgbaImage| {
+            let mut out =
+                image::RgbaImage::from_pixel(max_w, max_h, image::Rgba([255, 0, 255, 255]));
+            image::imageops::overlay(&mut out, img, 0, 0);
+            out
+        };
+        let a_pad = pad(&a);
+        let b_pad = pad(&b);
+        let (_, diff_img) = crate::compare::screenshots::pixel_diff(&a_pad, &b_pad);
+        let diff_dir = run_dir.join("shots-diff");
+        std::fs::create_dir_all(&diff_dir).ok();
+        let diff_path = diff_dir.join(format!("{shot}.diff.png"));
+        let _ = diff_img.save(&diff_path);
         bail!(
-            "shot '{shot}' changed size — baseline {:?} vs current {:?}; re-mint with shot-accept if intentional",
+            "shot '{shot}' changed size — baseline {:?} vs current {:?}; re-mint with shot-accept if intentional — diff at {}",
             a.dimensions(),
-            b.dimensions()
+            b.dimensions(),
+            diff_path.display()
         );
     }
     let (frac, diff_img) = crate::compare::screenshots::pixel_diff(&a, &b);
@@ -3563,6 +3582,43 @@ mod tests {
         }))
         .unwrap();
         dispatch_check(&claim2, &ctx, &mut scope, None).unwrap();
+    }
+
+    #[test]
+    fn shot_claim_size_mismatch_still_writes_a_diff() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let sid_dir = tmp.path().join("scenario");
+        let run_dir = tmp.path().join("run");
+        fs::create_dir_all(sid_dir.join("baselines")).unwrap();
+        fs::create_dir_all(run_dir.join("screenshots")).unwrap();
+
+        // 4x4 baseline vs taller 4x6 current — bail on size, but the
+        // padded diff must still land so reviewers see the change.
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([255, 255, 255, 255]))
+            .save(sid_dir.join("baselines/s1.png"))
+            .unwrap();
+        image::RgbaImage::from_pixel(4, 6, image::Rgba([255, 255, 255, 255]))
+            .save(run_dir.join("screenshots/s1.png"))
+            .unwrap();
+
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "shot": "s1" },
+            "predicate": "matches"
+        }))
+        .unwrap();
+        let mut scope = ValueScope::default();
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: &sid_dir,
+            run_dir: Some(&run_dir),
+        };
+        let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
+        assert!(err.to_string().contains("changed size"), "got: {err}");
+        let diff = run_dir.join("shots-diff/s1.diff.png");
+        assert!(diff.is_file(), "padded diff should be written");
+        let img = crate::compare::screenshots::decode_png(&diff).unwrap();
+        assert_eq!(img.dimensions(), (4, 6));
     }
 
     #[test]
