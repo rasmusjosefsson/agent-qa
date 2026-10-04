@@ -2831,8 +2831,10 @@ fn scenario_runs_for_changed(root: &std::path::Path, sid: &str, changed: &[Strin
 /// Repo-relative changed paths: `git diff --name-only <ref>` in cwd.
 /// `ref` can be a sha, `origin/main`, `HEAD~3`, or a `a...b` range —
 /// whatever diff syntax the repo uses.
-fn changed_paths_from_git(git_ref: &str) -> Result<Vec<String>> {
+fn changed_paths_from_git(git_ref: &str, cwd: &Path) -> Result<Vec<String>> {
     let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(cwd)
         .args(["diff", "--name-only", git_ref])
         .output()
         .context("--changed-git: run git diff")?;
@@ -3148,10 +3150,13 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
                 let r = it
                     .next()
                     .ok_or_else(|| anyhow!("--changed-git requires a git ref"))?;
-                changed = Some(changed_paths_from_git(r)?);
+                changed = Some(changed_paths_from_git(r, &std::env::current_dir()?)?);
             }
             s if s.starts_with("--changed-git=") => {
-                changed = Some(changed_paths_from_git(&s["--changed-git=".len()..])?);
+                changed = Some(changed_paths_from_git(
+                    &s["--changed-git=".len()..],
+                    &std::env::current_dir()?,
+                )?);
             }
             "--watch" => watch = true,
             other => filtered.push(other.to_string()),
@@ -3807,6 +3812,34 @@ mod tests {
             flags.changed.as_deref(),
             Some(&["src/a.rs".to_string(), "docs/b.md".to_string()][..])
         );
+    }
+
+    #[test]
+    fn changed_git_lists_diff_paths_and_bails_on_bad_ref() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let git = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(st.success());
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "t@t"]);
+        git(&["config", "user.name", "t"]);
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/a.rs"), "1").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "init"]);
+        fs::write(root.join("src/a.rs"), "2").unwrap();
+        fs::write(root.join("docs.md"), "d").unwrap();
+        git(&["add", "."]);
+        let paths = changed_paths_from_git("HEAD", root).unwrap();
+        assert_eq!(paths, ["docs.md", "src/a.rs"]);
+        assert!(changed_paths_from_git("nonexistent-ref", root).is_err());
     }
 
     #[test]
