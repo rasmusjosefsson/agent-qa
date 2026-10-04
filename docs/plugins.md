@@ -31,8 +31,8 @@ parse JSON. A 10-line shell script is enough to be a valid plugin (see
 
 - `<kind>` — the extension point. The universal `ping` kind must be
   implemented by every plugin. Other kinds: `auth`, `session-policy`,
-  `setup-hook`, `heal-strategy`, `discovery-defaults`. (Per-kind payload
-  shapes land alongside each verb's port.)
+  `setup-hook`, `heal-strategy`, `discovery-defaults`, `resolve`.
+  (Per-kind payload shapes land alongside each verb's port.)
 - `<op>` — optional sub-operation for kinds that have multiple verbs (e.g.
   `auth probe` vs `auth login`). Currently no kind uses `<op>`; reserved for
   future use.
@@ -84,6 +84,50 @@ Flip side: the host (this build of agent-qa) refuses any plugin whose
 `ping` returns a `protocolVersion` higher than agent-qa's own
 `PROTOCOL_VERSION` (currently `1`). The user sees a clear error
 pointing at upgrading agent-qa or downgrading the plugin.
+
+## The `resolve` kind
+
+Optional **authoring-time** element resolution. When `smart-click` /
+`smart-fill` (or `agent-qa resolve`) miss every deterministic locator
+strategy, the page's interactive elements are lifted from the ARIA
+snapshot and handed to the plugin with the author's description.
+
+Request payload:
+
+```json
+{
+  "description": "the save button",
+  "role": "button",
+  "candidates": [
+    {"ref": "e13", "role": "button", "name": "Save draft",
+     "line": "button \"Save draft\" [disabled, ref=e13]"}
+  ]
+}
+```
+
+- `role` — the caller's preferred role (null when unspecified).
+- `candidates` — interactive snapshot nodes (preferred role first, capped
+  at 40). `ref` is the only handle guaranteed to hit that exact node;
+  `line` carries state flags (`[disabled]`, `[checked=true]`) as context.
+
+Response payload:
+
+```json
+{"ref": "e13", "confidence": 0.83}
+{"ref": null}
+```
+
+`ref` MUST echo one of the request's candidate refs — unknown refs are
+treated as no pick. `confidence` is optional and informational only; the
+plugin applies its own threshold and returns `{"ref": null}` below it.
+
+Resolution never reaches replay: the recorded step keeps the picked
+element's concrete role+name locator, so a scenario authored with a
+resolver replays identically without one. With no `resolve` plugin
+configured the fallback rung is skipped entirely.
+
+A reference implementation lives in `examples/plugins/resolve-choice/` —
+it adapts any choice-question decision endpoint via env config.
 
 ## Discovery
 

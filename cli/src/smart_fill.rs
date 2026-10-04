@@ -32,36 +32,75 @@ pub fn run(args: &[String]) -> Result<u8> {
         .clone()
         .unwrap_or_else(|| state.session.clone());
 
-    browser::find_role_act(
+    let fill = browser::find_role_act(
         &session,
         &opts.role,
         &opts.name,
         RoleAct::Fill,
         Some(&opts.value),
-    )
-    .with_context(|| {
-        format!(
-            "agent-browser find role {} fill --name {:?}",
-            opts.role, opts.name
-        )
-    })?;
+    );
+
+    // On a role+name miss, offer the description to a configured `resolve`
+    // plugin: it picks among the page's fields and we fill via snapshot ref.
+    // The recorded step keeps the pick's concrete role+name, so replay stays
+    // deterministic without the plugin.
+    let resolved = match fill {
+        Ok(()) => None,
+        Err(fill_err) => match crate::resolve::resolve_and_act(
+            &session,
+            &opts.name,
+            Some(&opts.role),
+            RoleAct::Fill,
+            Some(&opts.value),
+        ) {
+            Some(pick) => {
+                let conf = pick
+                    .confidence
+                    .map(|c| format!(" (confidence {c:.2})"))
+                    .unwrap_or_default();
+                eprintln!(
+                    "[smart-fill] miss {:?} resolved to {} {:?} via plugin{}",
+                    opts.name, pick.candidate.role, pick.candidate.name, conf
+                );
+                Some(pick.candidate)
+            }
+            None => {
+                return Err(anyhow::Error::new(fill_err)).with_context(|| {
+                    format!(
+                        "agent-browser find role {} fill --name {:?} (resolve fallback also missed)",
+                        opts.role, opts.name
+                    )
+                });
+            }
+        },
+    };
+
+    let (on_role, on_name) = resolved
+        .as_ref()
+        .map(|c| (c.role.clone(), c.name.clone()))
+        .unwrap_or_else(|| (opts.role.clone(), opts.name.clone()));
+    let intent = if resolved.is_some() {
+        format!("smart-fill {} (resolved)", opts.name)
+    } else {
+        format!("smart-fill {}", opts.name)
+    };
 
     if opts.record {
         let payload = json!({
-            "intent": format!("smart-fill {}", opts.name),
+            "intent": intent,
             "verb": "type",
-            "on": { "role": opts.role, "name": opts.name },
+            "on": { "role": on_role, "name": on_name },
             "value": { "from": "literal", "literal": opts.value },
         });
         match crate::record_step::record_draft(&mut state, StepKind::Do, &payload, &session)? {
             Some(row) => println!(
                 "filled {} (step {}) — role={} name={:?}",
-                opts.name, row.step_id, opts.role, opts.name
+                opts.name, row.step_id, on_role, on_name
             ),
             None => println!("filled {} — not recorded (recording paused)", opts.name),
         }
     } else {
-        println!("filled role={} name={:?}", opts.role, opts.name);
+        println!("filled role={} name={:?}", on_role, on_name);
     }
     Ok(0)
 }

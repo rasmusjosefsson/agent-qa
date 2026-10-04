@@ -67,6 +67,7 @@ mod record_setup;
 mod record_step;
 mod recorder_contract;
 mod recorder_state;
+mod resolve;
 mod run_auth;
 mod run_report;
 mod run_step;
@@ -156,6 +157,7 @@ fn main() -> ExitCode {
         "fill-unique" => fill_unique::run(rest),
         "smart-click" => smart_click::run(rest),
         "smart-fill" => smart_fill::run(rest),
+        "resolve" => resolve::run(rest),
         "heal-respond" => heal_respond::run(rest),
         "heal-promote" => heal_promote::run(rest),
         "heal-apply" => heal_apply::run(rest),
@@ -176,7 +178,7 @@ fn main() -> ExitCode {
         "notify" => notify::run(rest),
         _ => {
             eprintln!(
-                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, smart-fill, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, domshot-accept, layout-accept, baselines, run-report, init, ingest, mcp, migrate, compile, describe, mail, discover, totp, notify."
+                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, smart-fill, resolve, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, domshot-accept, layout-accept, baselines, run-report, init, ingest, mcp, migrate, compile, describe, mail, discover, totp, notify."
             );
             eprintln!("Run `agent-qa --help` for usage.");
             Ok(2)
@@ -331,6 +333,7 @@ Verbs:
   fill-unique <Label> --template <…>   Fill a unique-token field + record
   smart-click \"<name>\" [--role <r>]   Click by accessible name + auto-record
   smart-fill \"<name>\" <value> [--role <r>]  Fill a field by accessible name + auto-record
+  resolve \"<description>\" [--role <r>]    Ask the resolve plugin which element a description means
   heal-respond <sid> --step <id> (--value <…> | --reject)   Record a caller-driven heal
   heal-promote <sid> [--run <id>] [--steps <…>] [--apply]   Promote replay-side patches
   heal-apply <sid> --step <id> [--target-step <…>] [--dry-run]   Patch buffer in place
