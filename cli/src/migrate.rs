@@ -57,10 +57,23 @@ pub fn cli(args: &[String]) -> Result<u8> {
 
     let mut total_steps = 0usize;
     let mut total_skipped = 0usize;
+    let mut used_sids = std::collections::HashSet::new();
+    let mut collision = 1usize;
     for spec in &specs {
         let source =
             fs::read_to_string(spec).with_context(|| format!("read {}", spec.display()))?;
-        let converted = convert_file(spec, &source, &prefix);
+        let mut converted = convert_file(spec, &source, &prefix);
+        while !used_sids.insert(converted.sid.clone()) {
+            collision += 1;
+            converted.sid = format!(
+                "{}-{}",
+                converted
+                    .sid
+                    .trim_end_matches(|c: char| c.is_ascii_digit() || c == '-'),
+                collision
+            );
+            converted.scenario["id"] = serde_json::json!(converted.sid);
+        }
         total_steps += converted.step_count;
         total_skipped += converted.skipped.len();
         let status = if converted.skipped.is_empty() {
@@ -188,6 +201,13 @@ fn convert_file(path: &Path, source: &str, prefix: &str) -> Converted {
     let mut skipped: Vec<(usize, String)> = Vec::new();
     let mut current_test = String::new();
     let mut n = 0usize;
+    // `const x = page.locator('.a');` → later `x.click()` / `expect(x)` get
+    // the call text substituted so locator_of sees a normal locator.
+    let mut aliases: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let alias_re = Regex::new(
+        r#"\bconst\s+([A-Za-z_]\w*)\s*=\s*(?:await\s+)?((?:page|cy)\.[A-Za-z]+\s*\([^;]+\))"#,
+    )
+    .unwrap();
 
     let statements = statements_of(source);
     for (line_no, stmt) in statements {
@@ -200,7 +220,21 @@ fn convert_file(path: &Path, source: &str, prefix: &str) -> Converted {
             current_test = t;
             continue;
         }
-        if let Some(step) = map_statement(s, &reason, n) {
+        if let Some(m) = alias_re.captures(s) {
+            aliases.insert(m[1].to_string(), m[2].to_string());
+        }
+        let mut expanded = s.to_string();
+        for (name, call) in &aliases {
+            let dotted = Regex::new(&format!(r"\b{}\s*\.", regex::escape(name))).unwrap();
+            expanded = dotted
+                .replace_all(&expanded, format!("{call}."))
+                .into_owned();
+            let expect = Regex::new(&format!(r"(expect\(\s*){}", regex::escape(name))).unwrap();
+            expanded = expect
+                .replace_all(&expanded, format!("${{1}}{call}"))
+                .into_owned();
+        }
+        if let Some(step) = map_statement(&expanded, &reason, n) {
             n += 1;
             steps.push(step);
             continue;
@@ -259,7 +293,21 @@ fn statements_of(source: &str) -> Vec<(usize, String)> {
                 || t.starts_with("afterAll(")
                 || matches!(t, "});" | "})" | "}" | "{");
             if standalone {
-                out.push((start, t.to_string()));
+                // One-liner blocks (`test('x', () => { await page.goto('/'); });`)
+                // put the body on the header line — split it back out.
+                if let Some(pos) = t.find("=>") {
+                    let body = t[pos + 2..].trim_start().trim_start_matches('{').trim();
+                    let head = t[..pos + 2].trim_end().to_string();
+                    out.push((start, head));
+                    for piece in body.split(';') {
+                        let p = piece.trim();
+                        if !p.is_empty() {
+                            out.push((start, format!("{p};")));
+                        }
+                    }
+                } else {
+                    out.push((start, t.to_string()));
+                }
                 continue;
             }
         }
@@ -290,14 +338,22 @@ fn capture(pattern: &str, text: &str) -> Option<String> {
 /// expression in the statement.
 fn locator_of(s: &str, reason: &str) -> Option<Value> {
     if let Some(m) = Regex::new(
-        r#"getByRole\(\s*['"]([a-zA-Z]+)['"](?:\s*,\s*\{\s*name\s*:\s*['"]([^'"]+)['"])?"#,
+        r#"getByRole\(\s*['"]([a-zA-Z]+)['"](?:\s*,\s*\{\s*name\s*:\s*(['"][^'"]+['"]|/[^/]+/[a-z]*))?"#,
     )
     .ok()?
     .captures(s)
     {
         let role = m.get(1)?.as_str();
-        let name = m.get(2).map(|g| g.as_str());
-        return Some(role_loc(role, name));
+        let raw_name = m.get(2).map(|g| g.as_str());
+        return Some(match raw_name {
+            Some(n) if n.starts_with('/') => {
+                // "/save/i" → pattern "save" (flags dropped)
+                let inner = n[1..].split('/').next().unwrap_or("").to_string();
+                json!({ "role": role, "name": { "pattern": inner, "match": "regex" } })
+            }
+            Some(n) => role_loc(role, Some(n.trim_matches(|c| c == '\'' || c == '"'))),
+            None => role_loc(role, None),
+        });
     }
     for (getter, kind) in [
         ("getByTestId", "testId"),
@@ -342,8 +398,7 @@ fn ignorable(s: &str) -> bool {
         || s.starts_with("cy.wait(")
         || s.starts_with("await test.")
         || s.starts_with("test.use(")
-        || s.starts_with("test.describe")
-        || s.starts_with("test.skip")
+        || s.starts_with("test.")
         || s.contains("beforeEach(")
         || s.contains("afterEach(")
         || s.contains("beforeAll(")
@@ -429,6 +484,27 @@ fn map_statement(s: &str, reason: &str, n: usize) -> Option<Value> {
         return None;
     }
 
+    // keyboard input without a target locator — press/type onto body
+    if let Some(v) = capture(r#"page\.keyboard\.press\(\s*['"]([^'"]+)"#, s) {
+        return Some(do_step(
+            n,
+            "press",
+            format!("press {v}"),
+            &[("on", raw_loc("css", "body", reason)), ("value", lit(&v))],
+        ));
+    }
+    if let Some(v) = capture(
+        r#"page\.keyboard\.(?:type|insertText)\(\s*['"`]([^'"`]+)"#,
+        s,
+    ) {
+        return Some(do_step(
+            n,
+            "type",
+            format!("type {v:?}"),
+            &[("on", raw_loc("css", "body", reason)), ("value", lit(&v))],
+        ));
+    }
+
     // selector-free page actions
     if let Some(v) = capture(r#"page\.press\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)"#, s) {
         return Some(do_step(
@@ -443,6 +519,15 @@ fn map_statement(s: &str, reason: &str, n: usize) -> Option<Value> {
 
 fn map_assertion(s: &str, reason: &str, n: usize) -> Option<Value> {
     // URL assertions
+    if let Some(u) = capture(r#"toHaveURL\(\s*/([^/]+)/"#, s) {
+        return Some(check_step(
+            n,
+            format!("url matches /{u}/"),
+            json!({ "url": true }),
+            "matches",
+            Some(&u),
+        ));
+    }
     for pat in [
         r#"toHaveURL\(\s*['"`]([^'"`]+)"#,
         r#"cy\.url\(\)\.should\(\s*['"](?:include|contain)['"]\s*,\s*['"]([^'"]+)"#,
@@ -459,12 +544,17 @@ fn map_assertion(s: &str, reason: &str, n: usize) -> Option<Value> {
     }
     // .should('be.visible') / 'exist' / 'have.text' / 'contain'
     if let Some(loc) = locator_of(s, reason) {
+        // expect(...).not.<flag> inverts flag predicates exactly; negated
+        // text assertions have no schema predicate — report them instead of
+        // mapping wrong.
+        let neg = s.contains(".not.");
+        let flag = |pos: &'static str, negated: &'static str| if neg { negated } else { pos };
         if s.contains("toBeVisible") || s.contains("'be.visible'") || s.contains("\"be.visible\"") {
             return Some(check_step(
                 n,
                 "element visible".into(),
                 json!({ "element": loc }),
-                "isVisible",
+                flag("isVisible", "isHidden"),
                 None,
             ));
         }
@@ -473,7 +563,7 @@ fn map_assertion(s: &str, reason: &str, n: usize) -> Option<Value> {
                 n,
                 "element hidden".into(),
                 json!({ "element": loc }),
-                "isHidden",
+                flag("isHidden", "isVisible"),
                 None,
             ));
         }
@@ -482,7 +572,7 @@ fn map_assertion(s: &str, reason: &str, n: usize) -> Option<Value> {
                 n,
                 "element checked".into(),
                 json!({ "element": loc }),
-                "isChecked",
+                flag("isChecked", "isUnchecked"),
                 None,
             ));
         }
@@ -491,7 +581,7 @@ fn map_assertion(s: &str, reason: &str, n: usize) -> Option<Value> {
                 n,
                 "element enabled".into(),
                 json!({ "element": loc }),
-                "isEnabled",
+                flag("isEnabled", "isDisabled"),
                 None,
             ));
         }
@@ -500,7 +590,7 @@ fn map_assertion(s: &str, reason: &str, n: usize) -> Option<Value> {
                 n,
                 "element disabled".into(),
                 json!({ "element": loc }),
-                "isDisabled",
+                flag("isDisabled", "isEnabled"),
                 None,
             ));
         }
@@ -509,9 +599,55 @@ fn map_assertion(s: &str, reason: &str, n: usize) -> Option<Value> {
                 n,
                 "element exists".into(),
                 json!({ "element": loc }),
-                "exists",
+                flag("exists", "notExists"),
                 None,
             ));
+        }
+        if neg {
+            return None;
+        }
+        if let Some(v) = capture(r#"toHaveValue\(\s*['"`]([^'"`]*)"#, s) {
+            return Some(check_step(
+                n,
+                format!("value equals {v:?}"),
+                json!({ "element": loc, "ofKind": "value" }),
+                "equals",
+                Some(&v),
+            ));
+        }
+        if let Some(v) = capture(r#"toHaveCount\(\s*(\d+)"#, s) {
+            let mut st = check_step(
+                n,
+                format!("count equals {v}"),
+                json!({ "element": loc, "ofKind": "count" }),
+                "countEquals",
+                None,
+            );
+            st["claim"]["value"] = json!(v.parse::<u64>().unwrap_or(0));
+            return Some(st);
+        }
+        if let Some(a) = capture(r#"toHaveAttribute\(\s*['"]([^'"]+)"#, s) {
+            if let Some(v) = capture(
+                r#"toHaveAttribute\(\s*['"][^'"]+['"]\s*,\s*['"`]([^'"`]+)"#,
+                s,
+            ) {
+                return Some(check_step(
+                    n,
+                    format!("{a} equals {v:?}"),
+                    json!({ "element": loc, "ofKind": "attribute", "attribute": a }),
+                    "equals",
+                    Some(&v),
+                ));
+            }
+            if let Some(v) = capture(r#"toHaveAttribute\(\s*['"][^'"]+['"]\s*,\s*/([^/]+)/"#, s) {
+                return Some(check_step(
+                    n,
+                    format!("{a} matches /{v}/"),
+                    json!({ "element": loc, "ofKind": "attribute", "attribute": a }),
+                    "matches",
+                    Some(&v),
+                ));
+            }
         }
         for (pat, pred, intent) in [
             (r#"toHaveText\(\s*['"`]([^'"`]+)"#, "equals", "text equals"),
@@ -605,6 +741,33 @@ describe('login', () => {
         assert_eq!(steps[2]["on"]["raw"]["kind"], "text");
         assert_eq!(steps[3]["claim"]["predicate"], "contains");
         assert_eq!(steps[4]["claim"]["predicate"], "isVisible");
+    }
+
+    #[test]
+    fn negated_flags_invert() {
+        let src = "test('x', async ({ page }) => {\n  await expect(page.locator('#m')).not.toBeVisible();\n});\n";
+        let c = convert_file(Path::new("x.spec.ts"), src, "");
+        assert_eq!(c.scenario["steps"][0]["claim"]["predicate"], "isHidden");
+    }
+
+    #[test]
+    fn regex_role_name_maps_to_regex_match() {
+        let src = "test('x', async ({ page }) => {\n  await page.getByRole('button', { name: /save/i }).click();\n});\n";
+        let c = convert_file(Path::new("x.spec.ts"), src, "");
+        assert_eq!(c.scenario["steps"][0]["on"]["name"]["match"], "regex");
+        assert_eq!(c.scenario["steps"][0]["on"]["name"]["pattern"], "save");
+    }
+
+    #[test]
+    fn config_lines_and_hooks_dont_count_as_skipped() {
+        let src = "test.use({ storageState: 'auth.json' });\ntest.beforeEach(async ({ page }) => { await page.goto('/'); });\ntest.describe.configure({ mode: 'serial' });\ntest('x', async ({ page }) => {\n  await page.goto('/a');\n});\n";
+        let c = convert_file(Path::new("x.spec.ts"), src, "");
+        // hooks and config lines are ignored outright — they must not
+        // pollute the skip report (their bodies are setup, not the test).
+        assert!(c
+            .skipped
+            .iter()
+            .all(|(_, t)| !t.contains("test.use") && !t.contains("configure")));
     }
 
     #[test]
