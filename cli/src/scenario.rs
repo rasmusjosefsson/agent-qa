@@ -612,6 +612,20 @@ pub enum ClaimSubject {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         skip: Vec<String>,
     },
+    /// `{"layout": "<stepId>"}` — compare this run's element-geometry
+    /// capture for the named do-step (`<run>/layouts/<stepId>.json`)
+    /// against `baselines/<stepId>.layout.json`: every visible element's
+    /// bounding box keyed by a stable DOM path. Only predicate is
+    /// `matches` — pass when each baseline key exists in the run and its
+    /// rect moved at most `tolerance.px` (default 4) in any dimension,
+    /// with `tolerance.added`/`removed` counting tolerable key churn
+    /// (default 0). On a miss `<run>/layouts-diff/<stepId>.diff.json`
+    /// holds the moved/added/removed detail. Mint with `layout-accept`.
+    /// Structure-only matching: content/style drift the pixel shot
+    /// flags does not register here — layout answers "did things move".
+    Layout {
+        layout: String,
+    },
     /// `{"storage": "key"}` or `{"storage": {"key": "k", "scope":
     /// "local"|"session"}}` — assert on a web-storage entry. `exists`/
     /// `notExists` check key presence; string predicates compare the
@@ -1036,6 +1050,14 @@ pub struct Scenario {
     pub templates: Option<BTreeMap<String, Template>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub produced_by: Option<Provenance>,
+    /// Repo-relative globs that gate this scenario under
+    /// `replay --all --changed`/`--changed-git`: a scenario with
+    /// `onlyWhen` runs only when ≥1 changed path matches ≥1 glob;
+    /// scenarios without it always run. The cheap TurboSnap —
+    /// `onlyWhen: ["src/checkout/**"]` replays the checkout suite
+    /// only when checkout code moved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub only_when: Option<Vec<String>>,
 }
 
 /// `replay --base-url <origin>` retargeting: rewrite every absolute URL

@@ -157,17 +157,23 @@ pub(crate) fn decode_png(path: &Path) -> Result<RgbaImage> {
 /// pixelmatch's default 0.1 threshold makes).
 const AA_DELTA: i16 = 32;
 
-fn pixel_changed(a: &Rgba<u8>, b: &Rgba<u8>) -> bool {
+fn pixel_changed(a: &Rgba<u8>, b: &Rgba<u8>, aa_delta: i16) -> bool {
     (0..4)
         .map(|i| (a[i] as i16 - b[i] as i16).abs())
         .max()
         .unwrap_or(0)
-        > AA_DELTA
+        > aa_delta
 }
 
 /// Returns (differing-fraction, delta-map image). Delta map shows the
 /// baseline (`a`) faded to 50% greyscale; differing pixels are red.
 pub(crate) fn pixel_diff(a: &RgbaImage, b: &RgbaImage) -> (f64, RgbaImage) {
+    pixel_diff_with(a, b, AA_DELTA)
+}
+
+/// `pixel_diff` with a caller-chosen AA delta — the shot claim's
+/// `tolerance.preset`/`tolerance.aa` knobs land here.
+pub(crate) fn pixel_diff_with(a: &RgbaImage, b: &RgbaImage, aa_delta: i16) -> (f64, RgbaImage) {
     let (w, h) = a.dimensions();
     let total = (w as u64) * (h as u64);
     let mut diff = RgbaImage::new(w, h);
@@ -176,7 +182,7 @@ pub(crate) fn pixel_diff(a: &RgbaImage, b: &RgbaImage) -> (f64, RgbaImage) {
         for x in 0..w {
             let pa = a.get_pixel(x, y);
             let pb = b.get_pixel(x, y);
-            if pixel_changed(pa, pb) {
+            if pixel_changed(pa, pb, aa_delta) {
                 differing += 1;
                 diff.put_pixel(x, y, Rgba([255, 0, 0, 255]));
             } else {

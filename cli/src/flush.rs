@@ -100,6 +100,7 @@ pub(crate) fn assemble_scenario(state: &RecorderState) -> Result<serde_json::Val
         }),
         steps: state.steps.clone(),
         templates: None,
+        only_when: None,
         produced_by: Some(Provenance {
             producer: Producer::AgentRecorder,
             produced_at: Some(

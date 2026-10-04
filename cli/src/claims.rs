@@ -24,6 +24,7 @@
 //!     the latest match's JSON response body). All forms poll.
 //!   - `flag`: structured not-yet-implemented boundary.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -174,6 +175,9 @@ pub fn dispatch_check(
         ),
         ClaimSubject::Domshot { domshot, skip } => {
             check_domshot(domshot, skip, &claim.predicate, ctx)
+        }
+        ClaimSubject::Layout { layout } => {
+            check_layout(layout, &claim.predicate, claim.tolerance.as_ref(), ctx)
         }
 
         ClaimSubject::Dialog { dialog } => {
@@ -1008,17 +1012,42 @@ fn check_shot(
             current.display()
         );
     }
-    let tol = tolerance
+    // `tolerance.preset` = strict | balanced | relaxed — named presets
+    // over (pixels, aa) so a claim can say how sensitive the diff is
+    // without picking numbers. `tolerance.pixels`/`tolerance.aa`
+    // override the preset's value individually.
+    let (mut tol, mut aa) = match tolerance
+        .and_then(|t| t.get("preset"))
+        .and_then(|v| v.as_str())
+    {
+        None | Some("balanced") => (0.01, 32),
+        Some("strict") => (0.0, 16),
+        Some("relaxed") => (0.05, 64),
+        Some(other) => bail!(
+            "shot '{shot}' tolerance.preset {other:?} — expected strict, balanced, or relaxed"
+        ),
+    };
+    if let Some(v) = tolerance
         .and_then(|t| t.get("pixels"))
         .and_then(|v| v.as_f64())
-        .unwrap_or(0.01);
+    {
+        tol = v;
+    }
+    if let Some(v) = tolerance.and_then(|t| t.get("aa")).and_then(|v| v.as_i64()) {
+        aa = v as i16;
+    }
     let mut a = crate::compare::screenshots::decode_png(&baseline)?;
     let mut b = crate::compare::screenshots::decode_png(&current)?;
+    // Remember the clip origin (image px) so a shot-miss RCA can map the
+    // cropped diff region back to page CSS coordinates.
+    let mut clip_origin_img: (u32, u32) = (0, 0);
+    let full_img_w = b.width();
     if let Some(loc) = clip {
         // Crop BOTH images to the element's live box (CSS px → image px via
         // the screenshot's device-pixel scale). The rect is read now, at
         // claim time — keep the viewport pinned so record ≈ replay rects.
         let rect = clip_rect(ctx.session, loc, scope, b.width())?;
+        clip_origin_img = (rect.0, rect.1);
         a = crop_to_rect(&a, rect).with_context(|| {
             format!(
                 "shot '{shot}' clip rect {:?} outside baseline {:?}",
@@ -1048,7 +1077,7 @@ fn check_shot(
         };
         let a_pad = pad(&a);
         let b_pad = pad(&b);
-        let (_, diff_img) = crate::compare::screenshots::pixel_diff(&a_pad, &b_pad);
+        let (_, diff_img) = crate::compare::screenshots::pixel_diff_with(&a_pad, &b_pad, aa);
         let diff_dir = run_dir.join("shots-diff");
         std::fs::create_dir_all(&diff_dir).ok();
         let diff_path = diff_dir.join(format!("{shot}.diff.png"));
@@ -1060,7 +1089,7 @@ fn check_shot(
             diff_path.display()
         );
     }
-    let (frac, diff_img) = crate::compare::screenshots::pixel_diff(&a, &b);
+    let (frac, diff_img) = crate::compare::screenshots::pixel_diff_with(&a, &b, aa);
     if frac <= tol {
         return Ok(());
     }
@@ -1068,12 +1097,152 @@ fn check_shot(
     std::fs::create_dir_all(&diff_dir).ok();
     let diff_path = diff_dir.join(format!("{shot}.diff.png"));
     let _ = diff_img.save(&diff_path);
+    // RCA-lite: map the diff's pixel bounds back to CSS space and list the
+    // elements intersecting it — "which element moved" without a human
+    // squinting at the diff map. Best-effort: an eval failure never masks
+    // the underlying miss.
+    let rca_note = shot_rca(
+        ctx.session,
+        shot,
+        run_dir,
+        &diff_img,
+        clip_origin_img,
+        full_img_w,
+        frac,
+        tol,
+    );
     bail!(
-        "shot '{shot}' differs from baseline: {:.2}% pixels changed (tolerance {:.2}%) — diff at {}",
+        "shot '{shot}' differs from baseline: {:.2}% pixels changed (tolerance {:.2}%) — diff at {}{}",
         frac * 100.0,
         tol * 100.0,
-        diff_path.display()
+        diff_path.display(),
+        rca_note
     )
+}
+
+/// Shot-miss RCA-lite: find the diff map's red-pixel bounds, convert them
+/// to page CSS coordinates (accounting for a clip origin and the
+/// device-pixel scale), then ask the page which elements intersect that
+/// region — the "what moved" answer a reviewer otherwise has to eyeball
+/// off the diff. Writes `<run>/rca/<shot>.rca.json` with the suspect list
+/// (top-12 by intersection area, DOM-path key + rect + text snippet) and
+/// returns a short " — suspects: a, b, c" suffix for the claim error.
+/// Returns "" when no suspects are found or the eval fails.
+#[allow(clippy::too_many_arguments)]
+fn shot_rca(
+    session: &str,
+    shot: &str,
+    run_dir: &Path,
+    diff_img: &image::RgbaImage,
+    clip_origin_img: (u32, u32),
+    full_img_w: u32,
+    frac: f64,
+    tol: f64,
+) -> String {
+    // Bounding box of the diff map's red pixels (image px).
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (u32::MAX, u32::MAX, 0u32, 0u32);
+    let (w, h) = diff_img.dimensions();
+    for y in 0..h {
+        for x in 0..w {
+            let p = diff_img.get_pixel(x, y);
+            if p[0] == 255 && p[1] == 0 && p[2] == 0 && p[3] == 255 {
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+            }
+        }
+    }
+    if min_x > max_x {
+        return String::new();
+    }
+    let params = serde_json::json!({
+        "x": clip_origin_img.0 + min_x,
+        "y": clip_origin_img.1 + min_y,
+        "w": max_x - min_x + 1,
+        "h": max_y - min_y + 1,
+        "iw": full_img_w,
+    });
+    let js = format!(
+        r#"(() => {{
+  const P = {params};
+  const scale = window.innerWidth > 0 ? P.iw / window.innerWidth : 1;
+  const box = {{x: P.x / scale, y: P.y / scale, w: P.w / scale, h: P.h / scale}};
+  const keyOf = (e) => {{
+    const parts = [];
+    for (let n = e; n && n !== document.documentElement && parts.length < 8; n = n.parentElement) {{
+      let seg = n.tagName.toLowerCase();
+      if (n.id) seg += '#' + CSS.escape(n.id);
+      else if (typeof n.className === 'string' && n.className.trim()) {{
+        seg += '.' + n.className.trim().split(/\s+/).filter(Boolean).slice(0, 3).map(c => CSS.escape(c)).join('.');
+      }}
+      const same = n.parentElement ? Array.from(n.parentElement.children).filter(c => c.tagName === n.tagName) : [n];
+      if (same.length > 1) seg += ':nth(' + same.indexOf(n) + ')';
+      parts.unshift(seg);
+    }}
+    return parts.join('>');
+  }};
+  const inter = (a, b) => {{
+    const x = Math.max(a.x, b.x), y = Math.max(a.y, b.y);
+    const r = Math.min(a.x + a.w, b.x + b.w), t = Math.min(a.y + a.h, b.y + b.h);
+    return r > x && t > y ? (r - x) * (t - y) : 0;
+  }};
+  const out = [];
+  for (const el of document.querySelectorAll('body *')) {{
+    if (el.closest('[id^="__qa_"]')) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) continue;
+    const area = inter(box, {{x: r.x, y: r.y, w: r.width, h: r.height}});
+    if (area <= 0) continue;
+    const text = (el.textContent || '').trim().slice(0, 80);
+    out.push({{k: keyOf(el), area, x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height), text}});
+  }}
+  // Suspects ranked by how much of the element sits inside the diff
+  // (most-specific first), then by absolute overlap.
+  out.sort((a, b) => (b.area / (b.w * b.h)) - (a.area / (a.w * a.h)) || b.area - a.area);
+  const suspects = out.slice(0, 12).map(s => ({{...s, area: Math.round(s.area)}}));
+  return JSON.stringify({{diffBoxCss: {{x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.w), h: Math.round(box.h)}}, suspects}});
+}})()"#
+    );
+    let suspects: Vec<Json> = match browser::eval_expression(session, &js) {
+        Ok(raw) => {
+            let text: String =
+                serde_json::from_str(raw.trim()).unwrap_or_else(|_| raw.trim().to_string());
+            match serde_json::from_str::<Json>(&text) {
+                Ok(doc) => {
+                    let report = serde_json::json!({
+                        "shot": shot,
+                        "pixelFrac": frac,
+                        "tolerance": tol,
+                        "diffBoxCss": doc.get("diffBoxCss").cloned().unwrap_or(Json::Null),
+                        "suspects": doc.get("suspects").cloned().unwrap_or(Json::Null),
+                    });
+                    let rca_dir = run_dir.join("rca");
+                    std::fs::create_dir_all(&rca_dir).ok();
+                    let rca_path = rca_dir.join(format!("{shot}.rca.json"));
+                    let _ = std::fs::write(
+                        &rca_path,
+                        serde_json::to_string_pretty(&report).unwrap_or_default(),
+                    );
+                    doc.get("suspects")
+                        .and_then(|s| s.as_array())
+                        .cloned()
+                        .unwrap_or_default()
+                }
+                Err(_) => Vec::new(),
+            }
+        }
+        Err(_) => Vec::new(),
+    };
+    if suspects.is_empty() {
+        return String::new();
+    }
+    let top: Vec<String> = suspects
+        .iter()
+        .filter_map(|s| s.get("k").and_then(|k| k.as_str()).map(str::to_string))
+        .take(3)
+        .collect();
+    format!(" — suspects: {}", top.join(", "))
 }
 
 /// `{"domshot": "<stepId>"}` — compare the run's ARIA snapshot for that
@@ -1139,6 +1308,131 @@ fn check_domshot(
     let _ = std::fs::write(&diff_path, &diff);
     bail!(
         "domshot '{domshot}' differs from baseline ({changed} changed lines) — diff at {} ; re-mint with domshot-accept if the change is intentional",
+        diff_path.display()
+    )
+}
+
+/// `{"layout": "<stepId>"}` — compare the run's element-geometry capture
+/// (`<run>/layouts/<stepId>.json`, a flat key→rect map of every visible
+/// element's bounding box keyed by a stable DOM path) against
+/// `baselines/<stepId>.layout.json`. Only `matches`: every baseline key
+/// must exist in the run and each of x/y/w/h may drift at most
+/// `tolerance.px` (default 4). Keys appearing/disappearing are added/
+/// removed churn, tolerated up to `tolerance.added`/`tolerance.removed`
+/// counts (default 0); `tolerance.moved` bounds how many keys may move
+/// before failing (default 0). On a miss the moved/added/removed detail
+/// lands at `<run>/layouts-diff/<stepId>.diff.json`. Mint baselines with
+/// `layout-accept`.
+fn check_layout(
+    layout: &str,
+    predicate: &Predicate,
+    tolerance: Option<&BTreeMap<String, serde_json::Value>>,
+    ctx: &CheckContext,
+) -> Result<()> {
+    if *predicate != Predicate::Matches {
+        bail!("layout subject only supports predicate 'matches', got '{predicate:?}'");
+    }
+    let run_dir = ctx
+        .run_dir
+        .ok_or_else(|| anyhow!("layout claim needs a replay run (not available via run-step)"))?;
+    let baseline = ctx
+        .scenario_dir
+        .join("baselines")
+        .join(format!("{layout}.layout.json"));
+    if !baseline.is_file() {
+        bail!(
+            "no baseline for layout '{layout}' at {} — mint one with: agent-qa layout-accept <sid> --steps {layout}",
+            baseline.display()
+        );
+    }
+    let current = run_dir.join("layouts").join(format!("{layout}.json"));
+    if !current.is_file() {
+        bail!(
+            "no layout capture for step '{layout}' in this run ({}) — check the step id and that sidecars are on",
+            current.display()
+        );
+    }
+
+    #[derive(serde::Deserialize)]
+    struct LayoutDoc {
+        els: Vec<LayoutEl>,
+    }
+    #[derive(serde::Deserialize, serde::Serialize, Clone)]
+    struct LayoutEl {
+        k: String,
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    }
+    let read_doc = |p: &std::path::Path| -> Result<BTreeMap<String, LayoutEl>> {
+        let doc: LayoutDoc = serde_json::from_slice(&std::fs::read(p)?)
+            .with_context(|| format!("layout capture {} is not valid JSON", p.display()))?;
+        Ok(doc.els.into_iter().map(|e| (e.k.clone(), e)).collect())
+    };
+    let base_map = read_doc(&baseline)?;
+    let run_map = read_doc(&current)?;
+
+    let tol_px = |k: &str, d: f64| -> f64 {
+        tolerance
+            .and_then(|t| t.get(k))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(d)
+    };
+    let px = tol_px("px", 4.0);
+    let allow_added = tol_px("added", 0.0) as usize;
+    let allow_removed = tol_px("removed", 0.0) as usize;
+    let allow_moved = tol_px("moved", 0.0) as usize;
+
+    let mut moved: Vec<serde_json::Value> = Vec::new();
+    let mut added: Vec<String> = Vec::new();
+    let mut removed: Vec<String> = Vec::new();
+    for (k, a) in &base_map {
+        match run_map.get(k) {
+            None => removed.push(k.clone()),
+            Some(b) => {
+                let d = [
+                    (b.x - a.x).abs(),
+                    (b.y - a.y).abs(),
+                    (b.w - a.w).abs(),
+                    (b.h - a.h).abs(),
+                ];
+                if d.iter().any(|v| *v > px) {
+                    moved.push(serde_json::json!({
+                        "key": k,
+                        "baseline": {"x": a.x, "y": a.y, "w": a.w, "h": a.h},
+                        "current": {"x": b.x, "y": b.y, "w": b.w, "h": b.h},
+                        "delta": d,
+                    }));
+                }
+            }
+        }
+    }
+    for k in run_map.keys() {
+        if !base_map.contains_key(k) {
+            added.push(k.clone());
+        }
+    }
+    if moved.len() <= allow_moved && added.len() <= allow_added && removed.len() <= allow_removed {
+        return Ok(());
+    }
+    let diff_dir = run_dir.join("layouts-diff");
+    std::fs::create_dir_all(&diff_dir).ok();
+    let diff_path = diff_dir.join(format!("{layout}.diff.json"));
+    let _ = std::fs::write(
+        &diff_path,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "px": px,
+            "moved": moved,
+            "added": added,
+            "removed": removed,
+        }))?,
+    );
+    bail!(
+        "layout '{layout}' differs from baseline ({} moved, {} added, {} removed; px={px}) — diff at {} ; re-mint with layout-accept if the change is intentional",
+        moved.len(),
+        added.len(),
+        removed.len(),
         diff_path.display()
     )
 }
@@ -3679,6 +3973,233 @@ mod tests {
         assert_eq!(c2.dimensions(), (2, 2));
         // Empty rect → hard error.
         assert!(crop_to_rect(&img, (0, 0, 0, 5)).is_err());
+    }
+
+    #[test]
+    fn shot_tolerance_preset_sets_pixels_and_aa() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let sid_dir = tmp.path().join("scenario");
+        let run_dir = tmp.path().join("run");
+        fs::create_dir_all(sid_dir.join("baselines")).unwrap();
+        fs::create_dir_all(run_dir.join("screenshots")).unwrap();
+
+        // 16x16 baseline; current differs in ONE pixel by delta 20
+        // (255→235): inside balanced AA (32) → invisible, outside strict
+        // AA (16) → a 0.39% diff that strict's pixels=0 rejects.
+        let a = image::RgbaImage::from_pixel(16, 16, image::Rgba([255, 255, 255, 255]));
+        a.save(sid_dir.join("baselines/s1.png")).unwrap();
+        let mut b = a.clone();
+        b.put_pixel(0, 0, image::Rgba([235, 235, 235, 255]));
+        b.save(run_dir.join("screenshots/s1.png")).unwrap();
+
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: &sid_dir,
+            run_dir: Some(&run_dir),
+        };
+        let mut scope = ValueScope::default();
+
+        // balanced (default): AA swallows the delta → pass.
+        let balanced: Claim = serde_json::from_value(json!({
+            "subject": { "shot": "s1" }, "predicate": "matches"
+        }))
+        .unwrap();
+        dispatch_check(&balanced, &ctx, &mut scope, None).unwrap();
+        let explicit: Claim = serde_json::from_value(json!({
+            "subject": { "shot": "s1" }, "predicate": "matches",
+            "tolerance": { "preset": "balanced" }
+        }))
+        .unwrap();
+        dispatch_check(&explicit, &ctx, &mut scope, None).unwrap();
+
+        // strict: aa=16 counts the delta and pixels=0 rejects the frac.
+        let strict: Claim = serde_json::from_value(json!({
+            "subject": { "shot": "s1" }, "predicate": "matches",
+            "tolerance": { "preset": "strict" }
+        }))
+        .unwrap();
+        let err = dispatch_check(&strict, &ctx, &mut scope, None).unwrap_err();
+        assert!(err.to_string().contains("pixels changed"), "got: {err}");
+
+        // tolerance.pixels overrides the preset's own value: relaxed
+        // preset + pixels:0 still fails on a counted pixel.
+        let override_claim: Claim = serde_json::from_value(json!({
+            "subject": { "shot": "s1" }, "predicate": "matches",
+            "tolerance": { "preset": "relaxed", "pixels": 0, "aa": 100 }
+        }))
+        .unwrap();
+        // aa:100 swallows delta 20 → zero differing pixels → pass.
+        dispatch_check(&override_claim, &ctx, &mut scope, None).unwrap();
+
+        // Unknown preset → hard error naming the valid set.
+        let bad: Claim = serde_json::from_value(json!({
+            "subject": { "shot": "s1" }, "predicate": "matches",
+            "tolerance": { "preset": "snug" }
+        }))
+        .unwrap();
+        let err = dispatch_check(&bad, &ctx, &mut scope, None).unwrap_err();
+        assert!(err.to_string().contains("preset"), "got: {err}");
+    }
+
+    // ---------- layout claims ----------
+
+    fn layout_doc(els: &[(&str, f64, f64, f64, f64)]) -> String {
+        let els: Vec<Json> = els
+            .iter()
+            .map(|(k, x, y, w, h)| json!({"k": k, "x": x, "y": y, "w": w, "h": h}))
+            .collect();
+        serde_json::to_string(&json!({"v": 1, "vw": 800, "vh": 600, "els": els})).unwrap()
+    }
+
+    #[test]
+    fn layout_claim_passes_identical_flags_moved_and_writes_diff() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let sid_dir = tmp.path().join("scenario");
+        let run_dir = tmp.path().join("run");
+        fs::create_dir_all(sid_dir.join("baselines")).unwrap();
+        fs::create_dir_all(run_dir.join("layouts")).unwrap();
+
+        let doc = layout_doc(&[
+            ("body>div#card", 10.0, 20.0, 300.0, 100.0),
+            ("body>div#card>button", 20.0, 60.0, 80.0, 30.0),
+        ]);
+        fs::write(sid_dir.join("baselines/s1.layout.json"), &doc).unwrap();
+        fs::write(run_dir.join("layouts/s1.json"), &doc).unwrap();
+
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: &sid_dir,
+            run_dir: Some(&run_dir),
+        };
+        let mut scope = ValueScope::default();
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "layout": "s1" }, "predicate": "matches"
+        }))
+        .unwrap();
+        dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+
+        // Subject parses as the Layout arm.
+        match claim.subject {
+            ClaimSubject::Layout { ref layout } => assert_eq!(layout, "s1"),
+            _ => panic!("expected layout subject"),
+        }
+
+        // 2px move is inside the default px=4 → still passes.
+        let drifted = layout_doc(&[
+            ("body>div#card", 12.0, 20.0, 300.0, 100.0),
+            ("body>div#card>button", 20.0, 60.0, 80.0, 30.0),
+        ]);
+        fs::write(run_dir.join("layouts/s1.json"), &drifted).unwrap();
+        dispatch_check(&claim, &ctx, &mut scope, None).unwrap();
+
+        // 20px move → fail + layouts-diff JSON with the moved key.
+        let moved = layout_doc(&[
+            ("body>div#card", 30.0, 20.0, 300.0, 100.0),
+            ("body>div#card>button", 20.0, 60.0, 80.0, 30.0),
+        ]);
+        fs::write(run_dir.join("layouts/s1.json"), &moved).unwrap();
+        let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
+        assert!(err.to_string().contains("1 moved"), "got: {err}");
+        let diff = run_dir.join("layouts-diff/s1.diff.json");
+        assert!(diff.is_file());
+        let diff_doc: Json = serde_json::from_str(&fs::read_to_string(diff).unwrap()).unwrap();
+        assert_eq!(diff_doc["moved"][0]["key"], "body>div#card");
+    }
+
+    #[test]
+    fn layout_claim_added_removed_and_tolerance_counts() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let sid_dir = tmp.path().join("scenario");
+        let run_dir = tmp.path().join("run");
+        fs::create_dir_all(sid_dir.join("baselines")).unwrap();
+        fs::create_dir_all(run_dir.join("layouts")).unwrap();
+
+        fs::write(
+            sid_dir.join("baselines/s1.layout.json"),
+            layout_doc(&[
+                ("body>div#a", 0.0, 0.0, 10.0, 10.0),
+                ("body>div#b", 0.0, 20.0, 10.0, 10.0),
+            ]),
+        )
+        .unwrap();
+        // div#b removed, div#c added.
+        fs::write(
+            run_dir.join("layouts/s1.json"),
+            layout_doc(&[
+                ("body>div#a", 0.0, 0.0, 10.0, 10.0),
+                ("body>div#c", 0.0, 20.0, 10.0, 10.0),
+            ]),
+        )
+        .unwrap();
+
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: &sid_dir,
+            run_dir: Some(&run_dir),
+        };
+        let mut scope = ValueScope::default();
+        let strict: Claim = serde_json::from_value(json!({
+            "subject": { "layout": "s1" }, "predicate": "matches"
+        }))
+        .unwrap();
+        let err = dispatch_check(&strict, &ctx, &mut scope, None).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("1 added") && msg.contains("1 removed"),
+            "got: {msg}"
+        );
+
+        let lenient: Claim = serde_json::from_value(json!({
+            "subject": { "layout": "s1" }, "predicate": "matches",
+            "tolerance": { "added": 1, "removed": 1 }
+        }))
+        .unwrap();
+        dispatch_check(&lenient, &ctx, &mut scope, None).unwrap();
+    }
+
+    #[test]
+    fn layout_claim_bails_without_baseline_capture_or_wrong_predicate() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let sid_dir = tmp.path().join("scenario");
+        let run_dir = tmp.path().join("run");
+        fs::create_dir_all(&sid_dir).unwrap();
+        fs::create_dir_all(&run_dir).unwrap();
+        let ctx = CheckContext {
+            session: "s",
+            scenario_dir: &sid_dir,
+            run_dir: Some(&run_dir),
+        };
+        let mut scope = ValueScope::default();
+        let claim: Claim = serde_json::from_value(json!({
+            "subject": { "layout": "s1" }, "predicate": "matches"
+        }))
+        .unwrap();
+        let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
+        assert!(err.to_string().contains("layout-accept"), "got: {err}");
+
+        fs::create_dir_all(sid_dir.join("baselines")).unwrap();
+        fs::write(
+            sid_dir.join("baselines/s1.layout.json"),
+            layout_doc(&[("body>div#a", 0.0, 0.0, 10.0, 10.0)]),
+        )
+        .unwrap();
+        let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
+        assert!(err.to_string().contains("no layout capture"), "got: {err}");
+
+        let wrong_pred: Claim = serde_json::from_value(json!({
+            "subject": { "layout": "s1" }, "predicate": "equals"
+        }))
+        .unwrap();
+        let err = dispatch_check(&wrong_pred, &ctx, &mut scope, None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("only supports predicate 'matches'"),
+            "got: {err}"
+        );
     }
 
     // ---------- domshot claims ----------

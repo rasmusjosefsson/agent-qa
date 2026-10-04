@@ -123,6 +123,7 @@ fn ingest_bundle(bundle: &Json, sid: Option<String>, source_ref: &str) -> Result
         env,
         steps,
         templates: None,
+        only_when: None,
         produced_by: Some(Provenance {
             producer: Producer::AutomatedCapture,
             produced_at: Some(

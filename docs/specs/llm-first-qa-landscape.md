@@ -121,29 +121,29 @@ deterministic version fits here:
     paint over dynamic elements (dates, ads, carousels) before capture on both
     sides so they can never diff. Ours would be a `mask: [locators]` option on
     shot claims — deterministic, no AI ignore needed.
-14. **Diff RCA-lite (Applitools)** — Eyes stores the DOM+CSS with each
-    checkpoint so clicking a diff pixel names the element whose style changed.
-    We already have domshot baselines beside shots: on a shot miss, correlate
-    the changed region with the DOM diff so the drift comment says "div.hero
-    background changed" instead of just showing red pixels. Medium effort,
-    high signal for review UX.
-15. **Floating regions + layout-level matching (Applitools)** — Layout match
-    level compares element positions, ignoring content/style; floating regions
-    tolerate an element moving within a range. A `ofKind:"layout"` diff over
-    bounding boxes would serve docs-page golden suites where content churns
-    but structure must hold. Heavier; domshot already covers a textual version.
+14. **Diff RCA-lite (Applitools)** — SHIPPED: on a shot miss the runner maps
+    the diff map's red-pixel bounds back to CSS space and lists the elements
+    intersecting it — `<run>/rca/<stepId>.rca.json` plus the top suspects in
+    the claim error ("suspects: body>div#card>button"). A miss now says what
+    moved, not just that red pixels exist.
+15. **Floating regions + layout-level matching (Applitools)** — SHIPPED as
+    `{"layout": "<stepId>"}` claims: a `layouts/` sidecar captures every
+    visible element's bounding box keyed by a stable DOM path; the claim diffs
+    it against `baselines/<stepId>.layout.json` with `tolerance.px` (default 4)
+    plus `moved`/`added`/`removed` churn budgets — the floating-region budget
+    as counts. Mint with `layout-accept`.
 16. **Flake score per scenario (Argos)** — flaky badges, stability %, history
     per test from replay history. Our `audit` already keeps runs; a stability
     column in `audit stats` / run-report is a small rollup over data we own.
-17. **Change-scoped re-snapshotting (Chromatic TurboSnap)** — only re-snapshot
-    what the commit's changes can affect, via git diff + dependency graph; the
-    rest copy baselines forward. We just shipped the docs-only version
-    (DOCS_ONLY selective replay); the generalization is a per-scenario
-    `only_when` glob mapping replay coverage to changed paths — config-driven,
-    no dep graph needed.
-18. **Per-snapshot diff sensitivity presets (Percy)** — Strict→Relaxed
-    presets over diff sensitivity. Our `tolerance.pixels` + AA delta already
-    parameterize this; named presets would just be UX sugar.
+17. **Change-scoped re-snapshotting (Chromatic TurboSnap)** — SHIPPED as
+    `onlyWhen` + `replay --all --changed <file>` / `--changed-git <ref>`:
+    a scenario whose globs match no changed path skips (SKIP row in
+    `--report`, not a failure); scenarios without `onlyWhen` always run.
+    Config-driven, no dep graph.
+18. **Per-snapshot diff sensitivity presets (Percy)** — SHIPPED as
+    `tolerance.preset`: `strict` (pixels 0 / aa 16), `balanced` (0.01 / 32 —
+    the default), `relaxed` (0.05 / 64). `tolerance.pixels`/`tolerance.aa`
+    override the preset individually.
 
 Non-goals learned from the field: don't adopt AI-tuned diffing (opaque in a
 gate), don't abandon stored scenarios for pure intent-execution (unreviewable),

@@ -29,7 +29,12 @@
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/Template" }
     },
-    "producedBy": { "$ref": "#/$defs/Provenance" }
+    "producedBy": { "$ref": "#/$defs/Provenance" },
+    "onlyWhen": {
+      "type": "array",
+      "items": { "type": "string" },
+      "$comment": "Repo-relative globs gating this scenario under `replay --all --changed`/`--changed-git` — runs only when ≥1 changed path matches ≥1 glob. Scenarios without it always run."
+    }
   },
   "$defs": {
     "Name": {
@@ -305,6 +310,15 @@
             }
           },
           "$comment": "domshot subject — structural text diff: compares <run>/snapshots/<stepId>.txt (the per-step ARIA sidecar) against <scenario>/baselines/<stepId>.snap.txt. Only predicate is 'matches'; pass when both are identical after normalization (@eN refs collapse to @e; lines matching a 'skip' regex are dropped from both sides). Unified diffs write to <run>/domshots-diff/. Mint baselines with domshot-accept."
+        },
+        {
+          "type": "object",
+          "required": ["layout"],
+          "additionalProperties": false,
+          "properties": {
+            "layout": { "type": "string", "minLength": 1 }
+          },
+          "$comment": "layout subject — element-geometry diff: compares <run>/layouts/<stepId>.json (a flat key→rect map of every visible element's bounding box keyed by a stable DOM path) against <scenario>/baselines/<stepId>.layout.json. Only predicate is 'matches'; every baseline key must exist in the run and each of x/y/w/h may drift at most tolerance.px (default 4). tolerance.added/removed/moved bound tolerable key churn (default 0). Diff detail writes to <run>/layouts-diff/. Mint baselines with layout-accept. Structure-only: answers 'did things move' — color/text drift needs a shot claim."
         },
         {
           "type": "object",
