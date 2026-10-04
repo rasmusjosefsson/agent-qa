@@ -8,6 +8,14 @@ given, which makes authoring-time element picking fast and deterministic.
 
 ## Wire it up
 
+**Easiest — the workbench:** `agent-qa web` → **Extensions** →
+**Element resolution → Jev (typesafe.ai)** → paste your API key →
+**Save & enable**. This binary ships inside the `agent-qa` package, so
+the server registers it and stores the key in `_config/jev.json` for
+every workbench-spawned call (chat agent, editor, replay).
+
+**From the CLI:**
+
 ```toml
 # agent-qa.toml
 [plugins]
@@ -16,6 +24,8 @@ resolve = "/path/to/examples/plugins/jev-resolve/agent-qa-plugin-jev-resolve"
 
 ```sh
 export TYPESAFE_API_KEY="…"   # console.typesafe.ai → API keys
+                              # shell env, CI secret (GitHub Actions), or vault —
+                              # the key never lives in git
 # optional overrides:
 export RESOLVE_MODEL="jev-latest"           # default
 export RESOLVE_MIN_CONFIDENCE=0.5           # default

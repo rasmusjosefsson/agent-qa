@@ -26,6 +26,9 @@
 | `smart-click "<accessible-name>"` | Clicks a target and appends a direct do draft. |
 | `fill-unique <label> --template <template>` | Fills a unique value and appends a direct type draft. |
 | `smart-fill "<accessible-name>" <value>` | Types a literal value into a field by accessible name and appends a direct `do/type` draft. |
+| `smart-assert "<description>"` | Verifies an element claim live and records a `check` draft; fuzzy descriptions resolve via the `resolve` plugin. |
+| `smart-hover "<description>"` | Hovers an element by description and records a `do/hover` draft. |
+| `smart-select "<description>" --value "<option>"` | Picks an option in a combobox by description and records a `do/select` draft. |
 | `verify [--fix]` | Checks the active recording buffer (dense ids + sidecar pairing); `--fix` renumbers ids and moves sidecars in place. |
 
 Only `do` and `check` drafts are accepted.

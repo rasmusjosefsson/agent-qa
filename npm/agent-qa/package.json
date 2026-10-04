@@ -26,6 +26,7 @@
     "lib/",
     "skills/",
     "extension/",
+    "plugins-bundled/",
     "README.md"
   ],
   "dependencies": {
