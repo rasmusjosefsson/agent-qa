@@ -2192,11 +2192,21 @@ fn clear_shot_mask(session: &str) {
 /// JSON status, and a settled status ends the wait. Soft-fail: any error
 /// or timeout just stops waiting — artifact fidelity only.
 fn stabilize_visual(session: &str, cap_ms: u64) {
+    // Freeze dynamic media before settling: finite animations/transitions are
+    // finished (they land at their designed end state — a fade-in must not be
+    // caught at opacity 0), infinite ones are paused at t=0 (deterministic
+    // frame), and animated GIFs are swapped for a canvas snapshot of their
+    // current frame so nothing can repaint between the settle check and the
+    // capture.
+    let _ = browser::eval_expression(
+        session,
+        "(() => { try { for (const a of document.getAnimations ? document.getAnimations() : []) { try { a.finish(); } catch (e) { try { a.currentTime = 0; a.pause(); } catch (e2) {} } } } catch (e) {} for (const im of Array.from(document.images || [])) { const src = im.currentSrc || im.src || ''; if (!/\\.gif(\\?|#|$)/i.test(src)) continue; try { const c = document.createElement('canvas'); c.width = im.naturalWidth; c.height = im.naturalHeight; if (c.width && c.height) { c.getContext('2d').drawImage(im, 0, 0); im.src = c.toDataURL('image/png'); } } catch (e) {} } })()",
+    );
     let deadline = Instant::now() + Duration::from_millis(cap_ms);
     loop {
         let status = browser::eval_expression(
             session,
-            "(() => { const imgs = Array.from(document.images || []).filter(i => !i.complete).length; return JSON.stringify({fonts: document.fonts ? document.fonts.status : 'loaded', imgs, ready: document.readyState}); })()",
+            "(() => { const imgs = Array.from(document.images || []).filter(i => !i.complete).length; return JSON.stringify({fonts: document.fonts ? document.fonts.status : 'loaded', imgs, ready: document.readyState, busy: document.querySelectorAll('[aria-busy=\"true\"]').length}); })()",
         );
         // In-flight fetches don't show up in readyState/images — a lazy data
         // load can still repaint after the screenshot. Require the session's
@@ -2214,6 +2224,7 @@ fn stabilize_visual(session: &str, cap_ms: u64) {
                         v.get("fonts").and_then(|f| f.as_str()) == Some("loaded")
                             && v.get("imgs").and_then(|i| i.as_u64()) == Some(0)
                             && v.get("ready").and_then(|r| r.as_str()) == Some("complete")
+                            && v.get("busy").and_then(|b| b.as_u64()) == Some(0)
                     })
                     .unwrap_or(false);
                 if settled && pending == 0 {
