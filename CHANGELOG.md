@@ -7,6 +7,12 @@ All notable changes to agent-qa are documented here. This project follows
 ## [Unreleased]
 ### Added
 
+- Auto-heal `resolve`-plugin rung — when a replay step's locator misses
+  and the deterministic strategy ladder finds no unique candidate, a
+  configured `resolve` plugin gets one last rung over the live
+  candidates of the step's role (`strategy: "plugin-resolve"` in
+  `heal.jsonl`). Opt-in via plugin config; plugin errors degrade to
+  no-pick; `AGENT_QA_NO_HEAL` disables it with the rest of auto-heal.
 - `agent-qa smart-assert` / `smart-hover` / `smart-select` — the same
   fuzzy-authoring ladder as smart-click/smart-fill (deterministic locators
   first, `resolve` plugin last), recording a concrete `check`/`hover`/

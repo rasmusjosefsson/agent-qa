@@ -99,6 +99,14 @@ pub fn is_locator_miss(err: &anyhow::Error) -> bool {
 
 /// Collect live role+name candidates and run the ladder. `Ok(None)` when the
 /// step has no healable locator or no strategy produced a unique match.
+///
+/// When every deterministic strategy misses, the OPTIONAL `resolve` plugin
+/// gets one rung: it sees the live snapshot candidates of the step's role
+/// and may pick the element the recorded name meant. A plugin pick heals
+/// like any strategy — the same audit row + heal-patch — under
+/// `strategy: "plugin-resolve"`. With no plugin configured the rung is
+/// skipped and behaviour is exactly as before; a spawn/transport failure
+/// degrades to a warn + unhealed so a broken plugin can't sink a replay.
 pub fn attempt(step: &Step, session: &str, scope: &mut ValueScope) -> Result<Option<Heal>> {
     let Some((loc, template)) = role_name_of(step) else {
         return Ok(None);
@@ -108,8 +116,12 @@ pub fn attempt(step: &Step, session: &str, scope: &mut ValueScope) -> Result<Opt
     let want = substitute_scenario_vars(&template, scope);
     let candidates =
         collect_role_names(session, &loc.role).context("collect live role+name candidates")?;
-    let Some((strategy, to)) = ladder(&want, &candidates) else {
-        return Ok(None);
+    let (strategy, to) = match ladder(&want, &candidates) {
+        Some((strategy, to)) => (strategy, to),
+        None => match plugin_resolve(session, &want, &loc.role) {
+            Some(to) => ("plugin-resolve", to),
+            None => return Ok(None),
+        },
     };
     let mut corrected = loc.clone();
     corrected.name = Some(NameMatch::Plain(to.clone()));
@@ -119,6 +131,21 @@ pub fn attempt(step: &Step, session: &str, scope: &mut ValueScope) -> Result<Opt
         to,
         locator: Locator::Role(corrected),
     }))
+}
+
+/// The ladder's last, optional rung: ask the configured `resolve` plugin to
+/// pick which live element of `role` the recorded name meant. Returns the
+/// picked accessible name, or None on no-plugin / no-pick / plugin error
+/// (warned on stderr — a dead resolver must not wedge or fail a replay).
+fn plugin_resolve(session: &str, want: &str, role: &str) -> Option<String> {
+    match crate::resolve::resolve_element_in_role(session, want, role) {
+        Ok(Some(pick)) => Some(pick.candidate.name),
+        Ok(None) => None,
+        Err(e) => {
+            eprintln!("auto-heal: resolve plugin failed (treated as no pick): {e}");
+            None
+        }
+    }
 }
 
 /// The step the runner re-dispatches after a heal — the recorded step with
