@@ -111,24 +111,23 @@ non-goal). Everything worth adopting lives on the compile-time side.
    deterministic parse, zero model in the gate. This is the scan's main
    recommendation.
 2. **Step-group includes** (Maestro `runFlow` / Gauge concepts / testRigor
-   rules) — `{"run": "subflows/login"}` or an `include:` step. Authored
-   composition: `login` written once, called from every scenario; failures
-   point at the caller's step. No equivalent exists in the Verb enum today.
-3. **Conditional step blocks** (Maestro `when:`) — `{"when": {"present":
-   "<locator>"}, steps: [...]}`: run the block only if the condition holds.
-   Deterministic branching for guards ("if logged out, sign in first"),
-   optional popups, region/state-dependent flows — the general mechanism
-   `dismiss` is a special case of.
-4. **Markdown test-plan artifact** (Playwright planner) — `discover`
-   already emits a route map; extend it (or an `agent-qa plan`) to a
-   reviewable `plan.md` — per-route *intent* (what to verify) that an agent
-   or `translate` materializes into scenarios. The plan is the human-
-   readable layer between exploration and code, and it's exactly what a
-   "describe your coverage in text" request should produce.
-5. **Data-row replay** (testRigor datasets, Robot templates) — a `rows:`/
-   `datafile:` (CSV/JSONL) binding replayed once per row over `{{vars.*}}`.
-   Cheap on top of existing substitution; unlocks the classic "same flow,
-   N inputs" case without duplicating scenarios.
+   rules) — **SHIPPED** as the `include` verb: `{"do":"include","params":
+   {"file":"<scenario-dir-relative path>"}}` inlines a `{"steps":[...]}`
+   (or bare array) file at flatten time — `login` written once, included
+   from every scenario, failures point at the flattened child ids.
+3. **Conditional step blocks** (Maestro `when:`) — **SHIPPED** (#525):
+   `{"do":"when","params":{"present"|"absent": <locator>, "steps":[...]}}`
+   plus the `runFor`/`skipFor`/`expectFailFor` profile gating wired onto
+   `--persona`/`--run-for`. Deterministic branching for persona-divergent
+   tails, guards, optional popups — the general mechanism `dismiss` is a
+   special case of.
+4. **Markdown test-plan artifact** (Playwright planner) — **SHIPPED**:
+   `discover` writes `plan.md` alongside the draft scenario — per-route
+   coverage bullets, the unmapped list with reasons, next steps.
+5. **Data-row replay** (testRigor datasets, Robot templates) — **SHIPPED**
+   as `replay --data <file.csv|.jsonl>`: one run per row, row fields bound
+   as `{{vars.<field>}}` input overrides, per-row run ids tagged
+   `data-row-N`, `DATA: x/y rows pass` + exit code on all-rows-green.
 
 ## Explicit non-adoptions
 
