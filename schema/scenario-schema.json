@@ -34,6 +34,20 @@
       "type": "array",
       "items": { "type": "string" },
       "$comment": "Repo-relative globs gating this scenario under `replay --all --changed`/`--changed-git` — runs only when ≥1 changed path matches ≥1 glob. Scenarios without it always run."
+    },
+    "quarantine": {
+      "oneOf": [
+        { "type": "boolean" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reason": { "type": "string" },
+            "until": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" }
+          }
+        }
+      ],
+      "$comment": "Opt-in containment — authored by hand, never auto-assigned. A quarantined run still executes and records failures (SUMMARY: FAIL — quarantined, QUAR-FAIL report rows, audit.quarantined) but exits 0. `until` (YYYY-MM-DD) expires the containment: past that date the run gates normally and lint errors. `reason` is linted when absent — quarantine is not a dumping ground."
     }
   },
   "$defs": {
@@ -464,6 +478,31 @@
             }
           },
           "$comment": "a11y claim subject — run an axe-core audit (agent-browser a11y) and count matching violations. exists/notExists on presence; numeric predicates compare the count. impact is a floor (minor<moderate<serious<critical); within scopes to a subtree; rule filters by axe rule id; incomplete also counts axe's incomplete results."
+        },
+        {
+          "type": "object",
+          "required": ["perf"],
+          "additionalProperties": false,
+          "properties": {
+            "perf": {
+              "oneOf": [
+                { "type": "string", "enum": ["fcp", "lcp", "cls", "tbt", "ttfb", "load"] },
+                {
+                  "type": "object",
+                  "required": ["metric"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "metric": {
+                      "type": "string",
+                      "enum": ["fcp", "lcp", "cls", "tbt", "ttfb", "load"]
+                    },
+                    "maxDwellMs": { "type": "integer", "minimum": 0 }
+                  }
+                }
+              ]
+            }
+          },
+          "$comment": "perf claim subject — read a Web Performance metric (Performance API + buffered observers). exists/notExists test presence (lcp with no paint is absent; cls/tbt report 0); numeric predicates compare the value (ms; cls is the unitless score). maxDwellMs bounds how long observer-buffered metrics wait for entries (default 1500)."
         }
       ]
     },
@@ -590,7 +629,8 @@
             "loop",
             "group",
             "useTemplate",
-            "mail"
+            "mail",
+            "totp"
           ]
         },
         "on": { "$ref": "#/$defs/Locator" },

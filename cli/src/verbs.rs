@@ -746,6 +746,7 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
             );
         }
         Verb::Mail => crate::mail::wait_message(params, scope, id).map(Some),
+        Verb::Totp => crate::totp::code_step(params, scope, id).map(Some),
         Verb::Upload => {
             let v = resolve_value(value.unwrap(), scope)?;
             let selector = upload_selector(on.unwrap(), scope)

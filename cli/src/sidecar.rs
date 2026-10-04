@@ -153,6 +153,11 @@ pub struct RunAudit {
     /// step (inclusive). `None` for full runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_until: Option<String>,
+    /// The scenario is quarantined and this run failed: exit code was
+    /// gated to 0 so the failure stays on record without failing the
+    /// gate. `None` for unquarantined or passing runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quarantined: Option<bool>,
 }
 
 impl RunAudit {
@@ -566,6 +571,7 @@ mod tests {
             heal_overrides_applied: None,
             auto_healed: None,
             tag: None,
+            quarantined: None,
             window_from: None,
             window_until: None,
         };

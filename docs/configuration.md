@@ -121,6 +121,24 @@ body. `timeoutMs` bounds the poll (default 30000); `to` and
 (useful for a per-test mailbox). Both mailpit (`/api/v1`) and
 mailhog (`/api/v2`) shapes are detected automatically.
 
+### `[notify]`
+
+Webhook alert sink — after each replay the runner POSTs the verdict
+to `url` (Slack-compatible JSON: `{text, sid, runId, verdict,
+summary, runDir, tag}`).
+
+```toml
+[notify]
+url = "https://hooks.slack.com/services/…"   # any JSON webhook
+on  = "failure"      # default: only when the gate fails;
+                     # "always" posts every run
+```
+
+Posting is best-effort — a failed POST warns on stderr and never
+changes the exit code. A quarantined failure passes the gate, so
+under `on = "failure"` it stays silent; under `"always"` it posts
+as `QUAR-FAIL`. Probe the wiring with `agent-qa notify test`.
+
 ## Personas and environments
 
 Credentialed replays draw from two record kinds under the scenarios

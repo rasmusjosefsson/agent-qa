@@ -44,6 +44,8 @@ pub(crate) struct ConfigFile {
     pub(crate) baselines: Option<BaselinesTable>,
     #[serde(default)]
     pub(crate) mail: Option<MailTable>,
+    #[serde(default)]
+    pub(crate) notify: Option<NotifyTable>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -99,6 +101,23 @@ pub(crate) fn mail_config() -> Option<(PathBuf, MailTable)> {
     let cwd = env::current_dir().ok()?;
     let (cfg_path, cfg) = load_config(&cwd)?;
     cfg.mail.map(|t| (cfg_path, t))
+}
+
+/// `[notify]` — the run-verdict alert sink. `url` is the webhook the
+/// finished run's verdict is POSTed to; `on` narrows when: "failure"
+/// (default) posts only non-pass runs, "always" posts every run.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct NotifyTable {
+    pub(crate) url: Option<String>,
+    pub(crate) on: Option<String>,
+}
+
+/// The `[notify]` section of the active `agent-qa.toml`.
+pub(crate) fn notify_config() -> Option<(PathBuf, NotifyTable)> {
+    let cwd = env::current_dir().ok()?;
+    let (cfg_path, cfg) = load_config(&cwd)?;
+    cfg.notify.map(|t| (cfg_path, t))
 }
 
 fn load_config(start: &Path) -> Option<(PathBuf, ConfigFile)> {

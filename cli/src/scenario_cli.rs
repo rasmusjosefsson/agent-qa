@@ -2196,6 +2196,16 @@ fn list_lint_rules(json_out: bool) -> Result<u8> {
             severity: "warning",
             description: "A do/wait step whose only condition is params.ms — a fixed delay flakes when the app is slow and idles when it is fast. Gate on the outcome instead: params.until/url/idle/locator.",
         },
+        Rule {
+            code: "quarantine-without-reason",
+            severity: "warning",
+            description: "Scenario is quarantined but gives no reason — quarantine is opt-in containment, not a dumping ground; write `quarantine: {\"reason\": \"...\", \"until\": \"YYYY-MM-DD\"}` so it can be reviewed and expire.",
+        },
+        Rule {
+            code: "quarantine-expired",
+            severity: "error",
+            description: "Scenario quarantine's `until` date has passed — the flag no longer silences failures; renew it deliberately or remove it.",
+        },
     ];
     if json_out {
         println!("{}", serde_json::to_string_pretty(&rules)?);
@@ -3031,6 +3041,35 @@ fn lint_findings(path: &Path) -> Result<(Vec<Finding>, Scenario)> {
                     });
                 }
             }
+        }
+    }
+
+    // 33) quarantine hygiene — the flag is opt-in containment, never a
+    // dumping ground: a reason documents *why* it is contained, and an
+    // expired `until` stops silencing AND lints an error so the flag
+    // gets renewed deliberately or removed.
+    if let Some(q) = &j.quarantine {
+        if q.active() && q.reason().is_none() {
+            findings.push(Finding {
+                severity: "warning",
+                code: "quarantine-without-reason",
+                message: "scenario is quarantined with no reason — add \
+                          quarantine.reason (and ideally an `until` date) \
+                          so the containment is reviewable"
+                    .into(),
+            });
+        }
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        if q.expired(&today) {
+            findings.push(Finding {
+                severity: "error",
+                code: "quarantine-expired",
+                message: format!(
+                    "quarantine until {} has passed — renew it or remove the flag; \
+                     it no longer silences failures",
+                    q.until().unwrap_or("")
+                ),
+            });
         }
     }
 

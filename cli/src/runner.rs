@@ -204,16 +204,29 @@ pub struct RunSummary {
     pub passed: u32,
     pub total: u32,
     pub ok: bool,
+    /// The scenario's `quarantine` flag is active: a failure here exits
+    /// 0 (the gate is not failed) while the failure stays on record.
+    /// `render` says "FAIL — quarantined" so the containment is visible
+    /// wherever the summary lands.
+    pub quarantined: bool,
 }
 
 impl RunSummary {
+    /// The run's gate decision — quarantine downgrades a failure to a
+    /// non-blocking exit while the summary/audit still record it.
+    pub fn gates_ok(&self) -> bool {
+        self.ok || self.quarantined
+    }
+
     pub fn render(&self) -> String {
-        format!(
-            "SUMMARY: {}/{} ({})",
-            self.passed,
-            self.total,
-            if self.ok { "PASS" } else { "FAIL" }
-        )
+        let verdict = if self.ok {
+            "PASS"
+        } else if self.quarantined {
+            "FAIL — quarantined"
+        } else {
+            "FAIL"
+        };
+        format!("SUMMARY: {}/{} ({})", self.passed, self.total, verdict)
     }
 }
 
@@ -628,6 +641,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         heal_overrides_applied: None,
         auto_healed: None,
         tag: opts.tag.clone(),
+        quarantined: None,
         window_from: None,
         window_until: None,
     };
@@ -785,10 +799,40 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     // Ids of steps the --from/--until window excluded — surfaced to --junit
     // as <skipped/> cases so CI sees the full scenario, not just the slice.
     let mut skipped_step_ids: Vec<String> = Vec::new();
+    // Quarantine: opt-in containment authored on the scenario itself
+    // (`quarantine: {"reason": "...", "until": "YYYY-MM-DD"}`). An
+    // expired `until` does NOT silence — the run gates normally and the
+    // expiry is warned so the flag gets renewed or removed.
+    let today = now_iso().get(..10).unwrap_or("").to_string();
+    let quarantined = scenario
+        .quarantine
+        .as_ref()
+        .map(|q| {
+            let active = q.active();
+            if active && q.expired(&today) {
+                eprintln!(
+                    "[v2-replay] quarantine expired {} — this run gates normally (renew or remove the flag)",
+                    q.until().unwrap_or("")
+                );
+            }
+            active && !q.expired(&today)
+        })
+        .unwrap_or(false);
+    if quarantined {
+        eprintln!(
+            "[v2-replay] quarantined (reason: {}) — failures are recorded but exit 0",
+            scenario
+                .quarantine
+                .as_ref()
+                .and_then(|q| q.reason())
+                .unwrap_or("(no reason given)")
+        );
+    }
     let mut summary = RunSummary {
         passed: 0,
         total: 0,
         ok: true,
+        quarantined,
     };
     let mut first_failure: Option<String> = None;
 
@@ -1412,7 +1456,10 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     }
     audit.finished_at = Some(now_iso());
     audit.summary = Some(summary_line.clone());
-    audit.exit_code = Some(if summary.ok { 0 } else { 1 });
+    audit.exit_code = Some(if summary.gates_ok() { 0 } else { 1 });
+    if !summary.ok && summary.quarantined {
+        audit.quarantined = Some(true);
+    }
     if opts.heal_from_run.is_some() {
         audit.heal_overrides_applied = Some(applied_overrides);
     }
@@ -1426,6 +1473,19 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         audit.window_until = Some(u.clone());
     }
     write_run_audit(&run, &audit)?;
+
+    // 9.3b. `[notify]` alert sink — post the verdict webhook when
+    // configured. A quarantined failure posts as QUAR-FAIL only under
+    // on="always"; on="failure" it stays silent (containment means no
+    // noise, by design).
+    if !opts.dry_run {
+        crate::notify::post_verdict(
+            &audit,
+            summary.ok,
+            summary.gates_ok(),
+            &run.run_root.display().to_string(),
+        );
+    }
 
     // 9.4. Persist the session console log alongside audit.json — the
     // `{"console"}` claims evaluated live during the run; landing the
@@ -2468,7 +2528,7 @@ pub fn cli(args: &[String]) -> Result<u8> {
                         "[v2-replay] failed on run {attempt} — flake reproduced; \
                          run dir kept for audit/compare"
                     );
-                    return Ok(1);
+                    return Ok(if summary.gates_ok() { 0 } else { 1 });
                 }
                 Ok(_) => {}
                 Err(e) => {
@@ -2490,7 +2550,7 @@ pub fn cli(args: &[String]) -> Result<u8> {
         for attempt in 1..=flags.retry {
             eprintln!("[v2-replay] attempt {attempt}/{}", flags.retry);
             match run(&parsed) {
-                Ok(summary) if summary.ok => {
+                Ok(summary) if summary.gates_ok() => {
                     if attempt > 1 {
                         eprintln!(
                             "[v2-replay] flaky — passed on attempt {attempt}/{} after {} failure(s)",
@@ -2533,7 +2593,7 @@ fn cli_watch(parsed: &RunOptions, flags: &CliFlags) -> Result<u8> {
             let mut code = 1u8;
             for attempt in 1..=flags.retry {
                 match run(parsed) {
-                    Ok(s) if s.ok => {
+                    Ok(s) if s.gates_ok() => {
                         code = 0;
                         break;
                     }
@@ -2570,7 +2630,7 @@ fn cli_watch(parsed: &RunOptions, flags: &CliFlags) -> Result<u8> {
 fn run_n(parsed: &RunOptions, runs: u32, label: Option<&str>) -> Result<(u8, Option<RunSummary>)> {
     if runs <= 1 {
         let summary = run(parsed)?;
-        let code = if summary.ok { 0 } else { 1 };
+        let code = if summary.gates_ok() { 0 } else { 1 };
         return Ok((code, Some(summary)));
     }
     let mut all_ok = true;
@@ -2579,7 +2639,7 @@ fn run_n(parsed: &RunOptions, runs: u32, label: Option<&str>) -> Result<(u8, Opt
         eprintln!("[v2-replay]{} run {i}/{runs}", label.unwrap_or(""));
         match run(parsed) {
             Ok(summary) => {
-                if !summary.ok {
+                if !summary.gates_ok() {
                     all_ok = false;
                 }
                 last = Some(summary);
@@ -2894,7 +2954,7 @@ fn write_report(
 ) -> Result<()> {
     let passed = rows
         .iter()
-        .filter(|(_, s)| s.as_ref().map(|s| s.ok).unwrap_or(false))
+        .filter(|(_, s)| s.as_ref().map(|s| s.gates_ok()).unwrap_or(false))
         .count();
     let failed = rows.len() - passed;
     let mut out = String::new();
@@ -2911,6 +2971,9 @@ fn write_report(
     for (sid, summary) in rows {
         let (verdict, steps) = match summary {
             Some(s) if s.ok => ("PASS".to_string(), format!("{}/{}", s.passed, s.total)),
+            Some(s) if s.quarantined => {
+                ("QUAR-FAIL".to_string(), format!("{}/{}", s.passed, s.total))
+            }
             Some(s) => ("FAIL".to_string(), format!("{}/{}", s.passed, s.total)),
             None => ("ERROR".to_string(), "—".to_string()),
         };
@@ -2921,7 +2984,7 @@ fn write_report(
     }
     let failing: Vec<&str> = rows
         .iter()
-        .filter(|(_, s)| !s.as_ref().map(|s| s.ok).unwrap_or(false))
+        .filter(|(_, s)| !s.as_ref().map(|s| s.gates_ok()).unwrap_or(false))
         .map(|(sid, _)| sid.as_str())
         .collect();
     if !failing.is_empty() {
@@ -3714,6 +3777,7 @@ mod tests {
                     passed: 3,
                     total: 3,
                     ok: true,
+                    quarantined: false,
                 }),
             ),
             (
@@ -3722,6 +3786,7 @@ mod tests {
                     passed: 1,
                     total: 4,
                     ok: false,
+                    quarantined: false,
                 }),
             ),
             ("gamma".to_string(), None),
@@ -5991,14 +6056,28 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             passed: 3,
             total: 3,
             ok: true,
+            quarantined: false,
         };
         assert_eq!(s.render(), "SUMMARY: 3/3 (PASS)");
         let s = RunSummary {
             passed: 1,
             total: 3,
             ok: false,
+            quarantined: false,
         };
         assert_eq!(s.render(), "SUMMARY: 1/3 (FAIL)");
+    }
+
+    #[test]
+    fn render_summary_quarantined_fail_shows_containment() {
+        let s = RunSummary {
+            passed: 1,
+            total: 3,
+            ok: false,
+            quarantined: true,
+        };
+        assert_eq!(s.render(), "SUMMARY: 1/3 (FAIL — quarantined)");
+        assert!(s.gates_ok());
     }
 
     // ----- event stream (events.jsonl + status.json) -----
