@@ -75,7 +75,78 @@ references for design context only; nothing vendor-specific enters core code.
 5. **Coverage-by-crawl** — Assrt's a11y crawl as a *recording bootstrap*: walk
    the app, emit candidate scenarios for the flows it finds, let the human
    prune. Turns "write scenarios" into "approve scenarios".
+6. **Migration playbooks** — TesterArmy ships per-framework `/migrate` pages
+   whose core is a copy-paste prompt a coding agent executes (discover specs →
+   map → verify → report). Mechanical mapping lands in
+   `docs/migrating.md`; the equivalent `agent-qa migrate <dir>` importer is
+   the follow-up.
+7. **MCP surface** — TesterArmy ships `e2e mcp`, a stdio server exposing its
+   CLI to agent clients (record/replay/lint as MCP tools). agent-qa's skills
+   already put the verbs in context; a thin `agent-qa mcp` wrapper would put
+   them in scope for MCP-native agents that never read a skill file.
+8. **Verification channels** — TesterArmy provisions temp mail inboxes so the
+   agent can read OTP codes and verification links during a run, plus HTTP
+   basic-auth and stored credentials. Our profile plugins cover login state,
+   but nothing reads an inbox: a `mail` helper (spin up or point at a
+   mailpit/temp-mail endpoint, poll for message, extract link/code) would
+   unblock signup/verify flows end-to-end.
+9. **Discovery runs** — TesterArmy's "give the agent a goal, no saved steps,
+   report every bug" and its PR exploration agent (read the diff → write a
+   plan → execute in a real browser). Gap #1 covers the PR-triggered half;
+   goal-driven exploration is the bigger half — `crawl` emits a coverage
+   scenario today, but nothing hunts for defects autonomously.
+10. **Agentic steps that lower to deterministic replay** — e2e's twist: an
+    `agent.act("upgrade the workspace")` step records the actions the agent
+    took, and later runs replay them with zero model calls until the app
+    changes. That's our record/replay loop read backwards — interesting as a
+    model-assisted *heal* fallback (a step whose locator can't resolve asks a
+    model once, records the new action, replays deterministically after),
+    not as an authoring surface.
+11. **Agent-discovery surface on the site** — llms.txt, `.md` mirrors of every
+    docs page, and a `.well-known/agent.json` capability manifest. Cheap; our
+    site already renders docs but nothing advertises them to agents.
+
+### E2E visual-testing tools (Percy, Applitools, Argos, Chromatic)
+
+Same pass over the dedicated visual tools — what each does well and whether a
+deterministic version fits here:
+
+12. **Capture stabilization pack (Argos)** — the strongest borrowable: before a
+    screenshot, freeze animated GIFs at frame 0, pause CSS animations, wait for
+    `[aria-busy]` to clear, wait for CSS background images, and disable font
+    hinting/subpixel rendering for cross-OS consistency. One JS injection at
+    capture time kills the dominant flake class (animations mid-frame, lazy
+    images, loading spinners). Cheap and orthogonal to everything else.
+13. **Ignore regions / `data-visual-test` masking (Argos, Percy, Applitools)** —
+    paint over dynamic elements (dates, ads, carousels) before capture on both
+    sides so they can never diff. Ours would be a `mask: [locators]` option on
+    shot claims — deterministic, no AI ignore needed.
+14. **Diff RCA-lite (Applitools)** — Eyes stores the DOM+CSS with each
+    checkpoint so clicking a diff pixel names the element whose style changed.
+    We already have domshot baselines beside shots: on a shot miss, correlate
+    the changed region with the DOM diff so the drift comment says "div.hero
+    background changed" instead of just showing red pixels. Medium effort,
+    high signal for review UX.
+15. **Floating regions + layout-level matching (Applitools)** — Layout match
+    level compares element positions, ignoring content/style; floating regions
+    tolerate an element moving within a range. A `ofKind:"layout"` diff over
+    bounding boxes would serve docs-page golden suites where content churns
+    but structure must hold. Heavier; domshot already covers a textual version.
+16. **Flake score per scenario (Argos)** — flaky badges, stability %, history
+    per test from replay history. Our `audit` already keeps runs; a stability
+    column in `audit stats` / run-report is a small rollup over data we own.
+17. **Change-scoped re-snapshotting (Chromatic TurboSnap)** — only re-snapshot
+    what the commit's changes can affect, via git diff + dependency graph; the
+    rest copy baselines forward. We just shipped the docs-only version
+    (DOCS_ONLY selective replay); the generalization is a per-scenario
+    `only_when` glob mapping replay coverage to changed paths — config-driven,
+    no dep graph needed.
+18. **Per-snapshot diff sensitivity presets (Percy)** — Strict→Relaxed
+    presets over diff sensitivity. Our `tolerance.pixels` + AA delta already
+    parameterize this; named presets would just be UX sugar.
 
 Non-goals learned from the field: don't adopt AI-tuned diffing (opaque in a
 gate), don't abandon stored scenarios for pure intent-execution (unreviewable),
-don't make heal suggestions silent writes (audit trail is the product).
+don't make heal suggestions silent writes (audit trail is the product), don't
+buy a hosted-dashboard dependency for diff review (the PR comment IS our
+dashboard — keep it that way).
