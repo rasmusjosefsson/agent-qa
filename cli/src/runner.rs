@@ -602,6 +602,9 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     // decoding, images mid-fetch, layout mid-frame) rather than absorbing
     // it in tolerance. Bounded ~1.5s so it never meaningfully slows a run.
     let stabilize_shots = scenario_uses_shots(&scenario);
+    // `{"layout": ...}` claims diff element geometry — capture the
+    // bounding-box map per step only when the scenario asks for it.
+    let capture_layouts = scenario_uses_layout(&scenario);
 
     // 2. Mint run + prepare root.
     let run_id = mint_run_id(opts.profile.as_deref());
@@ -1186,6 +1189,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                             stabilize_shots,
                             &shot_masks,
                             record_on,
+                            capture_layouts,
                         );
                     }
                     if record_on {
@@ -1230,6 +1234,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                             stabilize_shots,
                             &shot_masks,
                             record_on,
+                            capture_layouts,
                         );
                     }
                     if record_on {
@@ -2012,6 +2017,7 @@ fn capture_step_sidecars(
     stabilize_shots: bool,
     shot_masks: &[String],
     record_overlay: bool,
+    capture_layout: bool,
 ) {
     use crate::sidecar::{ensure_kind_dir, step_sidecar_path, write_step_sidecar, SidecarKind};
     if !is_safe_step_id(step_id) {
@@ -2096,6 +2102,88 @@ fn capture_step_sidecars(
             clear_shot_mask(session);
         }
     }
+    if capture_layout {
+        capture_layout_sidecar(run, step_id, session);
+    }
+}
+
+/// Element-geometry dump for `{"layout"}` claims: every visible
+/// element's bounding box keyed by a stable DOM path
+/// (tag.classes / #id / :nth-of-type among same-tag siblings, capped at
+/// 8 ancestors + `~N` on collision). `__qa_`-rooted nodes (the replay
+/// overlay chrome) are excluded so the capture reflects page structure
+/// only. Elements are capped at 3000 — layout beyond that depth is
+/// noise for a golden.
+const LAYOUT_CAPTURE_JS: &str = r#"(() => {
+  const keyOf = (e) => {
+    const parts = [];
+    for (let n = e; n && n !== document.documentElement && parts.length < 8; n = n.parentElement) {
+      let seg = n.tagName.toLowerCase();
+      if (n.id) seg += '#' + CSS.escape(n.id);
+      else if (typeof n.className === 'string' && n.className.trim()) {
+        seg += '.' + n.className.trim().split(/\s+/).filter(Boolean).slice(0, 3).map(c => CSS.escape(c)).join('.');
+      }
+      const same = n.parentElement ? Array.from(n.parentElement.children).filter(c => c.tagName === n.tagName) : [n];
+      if (same.length > 1) seg += ':nth(' + same.indexOf(n) + ')';
+      parts.unshift(seg);
+    }
+    return parts.join('>');
+  };
+  const out = []; const seen = {};
+  for (const el of document.querySelectorAll('body *')) {
+    if (el.closest('[id^="__qa_"]')) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) continue;
+    let k = keyOf(el);
+    if (seen[k]) { seen[k] += 1; k += '~' + seen[k]; } else { seen[k] = 1; }
+    out.push({k, x: Math.round(r.x * 100) / 100, y: Math.round(r.y * 100) / 100, w: Math.round(r.width * 100) / 100, h: Math.round(r.height * 100) / 100});
+    if (out.length >= 3000) break;
+  }
+  return JSON.stringify({v: 1, vw: window.innerWidth, vh: window.innerHeight, els: out});
+})()"#;
+
+fn capture_layout_sidecar(run: &crate::sidecar::RunPaths, step_id: &str, session: &str) {
+    match browser::eval_expression(session, LAYOUT_CAPTURE_JS) {
+        Ok(raw) => {
+            // agent-browser eval double-encodes string returns; unwrap once
+            // so the file holds the JSON document itself, not a quoted blob.
+            let trimmed = raw.trim();
+            let text: String =
+                serde_json::from_str(trimmed).unwrap_or_else(|_| trimmed.to_string());
+            if let Err(e) = crate::sidecar::write_step_sidecar(
+                run,
+                crate::sidecar::SidecarKind::Layouts,
+                step_id,
+                text.as_bytes(),
+            ) {
+                eprintln!("[v2-replay] layout sidecar failed for {step_id}: {e}");
+            }
+        }
+        Err(e) => eprintln!("[v2-replay] layout capture {step_id} failed: {e}"),
+    }
+}
+
+/// True when the scenario carries any `{"layout": ...}` claim — the
+/// serialized-walk sibling of [`scenario_uses_shots`] so claims nested in
+/// group/loop params or useTemplate bodies count too.
+fn scenario_uses_layout(scenario: &Scenario) -> bool {
+    fn contains_layout_marker(v: &serde_json::Value) -> bool {
+        match v {
+            serde_json::Value::Object(map) => {
+                if let Some(subject) = map.get("claim").and_then(|c| c.get("subject")) {
+                    if subject.get("layout").and_then(|s| s.as_str()).is_some() {
+                        return true;
+                    }
+                }
+                map.values().any(contains_layout_marker)
+            }
+            serde_json::Value::Array(items) => items.iter().any(contains_layout_marker),
+            _ => false,
+        }
+    }
+    let steps = serde_json::to_value(&scenario.steps).unwrap_or(serde_json::Value::Null);
+    let templates = serde_json::to_value(&scenario.templates).unwrap_or(serde_json::Value::Null);
+    contains_layout_marker(&steps) || contains_layout_marker(&templates)
 }
 
 /// Serialized `subject` objects of every `{"shot": ...}` claim in the
@@ -2200,13 +2288,13 @@ fn stabilize_visual(session: &str, cap_ms: u64) {
     // capture.
     let _ = browser::eval_expression(
         session,
-        "(() => { try { for (const a of document.getAnimations ? document.getAnimations() : []) { try { a.finish(); } catch (e) { try { a.currentTime = 0; a.pause(); } catch (e2) {} } } } catch (e) {} for (const im of Array.from(document.images || [])) { const src = im.currentSrc || im.src || ''; if (!/\\.gif(\\?|#|$)/i.test(src)) continue; try { const c = document.createElement('canvas'); c.width = im.naturalWidth; c.height = im.naturalHeight; if (c.width && c.height) { c.getContext('2d').drawImage(im, 0, 0); im.src = c.toDataURL('image/png'); } } catch (e) {} } })()",
+        "(() => { try { for (const a of document.getAnimations ? document.getAnimations() : []) { try { a.finish(); } catch (e) { try { a.currentTime = 0; a.pause(); } catch (e2) {} } } } catch (e) {} for (const im of Array.from(document.images || [])) { const src = im.currentSrc || im.src || ''; if (!/\\.gif(\\?|#|$)/i.test(src)) continue; try { const c = document.createElement('canvas'); c.width = im.naturalWidth; c.height = im.naturalHeight; if (c.width && c.height) { c.getContext('2d').drawImage(im, 0, 0); im.src = c.toDataURL('image/png'); } } catch (e) {} } try { if (!document.getElementById('__qa_caret_hide')) { const st = document.createElement('style'); st.id = '__qa_caret_hide'; st.textContent = '*{caret-color:transparent !important}'; document.head.appendChild(st); } } catch (e) {} })()",
     );
     let deadline = Instant::now() + Duration::from_millis(cap_ms);
     loop {
         let status = browser::eval_expression(
             session,
-            "(() => { const imgs = Array.from(document.images || []).filter(i => !i.complete).length; return JSON.stringify({fonts: document.fonts ? document.fonts.status : 'loaded', imgs, ready: document.readyState, busy: document.querySelectorAll('[aria-busy=\"true\"]').length}); })()",
+            "(() => { const imgs = Array.from(document.images || []).filter(i => !i.complete).length; const bg = (() => { if (!window.__qaBg) window.__qaBg = {}; let n = 0, i = 0; for (const el of document.querySelectorAll('body *')) { if (++i > 2000) break; let bi; try { bi = getComputedStyle(el).backgroundImage; } catch (e) { continue; } if (!bi || bi === 'none' || bi.indexOf('url(') < 0) continue; const ms = bi.match(/url\\([\"']?[^\"')]+[\"']?\\)/g) || []; for (const m of ms) { const url = m.slice(4, -1).replace(/^[\"']|[\"']$/g, ''); if (!window.__qaBg[url]) { const im = new Image(); im.src = url; window.__qaBg[url] = im; } if (!window.__qaBg[url].complete) n++; } } return n; })(); return JSON.stringify({fonts: document.fonts ? document.fonts.status : 'loaded', imgs, bg, ready: document.readyState, busy: document.querySelectorAll('[aria-busy=\"true\"]').length}); })()",
         );
         // In-flight fetches don't show up in readyState/images — a lazy data
         // load can still repaint after the screenshot. Require the session's
@@ -2223,6 +2311,7 @@ fn stabilize_visual(session: &str, cap_ms: u64) {
                     .map(|v| {
                         v.get("fonts").and_then(|f| f.as_str()) == Some("loaded")
                             && v.get("imgs").and_then(|i| i.as_u64()) == Some(0)
+                            && v.get("bg").and_then(|i| i.as_u64()) == Some(0)
                             && v.get("ready").and_then(|r| r.as_str()) == Some("complete")
                             && v.get("busy").and_then(|b| b.as_u64()) == Some(0)
                     })
@@ -2337,6 +2426,7 @@ pub fn cli(args: &[String]) -> Result<u8> {
             flags.report.as_deref(),
             flags.retry,
             flags.jobs,
+            flags.changed.as_deref(),
         );
     }
     if flags.shard.is_some() {
@@ -2353,6 +2443,9 @@ pub fn cli(args: &[String]) -> Result<u8> {
     }
     if flags.jobs > 1 {
         bail!("--jobs requires --all");
+    }
+    if flags.changed.is_some() {
+        bail!("--changed/--changed-git require --all");
     }
     if flags.watch && flags.runs > 1 {
         bail!("--watch already re-runs on every save; --runs N inside it is redundant");
@@ -2566,6 +2659,7 @@ fn cli_all(
     report: Option<&Path>,
     retry: u32,
     jobs: u32,
+    changed: Option<&[String]>,
 ) -> Result<u8> {
     let root = crate::paths::scenarios_root();
     let total = crate::scenario_cli::all_sids(&root, None).len();
@@ -2581,7 +2675,21 @@ fn cli_all(
             .map(|(_, sid)| sid)
             .collect();
     }
-    if sids.is_empty() {
+    // --changed/--changed-git: scenarios with `onlyWhen` run only when a
+    // glob hits a changed path; scenarios without it always run. Skipped
+    // sids become SKIP report rows, not failures.
+    let mut skipped: Vec<String> = Vec::new();
+    if let Some(changed) = changed {
+        let (keep, drop): (Vec<String>, Vec<String>) = sids
+            .into_iter()
+            .partition(|sid| scenario_runs_for_changed(&root, sid, changed));
+        skipped = drop;
+        sids = keep;
+        for sid in &skipped {
+            eprintln!("[v2-replay] {sid}: skipped — onlyWhen globs match no changed path");
+        }
+    }
+    if sids.is_empty() && skipped.is_empty() {
         if total == 0 {
             bail!("replay --all: no scenarios under {}", root.display());
         }
@@ -2592,6 +2700,18 @@ fn cli_all(
             tags,
             shard
         );
+    }
+    if sids.is_empty() {
+        // onlyWhen gated every scenario out — report the skips and pass.
+        if let Some(path) = report {
+            write_report(path, &[], &skipped)?;
+            eprintln!("[v2-replay] report → {}", path.display());
+        }
+        eprintln!(
+            "[v2-replay] --all done: 0 ran, {} skipped (onlyWhen)",
+            skipped.len()
+        );
+        return Ok(0);
     }
     eprintln!(
         "[v2-replay] --all{}: {} scenario(s){}",
@@ -2662,26 +2782,114 @@ fn cli_all(
         rows.push((sid, summary));
     }
     if let Some(path) = report {
-        write_report(path, &rows)?;
+        write_report(path, &rows, &skipped)?;
         eprintln!("[v2-replay] report → {}", path.display());
     }
     eprintln!(
-        "[v2-replay] --all done: {} passed, {} failed{}",
+        "[v2-replay] --all done: {} passed, {} failed{}{}",
         sids.len() - failed.len(),
         failed.len(),
         if failed.is_empty() {
             String::new()
         } else {
             format!(": {}", failed.join(", "))
+        },
+        if skipped.is_empty() {
+            String::new()
+        } else {
+            format!(", {} skipped (onlyWhen)", skipped.len())
         }
     );
     Ok(if all_ok { 0 } else { 1 })
 }
 
+/// `--all --changed`: whether `sid` runs for this changed-path set.
+/// Scenarios without `onlyWhen` always run; with it, at least one glob
+/// must match at least one changed path.
+fn scenario_runs_for_changed(root: &std::path::Path, sid: &str, changed: &[String]) -> bool {
+    let bytes = match std::fs::read(root.join(sid).join("scenario.json")) {
+        Ok(b) => b,
+        Err(_) => return true,
+    };
+    let doc: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(d) => d,
+        Err(_) => return true,
+    };
+    let globs: Vec<&str> = doc
+        .get("onlyWhen")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|g| g.as_str()).collect())
+        .unwrap_or_default();
+    if globs.is_empty() {
+        return true;
+    }
+    changed
+        .iter()
+        .any(|path| globs.iter().any(|g| glob_match(g, path)))
+}
+
+/// Repo-relative changed paths: `git diff --name-only <ref>` in cwd.
+/// `ref` can be a sha, `origin/main`, `HEAD~3`, or a `a...b` range —
+/// whatever diff syntax the repo uses.
+fn changed_paths_from_git(git_ref: &str) -> Result<Vec<String>> {
+    let out = std::process::Command::new("git")
+        .args(["diff", "--name-only", git_ref])
+        .output()
+        .context("--changed-git: run git diff")?;
+    if !out.status.success() {
+        bail!(
+            "--changed-git: `git diff --name-only {git_ref}` failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+/// Gitignore-lite glob match: `*` matches within a path segment, `**`
+/// matches across `/` (including zero segments), `?` matches one non-`/
+/// char. Patterns match whole paths — `src/**` covers `src/a/b.rs`,
+/// `*.rs` covers only root files, `**/foo.rs` covers it at any depth.
+pub(crate) fn glob_match(pattern: &str, path: &str) -> bool {
+    fn seg_match(p: &[u8], s: &[u8]) -> bool {
+        match (p.first(), s.first()) {
+            (None, None) => true,
+            (Some(&b'*'), _) => (0..=s.len()).any(|i| seg_match(&p[1..], &s[i..])),
+            (Some(&pc), Some(&sc)) if pc == sc => seg_match(&p[1..], &s[1..]),
+            (Some(&b'?'), Some(&sc)) => sc != b'/' && seg_match(&p[1..], &s[1..]),
+            _ => false,
+        }
+    }
+    fn match_parts(pat: &[&str], path: &[&str]) -> bool {
+        match (pat.first(), path.first()) {
+            (None, None) => true,
+            (Some(&"**"), _) => {
+                // `**` consumes zero or more path segments.
+                (0..=path.len()).any(|i| match_parts(&pat[1..], &path[i..]))
+            }
+            (Some(&p), Some(&s)) => {
+                seg_match(p.as_bytes(), s.as_bytes()) && match_parts(&pat[1..], &path[1..])
+            }
+            _ => false,
+        }
+    }
+    let pat: Vec<&str> = pattern.split('/').collect();
+    let parts: Vec<&str> = path.split('/').collect();
+    match_parts(&pat, &parts)
+}
+
 /// `--report` — a markdown verdict table for the suite run, the shape a
 /// CI step drops into a PR comment: header counts, one row per scenario,
 /// and a failing-scenario list at the bottom.
-fn write_report(path: &Path, rows: &[(String, Option<RunSummary>)]) -> Result<()> {
+fn write_report(
+    path: &Path,
+    rows: &[(String, Option<RunSummary>)],
+    skipped: &[String],
+) -> Result<()> {
     let passed = rows
         .iter()
         .filter(|(_, s)| s.as_ref().map(|s| s.ok).unwrap_or(false))
@@ -2705,6 +2913,9 @@ fn write_report(path: &Path, rows: &[(String, Option<RunSummary>)]) -> Result<()
             None => ("ERROR".to_string(), "—".to_string()),
         };
         out.push_str(&format!("| `{sid}` | {verdict} | {steps} |\n"));
+    }
+    for sid in skipped {
+        out.push_str(&format!("| `{sid}` | SKIP | onlyWhen |\n"));
     }
     let failing: Vec<&str> = rows
         .iter()
@@ -2755,6 +2966,9 @@ struct CliFlags {
     /// (the inverse of --retry): flake reproduction. The failing run
     /// dir stays on disk for `audit`/`compare` inspection.
     until_fail: u32,
+    /// `--changed <file>` / `--changed-git <ref>` resolved into the
+    /// changed repo-relative paths for onlyWhen filtering (with --all).
+    changed: Option<Vec<String>>,
 }
 
 /// Peel the CLI-level flags `--runs N`, `--retry N`, `--all`,
@@ -2772,6 +2986,7 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
     let mut jobs: u32 = 1;
     let mut watch = false;
     let mut until_fail: u32 = 0;
+    let mut changed: Option<Vec<String>> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -2903,6 +3118,41 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
                     bail!("--until-fail must be >= 1");
                 }
             }
+            "--changed" => {
+                let f = it
+                    .next()
+                    .ok_or_else(|| anyhow!("--changed requires a file path"))?;
+                let body =
+                    std::fs::read_to_string(f).with_context(|| format!("--changed: read {f}"))?;
+                changed = Some(
+                    body.lines()
+                        .map(str::trim)
+                        .filter(|l| !l.is_empty())
+                        .map(str::to_string)
+                        .collect(),
+                );
+            }
+            s if s.starts_with("--changed=") => {
+                let f = &s["--changed=".len()..];
+                let body =
+                    std::fs::read_to_string(f).with_context(|| format!("--changed: read {f}"))?;
+                changed = Some(
+                    body.lines()
+                        .map(str::trim)
+                        .filter(|l| !l.is_empty())
+                        .map(str::to_string)
+                        .collect(),
+                );
+            }
+            "--changed-git" => {
+                let r = it
+                    .next()
+                    .ok_or_else(|| anyhow!("--changed-git requires a git ref"))?;
+                changed = Some(changed_paths_from_git(r)?);
+            }
+            s if s.starts_with("--changed-git=") => {
+                changed = Some(changed_paths_from_git(&s["--changed-git=".len()..])?);
+            }
             "--watch" => watch = true,
             other => filtered.push(other.to_string()),
         }
@@ -2938,6 +3188,7 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
         jobs,
         watch,
         until_fail,
+        changed,
     })
 }
 
@@ -3324,6 +3575,14 @@ replays/latest.txt.
                          ignored. Progress lines interleave; --report
                          output stays sorted.
                          (case-insensitive).
+--changed <file>         With --all: read newline-separated changed
+                         paths from <file> and skip scenarios whose
+                         `onlyWhen` globs match none of them. Scenarios
+                         without onlyWhen always run; skips are SKIP
+                         rows in --report, not failures.
+--changed-git <ref>      With --all: same as --changed, but the path
+                         list comes from `git diff --name-only <ref>`
+                         in cwd (e.g. origin/main, HEAD~5, a...b).
 
 --no-sidecars            Skip per-step ARIA snapshot + screenshot
                          capture. audit.json is still written. Useful
@@ -3462,13 +3721,92 @@ mod tests {
             ),
             ("gamma".to_string(), None),
         ];
-        write_report(&path, &rows).unwrap();
+        write_report(&path, &rows, &[]).unwrap();
         let md = fs::read_to_string(&path).unwrap();
         assert!(md.contains("❌ 2/3 scenarios fail (1 pass)"));
         assert!(md.contains("| `alpha` | PASS | 3/3 |"));
         assert!(md.contains("| `beta` | FAIL | 1/4 |"));
         assert!(md.contains("| `gamma` | ERROR | — |"));
         assert!(md.contains("Failing: beta, gamma"));
+    }
+
+    #[test]
+    fn glob_match_star_star_question() {
+        assert!(glob_match("src/**", "src/a/b.rs"));
+        assert!(glob_match("src/**", "src/x.rs"));
+        assert!(glob_match("**/foo.rs", "a/b/foo.rs"));
+        assert!(glob_match("**/foo.rs", "foo.rs"));
+        assert!(glob_match("*.rs", "x.rs"));
+        assert!(!glob_match("*.rs", "a/x.rs"));
+        assert!(glob_match("docs/*.md", "docs/a.md"));
+        assert!(!glob_match("docs/*.md", "docs/sub/a.md"));
+        assert!(glob_match("a/?/c", "a/b/c"));
+        assert!(!glob_match("a/?/c", "a/bc/c"));
+        assert!(!glob_match("src/**", "tests/x.rs"));
+    }
+
+    #[test]
+    fn scenario_runs_for_changed_only_when() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let mk = |sid: &str, only: serde_json::Value| {
+            let d = root.join(sid);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(
+                d.join("scenario.json"),
+                serde_json::json!({
+                    "schema": "scenario/2", "id": sid, "intent": "t",
+                    "steps": [], "onlyWhen": only,
+                })
+                .to_string(),
+            )
+            .unwrap();
+        };
+        mk("gated", serde_json::json!(["src/checkout/**"]));
+        mk("multi", serde_json::json!(["ui/**", "styles/*.css"]));
+        mk("plain", serde_json::Value::Null);
+        // plain's onlyWhen is null — serde drops it; write without the key.
+        fs::write(
+            root.join("plain/scenario.json"),
+            serde_json::json!({"schema":"scenario/2","id":"plain","intent":"t","steps":[]})
+                .to_string(),
+        )
+        .unwrap();
+
+        let changed = vec!["src/checkout/cart.rs".to_string(), "README.md".to_string()];
+        assert!(scenario_runs_for_changed(root, "gated", &changed));
+        assert!(!scenario_runs_for_changed(root, "multi", &changed));
+        assert!(scenario_runs_for_changed(root, "plain", &changed));
+
+        let css = vec!["styles/main.css".to_string()];
+        assert!(scenario_runs_for_changed(root, "multi", &css));
+        assert!(!scenario_runs_for_changed(root, "gated", &css));
+    }
+
+    #[test]
+    fn changed_flag_requires_all() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let f = tmp.path().join("paths.txt");
+        fs::write(&f, "src/a.rs\n").unwrap();
+        let args: Vec<String> = vec![
+            "sid-x".to_string(),
+            "--changed".to_string(),
+            f.display().to_string(),
+        ];
+        assert!(cli(&args).is_err());
+    }
+
+    #[test]
+    fn changed_flag_parses_path_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let f = tmp.path().join("paths.txt");
+        fs::write(&f, "src/a.rs\n\ndocs/b.md\n").unwrap();
+        let flags =
+            parse_args_cli(&["--all".into(), "--changed".into(), f.display().to_string()]).unwrap();
+        assert_eq!(
+            flags.changed.as_deref(),
+            Some(&["src/a.rs".to_string(), "docs/b.md".to_string()][..])
+        );
     }
 
     #[test]
@@ -6179,12 +6517,12 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         }
         // Scenarios exist but the filter matches none — the error must
         // point at the selection, not the root.
-        let err = cli_all(&[], 1, None, Some("zzz"), &[], None, 1, 1)
+        let err = cli_all(&[], 1, None, Some("zzz"), &[], None, 1, 1, None)
             .unwrap_err()
             .to_string();
         assert!(err.contains("selection matched 0 of 2"), "{err}");
         fs::remove_dir_all(&root).unwrap();
-        let err = cli_all(&[], 1, None, None, &[], None, 1, 1)
+        let err = cli_all(&[], 1, None, None, &[], None, 1, 1, None)
             .unwrap_err()
             .to_string();
         assert!(err.contains("no scenarios under"), "{err}");

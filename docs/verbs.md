@@ -32,7 +32,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 
 | Verb | What it does |
 | --- | --- |
-| `replay <sid \| path>` | Run a scenario. Flags: `--profile`, `--session`, `--param name=value` (repeatable), `--heal-from-run <runId>`, `--dry-run`, `--no-sidecars`, `--runs <N>`, `--quiet`/`-q`, `--tag <label>`, `--output-audit <path>`, `--from <stepId>` / `--until <stepId>` (partial replay over a step window — needs a warm session at that state), `--keep-going` (dispatch every step past ANY failure — golden shot/domshot misses already continue by default), `--retry <N>` (re-run until pass, keeping flake evidence), `--junit [path]` (JUnit XML; bare flag writes `<run>/junit.xml`), `--record-video [path]` (film the run as mp4), `--freeze` (pin clock + RNG for deterministic goldens), `--har` (write `<run>/network.har`), `--mock-from <runId>` (hermetic replay from a recorded HAR), `--offline` (reject unmatched fetch/XHR), `--base-url <url>` (retarget onto another deploy), `--auto-promote` (write this run's locator heals back), `--update-baselines` (mint `baselines/` after the run), `--persona <id>` (replay as a `_personas/<id>` record — profile + credentials, vault refs resolved) + `--environment <id>`/`--env <id>` (replay against a `_environments/<id>` record — params, baseUrl, auth config; defaults to the `default` env when a persona is picked), `--fresh-browser` (close the session's browser before the run — the only reset for daemon-side `set` state like viewport/device/geo/credentials/media that has no off-switch). With `--all`: replay every scenario under the root — `--shard k/n` splits the sorted sid list for CI matrices, `--filter <substr>` narrows it, `--tags <a,b>` keeps scenarios declaring any of the named `tags`, `--jobs <N>` runs scenarios in parallel, `--report <path>` writes a markdown verdict table for a PR comment. |
+| `replay <sid \| path>` | Run a scenario. Flags: `--profile`, `--session`, `--param name=value` (repeatable), `--heal-from-run <runId>`, `--dry-run`, `--no-sidecars`, `--runs <N>`, `--quiet`/`-q`, `--tag <label>`, `--output-audit <path>`, `--from <stepId>` / `--until <stepId>` (partial replay over a step window — needs a warm session at that state), `--keep-going` (dispatch every step past ANY failure — golden shot/domshot misses already continue by default), `--retry <N>` (re-run until pass, keeping flake evidence), `--junit [path]` (JUnit XML; bare flag writes `<run>/junit.xml`), `--record-video [path]` (film the run as mp4), `--freeze` (pin clock + RNG for deterministic goldens), `--har` (write `<run>/network.har`), `--mock-from <runId>` (hermetic replay from a recorded HAR), `--offline` (reject unmatched fetch/XHR), `--base-url <url>` (retarget onto another deploy), `--auto-promote` (write this run's locator heals back), `--update-baselines` (mint `baselines/` after the run), `--persona <id>` (replay as a `_personas/<id>` record — profile + credentials, vault refs resolved) + `--environment <id>`/`--env <id>` (replay against a `_environments/<id>` record — params, baseUrl, auth config; defaults to the `default` env when a persona is picked), `--fresh-browser` (close the session's browser before the run — the only reset for daemon-side `set` state like viewport/device/geo/credentials/media that has no off-switch). With `--all`: replay every scenario under the root — `--shard k/n` splits the sorted sid list for CI matrices, `--filter <substr>` narrows it, `--tags <a,b>` keeps scenarios declaring any of the named `tags`, `--jobs <N>` runs scenarios in parallel, `--report <path>` writes a markdown verdict table for a PR comment, `--changed <file>`/`--changed-git <ref>` (with `--all`) replays only scenarios whose `onlyWhen` globs match the changed paths — scenarios without `onlyWhen` always run, skips land as SKIP rows in the report. |
 | `list` | Enumerate scenarios (root mode) or one scenario's replays. Flags: `--json`, `--filter <substr>`, `--limit <N>` |
 | `compare <a> <b>` | Diff two replay run directories. Alias `diff`. |
 | `crawl <url>` | Coverage scaffolding — enumerate same-origin links + interactive elements and write a draft scenario (goto + shot claim per route) to `<scenarios_root>/crawl-<host>/` plus a `crawl-report.json` authoring inventory. Flags: `--session`, `--out`, `--max`, `--sid`, `--depth <N>` (BFS past the entry page), `--mint-baselines` (capture `baselines/` PNGs while drafting). |
@@ -81,6 +81,7 @@ Plans/cases/sets are the workbench's run-scope records under `<root>/_plans`, `_
 | `heal-list <sid>` | List heal-responses. Flags: `--run <runId>`, `--mode value-correction\|reject`, `--applied`, `--unapplied`, `--json` |
 | `heal-chronic <sid>` | Flag steps that auto-healed in ≥ `--min-runs` distinct runs (default 2) — silent locator debt. Prints the `heal-promote` command per step. Flags: `--min-runs N`, `--json`, `--issue` (paste-ready markdown issue body for the handoff) |
 | `shot-accept <sid>` | Mint screenshot baselines for `{"shot"}` claims: copies the run's per-step PNGs into `<sid>/baselines/`. Flags: `--run <runId>` (default `latest.txt`), `--steps <csv>` (default every captured shot), `--json` |
+| `layout-accept <sid>` | Mint element-geometry baselines for `{"layout"}` claims: copies `<run>/layouts/<stepId>.json` into `<sid>/baselines/<stepId>.layout.json`. Same flags as `shot-accept` |
 | `baselines pull\|push\|status` | Sync `<sid>/baselines/` with the `[baselines]` remote store (github repo / turso db). Args: `<sid>` or `--all`, `--json`. Replay pulls automatically before the step loop; accept verbs push after minting — see configuration.md `[baselines]` |
 
 ### `{"shot"}` claims — visual diff vs a baseline
@@ -88,8 +89,18 @@ Plans/cases/sets are the workbench's run-scope records under `<root>/_plans`, `_
 A check step `{"check": {"shot": "<stepId>"}, "predicate": "matches"}` pixel-compares
 the current run's `screenshots/<stepId>.png` against `<sid>/baselines/<stepId>.png`.
 It passes when the differing-pixel fraction ≤ `tolerance.pixels` (default `0.01` = 1%);
-on a miss the claim fails and a red delta map lands at `<run>/shots-diff/<stepId>.diff.png`.
-Size changes fail outright — re-mint with `shot-accept` when the change is legitimate.
+on a miss the claim fails and a red delta map lands at `<run>/shots-diff/<stepId>.diff.png`,
+plus an RCA-lite report at `<run>/rca/<stepId>.rca.json` listing the elements intersecting
+the diff region (the failure message names the top suspects). Size changes fail outright —
+re-mint with `shot-accept` when the change is legitimate.
+
+`tolerance.preset` picks a named sensitivity bundle — `strict` (pixels `0`, aa `16`),
+`balanced` (default: pixels `0.01`, aa `32`), `relaxed` (pixels `0.05`, aa `64`) — and
+`tolerance.pixels`/`tolerance.aa` override the preset's values individually:
+
+```json
+{"check": {"shot": "s3"}, "predicate": "matches", "tolerance": {"preset": "relaxed"}}
+```
 
 `mask` lists CSS selectors to hide (`visibility:hidden`) around every step
 screenshot — the ignore-regions escape hatch for volatile UI like timestamps,
@@ -100,6 +111,27 @@ flake the diff:
 ```json
 {"check": {"shot": "s3", "mask": ["[data-qa-volatile]", "time"]}, "predicate": "matches"}
 ```
+
+### `{"layout"}` claims — element-geometry diff
+
+`{"check": {"layout": "<stepId>"}, "predicate": "matches"}` compares the run's
+`layouts/<stepId>.json` — a flat map of every visible element's bounding box keyed
+by a stable DOM path, captured as a sidecar whenever the scenario declares a layout
+claim — against `baselines/<stepId>.layout.json` (mint with `layout-accept`). It passes
+when each baseline key exists in the run and x/y/w/h each drift at most `tolerance.px`
+(default `4`). Keys appearing/disappearing are churn: `tolerance.added`,
+`tolerance.removed`, and `tolerance.moved` bound the tolerable counts (default `0`).
+On a miss the moved/added/removed detail writes to `<run>/layouts-diff/<stepId>.diff.json`.
+Layout answers "did things move" — text/color drift needs a `shot` claim.
+
+### `onlyWhen` — selective replay
+
+`"onlyWhen": ["src/checkout/**"]` on a scenario gates it under
+`replay --all --changed <file>` / `--changed-git <ref>`: the scenario runs only when
+a changed path matches a glob (`*` within a segment, `**` across segments, `?` one
+non-`/` char). Scenarios without `onlyWhen` always run; gated-out scenarios are SKIP
+rows in `--report`, not failures. The cheap TurboSnap: full suite on paper, only the
+scenarios whose code moved actually replay.
 
 A scenario with shot claims opts out of the warm-page `goto` skip: the step
 always navigates, so the diff compares a fresh document — a reused session can

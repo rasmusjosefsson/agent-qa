@@ -48,6 +48,7 @@ pub enum SidecarKind {
     Network,
     Probes,
     Perf,
+    Layouts,
 }
 
 impl SidecarKind {
@@ -58,6 +59,7 @@ impl SidecarKind {
             SidecarKind::Network => "network",
             SidecarKind::Probes => "probes",
             SidecarKind::Perf => "perf",
+            SidecarKind::Layouts => "layouts",
         }
     }
     pub fn extension(self) -> &'static str {
@@ -67,6 +69,7 @@ impl SidecarKind {
             SidecarKind::Network => "json",
             SidecarKind::Probes => "json",
             SidecarKind::Perf => "json",
+            SidecarKind::Layouts => "json",
         }
     }
 }

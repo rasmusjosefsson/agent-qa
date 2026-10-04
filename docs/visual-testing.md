@@ -19,9 +19,19 @@ against `<scenario>/baselines/<stepId>.png`. `matches` is the only predicate;
 `tolerance.pixels` is the allowed fraction of differing pixels (default `0.01`).
 
 On a miss the runner writes a delta map to `<run>/shots-diff/<stepId>.diff.png`
-(red pixels over a faded baseline) and fails the step with the diff ratio. A
+(red pixels over a faded baseline), an RCA-lite report to
+`<run>/rca/<stepId>.rca.json` (the elements intersecting the diff region — the
+claim error names the top suspects), and fails the step with the diff ratio. A
 missing baseline fails with the `shot-accept` hint — baselines are minted, never
 implicitly trusted.
+
+## Sensitivity
+
+`tolerance.preset` picks a named bundle instead of numbers: `strict`
+(pixels `0`, aa `16`), `balanced` (default: pixels `0.01`, aa `32`), `relaxed`
+(pixels `0.05`, aa `64`). `tolerance.pixels`/`tolerance.aa` override the preset
+individually. `aa` is the per-channel delta below which a pixel doesn't count —
+raise it for cross-platform text AA, lower it for surgical diffs.
 
 ## Element-clipped shots
 
@@ -138,3 +148,21 @@ artifact is a unified text diff under `domshots-diff/` that reads like a
 code review hunk. Use `skip: ["<regex>", ...]` to drop volatile lines.
 Mint with `domshot-accept <sid>` (defaults to the steps domshot claims
 reference; `--dry-run`/`--steps`/`--json` mirror shot-accept).
+
+## Geometry goldens (layout)
+
+`{"layout": "<stepId>"}` diffs the step's element-geometry capture (the
+`layouts/` sidecar — every visible element's bounding box keyed by a stable
+DOM path) against `baselines/<stepId>.layout.json`. Structure-only: it flags
+"moved / added / removed" elements (`tolerance.px`, default `4`; tolerable
+churn via `tolerance.moved`/`added`/`removed`), not color or text drift —
+that stays `shot`'s job. Mint with `layout-accept <sid>`.
+
+## Selective replay (onlyWhen)
+
+`"onlyWhen": ["src/checkout/**"]` on a scenario means: under
+`replay --all --changed <file>` / `--changed-git <ref>`, run only when a
+changed path matches a glob (`*`/`**`/`?`). Scenarios without `onlyWhen`
+always run; skipped ones report as SKIP rows, not failures — the cheap way
+to keep the full golden suite green-checked on every PR while only
+replaying what the diff touched.
