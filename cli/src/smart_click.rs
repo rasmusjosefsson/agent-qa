@@ -46,6 +46,9 @@ pub fn run(args: &[String]) -> Result<u8> {
         /// Snapshot-ref fallback worked. The direct draft keeps the role and
         /// accessible name because the snapshot confirmed both.
         Snapshot,
+        /// A `resolve` plugin picked the element — the recorded step keeps
+        /// the picked candidate's role+name, not the missed description.
+        Resolved(crate::resolve::ResolvedPick),
     }
     let recovery: Recovery = match click_outcome {
         Ok(()) => Recovery::None,
@@ -65,10 +68,29 @@ pub fn run(args: &[String]) -> Result<u8> {
                     opts.role, opts.name
                 );
                 Recovery::Snapshot
+            } else if let Some(pick) = crate::resolve::resolve_and_act(
+                &session,
+                &opts.name,
+                Some(&opts.role),
+                RoleAct::Click,
+                None,
+            ) {
+                // Ladder rung 4: configured `resolve` plugin picks among the
+                // page's interactive elements — authoring-time only; the
+                // recorded step keeps the pick's durable role+name.
+                let conf = pick
+                    .confidence
+                    .map(|c| format!(" (confidence {c:.2})"))
+                    .unwrap_or_default();
+                eprintln!(
+                    "[smart-click] miss {:?} resolved to {} {:?} via plugin{}",
+                    opts.name, pick.candidate.role, pick.candidate.name, conf
+                );
+                Recovery::Resolved(pick)
             } else {
                 return Err(anyhow::Error::new(role_err)).with_context(|| {
                     format!(
-                        "agent-browser find role {} click --name {} (text + snapshot fallbacks also missed)",
+                        "agent-browser find role {} click --name {} (text + snapshot + resolve fallbacks also missed)",
                         opts.role, opts.name
                     )
                 });
@@ -82,6 +104,14 @@ pub fn run(args: &[String]) -> Result<u8> {
                 "intent": format!("smart-click {}", opts.name),
                 "verb": "click",
                 "on": { "role": opts.role, "name": opts.name },
+            }),
+            Recovery::Resolved(pick) => json!({
+                "intent": format!("smart-click {} (resolved)", opts.name),
+                "verb": "click",
+                "on": {
+                    "role": pick.candidate.role,
+                    "name": pick.candidate.name,
+                },
             }),
             Recovery::Text(matched) => json!({
                 "intent": format!("smart-click {}", opts.name),
@@ -108,6 +138,10 @@ pub fn run(args: &[String]) -> Result<u8> {
                         "clicked {} (step {step_id}) — role={} name={:?} (recovered via snapshot ref)",
                         step_id, opts.role, opts.name
                     ),
+                    Recovery::Resolved(pick) => println!(
+                        "clicked {} (step {step_id}) — resolved {:?} to {} {:?}",
+                        step_id, opts.name, pick.candidate.role, pick.candidate.name
+                    ),
                 }
             }
             None => println!("clicked {} — not recorded (recording paused)", opts.name),
@@ -122,6 +156,10 @@ pub fn run(args: &[String]) -> Result<u8> {
             Recovery::Snapshot => println!(
                 "clicked role={} name={:?} (recovered via snapshot ref)",
                 opts.role, opts.name
+            ),
+            Recovery::Resolved(pick) => println!(
+                "clicked resolved {:?} → {} {:?}",
+                opts.name, pick.candidate.role, pick.candidate.name
             ),
         }
     }

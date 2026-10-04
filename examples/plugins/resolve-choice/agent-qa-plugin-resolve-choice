@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""resolve-choice — reference `resolve` plugin for agent-qa.
+
+Answers "which of these elements did the author mean?" by POSTing a choice
+question to a decision endpoint configured entirely through env vars:
+
+    RESOLVE_ENDPOINT        required. The decision API's URL.
+    RESOLVE_KEY_ENV         env var holding the bearer token
+                            (default: RESOLVE_API_KEY).
+    RESOLVE_MODEL           model/decision-profile name (default: "default").
+    RESOLVE_MIN_CONFIDENCE  minimum answer confidence to return a pick
+                            (default: 0.5).
+
+Request contract (what the endpoint is expected to accept):
+    POST <RESOLVE_ENDPOINT>
+    Authorization: Bearer <key>
+    {
+      "state": "<description + candidate lines>",
+      "model": "<RESOLVE_MODEL>",
+      "questions": {
+        "pick": {
+          "type": "choice",
+          "instructions": "<the author's description>",
+          "criteria": {"<ref>": "<role> \"<name>\" <line>", ...}
+        }
+      }
+    }
+    → {"answers": {"pick": {"choice": "<ref>", "confidence": 0.83}}}
+
+Any endpoint that speaks this shape works; the plugin is the seam vendors
+adapt. Python stdlib only — no dependencies.
+
+Invoke contract (agent-qa side):
+    <binary> ping            → {"ok":true,"response":{"protocolVersion":1,
+                               "name":"resolve-choice","kinds":["resolve"]}}
+    <binary> resolve         → stdin: {"protocolVersion":1,"request":{
+                                 "description": str, "role": str|null,
+                                 "candidates": [{"ref","role","name","line"}]}}
+                               stdout: {"ok":true,"response":{"ref":"eN"|null,
+                                        "confidence": 0.83}}
+"""
+
+import json
+import os
+import sys
+import urllib.request
+import urllib.error
+
+NAME = "resolve-choice"
+
+
+def respond(payload):
+    print(json.dumps({"ok": True, "response": payload}))
+
+
+def fail(code, message):
+    print(json.dumps({"ok": False, "error": {"code": code, "message": message}}))
+
+
+def main():
+    kind = sys.argv[1] if len(sys.argv) > 1 else ""
+
+    if kind == "ping":
+        respond({"protocolVersion": 1, "name": NAME, "kinds": ["resolve"]})
+        return
+
+    if kind != "resolve":
+        fail("unsupported-kind", f"{NAME} does not handle {kind!r}")
+        return
+
+    try:
+        envelope = json.load(sys.stdin)
+    except Exception as e:
+        fail("bad-request", f"stdin is not JSON: {e}")
+        return
+
+    req = (envelope or {}).get("request") or {}
+    description = req.get("description") or ""
+    role = req.get("role")
+    candidates = req.get("candidates") or []
+
+    endpoint = os.environ.get("RESOLVE_ENDPOINT", "").strip()
+    key_env = os.environ.get("RESOLVE_KEY_ENV", "RESOLVE_API_KEY")
+    api_key = os.environ.get(key_env, "").strip()
+    model = os.environ.get("RESOLVE_MODEL", "default")
+    try:
+        min_conf = float(os.environ.get("RESOLVE_MIN_CONFIDENCE", "0.5"))
+    except ValueError:
+        min_conf = 0.5
+
+    if not endpoint:
+        fail("not-configured", "RESOLVE_ENDPOINT is not set")
+        return
+    if not api_key:
+        fail("not-configured", f"{key_env} is not set")
+        return
+    if not candidates:
+        respond({"ref": None, "confidence": 0.0})
+        return
+
+    criteria = {
+        c["ref"]: f'{c["role"]} "{c["name"]}" — {c["line"]}'
+        for c in candidates
+        if c.get("ref")
+    }
+    want = f"Pick the element the author means: {description}"
+    if role:
+        want += f" (expected role: {role})"
+    state_lines = ["Elements on the page:"] + [
+        f'- {c["role"]} "{c["name"]}" [{c["ref"]}]' for c in candidates
+    ]
+
+    body = json.dumps(
+        {
+            "state": "\n".join(state_lines),
+            "model": model,
+            "questions": {
+                "pick": {
+                    "type": "choice",
+                    "instructions": want,
+                    "criteria": criteria,
+                }
+            },
+        }
+    ).encode()
+
+    request = urllib.request.Request(
+        endpoint,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as res:
+            data = json.loads(res.read())
+    except urllib.error.HTTPError as e:
+        fail("upstream", f"decision endpoint HTTP {e.code}")
+        return
+    except Exception as e:
+        fail("upstream", f"decision endpoint: {e}")
+        return
+
+    answer = (data.get("answers") or {}).get("pick") or {}
+    choice = answer.get("choice")
+    try:
+        confidence = float(answer.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+
+    if choice and choice in criteria and confidence >= min_conf:
+        respond({"ref": choice, "confidence": confidence})
+    else:
+        respond({"ref": None, "confidence": confidence})
+
+
+if __name__ == "__main__":
+    main()

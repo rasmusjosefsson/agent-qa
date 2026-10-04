@@ -19,6 +19,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `fill-unique` | Locator-uniqueness helper for `type`/`fill` style do steps |
 | `smart-click` | High-level click that resolves a label to a unique locator |
 | `smart-fill` | Type a literal value into a field by accessible name (default role `textbox`, `--role` to override) + auto-record a `do/type` step. `fill-unique` is the minted-per-run variant. |
+| `resolve "<description>" [--role <r>] [--session <s>] [--json]` | Authoring probe: ask the configured `resolve` plugin which of the page's interactive elements a description means — prints the pick (role/name/ref/confidence), exit 1 on no confident pick. The same resolution runs automatically as the last smart-click/smart-fill fallback; the recorded step keeps the picked element's concrete role+name, so replay never needs the plugin. See `docs/plugins.md` for the kind contract. |
 | `truncate` | Drop the trailing N steps from the in-flight scenario |
 | `flush` | Persist the recorder buffer to `scenario.json` |
 | `verify [--fix]` | Check the active recording — dense step ids + paired snapshot/screenshot sidecars. `--fix` renumbers to dense s0.. ids, rewiring `{"from":"step"}` refs and moving sidecar files to match. |
