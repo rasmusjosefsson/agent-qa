@@ -84,6 +84,27 @@ references for design context only; nothing vendor-specific enters core code.
    CLI to agent clients (record/replay/lint as MCP tools). agent-qa's skills
    already put the verbs in context; a thin `agent-qa mcp` wrapper would put
    them in scope for MCP-native agents that never read a skill file.
+8. **Verification channels** — TesterArmy provisions temp mail inboxes so the
+   agent can read OTP codes and verification links during a run, plus HTTP
+   basic-auth and stored credentials. Our profile plugins cover login state,
+   but nothing reads an inbox: a `mail` helper (spin up or point at a
+   mailpit/temp-mail endpoint, poll for message, extract link/code) would
+   unblock signup/verify flows end-to-end.
+9. **Discovery runs** — TesterArmy's "give the agent a goal, no saved steps,
+   report every bug" and its PR exploration agent (read the diff → write a
+   plan → execute in a real browser). Gap #1 covers the PR-triggered half;
+   goal-driven exploration is the bigger half — `crawl` emits a coverage
+   scenario today, but nothing hunts for defects autonomously.
+10. **Agentic steps that lower to deterministic replay** — e2e's twist: an
+    `agent.act("upgrade the workspace")` step records the actions the agent
+    took, and later runs replay them with zero model calls until the app
+    changes. That's our record/replay loop read backwards — interesting as a
+    model-assisted *heal* fallback (a step whose locator can't resolve asks a
+    model once, records the new action, replays deterministically after),
+    not as an authoring surface.
+11. **Agent-discovery surface on the site** — llms.txt, `.md` mirrors of every
+    docs page, and a `.well-known/agent.json` capability manifest. Cheap; our
+    site already renders docs but nothing advertises them to agents.
 
 Non-goals learned from the field: don't adopt AI-tuned diffing (opaque in a
 gate), don't abandon stored scenarios for pure intent-execution (unreviewable),
