@@ -58,6 +58,7 @@ const NOT_RECORDABLE: Record<string, string> = {
   mail: "authored — inbox polling is out-of-band, not a recorded browser action",
   totp: "authored — TOTP codes are computed locally from a seed; never a recorded browser action",
   when: "structural — conditional blocks are authored, not recorded",
+  include: "structural — file composition is authored, not recorded",
 };
 
 const action = (method: string, args: unknown[] = [], intent = "t") =>

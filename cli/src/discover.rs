@@ -221,9 +221,41 @@ pub fn run(args: &[String]) -> Result<u8> {
         serde_json::to_string_pretty(&report)?,
     )?;
 
+    // plan.md — the reviewable half of the draft: what will be covered,
+    // what was skipped, and where to add deeper checks before minting.
+    let mut plan = String::new();
+    plan.push_str(&format!("# Test plan — {sid}\n\n"));
+    plan.push_str(&format!("Base: {url}\n\n"));
+    plan.push_str("## Coverage\n\n");
+    for route in &routes {
+        let target = format!("{}{}", url.trim_end_matches('/'), route);
+        plan.push_str(&format!("### `{route}`\n\n"));
+        plan.push_str(&format!("- open {target}\n"));
+        plan.push_str(&format!("- `{route}` matches golden screenshot\n"));
+        plan.push_str(&format!("- `{route}` logs no console errors\n\n"));
+    }
+    if !unmapped.is_empty() {
+        plan.push_str("## Not covered\n\n");
+        for u in &unmapped {
+            let path = u["path"].as_str().unwrap_or("?");
+            let reason = u["reason"].as_str().unwrap_or("unmapped");
+            plan.push_str(&format!("- `{path}` — {reason}\n"));
+        }
+        plan.push('\n');
+    }
+    plan.push_str("## Next\n\n");
+    plan.push_str(&format!(
+        "1. `agent-qa replay {sid}` — verify the draft runs\n"
+    ));
+    plan.push_str(&format!(
+        "2. `agent-qa shot-accept {sid}` — mint baselines\n"
+    ));
+    plan.push_str("3. Extend: add interaction steps (click/fill/check) per route where a\n   golden alone isn't enough\n");
+    fs::write(dir.join("plan.md"), plan).with_context(|| "write plan.md")?;
+
     let skipped = report["unmapped"].as_array().map(|u| u.len()).unwrap_or(0);
     println!(
-        "wrote {} — {} routes ({} paths unmapped, see discover-report.json)",
+        "wrote {} — {} routes ({} paths unmapped, see discover-report.json + plan.md)",
         scenario_path.display(),
         routes.len(),
         skipped

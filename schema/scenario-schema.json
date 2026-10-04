@@ -631,7 +631,8 @@
             "useTemplate",
             "mail",
             "totp",
-            "when"
+            "when",
+            "include"
           ]
         },
         "on": { "$ref": "#/$defs/Locator" },

@@ -868,6 +868,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             &scenario.steps,
             scenario.templates.as_ref(),
             Some(&scope.inputs),
+            Some(&scenario_dir),
         ) {
             Ok(v) => v,
             Err(e) => {
@@ -1830,7 +1831,7 @@ fn flatten_steps(
     steps: &[Step],
     templates: Option<&std::collections::BTreeMap<String, crate::scenario::Template>>,
 ) -> Result<Vec<Step>> {
-    flatten_steps_with_scope(steps, templates, None)
+    flatten_steps_with_scope(steps, templates, None, None)
 }
 
 /// Deepest group/useTemplate/loop nesting flatten tolerates. A template
@@ -1842,14 +1843,16 @@ fn flatten_steps_with_scope(
     steps: &[Step],
     templates: Option<&std::collections::BTreeMap<String, crate::scenario::Template>>,
     inputs: Option<&std::collections::HashMap<String, serde_json::Value>>,
+    dir: Option<&std::path::Path>,
 ) -> Result<Vec<Step>> {
-    flatten_steps_depth(steps, templates, inputs, 0)
+    flatten_steps_depth(steps, templates, inputs, dir, 0)
 }
 
 fn flatten_steps_depth(
     steps: &[Step],
     templates: Option<&std::collections::BTreeMap<String, crate::scenario::Template>>,
     inputs: Option<&std::collections::HashMap<String, serde_json::Value>>,
+    dir: Option<&std::path::Path>,
     depth: usize,
 ) -> Result<Vec<Step>> {
     if depth > MAX_EXPAND_DEPTH {
@@ -1879,7 +1882,7 @@ fn flatten_steps_depth(
                         })?;
                     subs.push(parsed);
                 }
-                for sub in flatten_steps_depth(&subs, templates, inputs, depth + 1)? {
+                for sub in flatten_steps_depth(&subs, templates, inputs, dir, depth + 1)? {
                     out.push(sub);
                 }
             }
@@ -1907,7 +1910,7 @@ fn flatten_steps_depth(
                 })?;
                 let nested_templates = template.templates.as_ref().or(Some(templates));
                 for sub in
-                    flatten_steps_depth(&template.steps, nested_templates, inputs, depth + 1)?
+                    flatten_steps_depth(&template.steps, nested_templates, inputs, dir, depth + 1)?
                 {
                     out.push(sub);
                 }
@@ -1991,7 +1994,7 @@ fn flatten_steps_depth(
                         subs.push(parsed);
                     }
                 }
-                for sub in flatten_steps_depth(&subs, templates, inputs, depth + 1)? {
+                for sub in flatten_steps_depth(&subs, templates, inputs, dir, depth + 1)? {
                     out.push(sub);
                 }
             }
@@ -2042,11 +2045,68 @@ fn flatten_steps_depth(
                 // block itself never reaches dispatch. Conds already on a
                 // child came from deeper `when` blocks — prepend so the list
                 // reads outermost-first (evaluation is AND either way).
-                for mut sub in flatten_steps_depth(&subs, templates, inputs, depth + 1)? {
+                for mut sub in flatten_steps_depth(&subs, templates, inputs, dir, depth + 1)? {
                     let ctx = sub.context_mut().get_or_insert_with(Default::default);
                     ctx.when
                         .get_or_insert_with(Vec::new)
                         .insert(0, cond.clone());
+                    out.push(sub);
+                }
+            }
+            Step::Do {
+                id,
+                verb: crate::scenario::Verb::Include,
+                params,
+                ..
+            } => {
+                let rel = params
+                    .as_ref()
+                    .and_then(|p| p.get("file"))
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| {
+                        anyhow!("step '{id}' verb=include requires params.file (string)")
+                    })?;
+                let dir = dir.ok_or_else(|| {
+                    anyhow!("step '{id}' verb=include needs a scenario directory context")
+                })?;
+                let path = dir.join(rel);
+                let bytes = std::fs::read(&path).with_context(|| {
+                    format!("step '{id}' verb=include: cannot read {}", path.display())
+                })?;
+                let body: serde_json::Value =
+                    serde_json::from_slice(&bytes).with_context(|| {
+                        format!(
+                            "step '{id}' verb=include: {} is not valid JSON",
+                            path.display()
+                        )
+                    })?;
+                // Accept either a scenario-shaped `{ "steps": [...] }` or a
+                // bare `[...]` step array.
+                let arr = if let Some(arr) = body.as_array() {
+                    arr.clone()
+                } else {
+                    body.get("steps")
+                        .and_then(|v| v.as_array())
+                        .cloned()
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "step '{id}' verb=include: {} has no steps[]",
+                                path.display()
+                            )
+                        })?
+                };
+                let mut subs: Vec<Step> = Vec::with_capacity(arr.len());
+                for (idx, child) in arr.iter().enumerate() {
+                    let parsed: Step =
+                        serde_json::from_value(child.clone()).with_context(|| {
+                            format!(
+                                "step '{id}' verb=include: {} steps[{idx}] failed to parse",
+                                path.display()
+                            )
+                        })?;
+                    subs.push(parsed);
+                }
+                for sub in flatten_steps_depth(&subs, templates, inputs, Some(dir), depth + 1)? {
                     out.push(sub);
                 }
             }
@@ -2793,8 +2853,164 @@ pub fn cli(args: &[String]) -> Result<u8> {
         eprintln!("[v2-replay] failed all {} attempt(s)", flags.retry);
         return Ok(1);
     }
+    if let Some(data_file) = &flags.data {
+        return cli_data_rows(&parsed, data_file);
+    }
     let (code, _) = run_n(&parsed, flags.runs, None)?;
     Ok(code)
+}
+
+/// `--data <file>` — parse the row file and run the scenario once per
+/// row. Each row's fields merge into the run's input overrides, binding
+/// `{{vars.<field>}}` — row values win over `--param` for fields the row
+/// declares. Every row mints its own run id (tagged `data-row-N` when no
+/// `--tag` was given), so `audit list` shows the whole dataset. Exit 0
+/// iff every row's gates pass.
+fn cli_data_rows(parsed: &RunOptions, file: &Path) -> Result<u8> {
+    let rows = load_data_rows(file)?;
+    if rows.is_empty() {
+        bail!("--data: {} carries no rows", file.display());
+    }
+    let total = rows.len();
+    let mut passed = 0usize;
+    let mut failed: Vec<usize> = Vec::new();
+    for (i, row) in rows.iter().enumerate() {
+        let row_no = i + 1;
+        eprintln!(
+            "[v2-replay] data row {row_no}/{total} ({})",
+            row.iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let mut row_opts = parsed.clone();
+        for (k, v) in row {
+            row_opts.input_overrides.insert(k.clone(), v.clone());
+        }
+        if row_opts.tag.is_none() {
+            row_opts.tag = Some(format!("data-row-{row_no}"));
+        }
+        match run(&row_opts) {
+            Ok(summary) => {
+                if summary.gates_ok() {
+                    passed += 1;
+                } else {
+                    failed.push(row_no);
+                }
+            }
+            Err(e) => {
+                eprintln!("[v2-replay] data row {row_no} errored: {e:#}");
+                failed.push(row_no);
+            }
+        }
+    }
+    eprintln!("DATA: {passed}/{total} rows pass");
+    if !failed.is_empty() {
+        eprintln!(
+            "DATA: failing rows: {}",
+            failed
+                .iter()
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    Ok(if failed.is_empty() { 0 } else { 1 })
+}
+
+/// Parse a `--data` file into row maps. `.jsonl`: one JSON object per
+/// line — values stringify (strings as-is, numbers/bools via to_string,
+/// anything else via compact JSON). `.csv`: first line is the header;
+/// simple comma split with `"..."` unquoting (no embedded-newline
+/// fields). Field names double as input names — a column `user` binds
+/// `{{vars.user}}`.
+fn load_data_rows(file: &Path) -> Result<Vec<BTreeMap<String, String>>> {
+    let body = std::fs::read_to_string(file)
+        .with_context(|| format!("--data: read {}", file.display()))?;
+    let is_jsonl = file
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("jsonl"))
+        .unwrap_or(false);
+    if is_jsonl {
+        let mut rows = Vec::new();
+        for (n, line) in body.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let obj: serde_json::Value = serde_json::from_str(line).with_context(|| {
+                format!("--data: {} line {} is not JSON", file.display(), n + 1)
+            })?;
+            let map = obj.as_object().ok_or_else(|| {
+                anyhow!(
+                    "--data: {} line {} must be a JSON object",
+                    file.display(),
+                    n + 1
+                )
+            })?;
+            rows.push(
+                map.iter()
+                    .map(|(k, v)| {
+                        (
+                            k.clone(),
+                            match v {
+                                serde_json::Value::String(s) => s.clone(),
+                                serde_json::Value::Number(n) => n.to_string(),
+                                serde_json::Value::Bool(b) => b.to_string(),
+                                other => serde_json::to_string(other).unwrap_or_default(),
+                            },
+                        )
+                    })
+                    .collect(),
+            );
+        }
+        return Ok(rows);
+    }
+    let mut lines = body.lines().filter(|l| !l.trim().is_empty());
+    let header_line = lines
+        .next()
+        .ok_or_else(|| anyhow!("--data: {} is empty", file.display()))?;
+    let header = csv_split(header_line);
+    let mut rows = Vec::new();
+    for line in lines {
+        let cells = csv_split(line);
+        let mut row = BTreeMap::new();
+        for (i, name) in header.iter().enumerate() {
+            row.insert(name.clone(), cells.get(i).cloned().unwrap_or_default());
+        }
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
+fn csv_split(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_quotes = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_quotes {
+            if c == '"' {
+                if chars.peek() == Some(&'"') {
+                    cur.push('"');
+                    chars.next();
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                cur.push(c);
+            }
+        } else if c == '"' {
+            in_quotes = true;
+        } else if c == ',' {
+            out.push(std::mem::take(&mut cur));
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur);
+    out
 }
 
 /// `replay <sid> --watch`: run once, then re-run every time the scenario
@@ -3260,6 +3476,9 @@ struct CliFlags {
     /// `--changed <file>` / `--changed-git <ref>` resolved into the
     /// changed repo-relative paths for onlyWhen filtering (with --all).
     changed: Option<Vec<String>>,
+    /// `--data <file.csv|.jsonl>` — data-row replay: one full run per row,
+    /// row fields bound as input overrides (`{{vars.<field>}}`).
+    data: Option<PathBuf>,
 }
 
 /// Peel the CLI-level flags `--runs N`, `--retry N`, `--all`,
@@ -3278,6 +3497,7 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
     let mut watch = false;
     let mut until_fail: u32 = 0;
     let mut changed: Option<Vec<String>> = None;
+    let mut data: Option<PathBuf> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -3435,6 +3655,15 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
                         .collect(),
                 );
             }
+            "--data" => {
+                let f = it
+                    .next()
+                    .ok_or_else(|| anyhow!("--data requires a .csv or .jsonl path"))?;
+                data = Some(PathBuf::from(f));
+            }
+            s if s.starts_with("--data=") => {
+                data = Some(PathBuf::from(&s["--data=".len()..]));
+            }
             "--changed-git" => {
                 let r = it
                     .next()
@@ -3483,6 +3712,7 @@ fn parse_args_cli(args: &[String]) -> Result<CliFlags> {
         watch,
         until_fail,
         changed,
+        data,
     })
 }
 
@@ -3959,6 +4189,13 @@ replays/latest.txt.
                          `skipFor` skips on a match, `expectFailFor`
                          downgrades a failure to a skip-status event.
                          The --persona id is always in the tag set.
+
+--data <file.csv|.jsonl> Data-row replay: run the scenario once per row,
+                         row fields bound as input overrides
+                         ({{vars.<field>}}). Each row mints its own run
+                         (tagged data-row-N without --tag); exit 0 iff
+                         every row's gates pass. CSV: header line + one
+                         record per line; JSONL: one object per line.
 
 --junit [path]           Write the run's terminal step outcomes as JUnit
                          XML — one <testcase> per step. Bare flag writes
@@ -5903,7 +6140,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         let mut inputs: std::collections::HashMap<String, serde_json::Value> =
             std::collections::HashMap::new();
         inputs.insert("users".into(), serde_json::json!(["a", "b", "c"]));
-        let flat = flatten_steps_with_scope(&steps, None, Some(&inputs)).unwrap();
+        let flat = flatten_steps_with_scope(&steps, None, Some(&inputs), None).unwrap();
         let intents: Vec<&str> = flat.iter().map(|s| s.intent()).collect();
         assert_eq!(intents, vec!["hi a", "hi b", "hi c"]);
     }
@@ -6084,6 +6321,133 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         assert_eq!(opts.run_for, vec!["admin".to_string(), "beta".to_string()]);
         let opts = parse_args(&["./j.json".into()]).unwrap();
         assert!(opts.run_for.is_empty());
+    }
+
+    // ---------- include verb ----------
+
+    fn include_step(file: &str) -> Step {
+        serde_json::from_value(serde_json::json!({
+            "id": "inc", "kind": "do", "verb": "include", "intent": "include steps",
+            "params": {"file": file}
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn flatten_include_inlines_children() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("login.json"),
+            serde_json::json!({"steps": [
+                {"id": "a", "kind": "do", "verb": "goto", "intent": "open login", "value": {"from":"literal","literal":"/login"}},
+                {"id": "b", "kind": "do", "verb": "click", "intent": "go", "on": {"raw": {"kind": "css", "value": "#go"}, "reason": "t"}},
+                {"id": "c", "kind": "do", "verb": "group", "intent": "post-login", "params": {"steps": [
+                    {"id": "c1", "kind": "check", "intent": "ok visible", "claim": {"subject": {"element": {"raw": {"kind": "css", "value": "#ok"}, "reason": "t"}}, "predicate": "exists"}}
+                ]}}
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+        let steps = vec![
+            include_step("login.json"),
+            serde_json::from_value(
+                serde_json::json!({"id": "z", "kind": "do", "verb": "goto", "intent": "home", "value": {"from":"literal","literal":"/home"}}),
+            )
+            .unwrap(),
+        ];
+        let flat = flatten_steps_with_scope(&steps, None, None, Some(dir.path())).unwrap();
+        // include expands (nested group flattens too), then the literal tail
+        let ids: Vec<&str> = flat.iter().map(|s| s.id()).collect();
+        assert_eq!(ids, vec!["a", "b", "c1", "z"]);
+    }
+
+    #[test]
+    fn flatten_include_accepts_bare_array() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("arr.json"),
+            serde_json::json!([{"id": "x", "kind": "do", "verb": "goto", "intent": "root", "value": {"from":"literal","literal":"/"}}])
+                .to_string(),
+        )
+        .unwrap();
+        let steps = vec![include_step("arr.json")];
+        let flat = flatten_steps_with_scope(&steps, None, None, Some(dir.path())).unwrap();
+        assert_eq!(flat.len(), 1);
+        assert_eq!(flat[0].id(), "x");
+    }
+
+    #[test]
+    fn flatten_include_missing_file_errors_with_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let steps = vec![include_step("nope.json")];
+        let err = flatten_steps_with_scope(&steps, None, None, Some(dir.path()))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("cannot read"), "{err}");
+        assert!(err.contains("nope.json"), "{err}");
+    }
+
+    #[test]
+    fn flatten_include_cycle_hits_depth_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("self.json"),
+            serde_json::json!({"steps": [
+                {"id": "i", "kind": "do", "verb": "include", "intent": "self", "params": {"file": "self.json"}}
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+        let steps = vec![include_step("self.json")];
+        let err = flatten_steps_with_scope(&steps, None, None, Some(dir.path()))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("deeper than"), "{err}");
+    }
+
+    // ---------- --data rows ----------
+
+    #[test]
+    fn load_data_rows_csv() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("rows.csv");
+        std::fs::write(
+            &f,
+            "user,title\nalice,first\n\"bob, jr\",\"say \"\"hi\"\"\"\n",
+        )
+        .unwrap();
+        let rows = load_data_rows(&f).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["user"], "alice");
+        assert_eq!(rows[0]["title"], "first");
+        assert_eq!(rows[1]["user"], "bob, jr");
+        assert_eq!(rows[1]["title"], "say \"hi\"");
+    }
+
+    #[test]
+    fn load_data_rows_jsonl() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("rows.jsonl");
+        std::fs::write(
+            &f,
+            "{\"user\": \"alice\", \"n\": 3, \"ok\": true}\n\n{\"user\": \"bob\"}\n",
+        )
+        .unwrap();
+        let rows = load_data_rows(&f).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["user"], "alice");
+        assert_eq!(rows[0]["n"], "3");
+        assert_eq!(rows[0]["ok"], "true");
+        assert_eq!(rows[1]["user"], "bob");
+    }
+
+    #[test]
+    fn load_data_rows_rejects_non_object_jsonl() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("rows.jsonl");
+        std::fs::write(&f, "[1,2,3]\n").unwrap();
+        let err = load_data_rows(&f).unwrap_err().to_string();
+        assert!(err.contains("JSON object"), "{err}");
     }
 
     #[test]
