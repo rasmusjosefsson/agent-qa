@@ -4,6 +4,12 @@
  * automatically. Sequential because each case spawns its own agent-browser
  * sessions; parallel runs on small CI runners only add flakes.
  *
+ * Suite-level aggregators (a script that itself runs other golden cases)
+ * must NOT use the `golden:` prefix — each case already runs once here, so
+ * an aggregator would double-run its cases inside one GOLDEN_TIMEOUT_MS
+ * budget and always die mid-suite. Name them `eval:*` instead
+ * (e.g. `eval:automation-exercise-all`).
+ *
  * Env:
  *   GOLDEN_TIMEOUT_MS — per-case cap in milliseconds (default 300000)
  *   GOLDEN_ONLY       — comma-separated substring filters on script name;

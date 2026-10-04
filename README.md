@@ -3,12 +3,19 @@
 
 # <picture><source media="(prefers-color-scheme: light)" srcset="site/src/assets/logo-light.svg" /><img src="site/src/assets/logo.svg" width="36" height="36" align="absbottom" alt="agent-qa logo" /></picture> agent-qa
 
+[![npm](https://img.shields.io/npm/v/@rasmusjosefsson/agent-qa)](https://www.npmjs.com/package/@rasmusjosefsson/agent-qa)
+[![docs](https://img.shields.io/badge/docs-site-blue)](https://rasmusjosefsson.github.io/agent-qa/)
+[![CI](https://github.com/rasmusjosefsson/agent-qa/actions/workflows/ci.yml/badge.svg)](https://github.com/rasmusjosefsson/agent-qa/actions/workflows/ci.yml)
+
 Record a user scenario in a real browser. Replay it later. See exactly what
 changed.
 
 agent-qa drives the browser and handles record, replay, and diff. App-specific
 concerns — authentication, session policy, setup hooks — live in plugins you
 add for your target app.
+
+**Docs site:** https://rasmusjosefsson.github.io/agent-qa/ ·
+**npm:** https://www.npmjs.com/package/@rasmusjosefsson/agent-qa
 
 ## Install
 
@@ -128,10 +135,34 @@ layer. Run any verb with `--help` for full flags.
 
 ## Architecture
 
+```mermaid
+flowchart TB
+    Agent["Coding / QA agent (or human)"]
+    CLI["agent-qa CLI<br/>(Rust binary, single crate)"]
+    Plugin["Plugin<br/>(any-language subprocess<br/>over JSON+stdio)"]
+    AB["agent-browser<br/>(Rust binary, CDP driver)"]
+    Browser["Chromium tab"]
+    App["Target web app"]
+    Disk[("Scenario artefacts<br/>(audit.json, sidecars, screenshots, …)")]
+
+    Agent --> CLI
+    CLI -- "auth / session policy / hooks" --> Plugin
+    CLI -- "spawn for every gesture" --> AB
+    AB --> Browser
+    Browser --> App
+    CLI --> Disk
+    AB --> Disk
 ```
-agent-qa (Rust binary)
-  ├── spawns agent-browser   ← drives Chromium via CDP
-  └── invokes plugins        ← per-vendor auth / session policy / hooks
+
+```mermaid
+flowchart LR
+    Start["agent-qa start<br/>'&lt;intent&gt;'"] --> Drive["drive the page<br/>via agent-browser"]
+    Drive --> Step["record-step / smart-click / fill-unique"]
+    Step --> Flush["agent-qa flush"]
+    Flush --> Scenario[("scenario.json")]
+    Scenario --> Replay["agent-qa replay"]
+    Replay --> Audit["&lt;sid&gt;/replays/&lt;runId&gt;/<br/>audit.json + sidecars"]
+    Audit --> Compare["agent-qa compare<br/>snapshot + pixel diffs"]
 ```
 
 See [`docs/architecture.md`](docs/architecture.md), the
@@ -155,7 +186,7 @@ on stdin, reads a JSON response on stdout. Discovery looks at the
 ```bash
 cd cli
 cargo build
-cargo test       # 435 tests, zero warnings
+cargo test       # 911 tests, zero warnings
 ```
 
 The workbench UI is a generated bundle — a fresh checkout needs one build
