@@ -106,6 +106,47 @@ references for design context only; nothing vendor-specific enters core code.
     docs page, and a `.well-known/agent.json` capability manifest. Cheap; our
     site already renders docs but nothing advertises them to agents.
 
+### E2E visual-testing tools (Percy, Applitools, Argos, Chromatic)
+
+Same pass over the dedicated visual tools — what each does well and whether a
+deterministic version fits here:
+
+12. **Capture stabilization pack (Argos)** — the strongest borrowable: before a
+    screenshot, freeze animated GIFs at frame 0, pause CSS animations, wait for
+    `[aria-busy]` to clear, wait for CSS background images, and disable font
+    hinting/subpixel rendering for cross-OS consistency. One JS injection at
+    capture time kills the dominant flake class (animations mid-frame, lazy
+    images, loading spinners). Cheap and orthogonal to everything else.
+13. **Ignore regions / `data-visual-test` masking (Argos, Percy, Applitools)** —
+    paint over dynamic elements (dates, ads, carousels) before capture on both
+    sides so they can never diff. Ours would be a `mask: [locators]` option on
+    shot claims — deterministic, no AI ignore needed.
+14. **Diff RCA-lite (Applitools)** — Eyes stores the DOM+CSS with each
+    checkpoint so clicking a diff pixel names the element whose style changed.
+    We already have domshot baselines beside shots: on a shot miss, correlate
+    the changed region with the DOM diff so the drift comment says "div.hero
+    background changed" instead of just showing red pixels. Medium effort,
+    high signal for review UX.
+15. **Floating regions + layout-level matching (Applitools)** — Layout match
+    level compares element positions, ignoring content/style; floating regions
+    tolerate an element moving within a range. A `ofKind:"layout"` diff over
+    bounding boxes would serve docs-page golden suites where content churns
+    but structure must hold. Heavier; domshot already covers a textual version.
+16. **Flake score per scenario (Argos)** — flaky badges, stability %, history
+    per test from replay history. Our `audit` already keeps runs; a stability
+    column in `audit stats` / run-report is a small rollup over data we own.
+17. **Change-scoped re-snapshotting (Chromatic TurboSnap)** — only re-snapshot
+    what the commit's changes can affect, via git diff + dependency graph; the
+    rest copy baselines forward. We just shipped the docs-only version
+    (DOCS_ONLY selective replay); the generalization is a per-scenario
+    `only_when` glob mapping replay coverage to changed paths — config-driven,
+    no dep graph needed.
+18. **Per-snapshot diff sensitivity presets (Percy)** — Strict→Relaxed
+    presets over diff sensitivity. Our `tolerance.pixels` + AA delta already
+    parameterize this; named presets would just be UX sugar.
+
 Non-goals learned from the field: don't adopt AI-tuned diffing (opaque in a
 gate), don't abandon stored scenarios for pure intent-execution (unreviewable),
-don't make heal suggestions silent writes (audit trail is the product).
+don't make heal suggestions silent writes (audit trail is the product), don't
+buy a hosted-dashboard dependency for diff review (the PR comment IS our
+dashboard — keep it that way).
