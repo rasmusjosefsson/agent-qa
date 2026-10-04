@@ -1,6 +1,6 @@
 # Migrating an existing suite to agent-qa
 
-This doc is for teams moving a Playwright or Cypress suite onto agent-qa scenarios. It has two paths: a mechanical conversion (agent prompt below) and a re-record (preferred when the app is reachable).
+This doc is for teams moving a Playwright or Cypress suite onto agent-qa scenarios. Two paths: `agent-qa migrate <dir>` for a mechanical conversion, and re-recording (preferred when the app is reachable).
 
 ## What converts well
 
@@ -8,6 +8,16 @@ This doc is for teams moving a Playwright or Cypress suite onto agent-qa scenari
 - Suites whose value is "does the flow still work," not "does the component render."
 
 Skip: API-only tests, component tests, `page.route()`/intercept mocking, tests that assert implementation details (class names, internal state). agent-qa scenarios assert what a user perceives; implementation-detail assertions do not survive the move and usually should not.
+
+## The mechanical path: `agent-qa migrate`
+
+```bash
+agent-qa migrate tests/ --out scenarios --dry-run   # preview, no writes
+agent-qa migrate tests/ --out scenarios             # writes scenarios/<spec>/scenario.json
+agent-qa scenario check-all                         # validate + lint the result
+```
+
+Each spec file becomes one scenario; unmapped lines (mocks, intercepts, driver internals) are printed per file — never silently dropped. Then replay each scenario once against the running app and mint goldens with `shot-accept` where the spec asserted visuals.
 
 ## The mechanical mapping
 
@@ -26,7 +36,7 @@ A `<locator>` is `{"role":"button","name":{"exact":"Checkout"}}` — preferred �
 
 ## The conversion prompt
 
-Paste into a coding agent running in the repo with the old suite. It needs `agent-qa` installed (`npm i @rasmusjosefsson/agent-qa`) and your app reachable (or a replay base URL).
+`agent-qa migrate` covers the common spec shapes. For what it reports as unmapped — page objects, dynamic locators, fixtures with real setup — this prompt handles the rest. Paste into a coding agent running in the repo with the old suite. It needs `agent-qa` installed (`npm i @rasmusjosefsson/agent-qa`) and your app reachable (or a replay base URL).
 
 ```text
 Convert this repo's <Playwright|Cypress> suite to agent-qa scenarios.
