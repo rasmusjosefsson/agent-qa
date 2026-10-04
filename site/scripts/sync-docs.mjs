@@ -23,6 +23,7 @@ const DOCS = {
   plugins: { file: "plugins.md", description: "The plugin contract: JSON over stdio, any language." },
   verbs: { file: "verbs.md", description: "Complete CLI verb reference." },
   templates: { file: "templates.md", description: "Reusable sub-scenarios loaded by runTemplate." },
+  flow: { file: "flow.md", description: "Author scenarios as one line per step — compile to scenario.json, describe back." },
   "visual-testing": { file: "visual-testing.md", description: "Golden screenshots: shot claims, baselines, re-mint loop." },
   network: { file: "network.md", description: "Network and console claims behind the UI." },
   "github-action": { file: "github-action.md", description: "Replay your scenarios on every PR." },

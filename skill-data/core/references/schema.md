@@ -285,6 +285,29 @@ and templates bind against the including scenario's inputs, and `when`
 blocks inside the file carry their conditions. Cycles hit the shared
 depth cap; a missing file fails the run with the resolved path.
 
+### Flow DSL (compile/describe)
+
+Scenarios can be authored as one-line-per-step text and compiled to
+`scenario/2` JSON — `agent-qa compile file.flow`; `agent-qa describe
+<sid>` prints a scenario back in the same text (round-trip stable). The
+grammar (full reference in `docs/flow.md`):
+
+```text
+title Short name            base https://app
+input user = "default-user" # declares inputs.user
+open https://app/login      click "Sign in" | css:#x | role:button:"Go"
+fill "Username" with {{inputs.user}}      type "hi" into css:#field
+press Enter               select css:#plan = "pro"
+tick css:#tos             scroll css:#list | bottom | 400
+wait 200ms | css:#ready | url /dash | idle
+check "Welcome" exists | css:#n count 2 | url matches /dash | console quiet
+shot home                 group <label> / when present <loc> … end
+include shared/login.json ! <text> sets the next step's intent
+```
+
+Everything the DSL can't express stays in JSON — unsupported steps
+describe as `# unsupported:` comments, never silently dropped.
+
 ### Data-row replay (--data)
 
 `agent-qa replay <sid> --data rows.csv` (or `.jsonl`) runs the whole
