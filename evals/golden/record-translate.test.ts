@@ -55,6 +55,7 @@ const NOT_RECORDABLE: Record<string, string> = {
   state: "authored — seeds cookies/storage before navigation; never emitted by capture",
   emulate: "authored — emulation config is a scenario decision, not a recorded action",
   frame: "authored — frame context is a scenario decision; capture records flat actions",
+  mail: "authored — inbox polling is out-of-band, not a recorded browser action",
 };
 
 const action = (method: string, args: unknown[] = [], intent = "t") =>

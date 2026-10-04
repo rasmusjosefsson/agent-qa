@@ -2831,7 +2831,7 @@ fn scenario_runs_for_changed(root: &std::path::Path, sid: &str, changed: &[Strin
 /// Repo-relative changed paths: `git diff --name-only <ref>` in cwd.
 /// `ref` can be a sha, `origin/main`, `HEAD~3`, or a `a...b` range —
 /// whatever diff syntax the repo uses.
-fn changed_paths_from_git(git_ref: &str, cwd: &Path) -> Result<Vec<String>> {
+pub(crate) fn changed_paths_from_git(git_ref: &str, cwd: &Path) -> Result<Vec<String>> {
     let out = std::process::Command::new("git")
         .arg("-C")
         .arg(cwd)

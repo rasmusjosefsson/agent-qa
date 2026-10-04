@@ -589,7 +589,8 @@
             "emulate",
             "loop",
             "group",
-            "useTemplate"
+            "useTemplate",
+            "mail"
           ]
         },
         "on": { "$ref": "#/$defs/Locator" },
