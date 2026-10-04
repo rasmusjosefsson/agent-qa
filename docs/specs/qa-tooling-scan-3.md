@@ -91,7 +91,11 @@ non-goal). Everything worth adopting lives on the compile-time side.
 
 ## Gaps worth closing (ranked)
 
-1. **Plain-text scenario format that *compiles* to scenario JSON** — the
+1. **Plain-text scenario format that *compiles* to scenario JSON** —
+   **SHIPPED** as the flow DSL (`agent-qa compile`/`describe`, grammar in
+   `docs/flow.md`): one step per line, `!` intent lines, `group`/`when`
+   blocks, `describe → compile` byte-stable round-trip. Original
+   rationale:
    direct answer to "author an E2E with pure text," and Gauge/Maestro's
    proven shape: a constrained line DSL, no model at replay:
 
