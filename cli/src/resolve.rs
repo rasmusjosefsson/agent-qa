@@ -30,9 +30,10 @@ use crate::plugin::{discovery, host};
 /// authoring session.
 const INVOKE_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// How many snapshot candidates are offered per question. Keeps payloads
-/// small; genuinely ambiguous pages should be narrowed by the author anyway.
-const MAX_CANDIDATES: usize = 40;
+/// How many snapshot candidates are offered per question. Decision models
+/// handle hundreds of options in one Choice call, so the bound is about
+/// payload size, not model capacity — 100 covers very dense pages.
+const MAX_CANDIDATES: usize = 100;
 
 /// Roles a user can plausibly point at. Static text and grouping nodes are
 /// noise for a "which element did I mean" question.
@@ -238,8 +239,10 @@ pub(crate) fn resolve_and_act(
 
 pub fn run(args: &[String]) -> Result<u8> {
     let opts = parse_args(args)?;
-    let state = crate::recorder_state::RecorderState::load_active()?;
-    let session = opts.session.unwrap_or(state.session);
+    let session = match opts.session {
+        Some(s) => s,
+        None => crate::recorder_state::RecorderState::load_active()?.session,
+    };
 
     if find_plugin()?.is_none() {
         anyhow::bail!(
