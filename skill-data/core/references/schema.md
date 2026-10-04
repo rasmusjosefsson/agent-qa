@@ -267,6 +267,36 @@ green when the known-broken-under-that-profile step fails. All three are
 silent no-ops on an untagged run except `runFor`, which skips — that's
 the point of tagging it.
 
+### Shared step files (include)
+
+An `include` do-step inlines a step list from another JSON file relative
+to the scenario's directory — the authored-composition mechanism: write
+`login` once, include it from every scenario that needs it.
+
+```json
+{ "id": "s2", "intent": "sign in", "kind": "do", "verb": "include",
+  "params": { "file": "../shared/login.json" } }
+```
+
+The file holds either a scenario-shaped `{ "steps": [...] }` or a bare
+`[...]` step array. The runner flattens at load like `group` — included
+steps dispatch in place (failures point at the child ids), `{{vars.*}}`
+and templates bind against the including scenario's inputs, and `when`
+blocks inside the file carry their conditions. Cycles hit the shared
+depth cap; a missing file fails the run with the resolved path.
+
+### Data-row replay (--data)
+
+`agent-qa replay <sid> --data rows.csv` (or `.jsonl`) runs the whole
+scenario once per row, each row's fields merged into the run's input
+overrides — a column `title` binds `{{vars.title}}`. CSV: header line +
+one record per line (`"..."` quoting supported). JSONL: one JSON object
+per line, values stringified. Every row mints its own run id (tagged
+`data-row-N` without `--tag`), so `audit list` shows the whole dataset;
+`DATA: x/y rows pass` summarizes and the exit code is 0 only when every
+row's gates pass. Row values win over `--param` for fields the row
+declares.
+
 ### Inbox + TOTP (verification channels)
 
 Two do-verbs cover the out-of-browser channels OTP/verification flows

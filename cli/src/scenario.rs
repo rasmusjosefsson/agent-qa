@@ -263,6 +263,14 @@ pub enum Verb {
     /// children carry the condition in their `context.when`.
     #[serde(rename = "when")]
     When,
+    /// Inline another step list: `params.file` is a scenario-dir-relative
+    /// JSON file holding `{ "steps": [...] }` (or a bare `[...]` array).
+    /// The authored-composition mechanism — write `login` once in a shared
+    /// file, include it from every scenario; failures point at the
+    /// including step's children. Flattened at load like `group`; cycles
+    /// hit the shared depth cap.
+    #[serde(rename = "include")]
+    Include,
 }
 
 // ---------- Locator ----------

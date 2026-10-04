@@ -224,6 +224,12 @@ fn rule_for(verb: &Verb) -> VerbRule {
             params_required: &["steps"],
             ..VerbRule::default()
         },
+        Verb::Include => VerbRule {
+            required: &[DoField::Params],
+            forbidden: &[DoField::On, DoField::Value],
+            params_required: &["file"],
+            ..VerbRule::default()
+        },
     }
 }
 
@@ -435,6 +441,30 @@ mod tests {
         let s = parse(json!({
             "id": "w1", "intent": "x", "kind": "do", "verb": "when",
             "params": { "present": "css:#a", "steps": [] }
+        }));
+        assert!(assert_verb_shape(&s).is_ok());
+    }
+
+    #[test]
+    fn include_requires_params_file_forbids_on_value() {
+        let s = parse(json!({
+            "id": "i1", "intent": "x", "kind": "do", "verb": "include",
+            "params": {}
+        }));
+        let err = assert_verb_shape(&s).unwrap_err().to_string();
+        assert!(err.contains("params requires 'file'"), "got: {err}");
+
+        let s = parse(json!({
+            "id": "i1", "intent": "x", "kind": "do", "verb": "include",
+            "on": "css:#a",
+            "params": { "file": "shared.json" }
+        }));
+        let err = assert_verb_shape(&s).unwrap_err().to_string();
+        assert!(err.contains("on"), "got: {err}");
+
+        let s = parse(json!({
+            "id": "i1", "intent": "x", "kind": "do", "verb": "include",
+            "params": { "file": "shared.json" }
         }));
         assert!(assert_verb_shape(&s).is_ok());
     }
