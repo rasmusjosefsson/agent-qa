@@ -88,7 +88,14 @@ jobs:
 
           Minted by the qa-accept workflow on the PR head — the same image
           the ui-goldens gate replays against. Requested by comment ${{ github.event.comment.html_url }}."
-          git push origin "HEAD:${HEAD_REF}"
+          # The head can move while the mint runs (another commit landing on
+          # the PR) — a plain push then dies on fetch-first and the mint is
+          # lost. Fetch, rebase onto it, retry once.
+          git push origin "HEAD:${HEAD_REF}" || {
+            git fetch -q origin "${HEAD_REF}"
+            git rebase "origin/${HEAD_REF}"
+            git push origin "HEAD:${HEAD_REF}"
+          }
       - name: comment the result
         if: always()
         env:
