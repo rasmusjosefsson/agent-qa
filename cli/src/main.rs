@@ -43,6 +43,8 @@ mod init;
 mod io;
 mod junit;
 mod list;
+mod mcp;
+mod migrate;
 mod mock;
 mod net_tap;
 mod netlog;
@@ -157,6 +159,8 @@ fn main() -> ExitCode {
         "baselines" => golden_store::cli(rest),
         "init" => init::cli(rest),
         "ingest" => ingest::run(rest),
+        "mcp" => mcp::run(rest),
+        "migrate" => migrate::cli(rest),
         _ => {
             eprintln!(
                 "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, smart-fill, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, domshot-accept, baselines, run-report, init, ingest."
@@ -261,6 +265,11 @@ Verbs:
   init [dir] [--force] [--ci] [--store <local|github|turso>]
                                 Bootstrap a dir: toml + scenarios/hello + .gitignore
                                 (+ --ci golden-loop workflow, + [baselines] store)
+  mcp                            Serve the CLI as MCP tools over stdio for
+                                agent clients (tools/list + tools/call)
+  migrate <dir> [--out <dir>] [--dry-run] [--sid-prefix <p>]
+                                Convert Playwright/Cypress spec files into
+                                scenario/2 documents
   ingest <bundle.json> [--sid <name>]
                                 Turn a browser-extension capture bundle
                                 (steps + traffic) into scenario.json +

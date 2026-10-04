@@ -5,6 +5,21 @@ All notable changes to agent-qa are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+
+- `agent-qa mcp` — stdio MCP server exposing the CLI to agent clients
+  (tools/list + tools/call over newline-delimited JSON-RPC; tools spawn the
+  binary so the MCP surface can never drift from the verbs).
+- `agent-qa migrate <dir>` — Playwright/Cypress spec importer: each spec file
+  becomes a scenario/2 document (locators → role/raw arms, expects → check
+  claims); unmapped lines are reported, never silently dropped.
+- `docs/migrating.md` — migration playbook: mechanical mapping table +
+  copy-paste agent conversion prompt.
+
+### Changed
+
+- Drift comments no longer transcode `run.gif`; the mp4 attaches as a real
+  player when a user token is available, otherwise links plainly.
 
 ## [0.1.8] - 2026-10-03
 ### Added
