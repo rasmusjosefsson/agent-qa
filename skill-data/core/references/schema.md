@@ -216,6 +216,57 @@ in. Use for one known-flaky interaction; whole-run flake belongs to
 effect — prefer idempotent verbs (click, select) over append-style ones
 (type).
 
+### Conditional steps (when blocks + profile gating)
+
+A `when` do-step wraps a step list in a presence condition — the children
+dispatch only when the locator resolves (or doesn't, for `absent`) at that
+point in the flow. This is the persona-divergent-flow tool: record the
+full path once, wrap the admin-only tail, and a regular-user replay skips
+it instead of failing on a button that isn't there. The condition is the
+page state itself — no external flag needed.
+
+```json
+{ "id": "s10", "intent": "admin-only: create a user", "kind": "do",
+  "verb": "when",
+  "params": { "present": { "role": "button", "name": "Create user" },
+              "steps": [
+    { "id": "s10a", "intent": "open the dialog", "kind": "do", "verb": "click",
+      "on": { "role": "button", "name": "Create user" } },
+    { "id": "s10b", "intent": "name them", "kind": "do", "verb": "type",
+      "on": { "role": "textbox", "name": "Name" }, "value": "Rasmus" }
+  ] } }
+```
+
+`params.present` / `params.absent` take one locator (exactly one of the
+two, `on:`-shaped). The block never dispatches — the runner flattens it
+and every child carries the condition; a skipped child emits the same
+terminal `skip` event as `enabled:false`. The probe runs once per block
+at its position and the verdict is cached for the block's children —
+don't wrap steps whose condition flips mid-block. `when` nests (every
+condition ANDs) and composes with group/loop/template.
+
+Two declarative siblings on any step's `context` gate by *profile tag*
+instead of page state — the run's tag set is the `--persona` id plus any
+`--run-for <tag>` flags (repeatable):
+
+```json
+{ "kind": "do", "verb": "click", "on": { "css": "#create-user" },
+  "context": { "runFor": ["admin"] } }
+{ "kind": "check", "claim": { "element": { "isVisible": true },
+            "on": { "css": "#beta-banner" } },
+  "context": { "skipFor": ["regular"] } }
+{ "kind": "check", "claim": { "element": { "isVisible": true },
+            "on": { "css": "#known-broken" } },
+  "context": { "expectFailFor": ["admin"] } }
+```
+
+`runFor` runs the step only when a tag matches (no tags on the run →
+skip); `skipFor` skips on a match; `expectFailFor` downgrades a real
+failure to a skip-status event ("expected failure: …") so the run stays
+green when the known-broken-under-that-profile step fails. All three are
+silent no-ops on an untagged run except `runFor`, which skips — that's
+the point of tagging it.
+
 ### Inbox + TOTP (verification channels)
 
 Two do-verbs cover the out-of-browser channels OTP/verification flows

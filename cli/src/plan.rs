@@ -312,6 +312,7 @@ fn run_plan(root: &Path, plan: &PlanFile, opts: &RunOpts) -> Result<(Vec<RunRow>
             profile: opts.profile.clone(),
             persona: None,
             environment: None,
+            run_for: Vec::new(),
             session_name: opts
                 .profile
                 .as_ref()

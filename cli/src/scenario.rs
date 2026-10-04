@@ -254,6 +254,15 @@ pub enum Verb {
     /// `params.offset` seconds skew (default 0) complete the dial.
     /// No browser interaction — safe mid-recording too.
     Totp,
+    /// Conditional block: `params.present` or `params.absent` is a locator
+    /// (`on:`-shaped) evaluated once at the block's position; `params.steps`
+    /// is the nested step list dispatched only when the condition holds.
+    /// Presence covers persona-divergent flows (an admin-only button) and
+    /// optional interstitials — no external flag needed, the page state is
+    /// the condition. Flattened by the runner like `group`/`loop`; the
+    /// children carry the condition in their `context.when`.
+    #[serde(rename = "when")]
+    When,
 }
 
 // ---------- Locator ----------
@@ -853,6 +862,26 @@ pub struct TabMatcher {
     pub opens_from_step_id: Option<String>,
 }
 
+/// One condition a step must satisfy to dispatch, injected into children
+/// when a `when` block flattens. Nested `when` blocks accumulate — every
+/// entry must hold (AND semantics). `block` is the `when` step's id and
+/// doubles as the per-run evaluation-cache key.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WhenCond {
+    pub block: String,
+    pub condition: WhenCondition,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WhenCondition {
+    /// Runs when the locator resolves to at least one element right now.
+    Present { locator: Locator },
+    /// Runs when the locator does not resolve.
+    Absent { locator: Locator },
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StepContext {
@@ -870,6 +899,10 @@ pub struct StepContext {
     pub expect_fail_for: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tab: Option<TabMatcher>,
+    /// Internal: populated by the runner's flatten pass from `when` blocks —
+    /// not meant to be authored directly (write a `when` step instead).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<Vec<WhenCond>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -915,6 +948,18 @@ impl Step {
     pub fn intent(&self) -> &str {
         match self {
             Step::Do { intent, .. } | Step::Check { intent, .. } => intent,
+        }
+    }
+
+    pub fn context(&self) -> Option<&StepContext> {
+        match self {
+            Step::Do { context, .. } | Step::Check { context, .. } => context.as_ref(),
+        }
+    }
+
+    pub(crate) fn context_mut(&mut self) -> &mut Option<StepContext> {
+        match self {
+            Step::Do { context, .. } | Step::Check { context, .. } => context,
         }
     }
 
