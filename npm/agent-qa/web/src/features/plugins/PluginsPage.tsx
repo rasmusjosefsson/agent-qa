@@ -49,10 +49,13 @@ import {
   updatePackage,
   uninstallPackage,
   checkPackageUpdates,
+  getJev,
+  setJev as setJevApi,
   type InstallResult,
   type InstalledPackage,
   type PackageUpdate,
   type AppUpdate,
+  type JevStatus,
 } from '@/lib/run-config-api'
 import type { PluginInfo } from '@/features/environments/types'
 import { PageHeader, PageError } from '@/components/page-header'
@@ -74,14 +77,19 @@ export function PluginsPage() {
   const [checking, setChecking] = useState(false)
   const [updatingSource, setUpdatingSource] = useState<string | null>(null)
   const [removingSource, setRemovingSource] = useState<string | null>(null)
+  // Jev (typesafe.ai) bundled resolve plugin — the "enable in one click" card.
+  const [jev, setJev] = useState<JevStatus | null>(null)
+  const [jevKey, setJevKey] = useState('')
+  const [jevBusy, setJevBusy] = useState(false)
 
   const load = () =>
-    Promise.all([getPlugins(), getPluginPaths(), getPackages()])
-      .then(([disc, cfg, pkg]) => {
+    Promise.all([getPlugins(), getPluginPaths(), getPackages(), getJev()])
+      .then(([disc, cfg, pkg, j]) => {
         setPlugins(disc.plugins)
         setAvailable(disc.available)
         setPaths(cfg.paths)
         setPackages(pkg.packages)
+        setJev(j)
       })
       .catch((e) => setErr(String(e.message || e)))
   useEffect(() => {
@@ -150,6 +158,21 @@ export function PluginsPage() {
     await setPluginPaths(paths.filter((x) => x !== p)).catch((e) => setErr(String(e.message || e)))
     void load()
   }
+  const saveJev = async (patch: { enabled?: boolean; apiKey?: string }) => {
+    setJevBusy(true)
+    setErr('')
+    try {
+      const r = await setJevApi(patch)
+      setJev((prev) => prev && { ...prev, enabled: r.enabled, hasKey: r.hasKey })
+      setJevKey('')
+      void load()
+    } catch (e) {
+      setErr(String((e as Error).message || e))
+    } finally {
+      setJevBusy(false)
+    }
+  }
+
   const onImportFile = async (file: File) => {
     try {
       const dataUrl = await new Promise<string>((resolve, reject) => {
@@ -234,6 +257,66 @@ export function PluginsPage() {
             </Button>
           </div>
         </div>
+        {jev !== null && (
+          <div className="px-5 pt-5">
+            <div className="flex items-center gap-2 px-1 pb-2 text-[10.5px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">
+              <PlugIcon className="size-3.5 text-primary" /> Element resolution
+            </div>
+            <div className="aqa-table-card aqa-elevated flex flex-wrap items-center gap-4 p-4">
+              <div className="min-w-0 flex-1 basis-64">
+                <div className="text-sm font-medium text-foreground">Jev (typesafe.ai)</div>
+                <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                  Optional authoring-time picker: when a fuzzy description matches no element
+                  ("export it to excel"), Jev's decision model picks the intended one and the
+                  recorded step keeps a concrete role+name — replay never calls it. Disable at
+                  any time; recordings keep working.
+                  {jev.envForced && (
+                    <span className="mt-1 block text-warning">
+                      TYPESAFE_API_KEY is set in the environment — it wins over any saved key.
+                    </span>
+                  )}
+                </div>
+              </div>
+              {!jev.available ? (
+                <span className="text-xs text-muted-foreground">
+                  Bundled plugin not found — update the agent-qa package.
+                </span>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2">
+                  {jev.hasKey && (
+                    <span className="rounded-full border border-success/25 bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success">
+                      key saved
+                    </span>
+                  )}
+                  <Input
+                    type="password"
+                    autoComplete="new-password"
+                    placeholder={jev.hasKey ? 'Replace API key…' : 'API key (console.typesafe.ai)'}
+                    value={jevKey}
+                    onChange={(e) => setJevKey(e.target.value)}
+                    className="h-8 w-56"
+                  />
+                  {jevKey.trim() ? (
+                    <Button size="sm" disabled={jevBusy} onClick={() => void saveJev({ enabled: true, apiKey: jevKey.trim() })}>
+                      {jevBusy ? <Loader2Icon className="animate-spin" /> : null} Save &amp; enable
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant={jev.enabled ? 'outline' : 'default'}
+                      disabled={jevBusy || (!jev.enabled && !jev.hasKey && !jev.envForced)}
+                      title={!jev.hasKey && !jev.envForced ? 'Save an API key first' : undefined}
+                      onClick={() => void saveJev({ enabled: !jev.enabled })}
+                    >
+                      {jevBusy ? <Loader2Icon className="animate-spin" /> : null}
+                      {jev.enabled ? 'Disable' : 'Enable'}
+                    </Button>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
         {packages.length > 0 && (
           <div className="px-5 pt-5">
             <div className="flex items-center gap-2 px-1 pb-2 text-[10.5px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">

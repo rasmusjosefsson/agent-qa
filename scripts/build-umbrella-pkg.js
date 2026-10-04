@@ -76,3 +76,13 @@ if (existsSync(extSrc)) {
   cpSync(extSrc, extDst, { recursive: true });
   console.log(`copied ${extSrc}/ -> ${extDst}/`);
 }
+
+// Same for `examples/plugins/` — the bundled resolve plugin lets the workbench
+// offer one-click Jev enablement without the user wiring agent-qa.toml by hand.
+const pluginsSrc = 'examples/plugins';
+const pluginsDst = join('npm', 'agent-qa', 'plugins-bundled');
+if (existsSync(pluginsSrc)) {
+  if (existsSync(pluginsDst)) rmSync(pluginsDst, { recursive: true, force: true });
+  cpSync(pluginsSrc, pluginsDst, { recursive: true });
+  console.log(`copied ${pluginsSrc}/ -> ${pluginsDst}/`);
+}

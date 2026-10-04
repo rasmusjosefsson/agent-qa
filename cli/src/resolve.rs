@@ -110,12 +110,37 @@ pub(crate) fn resolve_element(
     description: &str,
     preferred_role: Option<&str>,
 ) -> Result<Option<ResolvedPick>> {
+    resolve_inner(session, description, preferred_role, false)
+}
+
+/// Like [`resolve_element`] but offers ONLY candidates of `role` — for
+/// verbs whose target must be a specific control kind (e.g. `select`
+/// needs the combobox, not one of its options).
+pub(crate) fn resolve_element_in_role(
+    session: &str,
+    description: &str,
+    role: &str,
+) -> Result<Option<ResolvedPick>> {
+    resolve_inner(session, description, Some(role), true)
+}
+
+fn resolve_inner(
+    session: &str,
+    description: &str,
+    preferred_role: Option<&str>,
+    restrict_to_role: bool,
+) -> Result<Option<ResolvedPick>> {
     let Some(binary) = find_plugin()? else {
         return Ok(None);
     };
     let snapshot = browser::snapshot_full(session)
         .map_err(|e| anyhow::anyhow!("resolve: snapshot for candidates: {e}"))?;
-    let candidates = candidates_from_snapshot(&snapshot, preferred_role, MAX_CANDIDATES);
+    let mut candidates = candidates_from_snapshot(&snapshot, preferred_role, MAX_CANDIDATES);
+    if restrict_to_role {
+        if let Some(role) = preferred_role {
+            candidates.retain(|c| c.role == role);
+        }
+    }
     if candidates.is_empty() {
         return Ok(None);
     }

@@ -2335,6 +2335,38 @@ test('GET/POST /api/config/settings round-trips and validates', async (t) => {
   assert.equal((await j('POST', '/api/config/settings', { headedDefault: 'yes' })).status, 400);
 });
 
+test('GET/POST /api/jev enables the bundled plugin and stores the key write-only', async (t) => {
+  const fx = makeFixture();
+  const { server, base } = await boot(fx.root);
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  // defaults: bundled plugin ships in the package; off, no key
+  const d0 = await (await j('GET', '/api/jev')).json();
+  assert.equal(d0.available, true);
+  assert.equal(d0.enabled, false);
+  assert.equal(d0.hasKey, false);
+
+  // enable + store key → persisted 0600 config, key never echoed back
+  const d1 = await (await j('POST', '/api/jev', { enabled: true, apiKey: 'sk-test-1' })).json();
+  assert.equal(d1.ok, true);
+  assert.equal(d1.enabled, true);
+  assert.equal(d1.hasKey, true);
+  assert.equal('apiKey' in d1, false);
+  const onDisk = JSON.parse(fs.readFileSync(path.join(fx.root, '_config', 'jev.json'), 'utf8'));
+  assert.equal(onDisk.schema, 'jev/1');
+  assert.equal(onDisk.apiKey, 'sk-test-1');
+  const d2 = await (await j('GET', '/api/jev')).json();
+  assert.equal('apiKey' in d2, false);
+  assert.equal(d2.hasKey, true);
+
+  // disable without touching the stored key
+  const d3 = await (await j('POST', '/api/jev', { enabled: false })).json();
+  assert.equal(d3.enabled, false);
+  assert.equal(d3.hasKey, true);
+});
+
 test('GET /api/scenarios surfaces a corrupt scenario.json instead of hiding the sid', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-report-corrupt-'));
   const badSid = 'broken-sid';

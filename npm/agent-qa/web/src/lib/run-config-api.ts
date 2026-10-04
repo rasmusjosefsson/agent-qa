@@ -55,6 +55,23 @@ export function getPlugins(): Promise<{ available: boolean; plugins: PluginInfo[
   return getJson('/api/plugins')
 }
 
+// --- Jev (typesafe.ai) authoring-time resolve plugin ---
+export interface JevStatus {
+  available: boolean
+  enabled: boolean
+  hasKey: boolean
+  envForced: boolean
+}
+export function getJev(): Promise<JevStatus> {
+  return getJson('/api/jev')
+}
+export function setJev(patch: {
+  enabled?: boolean
+  apiKey?: string
+}): Promise<{ ok: boolean; enabled: boolean; hasKey: boolean }> {
+  return postJson('/api/jev', patch)
+}
+
 // --- plugin registry (UI-managed paths injected as AGENT_QA_PLUGINS) ---
 export function getPluginPaths(): Promise<{ paths: string[] }> {
   return getJson('/api/config/plugins')

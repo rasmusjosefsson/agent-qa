@@ -79,8 +79,11 @@ mod session_lock;
 mod shot_accept;
 mod sidecar;
 mod skills;
+mod smart_assert;
 mod smart_click;
 mod smart_fill;
+mod smart_hover;
+mod smart_select;
 mod start;
 mod telemetry;
 mod test_util;
@@ -157,6 +160,9 @@ fn main() -> ExitCode {
         "fill-unique" => fill_unique::run(rest),
         "smart-click" => smart_click::run(rest),
         "smart-fill" => smart_fill::run(rest),
+        "smart-assert" => smart_assert::run(rest),
+        "smart-hover" => smart_hover::run(rest),
+        "smart-select" => smart_select::run(rest),
         "resolve" => resolve::run(rest),
         "heal-respond" => heal_respond::run(rest),
         "heal-promote" => heal_promote::run(rest),
@@ -178,7 +184,7 @@ fn main() -> ExitCode {
         "notify" => notify::run(rest),
         _ => {
             eprintln!(
-                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, smart-fill, resolve, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, domshot-accept, layout-accept, baselines, run-report, init, ingest, mcp, migrate, compile, describe, mail, discover, totp, notify."
+                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, smart-fill, smart-assert, smart-hover, smart-select, resolve, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, domshot-accept, layout-accept, baselines, run-report, init, ingest, mcp, migrate, compile, describe, mail, discover, totp, notify."
             );
             eprintln!("Run `agent-qa --help` for usage.");
             Ok(2)
@@ -333,6 +339,9 @@ Verbs:
   fill-unique <Label> --template <…>   Fill a unique-token field + record
   smart-click \"<name>\" [--role <r>]   Click by accessible name + auto-record
   smart-fill \"<name>\" <value> [--role <r>]  Fill a field by accessible name + auto-record
+  smart-assert \"<desc>\" [--role <r>]   Verify + record an element check by description
+  smart-hover \"<desc>\" [--role <r>]    Hover an element by description + auto-record
+  smart-select \"<desc>\" --value <v>    Pick an option by control description + auto-record
   resolve \"<description>\" [--role <r>]    Ask the resolve plugin which element a description means
   heal-respond <sid> --step <id> (--value <…> | --reject)   Record a caller-driven heal
   heal-promote <sid> [--run <id>] [--steps <…>] [--apply]   Promote replay-side patches

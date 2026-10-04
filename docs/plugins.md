@@ -107,7 +107,7 @@ Request payload:
 
 - `role` — the caller's preferred role (null when unspecified).
 - `candidates` — interactive snapshot nodes (preferred role first, capped
-  at 40). `ref` is the only handle guaranteed to hit that exact node;
+  at 100). `ref` is the only handle guaranteed to hit that exact node;
   `line` carries state flags (`[disabled]`, `[checked=true]`) as context.
 
 Response payload:
@@ -129,6 +129,56 @@ configured the fallback rung is skipped entirely.
 A reference implementation lives in `examples/plugins/jev-resolve/` — it
 answers via Jev (typesafe.ai)'s System One decision API out of the box,
 and adapts to any compatible choice-question endpoint via env config.
+
+### Enable in the workbench
+
+The `jev-resolve` binary ships inside the `agent-qa` npm package, so the
+workbench can wire it up with zero config editing:
+
+1. Open **Extensions** in the workbench (`agent-qa web` → `/plugins`).
+2. Under **Element resolution → Jev (typesafe.ai)**, paste your API key
+   (console.typesafe.ai → API keys) and click **Save & enable**.
+
+The server persists `{enabled, apiKey}` to `<root>/_config/jev.json`
+(mode 0600) and injects the bundled binary into `AGENT_QA_PLUGINS` +
+`TYPESAFE_API_KEY` for every CLI call it spawns — chat agents, the
+editor, and replay all pick it up. The API key is write-only over HTTP
+(the API reports `hasKey`, never the value).
+
+Any `TYPESAFE_API_KEY` already in the environment **wins** over the
+stored key, so CI and terminals keep working as before. Outside the
+workbench the CLI path stays the canonical way:
+
+```toml
+# agent-qa.toml
+[plugins]
+resolve = "/path/to/agent-qa-plugin-jev-resolve"   # or a name resolved via $PATH
+```
+
+```bash
+export TYPESAFE_API_KEY="…"   # shell, CI secret, or vault — never committed
+```
+
+The key can also come straight from GitHub (Actions secret → env var) —
+nothing Jev-related ever needs to be committed or stored in git.
+
+### Measured cost + accuracy
+
+Battery over a live Jev `jev-latest` endpoint (local snapshot
+enumeration + HTTP round-trip included):
+
+| metric | measured |
+| --- | --- |
+| resolution latency | ~250–300ms per call (~40ms snapshot + ~130ms API + spawn) |
+| smart-click resolved vs failed miss | ~2.9s vs ~1.9s — the plugin adds ~0.3s but turns a dead end into a pass |
+| accuracy on fuzzy descriptions | 15/17 correct at conf 0.85–1.0 on pages with 30+ controls |
+| nonsense / ambiguous | clean `{ref: null}` no-pick, no guessing |
+
+What that buys an author: a description that missed every deterministic
+locator previously cost a human retry loop (read candidates, guess an
+exact name, re-run — tens of seconds per element); with a resolver it's a
+one-shot ~3s pick. Jev's Choice primitive handles hundreds of options
+per call, so the 100-candidate cap bounds payload, not the model.
 
 ## Discovery
 

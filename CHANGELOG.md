@@ -7,6 +7,20 @@ All notable changes to agent-qa are documented here. This project follows
 ## [Unreleased]
 ### Added
 
+- `agent-qa smart-assert` / `smart-hover` / `smart-select` — the same
+  fuzzy-authoring ladder as smart-click/smart-fill (deterministic locators
+  first, `resolve` plugin last), recording a concrete `check`/`hover`/
+  `select` step; `smart-select` resolves strictly within the control's
+  role so it picks the combobox, never an option inside it.
+- Workbench Jev enable card (Extensions → Element resolution): the
+  bundled `jev-resolve` plugin + a write-only API-key field persist to
+  `_config/jev.json`; the server injects `AGENT_QA_PLUGINS` +
+  `TYPESAFE_API_KEY` into every spawned CLI call (chat agent, editor,
+  replay). A real `TYPESAFE_API_KEY` in the environment wins.
+- `examples/plugins/` is now mirrored into the npm package
+  (`plugins-bundled/`), so the workbench can enable the resolve plugin
+  without the user wiring `agent-qa.toml` by hand.
+
 - `agent-qa mcp` — stdio MCP server exposing the CLI to agent clients
   (tools/list + tools/call over newline-delimited JSON-RPC; tools spawn the
   binary so the MCP surface can never drift from the verbs).

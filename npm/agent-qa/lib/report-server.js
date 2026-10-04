@@ -1060,7 +1060,10 @@ function runOptsFromBody(body) {
 // vault ref can't be resolved. With no persona it returns just the plugin env
 // (the pre-existing no-auth path), so unauthenticated runs are unchanged.
 async function resolveRunAuthEnv(root, deps, opts) {
-  const base = pluginsEnv(await readPluginPaths(root));
+  const base = {
+    ...(await resolvePluginsEnv(root)),
+    ...jevKeyEnv(await readJevConfig(root)),
+  };
   const personaId = opts && opts.personaId ? String(opts.personaId) : '';
   if (!personaId) return { env: base };
   if (!isSafeSegment(personaId)) return { error: 'unsafe persona id' };
@@ -1522,6 +1525,91 @@ function pluginsEnv(paths) {
   return paths && paths.length ? { AGENT_QA_PLUGINS: paths.join(':') } : {};
 }
 
+// -------- Jev (typesafe.ai) authoring-time resolve --------
+//
+// `_config/jev.json` enables the bundled jev-resolve plugin without a
+// hand-edited agent-qa.toml: when enabled, the bundled binary is appended
+// to AGENT_QA_PLUGINS for every workbench-spawned CLI call and the stored
+// API key rides as TYPESAFE_API_KEY. A TYPESAFE_API_KEY already in the
+// environment always wins over the stored key — same convention as
+// settings.json.
+const jevConfigFile = (root) => path.join(root, '_config', 'jev.json');
+// Packaged path (mirrored from examples/plugins at release time) + the repo
+// checkout source so the card works under `npm run dev` too.
+const JEV_PLUGIN_PATHS = [
+  path.join(__dirname, '..', 'plugins-bundled', 'jev-resolve', 'agent-qa-plugin-jev-resolve'),
+  path.join(__dirname, '..', '..', '..', 'examples', 'plugins', 'jev-resolve', 'agent-qa-plugin-jev-resolve'),
+];
+
+function bundledJevPlugin() {
+  return JEV_PLUGIN_PATHS.find((p) => fs.existsSync(p)) || null;
+}
+
+function normalizeJevConfig(rec) {
+  return {
+    enabled: !!(rec && rec.enabled),
+    apiKey: rec && typeof rec.apiKey === 'string' ? rec.apiKey : '',
+  };
+}
+
+async function readJevConfig(root) {
+  return normalizeJevConfig(await readJson(jevConfigFile(root)));
+}
+
+function readJevConfigSync(root) {
+  try {
+    return normalizeJevConfig(JSON.parse(fs.readFileSync(jevConfigFile(root), 'utf8')));
+  } catch {
+    return normalizeJevConfig(null);
+  }
+}
+
+async function writeJevConfig(root, patch) {
+  const cur = await readJevConfig(root);
+  const next = {
+    schema: 'jev/1',
+    enabled: 'enabled' in patch ? !!patch.enabled : cur.enabled,
+    apiKey: 'apiKey' in patch ? String(patch.apiKey || '') : cur.apiKey,
+  };
+  await fsp.mkdir(path.join(root, '_config'), { recursive: true });
+  await fsp.writeFile(jevConfigFile(root), JSON.stringify(next, null, 2) + '\n');
+  try {
+    await fsp.chmod(jevConfigFile(root), 0o600);
+  } catch {
+    /* best-effort on platforms without chmod */
+  }
+  return next;
+}
+
+// Registered workbench plugin paths + the bundled jev-resolve binary when
+// enabled — the env every workbench-spawned CLI call should see.
+async function resolvePluginsEnv(root) {
+  const paths = await readPluginPaths(root);
+  const bundled = (await readJevConfig(root)).enabled ? bundledJevPlugin() : null;
+  return pluginsEnv(bundled ? [...paths, bundled] : paths);
+}
+
+function resolvePluginsEnvSync(root) {
+  let paths = [];
+  try {
+    const rec = JSON.parse(fs.readFileSync(pluginsConfigFile(root), 'utf8'));
+    if (Array.isArray(rec && rec.paths))
+      paths = rec.paths.filter((p) => typeof p === 'string' && p.trim());
+  } catch {
+    /* unreadable → none */
+  }
+  const bundled = readJevConfigSync(root).enabled ? bundledJevPlugin() : null;
+  return pluginsEnv(bundled ? [...paths, bundled] : paths);
+}
+
+// API-key env for an enabled Jev config. A real TYPESAFE_API_KEY in the
+// environment wins, so this returns {} when the env var is set (spread it
+// unconditionally over child env).
+function jevKeyEnv(jev) {
+  if (!jev || !jev.enabled || !jev.apiKey || process.env.TYPESAFE_API_KEY) return {};
+  return { TYPESAFE_API_KEY: jev.apiKey };
+}
+
 // -------- workbench settings --------
 //
 // User preferences managed from the Settings tab, stored at <root>/_config/
@@ -1656,7 +1744,10 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
 
   // Surface the environment's connection config to the plugin via env vars,
   // plus the UI-registered plugin paths so the plugin is discoverable.
-  const extraEnv = { ...pluginsEnv(pluginPaths) };
+  const extraEnv = {
+    ...(await resolvePluginsEnv(root)),
+    ...jevKeyEnv(await readJevConfig(root)),
+  };
   // Run profile-add / profile-bootstrap in the SAME record dir the chat agent
   // records under, so the scenario's `useProfile` op resolves the profile on
   // replay (otherwise it lands in the shared root the agent never looks in).
@@ -3157,7 +3248,11 @@ function createChatManager(deps, root) {
                 return d ? path.join(d, 'agent-session') : null;
               })(),
               bashEnv: () => {
-                const env = { AGENT_BROWSER_SESSION: browser.name };
+                const env = {
+                  ...resolvePluginsEnvSync(root),
+                  ...jevKeyEnv(readJevConfigSync(root)),
+                  AGENT_BROWSER_SESSION: browser.name,
+                };
                 const dir = entry.recordDir();
                 if (dir) env.AGENT_QA_RECORD_DIR = dir;
                 // So the agent can self-serve persona sign-in for THIS chat:
@@ -3844,7 +3939,7 @@ function createRequestHandler(root, deps, chat) {
         }
         const r = await deps.runCli(
           ['plugins', 'list', '--json'],
-          pluginsEnv(await readPluginPaths(root))
+          await resolvePluginsEnv(root)
         );
         let plugins = [];
         try {
@@ -3853,6 +3948,32 @@ function createRequestHandler(root, deps, chat) {
           plugins = [];
         }
         return sendJson(res, 200, { available: true, plugins });
+      }
+
+      // Jev (typesafe.ai) authoring-time resolve plugin: bundled availability +
+      // enable flag + key status. The stored key is write-only — the API never
+      // echoes it back (hasKey only).
+      if (segAll[0] === 'api' && segAll[1] === 'jev' && segAll.length === 2 && req.method === 'GET') {
+        const jev = await readJevConfig(root);
+        return sendJson(res, 200, {
+          available: !!bundledJevPlugin(),
+          enabled: jev.enabled,
+          hasKey: !!jev.apiKey,
+          envForced: !!process.env.TYPESAFE_API_KEY,
+        });
+      }
+      if (segAll[0] === 'api' && segAll[1] === 'jev' && segAll.length === 2 && req.method === 'POST') {
+        let body;
+        try {
+          body = await readJsonBody(req, 64 * 1024);
+        } catch (e) {
+          return badRequest(res, String((e && e.message) || e));
+        }
+        const patch = {};
+        if ('enabled' in (body || {})) patch.enabled = !!body.enabled;
+        if ('apiKey' in (body || {})) patch.apiKey = body.apiKey;
+        const jev = await writeJevConfig(root, patch);
+        return sendJson(res, 200, { ok: true, enabled: jev.enabled, hasKey: !!jev.apiKey });
       }
 
       // Import a downloaded plugin file: save it under <root>/_config/plugins,
@@ -4945,6 +5066,8 @@ function start(opts = {}) {
   if (bin) {
     const childEnv = {
       ...process.env,
+      ...resolvePluginsEnvSync(root),
+      ...jevKeyEnv(readJevConfigSync(root)),
       AGENT_QA_SCENARIOS_DIR: root,
       AGENT_QA_RECORD_DIR: recordRoot,
     };

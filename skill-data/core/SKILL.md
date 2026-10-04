@@ -95,9 +95,16 @@ agent-qa record-step check '{
 }'
 ```
 
-`smart-click`, `smart-fill`, and `fill-unique` record direct `do` drafts.
-`smart-fill "<label>" <value>` is the fixed manual fill — it records the
-`type` draft for you. `record-step` accepts only `do` and `check` drafts.
+`smart-click`, `smart-fill`, `smart-assert`, `smart-hover`, `smart-select`,
+and `fill-unique` record direct drafts. `smart-fill "<label>" <value>` is
+the fixed manual fill — it records the `type` draft for you. `record-step`
+accepts only `do` and `check` drafts.
+
+Smart verbs accept fuzzy descriptions: exact locators are tried first,
+then a configured `resolve` plugin picks the intended element
+(`agent-qa.toml [plugins] resolve = <path>`, `AGENT_QA_PLUGINS`, or
+`$PATH`). The plugin is authoring-time only — the recorded draft keeps
+the picked element's concrete role+name, so replays never invoke it.
 
 Flush and verify the sealed contract.
 
