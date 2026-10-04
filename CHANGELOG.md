@@ -21,6 +21,14 @@ All notable changes to agent-qa are documented here. This project follows
 - Drift comments no longer transcode `run.gif`; the mp4 attaches as a real
   player when a user token is available, otherwise links plainly.
 
+### Changed
+
+- Shot captures now freeze dynamic media first: finite animations and
+  transitions are finished, infinite ones are paused at a deterministic
+  frame, and animated GIFs are swapped for a canvas snapshot — nothing
+  can repaint between the settle check and the screenshot; the settle
+  check also waits for `[aria-busy]` regions to clear.
+
 ## [0.1.8] - 2026-10-03
 ### Added
 
