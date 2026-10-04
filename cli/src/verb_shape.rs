@@ -209,6 +209,13 @@ fn rule_for(verb: &Verb) -> VerbRule {
             forbidden: &[DoField::On, DoField::Value],
             ..VerbRule::default()
         },
+        // `params.secret` carries the base32 seed; saveAs binds the code.
+        Verb::Totp => VerbRule {
+            required: &[DoField::Params],
+            forbidden: &[DoField::On, DoField::Value],
+            params_required: &["secret"],
+            ..VerbRule::default()
+        },
     }
 }
 

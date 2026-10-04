@@ -70,37 +70,42 @@ enters core code.
 | Email verification channel | `{mail}` verb + `agent-qa mail` — just shipped |
 | Agent-discovery surface | `/llms.txt`, `.md` mirrors, `agent.json`, `agent-qa mcp` — just shipped |
 
-## Gaps worth closing (ranked)
+## Gaps worth closing (ranked) — status
 
-1. **Quarantine mode** (Momentic layer 4) — `quarantine: true` on a scenario
-   or claim: the step runs, failures are recorded and reported, but the run
-   verdict doesn't fail the gate. `heal-chronic` already surfaces repeat
-   healers; quarantine is the containment half — run and measure without
-   blocking. Small, high-value, directly serves flake tracking.
+1. **Quarantine mode** (Momentic layer 4) — **SHIPPED**: opt-in
+   `quarantine` on the scenario (`true` or `{reason, until}`). The run
+   executes and records failures honestly (`SUMMARY: FAIL — quarantined`,
+   `QUAR-FAIL` report rows, `audit.quarantined`) but exits 0. Deliberately
+   **not** auto-assigned: `reason` is linted when absent
+   (`quarantine-without-reason` warning) and `until` expires the
+   containment (`quarantine-expired` error + the flag stops silencing) so
+   it can't become a dumping ground.
 
-2. **Transient recovery** (Momentic layer 2) — deterministic version: a
-   `presteps`/`dismiss` mechanism that tries a list of overlay-closers
-   (cookie banners, modals, interstitials) before a step retries, rather
-   than AI-detecting obstructions. Could be `params.dismiss: [<locator>...]`
-   on a step or a scenario-level `beforeEachStep` hook.
+2. **Transient recovery** (Momentic layer 2) — **SHIPPED** (already): the
+   `dismiss` verb + per-run dismissal list — registered closers are
+   re-applied deterministically before every interactive step, which is
+   the `beforeEachStep` hook this item described.
 
-3. **a11y claim** — `{a11y: {maxViolations: 0, severity: "serious"}}` check
-   predicate: inject axe-core via `eval`, report per-rule violations as
-   claim details. Fully deterministic, gateable; the per-route threshold
-   matrix maps naturally onto per-scenario params.
+3. **a11y claim** — **SHIPPED** (already): `{a11y: {impact, rule, within,
+   incomplete}}` runs axe-core via `agent-browser a11y` and counts
+   matching violations; numeric predicates gate the count.
 
-4. **perf budget claim** — `{perf: {metric: "lcp"|"cls"|"tbt"|"fcp",
-   maxMs: 2500}}` via the Performance API; Lighthouse's assertMatrix = our
-   per-scenario params. Cheap, deterministic, complements shot claims.
+4. **perf budget claim** — **SHIPPED**: `{perf: "lcp"|"cls"|"tbt"|"fcp"|
+   "ttfb"|"load"}` reads the metric via Performance API + buffered
+   observers (`{metric, maxDwellMs}` for the dwell). Numeric predicates
+   compare the value (ms; cls is the score); `exists`/`notExists` test
+   presence (lcp before paint is absent; cls/tbt report 0).
 
-5. **totp verb** — `{totp: {secret: "{{secrets.X}}"}}` → current 6-digit
-   code bound via `saveAs`. HMAC-SHA1/30s window is ~40 lines; rounds out
-   the `{mail}` channel for 2FA flows.
+5. **totp verb** — **SHIPPED**: `{totp, params:{secret, digits, period,
+   algorithm, offset}}` computes the current code locally (HMAC-SHA1/
+   SHA256, RFC 4226) and binds `{code, period, remaining}` via `saveAs`;
+   `agent-qa totp <seed>` probes it from the CLI.
 
-6. **Alert sink** (Checkly's lesson) — runs on a schedule already work
-   (cron/CI); the missing piece is `agent-qa.toml [notify]` — a webhook/
-   Slack sink `run-report` posts verdicts to on failure. Replay-as-monitor
-   without a hosted service.
+6. **Alert sink** (Checkly's lesson) — **SHIPPED**: `[notify] url + on` in
+   `agent-qa.toml`; the runner POSTs the verdict payload after every run
+   (Slack-compatible `text` + `sid`/`verdict`/`summary`/`runDir` fields).
+   Best-effort — a failed POST warns, never changes the exit code.
+   `agent-qa notify test` probes the wiring.
 
 ## Explicit non-adoptions
 

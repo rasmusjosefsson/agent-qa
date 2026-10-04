@@ -1,6 +1,6 @@
 # Scenario lint rules
 
-14 rules ship out of the box. Run `agent-qa scenario lint --list-rules`
+16+ rules ship out of the box. Run `agent-qa scenario lint --list-rules`
 for the live table (this doc may lag the binary).
 
 | Code | Severity | What it catches |
@@ -21,6 +21,8 @@ for the live table (this doc may lag the binary).
 | `wait-without-condition` | warning | A do/wait step has none of `params.ms`/`until`/`url`/`timeoutMs`/`locator`; it falls back to a `networkidle` wait that may not reflect the condition the author intended. |
 | `domshot-without-baseline` | warning | A `{"domshot": <stepId>}` claim has no `baselines/<stepId>.snap.txt`; replay will fail with a missing-baseline hint. Minted by `domshot-accept`. Skipped for stdin input. |
 | `orphan-baseline` | warning | `baselines/<stepId>.png` or `.snap.txt` exists but no shot/domshot claim references `<stepId>` — a stale golden left by a deleted or renamed step. Skipped for stdin input. |
+| `quarantine-without-reason` | warning | The scenario is quarantined but gives no `reason` — quarantine is opt-in containment, not a dumping ground; write down why so it can be reviewed. |
+| `quarantine-expired` | error | The scenario's `quarantine.until` date has passed — the flag no longer silences failures; renew it deliberately or remove it. |
 
 ## Severity → exit code
 

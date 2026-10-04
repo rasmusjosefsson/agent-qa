@@ -245,6 +245,15 @@ pub enum Verb {
     /// return the hit for `saveAs`. `params.timeoutMs` bounds the poll
     /// (default 30000). No browser interaction — safe mid-recording too.
     Mail,
+    /// Emit the current TOTP code for `saveAs` — the 2FA complement to
+    /// `mail`. `params.secret` is the base32 seed (goes through
+    /// `{{vars.*}}` substitution — keep the real seed in a sensitive
+    /// input or `inputs.local.json`, never the scenario file).
+    /// `params.digits` (default 6), `params.period` seconds (default 30),
+    /// `params.algorithm` = "sha1"|"sha256" (default sha1) and
+    /// `params.offset` seconds skew (default 0) complete the dial.
+    /// No browser interaction — safe mid-recording too.
+    Totp,
 }
 
 // ---------- Locator ----------
@@ -503,6 +512,32 @@ pub enum A11ySubject {
     Matcher(A11yMatcher),
 }
 
+/// `{"perf": "lcp"}` or a matcher object — a Web Performance metric
+/// read via the Performance API at claim time. Numeric predicates
+/// compare the metric's value (ms for timings; unitless score for cls);
+/// `exists`/`notExists` test whether the metric was recorded at all
+/// (e.g. lcp before first paint).
+///   metrics: fcp | lcp | cls | tbt | ttfb | load
+///   `{"maxDwellMs": 1500}` — how long to poll for observer-buffered
+///                          metrics (lcp/cls/tbt) before declaring
+///                          them absent (default 1500; the observer
+///                          flush is a task, not instant)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PerfMatcher {
+    pub metric: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_dwell_ms: Option<u64>,
+}
+
+/// `perf` accepts a bare metric name or a matcher object.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PerfSubject {
+    Metric(String),
+    Matcher(PerfMatcher),
+}
+
 /// `storage` accepts `"key"` (localStorage) or a matcher object.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -700,6 +735,15 @@ pub enum ClaimSubject {
     /// `within` CSS scope, `incomplete` to include axe's incomplete results.
     A11y {
         a11y: A11ySubject,
+    },
+    /// `{"perf": "lcp"}` or `{"perf": {"metric": "lcp"}}` — a Web
+    /// Performance metric (fcp/lcp/cls/tbt/ttfb/load) read live via the
+    /// Performance API. Numeric predicates (`gt`/`gte`/`lt`/`lte`/`equals`)
+    /// compare the value — ms for timings, unitless score for cls — so a
+    /// budget is `{"predicate": "lte", "value": 2500}`. `exists`/
+    /// `notExists` test whether the metric was recorded at all.
+    Perf {
+        perf: PerfSubject,
     },
     Var {
         kind: String, // always "var" — kept literal to disambiguate untagged
@@ -1064,6 +1108,72 @@ pub struct Scenario {
     /// only when checkout code moved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub only_when: Option<Vec<String>>,
+    /// Containment for a known-flaky scenario: the run still executes
+    /// and failures are recorded as usual, but the run exits 0 marked
+    /// `quarantined` instead of failing the gate. Opt-in ONLY — the
+    /// flag is set by hand on the scenario; nothing auto-assigns it.
+    /// Write `quarantine: {"reason": "<why>", "until": "YYYY-MM-DD"}`:
+    /// a missing reason lints a warning and an `until` date in the past
+    /// lints an error AND stops silencing (expired quarantine fails
+    /// normally again — containment must be renewed or removed, never
+    /// left to decay silently). Bare `quarantine: true` works but earns
+    /// the same missing-reason warning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quarantine: Option<Quarantine>,
+}
+
+/// `quarantine` accepts `true` or an object carrying `reason` and an
+/// optional `until` date (YYYY-MM-DD). See [`Scenario::quarantine`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Quarantine {
+    Flag(bool),
+    Detail(QuarantineDetail),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuarantineDetail {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Expiry date `YYYY-MM-DD`: past this date the scenario fails
+    /// normally again — the quarantine must be renewed or removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<String>,
+}
+
+impl Quarantine {
+    /// The flag is on (`true` or an object), `false` = not quarantined.
+    pub fn active(&self) -> bool {
+        match self {
+            Quarantine::Flag(b) => *b,
+            Quarantine::Detail(_) => true,
+        }
+    }
+
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            Quarantine::Flag(_) => None,
+            Quarantine::Detail(d) => d.reason.as_deref(),
+        }
+    }
+
+    pub fn until(&self) -> Option<&str> {
+        match self {
+            Quarantine::Flag(_) => None,
+            Quarantine::Detail(d) => d.until.as_deref(),
+        }
+    }
+
+    /// `until` parsed as `YYYY-MM-DD` and compared against `today`
+    /// (same shape). A malformed date is not expired — the lint flags
+    /// the shape separately.
+    pub fn expired(&self, today: &str) -> bool {
+        match self.until() {
+            Some(u) => u.len() == 10 && u < today,
+            None => false,
+        }
+    }
 }
 
 /// `replay --base-url <origin>` retargeting: rewrite every absolute URL

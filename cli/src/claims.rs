@@ -238,6 +238,14 @@ pub fn dispatch_check(
             scope,
             timeout,
         ),
+        ClaimSubject::Perf { perf } => check_perf(
+            perf,
+            &claim.predicate,
+            claim.value.as_ref(),
+            ctx,
+            scope,
+            timeout,
+        ),
     }
 }
 
@@ -453,6 +461,132 @@ fn check_page_error(
                 } else {
                     sample.join(" | ")
                 }
+            );
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+}
+
+// ---------- web performance ----------
+
+/// Read a Performance-API metric at claim time. Observer-buffered
+/// types (lcp/layout-shift/longtask) flush as a task, so the eval
+/// polls until entries arrive or the dwell expires.
+fn perf_metric_js(metric: &str, dwell_ms: u64) -> String {
+    format!(
+        r#"(async () => {{
+  const metric = {metric:?};
+  const dwell = {dwell_ms};
+  if (metric === 'fcp') {{
+    const e = performance.getEntriesByName('first-contentful-paint')[0];
+    return JSON.stringify(e ? e.startTime : null);
+  }}
+  if (metric === 'ttfb' || metric === 'load') {{
+    const n = performance.getEntriesByType('navigation')[0];
+    if (!n) return 'null';
+    return JSON.stringify(metric === 'ttfb' ? n.responseStart : n.duration);
+  }}
+  if (metric === 'lcp' || metric === 'cls' || metric === 'tbt') {{
+    const type = metric === 'lcp' ? 'largest-contentful-paint' : metric === 'cls' ? 'layout-shift' : 'longtask';
+    return await new Promise((resolve) => {{
+      let entries = [];
+      const calc = () => {{
+        if (metric === 'lcp') return entries.length ? entries[entries.length - 1].startTime : null;
+        if (metric === 'cls') return entries.filter(e => !e.hadRecentInput).reduce((s, e) => s + e.value, 0);
+        return entries.reduce((s, e) => s + Math.max(0, e.duration - 50), 0);
+      }};
+      const po = new PerformanceObserver((list) => {{ entries = entries.concat(list.getEntries()); }});
+      try {{ po.observe({{ type, buffered: true }}); }} catch (e) {{ return resolve('null'); }}
+      const deadline = performance.now() + dwell;
+      const tick = () => {{
+        if (entries.length || performance.now() >= deadline) {{
+          try {{ po.disconnect(); }} catch (e) {{}}
+          return resolve(JSON.stringify(calc()));
+        }}
+        setTimeout(tick, 100);
+      }};
+      setTimeout(tick, 100);
+    }});
+  }}
+  return JSON.stringify('__aq_unknown__');
+}})()"#
+    )
+}
+
+/// `{"perf": "lcp"}` / `{"perf": {"metric": "lcp", "maxDwellMs": 1500}}` —
+/// a Web Performance budget as a gateable claim. `exists`/`notExists`
+/// test whether the metric was recorded (lcp with no paint → absent);
+/// numeric predicates compare the value (ms; cls is the unitless score).
+fn check_perf(
+    subject: &crate::scenario::PerfSubject,
+    predicate: &Predicate,
+    expected: Option<&Json>,
+    ctx: &CheckContext,
+    scope: &mut ValueScope,
+    timeout: Duration,
+) -> Result<()> {
+    use crate::scenario::PerfSubject;
+    let (metric, dwell_ms) = match subject {
+        PerfSubject::Metric(m) => (
+            substitute_scenario_vars(m, scope).to_ascii_lowercase(),
+            1_500u64,
+        ),
+        PerfSubject::Matcher(m) => (
+            substitute_scenario_vars(&m.metric, scope).to_ascii_lowercase(),
+            m.max_dwell_ms.unwrap_or(1_500),
+        ),
+    };
+    const METRICS: &[&str] = &["fcp", "lcp", "cls", "tbt", "ttfb", "load"];
+    if !METRICS.contains(&metric.as_str()) {
+        bail!(
+            "perf metric {metric:?} unknown — expected one of {}",
+            METRICS.join(", ")
+        );
+    }
+    let js = perf_metric_js(&metric, dwell_ms);
+    // Poll until the claim's condition is met — a metric that isn't
+    // there yet (lcp before the user-idle dwell) may still land.
+    let deadline = Instant::now() + timeout;
+    loop {
+        let raw = browser::eval_expression(ctx.session, &js)?;
+        let text: String =
+            serde_json::from_str(raw.trim()).unwrap_or_else(|_| raw.trim().to_string());
+        let value: Option<f64> = serde_json::from_str::<Json>(&text)
+            .ok()
+            .and_then(|v| v.as_f64());
+        let done = match predicate {
+            Predicate::Exists | Predicate::IsVisible => value.is_some(),
+            Predicate::NotExists | Predicate::IsHidden => value.is_none(),
+            Predicate::Equals
+            | Predicate::CountEquals
+            | Predicate::Gt
+            | Predicate::Gte
+            | Predicate::Lt
+            | Predicate::Lte => {
+                let need = expected.and_then(|v| v.as_f64()).ok_or_else(|| {
+                    anyhow!("perf claim with predicate '{predicate:?}' requires a numeric 'value'")
+                })?;
+                match (value, predicate) {
+                    (Some(v), Predicate::Equals | Predicate::CountEquals) => v == need,
+                    (Some(v), Predicate::Gt) => v > need,
+                    (Some(v), Predicate::Gte) => v >= need,
+                    (Some(v), Predicate::Lt) => v < need,
+                    (Some(v), Predicate::Lte) => v <= need,
+                    (None, _) => false,
+                    _ => unreachable!(),
+                }
+            }
+            other => bail!("perf subject does not support predicate '{other:?}'"),
+        };
+        if done {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "perf check failed: {metric} = {}",
+                value
+                    .map(|v| format!("{v:.1}"))
+                    .unwrap_or_else(|| "absent".to_string())
             );
         }
         thread::sleep(POLL_INTERVAL);

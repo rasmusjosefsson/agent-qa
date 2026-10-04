@@ -51,6 +51,7 @@ mod migrate;
 mod mock;
 mod net_tap;
 mod netlog;
+mod notify;
 mod paths;
 mod perf_snapshot;
 mod plan;
@@ -82,6 +83,7 @@ mod start;
 mod telemetry;
 mod test_util;
 mod time;
+mod totp;
 mod truncate;
 mod value;
 mod verb;
@@ -167,9 +169,11 @@ fn main() -> ExitCode {
         "mcp" => mcp::run(rest),
         "migrate" => migrate::cli(rest),
         "mail" => mail::run(rest),
+        "totp" => totp::run(rest),
+        "notify" => notify::run(rest),
         _ => {
             eprintln!(
-                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, smart-fill, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, domshot-accept, layout-accept, baselines, run-report, init, ingest, mcp, migrate, mail, discover."
+                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, smart-fill, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, domshot-accept, layout-accept, baselines, run-report, init, ingest, mcp, migrate, mail, discover, totp, notify."
             );
             eprintln!("Run `agent-qa --help` for usage.");
             Ok(2)
@@ -283,6 +287,12 @@ Verbs:
                                 Draft a scenario covering just the routes a
                                 changed-paths set plausibly reaches — the
                                 PR-diff-scoped cousin of `crawl`
+  totp <secret> [--digits N] [--period S] [--algorithm sha1|sha256] [--offset S]
+                                Print the current TOTP code for a base32
+                                seed — the same generator the `totp` step
+                                verb uses; handy for probing a seed
+  notify test                   POST a sample verdict to the [notify]-configured
+                                webhook — proves the alert sink wiring
   ingest <bundle.json> [--sid <name>]
                                 Turn a browser-extension capture bundle
                                 (steps + traffic) into scenario.json +

@@ -216,6 +216,37 @@ in. Use for one known-flaky interaction; whole-run flake belongs to
 effect — prefer idempotent verbs (click, select) over append-style ones
 (type).
 
+### Inbox + TOTP (verification channels)
+
+Two do-verbs cover the out-of-browser channels OTP/verification flows
+need — deterministic, no external calls the app didn't already make:
+
+```json
+{ "id": "s7", "intent": "read the verification mail", "kind": "do",
+  "verb": "mail",
+  "params": { "to": "*@example.test", "subject": "*verify*",
+              "extract": "link", "timeoutMs": 30000 },
+  "saveAs": "verifyUrl" }
+{ "id": "s8", "intent": "compute the 2FA code", "kind": "do",
+  "verb": "totp",
+  "params": { "secret": "{{vars.totpSeed}}" },
+  "saveAs": "code" }
+{ "id": "s9", "intent": "submit it", "kind": "do", "verb": "type",
+  "on": { "role": "textbox", "name": "Code" },
+  "value": "{{vars.code}}" }
+```
+
+`mail` polls the `[mail]`-configured test inbox (mailpit/mailhog API in
+`agent-qa.toml`) for the newest message matching `to`/`subject` globs and
+extracts from the body: `"link"` = first URL, `"code"` = first 4–8 digit
+run, anything else = a regex (capture group 1 wins). Bound value is the
+extraction, or the whole text body without `extract`.
+
+`totp` computes the current code locally: `params.secret` is the base32
+seed (from a var — never inline), `digits` (6), `period` (30s),
+`algorithm` (`sha1`|`sha256`), `offset` (seconds, for clock skew). Same
+generator as `agent-qa totp <seed>` on the CLI.
+
 ### Native dialogs (alert/confirm/prompt)
 
 Resolve a pending native dialog with a `dialog` do-step:
@@ -503,6 +534,44 @@ Matcher fields: `impact` (a floor — `serious` also counts `critical`),
 subtree), `incomplete` (also count axe's `incomplete` results). Predicates:
 `exists`/`notExists` on presence, `countEquals`/`gt`/`gte`/`lt`/`lte` on the
 count. A failing check lists the offending rule ids.
+
+### Performance claims
+
+`{"perf": "<metric>"}` reads a Web Performance metric (Performance API +
+buffered observers) — a perf budget as a gateable claim:
+
+```json
+{
+  "id": "s11",
+  "intent": "largest paint under 2.5s",
+  "kind": "check",
+  "claim": {
+    "subject": { "perf": { "metric": "lcp", "maxDwellMs": 2000 } },
+    "predicate": "lt",
+    "value": 2500
+  }
+}
+```
+
+Metrics: `fcp`, `lcp`, `cls`, `tbt`, `ttfb`, `load` (values in ms; `cls` is
+the unitless score). `exists`/`notExists` test whether the metric was
+recorded — `lcp` before any paint is absent; `cls`/`tbt` with no offending
+entries report `0`. `maxDwellMs` bounds how long observer-buffered metrics
+wait for entries (default 1500).
+
+### Quarantine (opt-in containment)
+
+`"quarantine": {"reason": "…", "until": "YYYY-MM-DD"}` on a scenario means:
+the run still executes and the failure stays on record — `SUMMARY: … FAIL —
+quarantined`, a `QUAR-FAIL` row in `--all` reports, `audit.quarantined` —
+but the exit code is 0. It is for a *known broken* scenario that must stop
+blocking merges while staying visible, never for silencing noise:
+
+- `reason` — linted (`quarantine-without-reason` warning) when absent.
+- `until` — expiry. Past the date the flag stops silencing AND
+  `quarantine-expired` lints an error; the run gates normally again.
+- Quarantine is authored by hand only — nothing auto-assigns it, and
+  nothing other than quarantining *this* scenario is affected.
 
 ### Network claims
 
