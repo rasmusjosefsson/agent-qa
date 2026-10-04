@@ -238,8 +238,10 @@ pub(crate) fn resolve_and_act(
 
 pub fn run(args: &[String]) -> Result<u8> {
     let opts = parse_args(args)?;
-    let state = crate::recorder_state::RecorderState::load_active()?;
-    let session = opts.session.unwrap_or(state.session);
+    let session = match opts.session {
+        Some(s) => s,
+        None => crate::recorder_state::RecorderState::load_active()?.session,
+    };
 
     if find_plugin()?.is_none() {
         anyhow::bail!(

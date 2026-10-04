@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""resolve-choice — reference `resolve` plugin for agent-qa.
+"""jev-resolve — the `resolve` plugin for agent-qa backed by Jev (typesafe.ai).
 
-Answers "which of these elements did the author mean?" by POSTing a choice
-question to a decision endpoint configured entirely through env vars:
+Answers "which of these elements did the author mean?" by POSTing a single
+choice question to Jev's System One decision API:
 
-    RESOLVE_ENDPOINT        required. The decision API's URL.
-    RESOLVE_KEY_ENV         env var holding the bearer token
-                            (default: RESOLVE_API_KEY).
-    RESOLVE_MODEL           model/decision-profile name (default: "default").
+    TYPESAFE_API_KEY        required. Bearer token from console.typesafe.ai.
+    RESOLVE_ENDPOINT        default https://api.typesafe.ai/v1/systemone.
+    RESOLVE_KEY_ENV         override the key env var name
+                            (default: TYPESAFE_API_KEY).
+    RESOLVE_MODEL           Jev model name (default: jev-latest).
     RESOLVE_MIN_CONFIDENCE  minimum answer confidence to return a pick
                             (default: 0.5).
 
-Request contract (what the endpoint is expected to accept):
+Request contract (Jev System One):
     POST <RESOLVE_ENDPOINT>
     Authorization: Bearer <key>
     {
@@ -27,12 +28,12 @@ Request contract (what the endpoint is expected to accept):
     }
     → {"answers": {"pick": {"choice": "<ref>", "confidence": 0.83}}}
 
-Any endpoint that speaks this shape works; the plugin is the seam vendors
-adapt. Python stdlib only — no dependencies.
+Any endpoint that speaks this shape works — override RESOLVE_ENDPOINT /
+RESOLVE_MODEL to point at a compatible decision service. Python stdlib only.
 
 Invoke contract (agent-qa side):
     <binary> ping            → {"ok":true,"response":{"protocolVersion":1,
-                               "name":"resolve-choice","kinds":["resolve"]}}
+                               "name":"jev-resolve","kinds":["resolve"]}}
     <binary> resolve         → stdin: {"protocolVersion":1,"request":{
                                  "description": str, "role": str|null,
                                  "candidates": [{"ref","role","name","line"}]}}
@@ -46,7 +47,10 @@ import sys
 import urllib.request
 import urllib.error
 
-NAME = "resolve-choice"
+NAME = "jev-resolve"
+DEFAULT_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
+DEFAULT_MODEL = "jev-latest"
+DEFAULT_KEY_ENV = "TYPESAFE_API_KEY"
 
 
 def respond(payload):
@@ -79,10 +83,10 @@ def main():
     role = req.get("role")
     candidates = req.get("candidates") or []
 
-    endpoint = os.environ.get("RESOLVE_ENDPOINT", "").strip()
-    key_env = os.environ.get("RESOLVE_KEY_ENV", "RESOLVE_API_KEY")
+    endpoint = os.environ.get("RESOLVE_ENDPOINT", DEFAULT_ENDPOINT).strip()
+    key_env = os.environ.get("RESOLVE_KEY_ENV", DEFAULT_KEY_ENV)
     api_key = os.environ.get(key_env, "").strip()
-    model = os.environ.get("RESOLVE_MODEL", "default")
+    model = os.environ.get("RESOLVE_MODEL", DEFAULT_MODEL)
     try:
         min_conf = float(os.environ.get("RESOLVE_MIN_CONFIDENCE", "0.5"))
     except ValueError:

@@ -126,8 +126,9 @@ element's concrete role+name locator, so a scenario authored with a
 resolver replays identically without one. With no `resolve` plugin
 configured the fallback rung is skipped entirely.
 
-A reference implementation lives in `examples/plugins/resolve-choice/` —
-it adapts any choice-question decision endpoint via env config.
+A reference implementation lives in `examples/plugins/jev-resolve/` — it
+answers via Jev (typesafe.ai)'s System One decision API out of the box,
+and adapts to any compatible choice-question endpoint via env config.
 
 ## Discovery
 
