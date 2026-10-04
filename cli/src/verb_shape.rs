@@ -216,6 +216,14 @@ fn rule_for(verb: &Verb) -> VerbRule {
             params_required: &["secret"],
             ..VerbRule::default()
         },
+        // The condition locators live under params.present/params.absent —
+        // on/value stay free so children aren't confused with the block.
+        Verb::When => VerbRule {
+            required: &[DoField::Params],
+            forbidden: &[DoField::On, DoField::Value],
+            params_required: &["steps"],
+            ..VerbRule::default()
+        },
     }
 }
 
@@ -405,6 +413,30 @@ mod tests {
         }));
         let err = assert_verb_shape(&s).unwrap_err().to_string();
         assert!(err.contains("params requires 'do'"), "got: {err}");
+    }
+
+    #[test]
+    fn when_requires_params_steps_forbids_on_value() {
+        let s = parse(json!({
+            "id": "w1", "intent": "x", "kind": "do", "verb": "when",
+            "params": { "present": "css:#a" }
+        }));
+        let err = assert_verb_shape(&s).unwrap_err().to_string();
+        assert!(err.contains("params requires 'steps'"), "got: {err}");
+
+        let s = parse(json!({
+            "id": "w1", "intent": "x", "kind": "do", "verb": "when",
+            "on": "css:#a",
+            "params": { "present": "css:#a", "steps": [] }
+        }));
+        let err = assert_verb_shape(&s).unwrap_err().to_string();
+        assert!(err.contains("on"), "got: {err}");
+
+        let s = parse(json!({
+            "id": "w1", "intent": "x", "kind": "do", "verb": "when",
+            "params": { "present": "css:#a", "steps": [] }
+        }));
+        assert!(assert_verb_shape(&s).is_ok());
     }
 
     #[test]

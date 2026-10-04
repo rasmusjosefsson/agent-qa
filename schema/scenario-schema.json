@@ -630,7 +630,8 @@
             "group",
             "useTemplate",
             "mail",
-            "totp"
+            "totp",
+            "when"
           ]
         },
         "on": { "$ref": "#/$defs/Locator" },

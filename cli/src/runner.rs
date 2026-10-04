@@ -138,6 +138,12 @@ pub struct RunOptions {
     /// we're reporting.
     pub keep_going: bool,
 
+    /// `--run-for <tag>` (repeatable) — extra profile tags the run gates
+    /// step `context.runFor`/`skipFor`/`expectFailFor` against, on top of
+    /// `--persona <id>` (the persona id is always a tag). The declarative
+    /// twin of `when` blocks: run once, tagged steps activate per profile.
+    pub run_for: Vec<String>,
+
     /// Pull this scenario's goldens from the configured `[baselines]`
     /// remote store before the step loop (default true; a `local` store
     /// is a no-op). `--no-baseline-sync` opts out — e.g. offline runs on
@@ -947,6 +953,19 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         // subsequent option/menuitem click finds dismissed. See the
         // transient-popup recovery in the dispatch match below.
         let mut prev_click: Option<Step> = None;
+        // Profile tags the run gates step conditionals against: the
+        // `--persona` id is always a tag; `--run-for` adds extra ones.
+        let run_tags: std::collections::BTreeSet<String> = opts
+            .persona
+            .iter()
+            .cloned()
+            .chain(opts.run_for.iter().cloned())
+            .collect();
+        // Each `when` block's condition evaluates once — at the first
+        // step carrying it — then the verdict is shared by every other
+        // step in that block.
+        let mut when_cache: std::collections::HashMap<String, bool> =
+            std::collections::HashMap::new();
         for step in &flat {
             summary.total += 1;
             let idx = summary.total;
@@ -1002,6 +1021,104 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 );
                 skipped_step_ids.push(id.to_string());
                 continue;
+            }
+            // Step-context gating: runFor/skipFor tags and `when`-block
+            // conditions skip the step like `enabled:false` — same terminal
+            // `skip` event, never reaching dispatch. (expectFailFor lives
+            // in the failure arm: it downgrades, not skips.)
+            if let Some(step_ctx) = step.context() {
+                let mut gate: Option<String> = None;
+                if let Some(tags) = step_ctx.run_for.as_ref().filter(|t| !t.is_empty()) {
+                    if !tags.iter().any(|t| run_tags.contains(t)) {
+                        gate = Some(format!(
+                            "runFor [{}] — run tags [{}]",
+                            tags.join(", "),
+                            run_tags.iter().cloned().collect::<Vec<_>>().join(", ")
+                        ));
+                    }
+                }
+                if gate.is_none() {
+                    if let Some(tags) = step_ctx.skip_for.as_ref().filter(|t| !t.is_empty()) {
+                        if let Some(hit) = tags.iter().find(|t| run_tags.contains(*t)) {
+                            gate = Some(format!("skipFor {hit}"));
+                        }
+                    }
+                }
+                if gate.is_none() {
+                    if let Some(conds) = step_ctx.when.as_ref() {
+                        for cond in conds {
+                            let holds = match when_cache.get(&cond.block) {
+                                Some(v) => *v,
+                                None => {
+                                    let (loc, negated) = match &cond.condition {
+                                        crate::scenario::WhenCondition::Present { locator } => {
+                                            (locator, false)
+                                        }
+                                        crate::scenario::WhenCondition::Absent { locator } => {
+                                            (locator, true)
+                                        }
+                                    };
+                                    // Any probe error — not-found IS the
+                                    // absence signal — reads as "condition
+                                    // unmet"; skipping children is the safe
+                                    // side.
+                                    let resolved = crate::claims::locator_resolves(
+                                        &opts.session_name,
+                                        loc,
+                                        &mut scope,
+                                        &scenario_dir,
+                                    )
+                                    .is_ok();
+                                    let holds = resolved ^ negated;
+                                    when_cache.insert(cond.block.clone(), holds);
+                                    holds
+                                }
+                            };
+                            if !holds {
+                                gate = Some(format!("when {} condition unmet", cond.block));
+                                break;
+                            }
+                        }
+                    }
+                }
+                if let Some(reason) = gate {
+                    if record_on {
+                        rail_outcomes[(idx - 1) as usize] = Some("skip");
+                        crate::video_overlay::annotate(
+                            &opts.session_name,
+                            &rail_labels,
+                            idx,
+                            &rail_outcomes,
+                            step,
+                            &mut scope,
+                        );
+                    }
+                    emit_step_done(
+                        progress_mode,
+                        idx,
+                        total,
+                        true,
+                        &format!("{label} ({reason})"),
+                        0,
+                    );
+                    let _ = append_event(
+                        &run,
+                        &StepEvent {
+                            idx,
+                            total,
+                            id: id.to_string(),
+                            intent: intent.to_string(),
+                            kind: kind_label.clone(),
+                            status: "skip".to_string(),
+                            ms: Some(0),
+                            error: None,
+                            screenshot: None,
+                            snapshot: None,
+                        },
+                    );
+                    skipped_step_ids.push(id.to_string());
+                    continue;
+                }
             }
             // Live progress — a `…` running line in pretty/TTY mode
             // (overwritten in place by the terminal line), nothing in
@@ -1267,6 +1384,54 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                     );
                 }
                 Err(e) => {
+                    // expectFailFor ∩ run tags: the author declared this
+                    // step is allowed to fail under this profile — report
+                    // it like a skip (visible, non-fatal), keep the run
+                    // green.
+                    let expected_fail = patched_step
+                        .context()
+                        .and_then(|c| c.expect_fail_for.as_ref())
+                        .is_some_and(|tags| {
+                            !tags.is_empty() && tags.iter().any(|t| run_tags.contains(t))
+                        });
+                    if expected_fail {
+                        if record_on {
+                            rail_outcomes[(idx - 1) as usize] = Some("skip");
+                            crate::video_overlay::annotate(
+                                &opts.session_name,
+                                &rail_labels,
+                                idx,
+                                &rail_outcomes,
+                                &patched_step,
+                                &mut scope,
+                            );
+                        }
+                        emit_step_done(
+                            progress_mode,
+                            idx,
+                            total,
+                            true,
+                            &format!("{label} (expected failure: {e:#})"),
+                            step_ms,
+                        );
+                        let _ = append_event(
+                            &run,
+                            &StepEvent {
+                                idx,
+                                total,
+                                id: id.to_string(),
+                                intent: intent.to_string(),
+                                kind: kind_label.clone(),
+                                status: "skip".to_string(),
+                                ms: Some(step_ms),
+                                error: Some(format!("expected failure: {e:#}")),
+                                screenshot: None,
+                                snapshot: None,
+                            },
+                        );
+                        skipped_step_ids.push(id.to_string());
+                        continue;
+                    }
                     if record_on {
                         rail_outcomes[(idx - 1) as usize] = Some("fail");
                     }
@@ -1827,6 +1992,61 @@ fn flatten_steps_depth(
                     }
                 }
                 for sub in flatten_steps_depth(&subs, templates, inputs, depth + 1)? {
+                    out.push(sub);
+                }
+            }
+            Step::Do {
+                id,
+                verb: crate::scenario::Verb::When,
+                params,
+                ..
+            } => {
+                let p = params
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("step '{id}' verb=when requires params"))?;
+                let condition = match (p.get("present"), p.get("absent")) {
+                    (Some(loc), None) => crate::scenario::WhenCondition::Present {
+                        locator: serde_json::from_value(loc.clone()).with_context(|| {
+                            format!("step '{id}' verb=when: params.present is not a locator")
+                        })?,
+                    },
+                    (None, Some(loc)) => crate::scenario::WhenCondition::Absent {
+                        locator: serde_json::from_value(loc.clone()).with_context(|| {
+                            format!("step '{id}' verb=when: params.absent is not a locator")
+                        })?,
+                    },
+                    (Some(_), Some(_)) => {
+                        bail!("step '{id}' verb=when: params takes present OR absent, not both")
+                    }
+                    (None, None) => bail!(
+                        "step '{id}' verb=when: params requires present or absent (a locator)"
+                    ),
+                };
+                let arr = p
+                    .get("steps")
+                    .and_then(|v| v.as_array())
+                    .ok_or_else(|| anyhow!("step '{id}' verb=when requires params.steps[]"))?;
+                let mut subs: Vec<Step> = Vec::with_capacity(arr.len());
+                for (idx, child) in arr.iter().enumerate() {
+                    let parsed: Step =
+                        serde_json::from_value(child.clone()).with_context(|| {
+                            format!("step '{id}' verb=when: params.steps[{idx}] failed to parse")
+                        })?;
+                    subs.push(parsed);
+                }
+                let cond = crate::scenario::WhenCond {
+                    block: id.clone(),
+                    condition,
+                };
+                // Each flattened child carries the block's condition so the
+                // block itself never reaches dispatch. Conds already on a
+                // child came from deeper `when` blocks — prepend so the list
+                // reads outermost-first (evaluation is AND either way).
+                for mut sub in flatten_steps_depth(&subs, templates, inputs, depth + 1)? {
+                    let ctx = sub.context_mut().get_or_insert_with(Default::default);
+                    ctx.when
+                        .get_or_insert_with(Vec::new)
+                        .insert(0, cond.clone());
                     out.push(sub);
                 }
             }
@@ -3341,6 +3561,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
     let mut offline = false;
     let mut fresh_browser = false;
     let mut input_overrides: BTreeMap<String, String> = BTreeMap::new();
+    let mut run_for: Vec<String> = Vec::new();
     let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -3398,6 +3619,12 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
             s if s.starts_with("--until=") => until_step = Some(s["--until=".len()..].to_string()),
             "--update-baselines" => update_baselines = true,
             "--keep-going" => keep_going = true,
+            "--run-for" => {
+                if let Some(t) = it.next().cloned().or_else(|| bail_missing("--run-for")) {
+                    run_for.push(t);
+                }
+            }
+            s if s.starts_with("--run-for=") => run_for.push(s["--run-for=".len()..].to_string()),
             "--no-baseline-sync" => baseline_sync = false,
 
             "--record-video" => record_video = Some(PathBuf::new()),
@@ -3478,6 +3705,7 @@ fn parse_args(args: &[String]) -> Result<RunOptions> {
         until_step,
         update_baselines,
         keep_going,
+        run_for,
         baseline_sync,
         record_video,
         junit,
@@ -3570,7 +3798,8 @@ Usage:
                   [--tag <label>] [--output-audit <path>]
                   [--from <stepId>] [--until <stepId>]
                   [--update-baselines] [--freeze <iso>] [--base-url <origin>]
-                  [--runs <N>] [--keep-going] [--junit [path]] [--record-video [path]]
+                  [--runs <N>] [--keep-going] [--run-for <tag>]
+                  [--junit [path]] [--record-video [path]]
 
 Loads + validates the scenario, mints a run id, prepares
 <sid>/replays/<runId>/, writes audit.json, runs env.open, iterates
@@ -3723,6 +3952,13 @@ replays/latest.txt.
                          state, but a repair sweep wants the complete
                          failure list in one run's audit rather than one
                          re-run per step.
+
+--run-for <tag>          Repeatable. Extra profile tag(s) for step
+                         context gating: `runFor` steps run only when
+                         one of their tags matches the run's tag set,
+                         `skipFor` skips on a match, `expectFailFor`
+                         downgrades a failure to a skip-status event.
+                         The --persona id is always in the tag set.
 
 --junit [path]           Write the run's terminal step outcomes as JUnit
                          XML — one <testcase> per step. Bare flag writes
@@ -3993,6 +4229,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            run_for: Vec::new(),
             baseline_sync: false,
             record_video: None,
             junit: None,
@@ -4066,6 +4303,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            run_for: Vec::new(),
             baseline_sync: false,
             record_video: None,
             junit: None,
@@ -4142,6 +4380,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            run_for: Vec::new(),
             baseline_sync: false,
             record_video: None,
             junit: None,
@@ -4213,6 +4452,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            run_for: Vec::new(),
             baseline_sync: false,
             record_video: None,
             junit: None,
@@ -4287,6 +4527,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            run_for: Vec::new(),
             baseline_sync: false,
             record_video: None,
             junit: None,
@@ -4354,6 +4595,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            run_for: Vec::new(),
             baseline_sync: false,
             record_video: None,
             junit: None,
@@ -4421,6 +4663,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            run_for: Vec::new(),
             baseline_sync: false,
             record_video: None,
             junit: None,
@@ -4474,6 +4717,7 @@ mod tests {
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            run_for: Vec::new(),
             baseline_sync: false,
             record_video: None,
             junit: None,
@@ -4551,6 +4795,7 @@ esac\nexit 0\n",
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            run_for: Vec::new(),
             baseline_sync: false,
             record_video: None,
             junit: None,
@@ -4816,6 +5061,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            run_for: Vec::new(),
             baseline_sync: false,
             record_video: None,
             junit: None,
@@ -4897,6 +5143,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            run_for: Vec::new(),
             baseline_sync: false,
             record_video: None,
             junit: None,
@@ -5677,6 +5924,169 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
     }
 
     #[test]
+    fn flatten_steps_when_injects_condition_into_children() {
+        let body = serde_json::json!([
+            { "id": "w1", "intent": "admin only", "kind": "do", "verb": "when",
+              "params": { "present": "css:#create-user", "steps": [
+                  { "id": "c1", "intent": "open", "kind": "do", "verb": "click",
+                    "on": "css:#create-user" },
+                  { "id": "c2", "intent": "see it", "kind": "check",
+                    "claim": { "subject": { "element": { "raw": { "kind": "css", "value": "#dialog" }, "reason": "t" } }, "predicate": "isVisible" } }
+              ] } },
+            { "id": "s2", "intent": "after", "kind": "do", "verb": "reload" }
+        ]);
+        let steps: Vec<Step> = serde_json::from_value(body).unwrap();
+        let flat = flatten_steps(&steps, None).unwrap();
+        assert_eq!(flat.len(), 3);
+        for (i, id) in ["c1", "c2"].iter().enumerate() {
+            assert_eq!(flat[i].id(), *id);
+            let conds = flat[i].context().and_then(|c| c.when.as_ref()).unwrap();
+            assert_eq!(conds.len(), 1);
+            assert_eq!(conds[0].block, "w1");
+            assert!(matches!(
+                conds[0].condition,
+                crate::scenario::WhenCondition::Present { .. }
+            ));
+        }
+        // the sibling outside the block stays unconditional
+        assert!(flat[2].context().is_none() || flat[2].context().unwrap().when.is_none());
+    }
+
+    #[test]
+    fn flatten_steps_when_absent_condition() {
+        let body = serde_json::json!([
+            { "id": "w1", "intent": "first run only", "kind": "do", "verb": "when",
+              "params": { "absent": { "role": "dialog" }, "steps": [
+                  { "id": "c1", "intent": "close intro", "kind": "do", "verb": "click",
+                    "on": "css:#skip-intro" }
+              ] } }
+        ]);
+        let steps: Vec<Step> = serde_json::from_value(body).unwrap();
+        let flat = flatten_steps(&steps, None).unwrap();
+        assert_eq!(flat.len(), 1);
+        let conds = flat[0].context().unwrap().when.as_ref().unwrap();
+        assert!(matches!(
+            conds[0].condition,
+            crate::scenario::WhenCondition::Absent { .. }
+        ));
+    }
+
+    #[test]
+    fn flatten_steps_when_nested_ands_conditions() {
+        let body = serde_json::json!([
+            { "id": "outer", "intent": "admin", "kind": "do", "verb": "when",
+              "params": { "present": "css:#admin-tools", "steps": [
+                  { "id": "inner", "intent": "beta too", "kind": "do", "verb": "when",
+                    "params": { "present": "css:#beta-panel", "steps": [
+                        { "id": "leaf", "intent": "use it", "kind": "do", "verb": "click",
+                          "on": "css:#beta-btn" }
+                    ] } }
+              ] } }
+        ]);
+        let steps: Vec<Step> = serde_json::from_value(body).unwrap();
+        let flat = flatten_steps(&steps, None).unwrap();
+        assert_eq!(flat.len(), 1);
+        let conds = flat[0].context().unwrap().when.as_ref().unwrap();
+        assert_eq!(conds.len(), 2);
+        assert_eq!(conds[0].block, "outer");
+        assert_eq!(conds[1].block, "inner");
+    }
+
+    #[test]
+    fn flatten_steps_when_composes_with_group() {
+        let body = serde_json::json!([
+            { "id": "g1", "intent": "grp", "kind": "do", "verb": "group",
+              "params": { "steps": [
+                  { "id": "w1", "intent": "maybe", "kind": "do", "verb": "when",
+                    "params": { "present": "css:#x", "steps": [
+                        { "id": "c1", "intent": "click", "kind": "do", "verb": "click",
+                          "on": "css:#x" }
+                    ] } }
+              ] } }
+        ]);
+        let steps: Vec<Step> = serde_json::from_value(body).unwrap();
+        let flat = flatten_steps(&steps, None).unwrap();
+        assert_eq!(flat.len(), 1);
+        assert_eq!(flat[0].id(), "c1");
+        assert_eq!(
+            flat[0].context().unwrap().when.as_ref().unwrap()[0].block,
+            "w1"
+        );
+    }
+
+    #[test]
+    fn flatten_steps_when_requires_present_or_absent_and_steps() {
+        // neither condition key
+        let body = serde_json::json!([
+            { "id": "w1", "intent": "x", "kind": "do", "verb": "when",
+              "params": { "steps": [] } }
+        ]);
+        let steps: Vec<Step> = serde_json::from_value(body).unwrap();
+        let err = flatten_steps(&steps, None).unwrap_err().to_string();
+        assert!(err.contains("requires present or absent"), "got: {err}");
+
+        // both condition keys
+        let body = serde_json::json!([
+            { "id": "w1", "intent": "x", "kind": "do", "verb": "when",
+              "params": { "present": "css:#a", "absent": "css:#b", "steps": [] } }
+        ]);
+        let steps: Vec<Step> = serde_json::from_value(body).unwrap();
+        let err = flatten_steps(&steps, None).unwrap_err().to_string();
+        assert!(err.contains("not both"), "got: {err}");
+
+        // no steps
+        let body = serde_json::json!([
+            { "id": "w1", "intent": "x", "kind": "do", "verb": "when",
+              "params": { "present": "css:#a" } }
+        ]);
+        let steps: Vec<Step> = serde_json::from_value(body).unwrap();
+        let err = flatten_steps(&steps, None).unwrap_err().to_string();
+        assert!(err.contains("params.steps"), "got: {err}");
+
+        // bad locator shape
+        let body = serde_json::json!([
+            { "id": "w1", "intent": "x", "kind": "do", "verb": "when",
+              "params": { "present": 42, "steps": [] } }
+        ]);
+        let steps: Vec<Step> = serde_json::from_value(body).unwrap();
+        let err = flatten_steps(&steps, None).unwrap_err().to_string();
+        assert!(err.contains("not a locator"), "got: {err}");
+    }
+
+    #[test]
+    fn flatten_steps_when_preserves_child_context_tags() {
+        let body = serde_json::json!([
+            { "id": "w1", "intent": "maybe", "kind": "do", "verb": "when",
+              "params": { "present": "css:#x", "steps": [
+                  { "id": "c1", "intent": "click", "kind": "do", "verb": "click",
+                    "on": "css:#x", "context": { "runFor": ["admin"] } }
+              ] } }
+        ]);
+        let steps: Vec<Step> = serde_json::from_value(body).unwrap();
+        let flat = flatten_steps(&steps, None).unwrap();
+        let ctx = flat[0].context().unwrap();
+        assert_eq!(
+            ctx.run_for.as_deref(),
+            Some(["admin".to_string()].as_slice())
+        );
+        assert_eq!(ctx.when.as_ref().unwrap()[0].block, "w1");
+    }
+
+    #[test]
+    fn parse_args_run_for_repeatable() {
+        let opts = parse_args(&[
+            "./j.json".into(),
+            "--run-for".into(),
+            "admin".into(),
+            "--run-for=beta".into(),
+        ])
+        .unwrap();
+        assert_eq!(opts.run_for, vec!["admin".to_string(), "beta".to_string()]);
+        let opts = parse_args(&["./j.json".into()]).unwrap();
+        assert!(opts.run_for.is_empty());
+    }
+
+    #[test]
     fn parse_args_output_audit_flag() {
         let opts = parse_args(&[
             "./j.json".into(),
@@ -5767,6 +6177,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            run_for: Vec::new(),
             baseline_sync: false,
             record_video: None,
             junit: None,
@@ -5866,6 +6277,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            run_for: Vec::new(),
             baseline_sync: false,
             record_video: None,
             junit: None,
@@ -6137,6 +6549,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            run_for: Vec::new(),
             baseline_sync: false,
             record_video: None,
             junit: None,
@@ -6238,6 +6651,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            run_for: Vec::new(),
             baseline_sync: false,
             record_video: None,
             junit: None,
@@ -6318,6 +6732,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            run_for: Vec::new(),
             baseline_sync: false,
             record_video: None,
             junit: None,
@@ -6376,6 +6791,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            run_for: Vec::new(),
             baseline_sync: false,
             record_video: None,
             junit: None,
@@ -6571,6 +6987,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            run_for: Vec::new(),
             baseline_sync: false,
             record_video: None,
             junit: None,
@@ -6695,6 +7112,7 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
             until_step: None,
             update_baselines: false,
             keep_going: false,
+            run_for: Vec::new(),
             baseline_sync: false,
             record_video: None,
             junit: None,

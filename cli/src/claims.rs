@@ -2404,7 +2404,7 @@ fn snapshot_line_attribute(line: &str, attribute: &str) -> Result<String> {
     }
 }
 
-fn locator_resolves(
+pub(crate) fn locator_resolves(
     session: &str,
     loc: &Locator,
     scope: &mut ValueScope,

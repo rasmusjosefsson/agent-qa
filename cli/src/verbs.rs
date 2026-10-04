@@ -745,6 +745,11 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
                 "step '{id}' verb=loop should be flattened by the runner before dispatch_do is called"
             );
         }
+        Verb::When => {
+            bail!(
+                "step '{id}' verb=when should be flattened by the runner before dispatch_do is called"
+            );
+        }
         Verb::Mail => crate::mail::wait_message(params, scope, id).map(Some),
         Verb::Totp => crate::totp::code_step(params, scope, id).map(Some),
         Verb::Upload => {
