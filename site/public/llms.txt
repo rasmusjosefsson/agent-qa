@@ -1,0 +1,28 @@
+# agent-qa
+
+> Record a user scenario in a real browser. Replay it later. See exactly what changed.
+
+agent-qa is a CLI (plus browser extension) that captures browser sessions as deterministic replay scripts — `scenario.json` — with visual goldens, network/console claims, self-heal, and a PR-level golden loop. No model calls on replay.
+
+## Docs (markdown mirrors — same URL as the HTML page, minus the trailing slash)
+
+- [Quickstart](https://rasmusjosefsson.github.io/agent-qa/docs/quickstart.md): install, record, replay in five minutes
+- [How it works](https://rasmusjosefsson.github.io/agent-qa/docs/overview.md): the whole system in one read
+- [Configuration](https://rasmusjosefsson.github.io/agent-qa/docs/configuration.md): agent-qa.toml, env vars, precedence
+- [CLI verbs](https://rasmusjosefsson.github.io/agent-qa/docs/verbs.md): complete verb reference
+- [Golden screenshots](https://rasmusjosefsson.github.io/agent-qa/docs/visual-testing.md): shot claims, baselines, re-mint loop
+- [Network claims](https://rasmusjosefsson.github.io/agent-qa/docs/network.md): network and console claims behind the UI
+- [Templates](https://rasmusjosefsson.github.io/agent-qa/docs/templates.md): reusable sub-scenarios via useTemplate
+- [Plugins](https://rasmusjosefsson.github.io/agent-qa/docs/plugins.md): JSON-over-stdio plugin contract
+- [Browser extension](https://rasmusjosefsson.github.io/agent-qa/docs/extension.md): one-click capture → ingest → replay
+- [GitHub Action](https://rasmusjosefsson.github.io/agent-qa/docs/github-action.md): replay scenarios on every PR
+- [Lint rules](https://rasmusjosefsson.github.io/agent-qa/docs/lint-rules.md): scenario lint catalogue
+- [Architecture](https://rasmusjosefsson.github.io/agent-qa/docs/architecture.md): codemap and runtime flows
+- [Session hygiene](https://rasmusjosefsson.github.io/agent-qa/docs/process-hygiene.md): ps + cleanup for stray daemons
+- [Releasing](https://rasmusjosefsson.github.io/agent-qa/docs/releasing.md): cross-compile, package, publish
+
+## Capabilities
+
+- [Agent manifest](https://rasmusjosefsson.github.io/agent-qa/.well-known/agent.json): machine-readable capability list
+- [Repository](https://github.com/rasmusjosefsson/agent-qa): source, issues, releases
+- `agent-qa mcp` serves the CLI as MCP tools over stdio — record, replay, lint, audit from an MCP client

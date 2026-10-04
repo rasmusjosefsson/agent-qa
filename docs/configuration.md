@@ -90,6 +90,37 @@ the other, and a `.store.json` manifest under `baselines/` tracks
 local/remote hashes so only changed files move. The workbench
 Settings page edits the same table under "Golden storage".
 
+### `[mail]`
+
+HTTP API of the test inbox the `{"mail": …}` scenario verb and the
+`agent-qa mail` CLI read — a mailpit or mailhog server the app under
+test sends mail to (OTP codes, verification links).
+
+```toml
+[mail]
+url = "http://localhost:8025"   # mailpit's API base (mailhog works too)
+```
+
+A mail step polls the inbox for the newest message matching
+`params.to` / `params.subject` (globs), extracts from the body, and
+binds the hit for `saveAs`:
+
+```json
+{"id":"s9","kind":"do","verb":"mail",
+ "intent":"wait for the verification mail",
+ "params":{"to":"*@example.test","subject":"*verify*",
+           "extract":"link","timeoutMs":30000},
+ "saveAs":"verifyUrl"}
+```
+
+`extract`: `"link"` = first `https?://` URL, `"code"` = first 4–8
+digit run, anything else = a regex (capture group 1 wins, else the
+whole match). Without `extract` the bound value is the whole text
+body. `timeoutMs` bounds the poll (default 30000); `to` and
+`subject` are optional — no filters matches the newest message
+(useful for a per-test mailbox). Both mailpit (`/api/v1`) and
+mailhog (`/api/v2`) shapes are detected automatically.
+
 ## Personas and environments
 
 Credentialed replays draw from two record kinds under the scenarios

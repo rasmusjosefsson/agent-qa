@@ -84,17 +84,19 @@ references for design context only; nothing vendor-specific enters core code.
    CLI to agent clients (record/replay/lint as MCP tools). agent-qa's skills
    already put the verbs in context; a thin `agent-qa mcp` wrapper would put
    them in scope for MCP-native agents that never read a skill file.
-8. **Verification channels** — TesterArmy provisions temp mail inboxes so the
-   agent can read OTP codes and verification links during a run, plus HTTP
-   basic-auth and stored credentials. Our profile plugins cover login state,
-   but nothing reads an inbox: a `mail` helper (spin up or point at a
-   mailpit/temp-mail endpoint, poll for message, extract link/code) would
-   unblock signup/verify flows end-to-end.
-9. **Discovery runs** — TesterArmy's "give the agent a goal, no saved steps,
-   report every bug" and its PR exploration agent (read the diff → write a
-   plan → execute in a real browser). Gap #1 covers the PR-triggered half;
-   goal-driven exploration is the bigger half — `crawl` emits a coverage
-   scenario today, but nothing hunts for defects autonomously.
+8. **Verification channels** — SHIPPED (mail half): the `{"mail": …}`
+   scenario verb polls a `[mail]`-configured mailpit/mailhog API for the
+   newest message matching `params.to`/`params.subject` globs, extracts a
+   `link`/`code`/regex from the body, and binds it via `saveAs` for later
+   steps — signup/verify flows run end-to-end. `agent-qa mail
+   list|read|wait|delete` probes the same inbox from the CLI. HTTP
+   basic-auth + stored credentials remain profile-plugin territory.
+9. **Discovery runs** — PARTIAL: `agent-qa discover <url>
+   --changed-git <ref>` covers the deterministic slice — changed paths →
+   route mapping (pages/app/routes/views conventions) → a draft scenario
+   whose `onlyWhen` self-scopes future replays. The goal-driven
+   exploratory half ("find bugs with no saved steps") stays open — it's
+   agentic, and a deterministic crawler can't judge defect-ness.
 10. **Agentic steps that lower to deterministic replay** — e2e's twist: an
     `agent.act("upgrade the workspace")` step records the actions the agent
     took, and later runs replay them with zero model calls until the app
@@ -102,9 +104,12 @@ references for design context only; nothing vendor-specific enters core code.
     model-assisted *heal* fallback (a step whose locator can't resolve asks a
     model once, records the new action, replays deterministically after),
     not as an authoring surface.
-11. **Agent-discovery surface on the site** — llms.txt, `.md` mirrors of every
-    docs page, and a `.well-known/agent.json` capability manifest. Cheap; our
-    site already renders docs but nothing advertises them to agents.
+11. **Agent-discovery surface on the site** — SHIPPED: `llms.txt` +
+    `.well-known/agent.json` (capability manifest, MCP surface, docs
+    links) are static under `site/public/`; `sync-docs.mjs` now emits
+    `.md` mirrors of every docs page (`docs/<slug>.md`), and each page's
+    `<head>` advertises its mirror via `link rel="alternate"
+    type="text/markdown"`.
 
 ### E2E visual-testing tools (Percy, Applitools, Argos, Chromatic)
 

@@ -42,6 +42,8 @@ pub(crate) struct ConfigFile {
     browser: Option<BrowserConfig>,
     #[serde(default)]
     pub(crate) baselines: Option<BaselinesTable>,
+    #[serde(default)]
+    pub(crate) mail: Option<MailTable>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -79,6 +81,24 @@ pub(crate) fn baselines_config() -> Option<(PathBuf, BaselinesTable)> {
     let cwd = env::current_dir().ok()?;
     let (cfg_path, cfg) = load_config(&cwd)?;
     cfg.baselines.map(|t| (cfg_path, t))
+}
+
+/// `[mail]` — HTTP API of the test inbox the `mail` verb reads.
+/// `url` points at the server's API base (mailpit: `http://host:8025`,
+/// mailhog: `http://host:8025` — both detected by response shape).
+/// No credentials are read here; if the inbox sits behind auth, front it
+/// with a header through a local proxy instead of storing a token.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) struct MailTable {
+    pub(crate) url: Option<String>,
+}
+
+/// The `[mail]` section of the active `agent-qa.toml`.
+pub(crate) fn mail_config() -> Option<(PathBuf, MailTable)> {
+    let cwd = env::current_dir().ok()?;
+    let (cfg_path, cfg) = load_config(&cwd)?;
+    cfg.mail.map(|t| (cfg_path, t))
 }
 
 fn load_config(start: &Path) -> Option<(PathBuf, ConfigFile)> {

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://rasmusjosefsson.github.io/agent-qa/.well-known/agent.schema.json",
+  "name": "agent-qa",
+  "description": "Record a user scenario in a real browser. Replay it later. See exactly what changed. Deterministic replay of browser sessions with visual goldens, network/console claims, and audit-trialed self-heal.",
+  "homepage": "https://rasmusjosefsson.github.io/agent-qa/",
+  "repository": "https://github.com/rasmusjosefsson/agent-qa",
+  "license": "MIT",
+  "docs": {
+    "llms": "https://rasmusjosefsson.github.io/agent-qa/llms.txt",
+    "markdownMirrors": "https://rasmusjosefsson.github.io/agent-qa/docs/{page}.md",
+    "quickstart": "https://rasmusjosefsson.github.io/agent-qa/docs/quickstart.md"
+  },
+  "interfaces": {
+    "cli": {
+      "install": "npm i -g @rasmusjosefsson/agent-qa",
+      "verbs": [
+        "init", "start", "record", "flush", "replay", "crawl", "discover",
+        "shot-accept", "domshot-accept", "layout-accept", "baselines",
+        "audit", "compare", "migrate", "mail", "mcp", "doctor", "list",
+        "verify", "plan", "design", "ingest"
+      ]
+    },
+    "mcp": {
+      "transport": "stdio",
+      "command": "agent-qa mcp",
+      "tools": ["record", "replay", "lint", "audit"]
+    }
+  },
+  "capabilities": [
+    "record browser scenarios to scenario.json",
+    "deterministic replay with per-step claims",
+    "visual goldens (shot/domshot/layout) with baselines and diffs",
+    "network, console, a11y, storage, and file claims",
+    "selective replay via onlyWhen globs + --changed",
+    "self-heal with audit trail (auto_heal, heal-*)",
+    "Playwright/Cypress spec import (migrate)",
+    "test-inbox reads for OTP/verification links (mail)",
+    "change-scoped scenario drafting (discover)"
+  ]
+}

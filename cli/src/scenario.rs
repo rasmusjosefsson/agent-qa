@@ -239,6 +239,12 @@ pub enum Verb {
     Loop,
     Group,
     UseTemplate,
+    /// Read the test inbox: poll the `[mail]`-configured mailpit/mailhog
+    /// API for the newest message matching `params.to`/`params.subject`
+    /// (globs), then `params.extract` ("link"/"code"/regex) the body and
+    /// return the hit for `saveAs`. `params.timeoutMs` bounds the poll
+    /// (default 30000). No browser interaction — safe mid-recording too.
+    Mail,
 }
 
 // ---------- Locator ----------

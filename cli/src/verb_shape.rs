@@ -205,6 +205,10 @@ fn rule_for(verb: &Verb) -> VerbRule {
             params_required: &["template"],
             ..VerbRule::default()
         },
+        Verb::Mail => VerbRule {
+            forbidden: &[DoField::On, DoField::Value],
+            ..VerbRule::default()
+        },
     }
 }
 

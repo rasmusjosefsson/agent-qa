@@ -83,3 +83,26 @@ for (const [slug, { file, description }] of Object.entries(DOCS)) {
   await writeFile(join(out, `${slug}.md`), transform(src, description))
 }
 console.log(`sync-docs: ${Object.keys(DOCS).length} pages → src/content/docs/docs/`)
+
+// Agent-facing .md mirrors — each doc served verbatim as <slug>.md next to
+// its HTML page (docs/foo/ → docs/foo.md), so an agent can read markdown
+// without parsing the site chrome. Mirrors keep the raw repo markdown —
+// mermaid fences and all — plus a header naming canonical + source.
+const SITE_ORIGIN = process.env.SITE_URL ?? "https://rasmusjosefsson.github.io"
+const SITE_BASE = process.env.SITE_BASE ?? "/agent-qa"
+const mirrorOut = join(here, "..", "public", "docs")
+await mkdir(mirrorOut, { recursive: true })
+for (const name of await readdir(mirrorOut)) await rm(join(mirrorOut, name), { force: true })
+for (const [slug, { file }] of Object.entries(DOCS)) {
+  const src = await readFile(join(repo, "docs", file), "utf8")
+  const header =
+    `<!-- markdown mirror of ${SITE_ORIGIN}${SITE_BASE}/docs/${slug}/ — source: docs/${file} in rasmusjosefsson/agent-qa -->\n\n`
+  await writeFile(join(mirrorOut, `${slug}.md`), header + src.replace(/\r\n/g, "\n"))
+}
+// quickstart is hand-written mdx — mirror its content too (mdx is readable markdown).
+const qs = await readFile(join(out, "quickstart.mdx"), "utf8")
+await writeFile(
+  join(mirrorOut, "quickstart.md"),
+  `<!-- markdown mirror of ${SITE_ORIGIN}${SITE_BASE}/docs/quickstart/ — source: site quickstart.mdx -->\n\n` + qs.replace(/\r\n/g, "\n"),
+)
+console.log(`sync-docs: ${Object.keys(DOCS).length + 1} mirrors → public/docs/`)

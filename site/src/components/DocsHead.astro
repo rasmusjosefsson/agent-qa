@@ -1,8 +1,15 @@
 ---
 import Default from "@astrojs/starlight/components/Head.astro"
+
+// Agent discovery: every docs page advertises its raw-markdown mirror
+// (docs/<slug>/ → docs/<slug>.md) so a crawler can read the doc without
+// parsing the site chrome.
+const path = Astro.url.pathname.replace(/\/$/, "")
+const mdMirror = path.match(/\/docs\/[^/]+$/) ? `${path}.md` : null
 ---
 
 <Default />
+{mdMirror && <link rel="alternate" type="text/markdown" href={mdMirror} />}
 
 <script>
   // Render ```mermaid blocks (converted to <pre class="mermaid"> by

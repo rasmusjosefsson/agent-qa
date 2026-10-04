@@ -22,6 +22,7 @@ mod compare;
 mod config;
 mod crawl;
 mod design;
+mod discover;
 mod doctor;
 mod dom_activate;
 mod domshot_accept;
@@ -44,6 +45,7 @@ mod io;
 mod junit;
 mod layout_accept;
 mod list;
+mod mail;
 mod mcp;
 mod migrate;
 mod mock;
@@ -126,6 +128,7 @@ fn main() -> ExitCode {
         "list" => list::run(rest),
         "compare" | "diff" => compare::run(rest),
         "crawl" => crawl::run(rest),
+        "discover" => discover::run(rest),
         "design" => design::run(rest),
         "audit" => audit::run(rest),
         "plan" => plan::run(rest),
@@ -163,9 +166,10 @@ fn main() -> ExitCode {
         "ingest" => ingest::run(rest),
         "mcp" => mcp::run(rest),
         "migrate" => migrate::cli(rest),
+        "mail" => mail::run(rest),
         _ => {
             eprintln!(
-                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, smart-fill, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, domshot-accept, layout-accept, baselines, run-report, init, ingest, mcp, migrate."
+                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, smart-fill, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, domshot-accept, layout-accept, baselines, run-report, init, ingest, mcp, migrate, mail, discover."
             );
             eprintln!("Run `agent-qa --help` for usage.");
             Ok(2)
@@ -272,6 +276,13 @@ Verbs:
   migrate <dir> [--out <dir>] [--dry-run] [--sid-prefix <p>]
                                 Convert Playwright/Cypress spec files into
                                 scenario/2 documents
+  mail list|read|wait|delete    Probe the [mail]-configured test inbox
+                                (mailpit/mailhog); `wait` polls for a
+                                to/subject match and prints the extract
+  discover <url> --changed <file>|--changed-git <ref> [--routes r1,r2]
+                                Draft a scenario covering just the routes a
+                                changed-paths set plausibly reaches — the
+                                PR-diff-scoped cousin of `crawl`
   ingest <bundle.json> [--sid <name>]
                                 Turn a browser-extension capture bundle
                                 (steps + traffic) into scenario.json +

@@ -94,7 +94,7 @@ pub fn run(args: &[String]) -> Result<u8> {
             "usage: agent-qa crawl <url> [--session <name>] [--out <dir>] [--max N] [--sid <name>]"
         )
     })?;
-    let host = url::host_of(&url);
+    let host = self::url::host_of(&url);
     let sid = sid_override.unwrap_or_else(|| format!("crawl-{}", sanitize(&host)));
     let dir = out_dir.unwrap_or_else(|| paths::scenarios_root().join(&sid));
 
@@ -517,7 +517,7 @@ fn sanitize(host: &str) -> String {
 }
 
 /// URL helpers kept local — the crate doesn't take a url dep for one host parse.
-mod url {
+pub(crate) mod url {
     pub fn host_of(url: &str) -> String {
         let after_scheme = url.split("://").nth(1).unwrap_or(url);
         after_scheme

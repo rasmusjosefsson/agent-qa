@@ -4,3 +4,6 @@ dist/
 # Generated from ../docs by scripts/sync-docs.mjs
 src/content/docs/docs/*
 !src/content/docs/docs/quickstart.mdx
+
+# Generated .md mirrors (scripts/sync-docs.mjs)
+public/docs/
