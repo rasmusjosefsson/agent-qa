@@ -1610,7 +1610,13 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     }
 
     if let Some(msg) = first_failure {
-        bail!(msg);
+        // A quarantined failure returns the summary instead of the error —
+        // the failure is already on record (events, audit, report rows)
+        // and containment means the gate stays green. The error text
+        // still surfaced above in the step block.
+        if !summary.gates_ok() {
+            bail!(msg);
+        }
     }
     Ok(summary)
 }

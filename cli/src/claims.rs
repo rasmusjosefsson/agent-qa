@@ -508,7 +508,7 @@ fn perf_metric_js(metric: &str, dwell_ms: u64) -> String {
       setTimeout(tick, 100);
     }});
   }}
-  return '"'"'__aq_unknown__'"'"';
+  return JSON.stringify('__aq_unknown__');
 }})()"#
     )
 }
