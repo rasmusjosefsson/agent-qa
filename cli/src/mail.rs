@@ -190,7 +190,7 @@ fn list_messages(base: &str) -> Result<Vec<Message>> {
                 .and_then(|s| s.as_str())
                 .map(decode_header)
                 .unwrap_or_default();
-            let to = headers
+            let from_headers = headers
                 .and_then(|h| h.get("To"))
                 .and_then(|s| s.as_array())
                 .map(|a| {
@@ -205,9 +205,29 @@ fn list_messages(base: &str) -> Result<Vec<Message>> {
                                 .trim()
                                 .to_string()
                         })
-                        .collect()
+                        .collect::<Vec<String>>()
                 })
                 .unwrap_or_default();
+            // Header To is absent on some builds — the item's
+            // `{Mailbox, Domain}` pairs carry the same recipients.
+            let to = if from_headers.is_empty() {
+                m.get("To")
+                    .and_then(|t| t.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|e| {
+                                Some(format!(
+                                    "{}@{}",
+                                    e.get("Mailbox")?.as_str()?,
+                                    e.get("Domain")?.as_str()?
+                                ))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                from_headers
+            };
             Some(Message {
                 id: m.get("ID")?.as_str()?.to_string(),
                 subject,
@@ -418,10 +438,21 @@ pub fn run(args: &[String]) -> Result<u8> {
                     Ok(0)
                 }
                 Some(id) => {
-                    ureq::delete(&format!("{base}/api/v1/message/{id}"))
+                    // Mailpit deletes at the singular path, mailhog the
+                    // plural — try singular, fall back on 404.
+                    let one = ureq::delete(&format!("{base}/api/v1/message/{id}"))
                         .timeout(Duration::from_secs(10))
-                        .call()
-                        .with_context(|| format!("mail delete {id}"))?;
+                        .call();
+                    match one {
+                        Err(ureq::Error::Status(404, _)) => {
+                            ureq::delete(&format!("{base}/api/v1/messages/{id}"))
+                                .timeout(Duration::from_secs(10))
+                                .call()
+                                .with_context(|| format!("mail delete {id}"))?;
+                        }
+                        Err(e) => return Err(e).with_context(|| format!("mail delete {id}")),
+                        Ok(_) => {}
+                    }
                     Ok(0)
                 }
                 None => bail!("usage: agent-qa mail delete <id>|--all"),
