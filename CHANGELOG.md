@@ -6,6 +6,45 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-05
+
+### Added
+
+- Perceptual shot diffing — pixelmatch-style antialiasing detection: a
+  pixel only counts as changed when its channel delta exceeds the
+  threshold AND it isn't an AA fringe in either image, so solid edge
+  shifts report as real diffs while render-hint noise is ignored. Diffs
+  now cluster into regions — the failure line and `compare` output name
+  the count plus the largest region (`N region(s), largest WxH at x,y`)
+  so a shot miss points at where on the page it landed.
+- `agent-qa triage <sid> [<runId|latest>]` — post-run drift triage via
+  the `triage` plugin kind: the run's exit code, failures, heals and
+  diffs go to the configured plugin, whose response is written to
+  `triage.md` + `triage.json` in the run dir. Plugins learn `triage`
+  via `ping` like every other kind; see `docs/plugins.md`.
+- `audit stats` / `stats-all` flake score — per-scenario 0–100 score
+  blending outcome flip-rate, fail-rate and heal-rate, plus a
+  `healedRuns` count; `-` when a scenario has fewer than two runs.
+  Surfaces silently-flaky scenarios that a raw pass-rate hides.
+- `agent-qa resolve --batch <descriptions...>` — speculative fan-out:
+  one snapshot enumeration + one plugin call for N questions. The
+  resolve request can carry `descriptions: [{id, description, role}]`
+  with a shared `candidates` list; response is `{"answers": {"<id>":
+  {"ref", "confidence"}}}`. A plugin that doesn't understand the batch
+  shape degrades to per-id no-picks; single-question callers are
+  unchanged. `examples/plugins/jev-resolve` fans out all questions in
+  one System One call.
+
+### Changed
+
+- Docs and help strings say plain "scenario" in prose; `scenario/2`
+  remains only where the schema version id is load-bearing.
+
+### Fixed
+
+- Release workflow umbrella dep-check polls 30 min (was 10) — platform
+  packages take ~25 min to index after publish.
+
 ## [0.1.9] - 2026-10-05
 ### Added
 
