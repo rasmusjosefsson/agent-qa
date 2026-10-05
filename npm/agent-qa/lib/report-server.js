@@ -22,7 +22,7 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const path = require('node:path');
 const { createReadStream } = require('node:fs');
-const { execFile } = require('node:child_process');
+const { execFile, spawnSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 const { createLiveBridge } = require('./live-bridge.js');
 const { findExtensionDir, zipExtensionDir } = require('./extension-zip.js');
@@ -1090,10 +1090,10 @@ async function resolveRunAuthEnv(root, deps, opts) {
     ...(auth.creds || {}),
     ...((persona.credentials && persona.credentials.entries) || {}),
   };
-  const { env: resolvedEnv, unresolved } = await resolveVaultRefs(entries);
+  const { env: resolvedEnv, unresolved, reason } = await resolveVaultRefs(entries);
   if (unresolved.length) {
     return {
-      error: `could not resolve vault refs: ${unresolved.join(', ')}. Run \`vault login\` and set VAULT_ADDR.`,
+      error: `could not resolve vault refs: ${unresolved.join(', ')} — ${reason}`,
     };
   }
 
@@ -1173,6 +1173,7 @@ async function readVaultToken() {
 async function resolveVaultRefs(map) {
   const out = {};
   const unresolved = [];
+  let reason = '';
   const needsVault = Object.values(map).some((v) => typeof v === 'string' && v.startsWith('vault:'));
   const token = needsVault ? await readVaultToken() : null;
   const endpoint = needsVault ? String(process.env.VAULT_ADDR || '').replace(/\/$/, '') : '';
@@ -1185,6 +1186,11 @@ async function resolveVaultRefs(map) {
     if (!endpoint || !token || parts.length !== 2 || !parts[0] || !parts[1]) {
       out[name] = value;
       unresolved.push(name);
+      reason = !endpoint
+        ? 'VAULT_ADDR is not set in the workbench environment'
+        : !token
+          ? 'no vault token (VAULT_TOKEN / ~/.vault-token) — run `vault login`'
+          : `malformed ref "${value}" (expected vault:<path>:<key>)`;
       continue;
     }
     const [vpath, key] = parts;
@@ -1193,6 +1199,7 @@ async function resolveVaultRefs(map) {
       if (!r.ok) {
         out[name] = value;
         unresolved.push(name);
+        reason = `vault lookup failed (HTTP ${r.status} — expired token? run \`vault login\`)`;
         continue;
       }
       const j = await r.json();
@@ -1202,13 +1209,40 @@ async function resolveVaultRefs(map) {
       else {
         out[name] = value;
         unresolved.push(name);
+        reason = `key "${key}" missing at ${vpath}`;
       }
     } catch {
       out[name] = value;
       unresolved.push(name);
+      reason = `vault unreachable at ${endpoint}`;
     }
   }
-  return { env: out, unresolved };
+  return { env: out, unresolved, reason };
+}
+
+// A core-provided credential preparation for `vault:` refs that can't resolve:
+// when the workbench knows VAULT_ADDR and a `vault` CLI is on PATH, offer
+// `vault login -method=oidc` — browser SSO that writes ~/.vault-token, which
+// resolveVaultRefs then picks up. Used only when the environment declared no
+// remediation of its own; a declared one always wins.
+let vaultCliChecked;
+function vaultCliOnPath() {
+  if (vaultCliChecked === undefined) {
+    try {
+      const r = spawnSync('vault', ['version'], { timeout: 5000 });
+      vaultCliChecked = !r.error && r.status === 0;
+    } catch {
+      vaultCliChecked = false;
+    }
+  }
+  return vaultCliChecked;
+}
+
+function vaultLoginRemediation(map, cliOk) {
+  const hasRefs = Object.values(map || {}).some((v) => typeof v === 'string' && v.startsWith('vault:'));
+  const ok = cliOk === undefined ? vaultCliOnPath() : cliOk;
+  if (!hasRefs || !process.env.VAULT_ADDR || !ok) return null;
+  return { label: 'Sign in to Vault', argv: ['vault', 'login', '-method=oidc'], automatic: true };
 }
 
 // A trusted extension may declare a non-shell credential-preparation command.
@@ -1683,6 +1717,54 @@ async function settingsPayload(root) {
   };
 }
 
+// Extract the plugin-reported outcome from a connect step's stdout. The CLI
+// prints `profile <id> → <status>` then the plugin's pretty-printed JSON
+// response; the JSON carries the actionable bits (status + error/message).
+function parseAuthStepOutput(stdout) {
+  const text = String(stdout || '');
+  const i = text.indexOf('{');
+  if (i >= 0) {
+    try {
+      const j = JSON.parse(text.slice(i));
+      const status = typeof j.status === 'string' ? j.status : '';
+      const detail =
+        ['error', 'message', 'detail', 'reason', 'hint']
+          .map((k) => (typeof j[k] === 'string' ? j[k].trim() : ''))
+          .find(Boolean) || '';
+      return { status, detail };
+    } catch {
+      /* not JSON after all — fall through to the status line */
+    }
+  }
+  const m = text.match(/(?:→|:)\s*([^\n{]+)/);
+  return { status: m ? m[1].trim() : '', detail: '' };
+}
+
+// True only when the plugin's probe reports authenticated. Check the CLI's
+// `profile <id> → <status>` line, not the whole stdout — the printed JSON body
+// can contain the word "authenticated" inside a message/detail field.
+function reportedAuthenticated(stdout) {
+  const firstLine = String(stdout || '').split('\n', 1)[0];
+  const parsed = parseAuthStepOutput(stdout);
+  return parsed.status === 'authenticated' || /authenticated/i.test(firstLine);
+}
+
+// Reduce a connect step log to one human-readable line for the UI: the step
+// that failed, the plugin-reported status/message, or stderr when the plugin
+// printed nothing parseable.
+function connectFailureDetail(log) {
+  const failing = (log || []).find((e) => e.spawnError || e.code !== 0);
+  if (!failing) return '';
+  const parsed = parseAuthStepOutput(failing.stdout);
+  const msg =
+    parsed.detail ||
+    String(failing.stderr || '').trim() ||
+    (failing.spawnError ? String(failing.spawnError) : '');
+  const lead = parsed.status ? `status "${parsed.status}"` : `${failing.step} failed`;
+  const out = msg ? `${lead} — ${msg}` : lead;
+  return out.length > 400 ? `${out.slice(0, 400)}…` : out;
+}
+
 // POST /api/personas/:id/connect { environmentId } — sign a persona in for an
 // environment via the downstream auth plugin: profile-add (register the profile
 // against the env's plugin) → profile-bootstrap (run the plugin's auth) →
@@ -1724,7 +1806,7 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
   // is why a persona-only connect used to fail with "auth-failed: <cred> unset".
   if (!env) env = await pickDefaultEnvironment(root);
   const auth = (env && env.auth) || {};
-  const remediation = normalizeAuthRemediation(auth.remediation);
+  let remediation = normalizeAuthRemediation(auth.remediation);
   // An auth plugin can come from three places: the workbench's own registry
   // (UI-imported → AGENT_QA_PLUGINS), an environment's auth.plugin adapter
   // preference, or the CLI's native discovery (agent-qa.toml [plugins] /
@@ -1769,16 +1851,27 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
     ...(auth.creds || {}),
     ...((persona.credentials && persona.credentials.entries) || {}),
   };
-  const { env: resolvedEnv, unresolved } = await resolveVaultRefs(entries);
+  const { env: resolvedEnv, unresolved, reason: vaultReason } = await resolveVaultRefs(entries);
   if (unresolved.length) {
+    // No declared remediation? Offer the built-in vault login when the CLI is
+    // available — the user gets a button (or auto-connect runs it) instead of
+    // a dead-end message.
+    if (!remediation) remediation = vaultLoginRemediation(entries);
     log.push({
       step: 'vault',
       code: 1,
       stdout: '',
-      stderr: `could not resolve vault refs: ${unresolved.join(', ')}. Run \`vault login\` and set VAULT_ADDR.`,
+      stderr: `could not resolve vault refs: ${unresolved.join(', ')} — ${vaultReason}`,
       spawnError: null,
     });
-    return sendJson(res, 200, { ok: false, authenticated: false, profile, log, remediation: publicAuthRemediation(remediation) });
+    return sendJson(res, 200, {
+      ok: false,
+      authenticated: false,
+      profile,
+      log,
+      detail: connectFailureDetail(log),
+      remediation: publicAuthRemediation(remediation),
+    });
   }
   Object.assign(extraEnv, resolvedEnv);
 
@@ -1818,6 +1911,7 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
       session: sessionOverride,
       headed,
       log,
+      detail: connectFailureDetail(log),
       remediation: publicAuthRemediation(remediation),
     });
   }
@@ -1829,7 +1923,17 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
     const statArgs = ['profile-status', profile];
     if (sessionOverride) statArgs.push('--session', sessionOverride);
     const stat = await step('profile-status', statArgs);
-    const authenticated = /authenticated/i.test(stat.stdout || '');
+    const authenticated = reportedAuthenticated(stat.stdout);
+    let detail;
+    if (!authenticated) {
+      detail = connectFailureDetail(log);
+      // An empty credential set usually means the persona's secret env vars /
+      // vault refs were never configured — the plugin had nothing to sign in
+      // with. Worth saying out loud; the plugin's own message may not.
+      if (Object.keys(entries).length === 0) {
+        detail = `${detail ? `${detail} ` : ''}(no credential entries configured for this persona or environment)`;
+      }
+    }
     if (authenticated) {
       // Remember the profile on the chat entry (so the agent's bash gets
       // AGENT_QA_PROFILE → a later `start` records a useProfile baseline) and
@@ -1850,6 +1954,7 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
       session: sessionOverride,
       headed,
       log,
+      detail,
       remediation: authenticated ? undefined : publicAuthRemediation(remediation),
     });
   } finally {
@@ -1867,7 +1972,12 @@ async function handleChatRemediation(res, root, entry, deps, body) {
   const envId = body.environmentId ? String(body.environmentId) : '';
   let env = envId && isSafeSegment(envId) ? await loadEnvironmentById(root, envId) : null;
   if (!env) env = await pickDefaultEnvironment(root);
-  const remediation = normalizeAuthRemediation(env && env.auth && env.auth.remediation);
+  const remediation =
+    normalizeAuthRemediation(env && env.auth && env.auth.remediation) ||
+    vaultLoginRemediation({
+      ...((env && env.auth && env.auth.creds) || {}),
+      ...((persona.credentials && persona.credentials.entries) || {}),
+    });
   if (!remediation || !deps || typeof deps.runAuthRemediation !== 'function') {
     return badRequest(res, 'this environment has no credential preparation action');
   }
@@ -3159,7 +3269,12 @@ async function autoConnectDefault(root, entry, deps) {
     if (!root || !deps || typeof deps.runCli !== 'function') return;
     const [persona, env] = await Promise.all([pickDefaultPersona(root), pickDefaultEnvironment(root)]);
     if (!persona || !env) return;
-    const remediation = normalizeAuthRemediation(env.auth && env.auth.remediation);
+    const remediation =
+      normalizeAuthRemediation(env.auth && env.auth.remediation) ||
+      vaultLoginRemediation({
+        ...((env.auth && env.auth.creds) || {}),
+        ...((persona.credentials && persona.credentials.entries) || {}),
+      });
     entry.autoConnect = { state: 'connecting', personaId: persona.id, environmentId: env.id, at: Date.now() };
     const connect = async () => {
       const res = makeCaptureRes();
@@ -3185,6 +3300,7 @@ async function autoConnectDefault(root, entry, deps) {
       personaId: persona.id,
       environmentId: env.id,
       remediation: parsed.authenticated ? undefined : publicAuthRemediation(remediation),
+      detail: parsed.authenticated ? undefined : parsed.detail,
       at: Date.now(),
     };
     // The user may have hit "No sign-in" while this connect was in flight —
@@ -3513,6 +3629,7 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
       // Present only after the user picks "No sign-in" for this chat.
       ...(entry.guest ? { guest: true } : {}),
       remediation: entry.connectedProfile ? undefined : auto.remediation,
+      detail: entry.connectedProfile ? undefined : auto.detail,
     });
   }
 
@@ -5195,6 +5312,11 @@ module.exports = {
   _test: {
     replayArgs,
     runOptsFromBody,
+    parseAuthStepOutput,
+    reportedAuthenticated,
+    connectFailureDetail,
+    vaultLoginRemediation,
+    vaultCliOnPath,
     makeBrowserModePreparer,
     launchReplay,
     finalizeIncompleteReplay,

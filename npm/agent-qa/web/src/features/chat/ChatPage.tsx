@@ -770,8 +770,13 @@ function ConnectBar({ cid }: { cid: string }) {
   // True once the user picks a persona by hand — a guest-state poll must not
   // wipe their selection before they press Connect.
   const pickedRef = useRef(false)
+  // Connect runs headless; when it fails, offer a retry in a visible browser
+  // window so interactive sign-in (SSO, MFA) can complete and failures are
+  // watchable. Cleared on the next attempt/success.
+  const [offerVisibleRetry, setOfferVisibleRetry] = useState(false)
 
   const showConnectResult = (result: ConnectResult, afterPreparing = false) => {
+    setOfferVisibleRetry(!result.authenticated && result.headed !== true)
     setMsg(
       result.authenticated
         ? { tone: 'ok', text: `Signed in as ${result.profile} — this chat's browser is authenticated.` }
@@ -780,11 +785,12 @@ function ConnectBar({ cid }: { cid: string }) {
             // A prepare that ran and still left us signed out must not repeat
             // "needs preparation" — that reads as if nothing happened and
             // invites pressing the same button forever.
-            text: !result.remediation
-              ? "Connect ran but the profile isn't authenticated yet."
-              : afterPreparing
-                ? 'Preparation ran, but sign-in still failed.'
-                : 'Sign-in needs preparation.',
+            text:
+              (!result.remediation
+                ? "Connect ran but the profile isn't authenticated yet."
+                : afterPreparing
+                  ? 'Preparation ran, but sign-in still failed.'
+                  : 'Sign-in needs preparation.') + (result.detail ? ` ${result.detail}` : ''),
             remediation: result.remediation,
           }
     )
@@ -836,18 +842,23 @@ function ConnectBar({ cid }: { cid: string }) {
       shownKey = key
       if (connection.guest) {
         setBusy(false)
+        setOfferVisibleRetry(false)
         setMsg({ tone: 'ok', text: 'No sign-in — browsing anonymously.' })
       } else if (connection.state === 'connecting') {
         setBusy(true)
         setMsg({ tone: 'busy', text: 'Signing in…' })
       } else if (connection.state === 'connected') {
         setBusy(false)
+        setOfferVisibleRetry(false)
         setMsg({ tone: 'ok', text: `Signed in as ${connection.profile}.` })
       } else if (connection.state === 'failed') {
         setBusy(false)
+        setOfferVisibleRetry(true)
         setMsg({
           tone: 'err',
-          text: connection.remediation ? 'Sign-in needs preparation.' : 'Automatic sign-in failed. Press Connect to retry.',
+          text:
+            (connection.remediation ? 'Sign-in needs preparation.' : 'Automatic sign-in failed. Press Connect to retry.') +
+            (connection.detail ? ` ${connection.detail}` : ''),
           remediation: connection.remediation,
         })
       }
@@ -885,12 +896,13 @@ function ConnectBar({ cid }: { cid: string }) {
 
   if (personas.length === 0) return null
 
-  const connect = async () => {
+  const connect = async (headed = false) => {
     if (!personaId || busy) return
     setBusy(true)
     setMsg(null)
+    setOfferVisibleRetry(false)
     try {
-      showConnectResult(await connectPersonaToChat(cid, personaId, envId || undefined))
+      showConnectResult(await connectPersonaToChat(cid, personaId, envId || undefined, headed))
     } catch (e) {
       setMsg({ tone: 'err', text: e instanceof Error ? e.message : String(e) })
     } finally {
@@ -948,6 +960,18 @@ function ConnectBar({ cid }: { cid: string }) {
       >
         {busy ? <Loader2Icon className="size-3.5 animate-spin" /> : <PlugZapIcon className="size-3.5" />} Connect
       </Button>
+      {offerVisibleRetry && !busy && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 text-xs"
+          onClick={() => void connect(true)}
+          disabled={busy || !personaId}
+          title="Retry sign-in in a visible browser window — lets interactive steps (SSO, MFA) complete and shows what blocked sign-in"
+        >
+          <MonitorPlayIcon className="size-3.5" /> Retry in a visible browser
+        </Button>
+      )}
       {msg?.remediation && (
         <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => void remediate()} disabled={busy || !personaId}>
           {msg.remediation.label}

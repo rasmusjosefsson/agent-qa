@@ -1568,6 +1568,85 @@ test("POST /api/chat/c/:id/connect bootstraps auth into THAT chat's own session"
   assert.equal((await j('POST', `/api/chat/c/${created.id}/connect`, {})).status, 400);
 });
 
+test('reportedAuthenticated reads the status line, not the JSON body', () => {
+  // The printed JSON response can contain the word "authenticated" inside a
+  // message — that must not count.
+  assert.equal(
+    srv._test.reportedAuthenticated(
+      'profile admin-user → expired\n{\n  "status": "expired",\n  "detail": "token authenticated at 10:00 has expired"\n}',
+    ),
+    false,
+  );
+  assert.equal(
+    srv._test.reportedAuthenticated('profile admin-user → authenticated\n{\n  "status": "authenticated"\n}'),
+    true,
+  );
+  // Bare CLI line without a JSON body (e.g. --quiet style or older builds).
+  assert.equal(srv._test.reportedAuthenticated('admin-user: authenticated'), true);
+  assert.equal(srv._test.reportedAuthenticated('admin-user: signed out'), false);
+});
+
+test('connectFailureDetail distills the failing step for the UI', () => {
+  const detail = srv._test.connectFailureDetail([
+    { step: 'profile-add', code: 0, stdout: 'ok', stderr: '', spawnError: null },
+    {
+      step: 'profile-status',
+      code: 1,
+      stdout: 'profile admin-user → on-login\n{\n  "status": "on-login",\n  "message": "credentials rejected"\n}',
+      stderr: '',
+      spawnError: null,
+    },
+  ]);
+  assert.match(detail, /on-login/);
+  assert.match(detail, /credentials rejected/);
+
+  // No parseable plugin output → fall back to stderr.
+  assert.match(
+    srv._test.connectFailureDetail([
+      { step: 'profile-bootstrap', code: 1, stdout: '', stderr: 'auth-failed: EMAIL unset', spawnError: null },
+    ]),
+    /auth-failed: EMAIL unset/,
+  );
+  assert.equal(srv._test.connectFailureDetail([{ step: 'x', code: 0, stdout: '', stderr: '' }]), '');
+});
+
+test('connect failure returns a human-readable detail (and the no-credentials hint)', async (t) => {
+  const fx = makeFixture();
+  const deps = {
+    chat: { hub: {} },
+    runCli: async (args) => {
+      if (args[0] === 'profile-status') {
+        return {
+          code: 1,
+          stdout: 'profile admin-user → on-login\n{\n  "status": "on-login",\n  "message": "still on the login page"\n}',
+          stderr: '',
+        };
+      }
+      return { code: 0, stdout: 'ok', stderr: '' };
+    },
+  };
+  const booted = await boot(fx.root, deps);
+  t.after(() => booted.server.close());
+  const j = (m, p, b) =>
+    fetch(`${booted.base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+  const created = await (await j('POST', '/api/chat/create')).json();
+  // Persona with NO credential entries → the hint names the likely cause.
+  await j('POST', '/api/personas/admin', { name: 'Admin', profile: 'admin-user' });
+  await j('POST', '/api/environments/staging', { name: 'Staging', auth: { plugin: 'agent-qa-plugin-acme' } });
+
+  const out = await (
+    await j('POST', `/api/chat/c/${created.id}/connect`, { personaId: 'admin', environmentId: 'staging' })
+  ).json();
+  assert.equal(out.authenticated, false);
+  assert.match(out.detail, /status "on-login"/);
+  assert.match(out.detail, /still on the login page/);
+  assert.match(out.detail, /no credential entries configured/);
+  // The failed auto-connect never ran (chat was created before the persona
+  // existed), so the poll endpoint stays disconnected.
+  const connection = await (await j('GET', `/api/chat/c/${created.id}/connection`)).json();
+  assert.equal(connection.state, 'disconnected');
+});
+
 test("POST /api/chat/c/:id/prompt annotates the text with the pane's current page", async (t) => {
   const fx = makeFixture();
   const prompts = [];
@@ -1740,7 +1819,82 @@ test('persona credentials inject into the plugin env; unresolved vault refs fail
   const r2 = await (await j('POST', '/api/personas/vaulted/connect', { environmentId: 'staging' })).json();
   assert.equal(r2.ok, false);
   assert.ok(r2.log.some((s) => s.step === 'vault'));
+  assert.match(r2.detail, /VAULT_ADDR is not set/);
+  // No remediation is offered without VAULT_ADDR — `vault login` can't run.
+  assert.equal(r2.remediation, undefined);
   assert.ok(!calls.some((c) => c.args[0] === 'profile-bootstrap'));
+});
+
+test('vaultLoginRemediation gates on vault refs, VAULT_ADDR, and the CLI', () => {
+  const prev = process.env.VAULT_ADDR;
+  try {
+    process.env.VAULT_ADDR = 'https://vault.invalid';
+    assert.deepEqual(srv._test.vaultLoginRemediation({ A: 'vault:x:y' }, true), {
+      label: 'Sign in to Vault',
+      argv: ['vault', 'login', '-method=oidc'],
+      automatic: true,
+    });
+    assert.equal(srv._test.vaultLoginRemediation({ A: 'vault:x:y' }, false), null); // no CLI
+    assert.equal(srv._test.vaultLoginRemediation({ A: 'literal' }, true), null); // no refs
+    process.env.VAULT_ADDR = '';
+    assert.equal(srv._test.vaultLoginRemediation({ A: 'vault:x:y' }, true), null); // no addr
+  } finally {
+    if (prev === undefined) delete process.env.VAULT_ADDR;
+    else process.env.VAULT_ADDR = prev;
+  }
+});
+
+test('unresolved vault refs offer a built-in vault-login remediation', async (t) => {
+  const fx = makeFixture();
+  const remediationRuns = [];
+  const deps = {
+    chat: { hub: {} },
+    runCli: async () => ({ code: 0, stdout: 'ok', stderr: '' }),
+    runAuthRemediation: async (argv) => {
+      remediationRuns.push(argv);
+      return { ok: true };
+    },
+  };
+  const { server, base } = await boot(fx.root, deps);
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  const prevAddr = process.env.VAULT_ADDR;
+  // Unroutable endpoint: token present or not, the refs stay unresolved.
+  process.env.VAULT_ADDR = 'https://vault.invalid';
+  t.after(() => {
+    if (prevAddr === undefined) delete process.env.VAULT_ADDR;
+    else process.env.VAULT_ADDR = prevAddr;
+  });
+
+  // Chat created BEFORE the persona/env exist — its background auto-connect
+  // no-ops, so only the explicit connect + remediate below run remediation.
+  const created = await (await j('POST', '/api/chat/create')).json();
+  await j('POST', '/api/environments/staging', { name: 'Staging', auth: { plugin: 'agent-qa-plugin-acme' } });
+  await j('POST', '/api/personas/vaulted', {
+    name: 'Vaulted',
+    profile: 'vaulted',
+    credentials: { entries: { APP_EMAIL: 'vault:dev/data/x:EMAIL' } },
+  });
+
+  const out = await (
+    await j('POST', `/api/chat/c/${created.id}/connect`, { personaId: 'vaulted', environmentId: 'staging' })
+  ).json();
+  assert.equal(out.authenticated, false);
+  assert.match(out.detail, /could not resolve vault refs: APP_EMAIL/);
+  if (srv._test.vaultCliOnPath()) {
+    assert.equal(out.remediation.label, 'Sign in to Vault');
+    // The remediate endpoint accepts the synthesized (non-declared) action too.
+    const r = await j('POST', `/api/chat/c/${created.id}/remediate`, {
+      personaId: 'vaulted',
+      environmentId: 'staging',
+    });
+    assert.equal(r.status, 200);
+    assert.deepEqual(remediationRuns, [['vault', 'login', '-method=oidc']]);
+  } else {
+    assert.equal(out.remediation, undefined);
+  }
 });
 
 test('plan run + scenario replay inject the persona credentials and self-bootstrap the profile', async (t) => {

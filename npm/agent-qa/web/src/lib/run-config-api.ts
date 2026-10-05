@@ -160,6 +160,9 @@ export interface ConnectResult {
   session?: string | null
   headed?: boolean
   log: ConnectStep[]
+  // Human-readable reason the connect did not authenticate (plugin status /
+  // error distilled server-side from the step log). Absent on success.
+  detail?: string
   remediation?: AuthRemediation
 }
 export function connectPersona(
@@ -181,6 +184,8 @@ export interface ChatConnection {
   // True after the user picks "No sign-in" — auto-connect won't re-fire.
   guest?: boolean
   remediation?: AuthRemediation
+  // Why the background auto-connect failed, when it did.
+  detail?: string
 }
 
 export function getChatConnection(chatId: string): Promise<ChatConnection> {
