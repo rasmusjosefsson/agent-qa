@@ -28,6 +28,12 @@ Request contract (Jev System One):
     }
     → {"answers": {"pick": {"choice": "<ref>", "confidence": 0.83}}}
 
+Batch contract: when the request carries `descriptions` (a list of
+{id, description, role}) instead of `description`, every question is
+answered in ONE System One call — the questions dict fans out per id —
+and the response is {"answers": {"<id>": {"ref", "confidence"}}}.
+That is Jev's speculative fan-out: one round-trip for N decisions.
+
 Any endpoint that speaks this shape works — override RESOLVE_ENDPOINT /
 RESOLVE_MODEL to point at a compatible decision service. Python stdlib only.
 
@@ -82,6 +88,7 @@ def main():
     description = req.get("description") or ""
     role = req.get("role")
     candidates = req.get("candidates") or []
+    descriptions = req.get("descriptions") or []
 
     endpoint = os.environ.get("RESOLVE_ENDPOINT", DEFAULT_ENDPOINT).strip()
     key_env = os.environ.get("RESOLVE_KEY_ENV", DEFAULT_KEY_ENV)
@@ -99,7 +106,17 @@ def main():
         fail("not-configured", f"{key_env} is not set")
         return
     if not candidates:
-        respond({"ref": None, "confidence": 0.0})
+        if descriptions:
+            respond(
+                {
+                    "answers": {
+                        d.get("id", f"q{i}"): {"ref": None, "confidence": 0.0}
+                        for i, d in enumerate(descriptions)
+                    }
+                }
+            )
+        else:
+            respond({"ref": None, "confidence": 0.0})
         return
 
     criteria = {
@@ -107,24 +124,40 @@ def main():
         for c in candidates
         if c.get("ref")
     }
-    want = f"Pick the element the author means: {description}"
-    if role:
-        want += f" (expected role: {role})"
     state_lines = ["Elements on the page:"] + [
         f'- {c["role"]} "{c["name"]}" [{c["ref"]}]' for c in candidates
     ]
+
+    if descriptions:
+        # Speculative fan-out: all questions in one call.
+        questions = {}
+        for i, d in enumerate(descriptions):
+            qid = d.get("id") or f"q{i}"
+            want = f"Pick the element the author means: {d.get('description', '')}"
+            if d.get("role"):
+                want += f" (expected role: {d['role']})"
+            questions[qid] = {
+                "type": "choice",
+                "instructions": want,
+                "criteria": criteria,
+            }
+    else:
+        want = f"Pick the element the author means: {description}"
+        if role:
+            want += f" (expected role: {role})"
+        questions = {
+            "pick": {
+                "type": "choice",
+                "instructions": want,
+                "criteria": criteria,
+            }
+        }
 
     body = json.dumps(
         {
             "state": "\n".join(state_lines),
             "model": model,
-            "questions": {
-                "pick": {
-                    "type": "choice",
-                    "instructions": want,
-                    "criteria": criteria,
-                }
-            },
+            "questions": questions,
         }
     ).encode()
 
@@ -147,17 +180,28 @@ def main():
         fail("upstream", f"decision endpoint: {e}")
         return
 
-    answer = (data.get("answers") or {}).get("pick") or {}
-    choice = answer.get("choice")
-    try:
-        confidence = float(answer.get("confidence", 0.0))
-    except (TypeError, ValueError):
-        confidence = 0.0
+    def pick_of(answer):
+        choice = (answer or {}).get("choice")
+        try:
+            conf = float((answer or {}).get("confidence", 0.0))
+        except (TypeError, ValueError):
+            conf = 0.0
+        if choice and choice in criteria and conf >= min_conf:
+            return {"ref": choice, "confidence": conf}
+        return {"ref": None, "confidence": conf}
 
-    if choice and choice in criteria and confidence >= min_conf:
-        respond({"ref": choice, "confidence": confidence})
+    answers = data.get("answers") or {}
+    if descriptions:
+        respond(
+            {
+                "answers": {
+                    qid: pick_of(answers.get(qid)) for qid in questions
+                }
+            }
+        )
     else:
-        respond({"ref": None, "confidence": confidence})
+        r = pick_of(answers.get("pick"))
+        respond(r)
 
 
 if __name__ == "__main__":

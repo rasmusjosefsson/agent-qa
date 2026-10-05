@@ -122,6 +122,26 @@ Response payload:
 treated as no pick. `confidence` is optional and informational only; the
 plugin applies its own threshold and returns `{"ref": null}` below it.
 
+Batch form — speculative fan-out, one plugin call for N questions:
+
+```json
+{
+  "descriptions": [
+    {"id": "q0", "description": "the save button", "role": null},
+    {"id": "q1", "description": "the code box", "role": "textbox"}
+  ],
+  "candidates": [ ...shared list... ]
+}
+→ {"answers": {"q0": {"ref": "e5", "confidence": 0.9},
+               "q1": {"ref": null, "confidence": 0.1}}}
+```
+
+`agent-qa resolve --batch "desc a" "desc b" ...` uses this shape — one
+snapshot enumeration + one API round-trip for every question (~3x faster
+than sequential on a live page; Jev fans the questions dict out in one
+System One call). A plugin that doesn't understand `descriptions` should
+answer each id as a no-pick; single-question callers are unaffected.
+
 Resolution never changes what lands in the scenario: the recorded step
 keeps the picked element's concrete role+name locator, so a scenario
 authored with a resolver replays identically without one. With no
