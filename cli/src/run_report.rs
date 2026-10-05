@@ -190,6 +190,7 @@ const ARTIFACT_DIRS: &[&str] = &[
     "shots-diff",
     "domshots-diff",
     "heal-responses",
+    "perf",
 ];
 
 fn esc(s: &str) -> String {

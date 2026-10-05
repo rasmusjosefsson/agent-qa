@@ -310,7 +310,7 @@
               "items": { "type": "string", "minLength": 1 }
             }
           },
-          "$comment": "shot subject — visual diff: compares <run>/screenshots/<stepId>.png against <scenario>/baselines/<stepId>.png. Only predicate is 'matches'; pass when the differing-pixel fraction <= tolerance.pixels (default 0.01). Diff maps write to <run>/shots-diff/. Mint baselines with shot-accept. 'mask' lists CSS selectors hidden (visibility:hidden) around every step screenshot — ignore regions for volatile UI (timestamps, live badges). Masks union across all shot claims in the scenario."
+          "$comment": "shot subject — visual diff: compares <run>/screenshots/<stepId>.png against <scenario>/baselines/<stepId>.png. Only predicate is 'matches'; pass when the differing-pixel fraction <= tolerance.pixels (default 0.01). Diff maps write to <run>/shots-diff/. Mint baselines with shot-accept. tolerance.knownDrift: true suppresses a miss whose fingerprint is in the scenario's known-drift.json ledger (minted via 'agent-qa known-drift accept') — a different drift still fails. 'mask' lists CSS selectors hidden (visibility:hidden) around every step screenshot — ignore regions for volatile UI (timestamps, live badges). Masks union across all shot claims in the scenario."
         },
         {
           "type": "object",
@@ -496,13 +496,14 @@
                       "type": "string",
                       "enum": ["fcp", "lcp", "cls", "tbt", "ttfb", "load"]
                     },
-                    "maxDwellMs": { "type": "integer", "minimum": 0 }
+                    "maxDwellMs": { "type": "integer", "minimum": 0 },
+                    "trace": { "type": "boolean" }
                   }
                 }
               ]
             }
           },
-          "$comment": "perf claim subject — read a Web Performance metric (Performance API + buffered observers). exists/notExists test presence (lcp with no paint is absent; cls/tbt report 0); numeric predicates compare the value (ms; cls is the unitless score). maxDwellMs bounds how long observer-buffered metrics wait for entries (default 1500)."
+          "$comment": "perf claim subject — read a Web Performance metric (Performance API + buffered observers). exists/notExists test presence (lcp with no paint is absent; cls/tbt report 0); numeric predicates compare the value (ms; cls is the unitless score). maxDwellMs bounds how long observer-buffered metrics wait for entries (default 1500). trace: true records a Chrome DevTools trace for the claim window to <run>/perf/<checkStepId>.trace.json — RCA material for a budget miss."
         }
       ]
     },

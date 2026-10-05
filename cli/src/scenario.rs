@@ -545,6 +545,11 @@ pub struct PerfMatcher {
     pub metric: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_dwell_ms: Option<u64>,
+    /// Record a Chrome DevTools trace for the claim window into
+    /// `<run>/perf/<checkStepId>.trace.json` — the RCA artifact a budget
+    /// miss needs (devtools-mcp's trace tooling reads the same format).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace: Option<bool>,
 }
 
 /// `perf` accepts a bare metric name or a matcher object.

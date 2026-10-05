@@ -526,14 +526,16 @@ fn check_perf(
     timeout: Duration,
 ) -> Result<()> {
     use crate::scenario::PerfSubject;
-    let (metric, dwell_ms) = match subject {
+    let (metric, dwell_ms, want_trace) = match subject {
         PerfSubject::Metric(m) => (
             substitute_scenario_vars(m, scope).to_ascii_lowercase(),
             1_500u64,
+            false,
         ),
         PerfSubject::Matcher(m) => (
             substitute_scenario_vars(&m.metric, scope).to_ascii_lowercase(),
             m.max_dwell_ms.unwrap_or(1_500),
+            m.trace.unwrap_or(false),
         ),
     };
     const METRICS: &[&str] = &["fcp", "lcp", "cls", "tbt", "ttfb", "load"];
@@ -543,7 +545,49 @@ fn check_perf(
             METRICS.join(", ")
         );
     }
-    let js = perf_metric_js(&metric, dwell_ms);
+    // `trace: true` wraps the claim window in a DevTools Tracing capture —
+    // the artifact a budget miss needs for RCA. Only inside a replay
+    // (needs run_dir for the output), best-effort: no CDP → no trace,
+    // claim unaffected.
+    let trace_guard = match (want_trace, ctx.run_dir) {
+        (true, Some(_)) => match crate::cdp_trace::start(ctx.session) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("[v2-replay] perf trace for '{metric}' skipped: {e:#}");
+                None
+            }
+        },
+        _ => None,
+    };
+    let out = check_perf_inner(&metric, dwell_ms, predicate, expected, ctx, timeout);
+    if let Some(guard) = trace_guard {
+        match guard.stop() {
+            Ok(events) => {
+                let dir = ctx.run_dir.expect("checked above").join("perf");
+                if let Err(e) = std::fs::create_dir_all(&dir).and_then(|_| {
+                    std::fs::write(
+                        dir.join(format!("{metric}.trace.json")),
+                        serde_json::json!({ "traceEvents": events }).to_string(),
+                    )
+                }) {
+                    eprintln!("[v2-replay] perf trace write failed: {e:#}");
+                }
+            }
+            Err(e) => eprintln!("[v2-replay] perf trace stop failed: {e:#}"),
+        }
+    }
+    out
+}
+
+fn check_perf_inner(
+    metric: &str,
+    dwell_ms: u64,
+    predicate: &Predicate,
+    expected: Option<&Json>,
+    ctx: &CheckContext,
+    timeout: Duration,
+) -> Result<()> {
+    let js = perf_metric_js(metric, dwell_ms);
     // Poll until the claim's condition is met — a metric that isn't
     // there yet (lcp before the user-idle dwell) may still land.
     let deadline = Instant::now() + timeout;
@@ -1232,6 +1276,46 @@ fn check_shot(
     let diff_path = diff_dir.join(format!("{shot}.diff.png"));
     let _ = diff_img.save(&diff_path);
     let regions = crate::compare::screenshots::diff_regions(&diff_img);
+    // Drift fingerprint — a stable id for THIS diff's shape. Written to a
+    // sidecar so `known-drift accept` and the "same drift as run N" scan
+    // don't have to recompute it, and so a later run can recognize this
+    // exact regression without pixel work.
+    let fp = crate::compare::screenshots::drift_fingerprint(
+        &regions,
+        diff_img.width(),
+        diff_img.height(),
+    );
+    let _ = std::fs::write(
+        diff_dir.join(format!("{shot}.diff.json")),
+        serde_json::json!({
+            "fingerprint": fp,
+            "fraction": frac,
+            "regions": regions.iter().map(|r| serde_json::json!(r)).collect::<Vec<_>>(),
+        })
+        .to_string(),
+    );
+    // Opt-in suppression: a fingerprint already triaged into the
+    // scenario's known-drift.json downgrades this miss to a warning —
+    // the same reviewed drift re-fails nothing, a NEW one still does.
+    if crate::drift::opt_in(tolerance) {
+        let known = crate::drift::fingerprints(ctx.scenario_dir);
+        if let Some(meta) = known.get(&fp) {
+            let note = meta
+                .get("note")
+                .or_else(|| meta.get("run"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            eprintln!(
+                "[v2-replay] shot '{shot}' differs ({:.2}%) but fingerprint {fp} is known drift{} — passing",
+                frac * 100.0,
+                if note.is_empty() { String::new() } else { format!(" ({note})") }
+            );
+            return Ok(());
+        }
+    }
+    // "Same drift as run N" — an earlier run's sidecar carrying this fp
+    // means the regression is already on file, which belongs in the error.
+    let seen_note = same_drift_seen_before(ctx.scenario_dir, run_dir, shot, &fp);
     let region_note = if regions.is_empty() {
         String::new()
     } else {
@@ -1260,13 +1344,52 @@ fn check_shot(
         tol,
     );
     bail!(
-        "shot '{shot}' differs from baseline: {:.2}% pixels changed (tolerance {:.2}%){} — diff at {}{}",
+        "shot '{shot}' differs from baseline: {:.2}% pixels changed (tolerance {:.2}%){} — diff at {}{}{}",
         frac * 100.0,
         tol * 100.0,
         region_note,
         diff_path.display(),
-        rca_note
+        rca_note,
+        seen_note
     )
+}
+
+/// Scan every *other* run's `<run>/shots-diff/<step>.diff.json` for the
+/// same fingerprint — "this identical drift already happened in run N"
+/// for the error line. Cheap (one small JSON per run dir that has one);
+/// skips runs that predate sidecars or never diffed this step.
+fn same_drift_seen_before(scenario_dir: &Path, run_dir: &Path, step: &str, fp: &str) -> String {
+    let runs_dir = scenario_dir.join("replays");
+    let Ok(entries) = std::fs::read_dir(&runs_dir) else {
+        return String::new();
+    };
+    let mut seen = Vec::new();
+    for entry in entries.flatten() {
+        let d = entry.path();
+        if d == run_dir {
+            continue;
+        }
+        let sidecar = d.join("shots-diff").join(format!("{step}.diff.json"));
+        let Ok(body) = std::fs::read_to_string(&sidecar) else {
+            continue;
+        };
+        let same = serde_json::from_str::<Json>(&body)
+            .ok()
+            .and_then(|v| v.get("fingerprint")?.as_str().map(str::to_string))
+            .map(|s| s == fp)
+            .unwrap_or(false);
+        if same {
+            if let Some(name) = d.file_name().and_then(|n| n.to_str()) {
+                seen.push(name.to_string());
+            }
+        }
+    }
+    if seen.is_empty() {
+        String::new()
+    } else {
+        seen.sort();
+        format!(" — same drift as {}", seen.join(", "))
+    }
 }
 
 /// Shot-miss RCA-lite: find the diff map's red-pixel bounds, convert them
