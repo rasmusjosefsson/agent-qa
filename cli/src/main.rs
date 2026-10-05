@@ -263,7 +263,7 @@ Verbs:
   audit count <sid>                Print the number of runs under <sid>
   audit duration <sid> <runId|latest>  Print run duration in seconds
   profile-list                  List registered profiles (id, adapter, default, registeredAt)
-  replay <sid | path>           Re-execute a scenario/2 document
+  replay <sid | path>           Re-execute a scenario document
   doctor [--json]               Diagnose the local install (agent-browser + plugins)
   ps [--json]                   List live/orphan/stale agent-browser sessions + zombie Chrome
   cleanup [--all|--session <n>] [--older-than <dur>] [--dry-run] [--json]
@@ -290,7 +290,7 @@ Verbs:
                                 agent clients (tools/list + tools/call)
   migrate <dir> [--out <dir>] [--dry-run] [--sid-prefix <p>]
                                 Convert Playwright/Cypress spec files into
-                                scenario/2 documents
+                                scenario documents
   compile <file.flow> [--out <scenario.json>] [--check]
                                 Compile line-DSL (open/click/fill/check/shot/
                                 group/when/include…) to a scenario.json

@@ -1,6 +1,6 @@
 //! `agent-qa compile <file.flow>` / `agent-qa describe <scenario>` — the
 //! line-DSL surface (scan-3 item 1): a diffable, hand-writable text form
-//! that compiles to a scenario/2 document, and back.
+//! that compiles to a scenario document, and back.
 //!
 //! Bounded grammar = deterministic parse; no model anywhere near it. One
 //! statement per line; `#`/`//` comments and blank lines are ignored.

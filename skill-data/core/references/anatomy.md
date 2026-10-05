@@ -1,6 +1,6 @@
 # Scenario anatomy
 
-New recordings use `scenario/2`. The recorder writes the local recording state,
+New recordings use the scenario format (`scenario/2`). The recorder writes the local recording state,
 then `flush` seals `scenario.json`.
 
 Keep replay setup in `env.open` and cleanup in `env.close`. Keep browser actions

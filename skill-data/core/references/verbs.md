@@ -21,8 +21,8 @@
 | `aria-snapshot [--session <name>] [--interactive]` | agent-qa's own read-only ARIA dump verb. Not a `browser` sub-verb — run it as `agent-qa aria-snapshot`, not `agent-qa browser aria-snapshot` (that's `Unknown command`). |
 | `cdp-url [--json]` | agent-qa's own verb for the live session's CDP WebSocket endpoint. Also not a `browser` sub-verb. |
 | `record-setup '<env-op-json>'` | Appends one schema-valid generic `env.open` operation. |
-| `record-step do '<draft-json>'` | Appends a `scenario/2` do draft without `id` or `kind`. |
-| `record-step check '<draft-json>'` | Appends a `scenario/2` check draft without `id` or `kind`. |
+| `record-step do '<draft-json>'` | Appends a scenario do draft without `id` or `kind`. |
+| `record-step check '<draft-json>'` | Appends a scenario check draft without `id` or `kind`. |
 | `smart-click "<accessible-name>"` | Clicks a target and appends a direct do draft. |
 | `fill-unique <label> --template <template>` | Fills a unique value and appends a direct type draft. |
 | `smart-fill "<accessible-name>" <value>` | Types a literal value into a field by accessible name and appends a direct `do/type` draft. |
@@ -39,7 +39,7 @@ Only `do` and `check` drafts are accepted.
 `[--keep-going] [--retry N] [--junit [path]] [--record-video [path]] [--freeze]`
 `[--har] [--mock-from <runId>] [--offline] [--base-url <url>] [--auto-promote]`
 `[--all [--shard k/n] [--filter <substr>] [--tags <a,b>] [--jobs N] [--report <path>]]`
-replays a sealed `scenario/2` document. It writes its audit and sidecars below
+replays a sealed scenario document. It writes its audit and sidecars below
 `replays/`; `--update-baselines` mints `baselines/` PNGs from the run's
 screenshots afterwards (visual baselines — see `visual.md`).`--auto-promote`
 writes this run's locator-correction patches back into `scenario.json` when
@@ -66,7 +66,7 @@ without a `heal-promote` step.
 `[--keep-going] [--retry N] [--junit [path]] [--record-video [path]] [--freeze]`
 `[--har] [--mock-from <runId>] [--offline] [--base-url <url>] [--auto-promote]`
 `[--all [--shard k/n] [--filter <substr>] [--tags <a,b>] [--jobs N] [--report <path>]]`
-replays a sealed `scenario/2` document. It writes its audit and sidecars below
+replays a sealed scenario document. It writes its audit and sidecars below
 `replays/`; `--update-baselines` mints `baselines/` PNGs from the run's
 screenshots afterwards (visual baselines — see `visual.md`).
 

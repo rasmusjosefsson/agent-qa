@@ -1,6 +1,6 @@
 # `agent-qa replay`
 
-`agent-qa replay <sid-or-scenario-path>` validates a `scenario/2` file, runs
+`agent-qa replay <sid-or-scenario-path>` validates a scenario file, runs
 `env.open`, dispatches every `do` and `check` step, then runs `env.close`.
 Replay writes evidence under `<scenario-dir>/replays/<run-id>/`. It never
 changes `scenario.json`. Artifacts include `status.json`, `audit.json`,
