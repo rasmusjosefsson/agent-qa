@@ -145,14 +145,32 @@ jobs:
         run: npm publish --provenance --access public
       - name: verify published umbrella
         run: |
+          # npm's read side lags publish — "npm view" right after publish 404s
+          # while the registry processes the new version. Poll with backoff
+          # instead of failing the release on the race.
           VERSION="${GITHUB_REF#refs/tags/v}"
           node -e '
             const version = process.argv[1];
             const { execFileSync } = require("node:child_process");
-            const deps = JSON.parse(execFileSync("npm", [
-              "view", `@rasmusjosefsson/agent-qa@${version}`, "optionalDependencies",
-              "--json", "--loglevel=error",
-            ], { encoding: "utf8" }));
+            const view = () => {
+              try {
+                return JSON.parse(execFileSync("npm", [
+                  "view", `@rasmusjosefsson/agent-qa@${version}`, "optionalDependencies",
+                  "--json", "--loglevel=error",
+                ], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }));
+              } catch {
+                return null;
+              }
+            };
+            let deps = view();
+            for (let i = 0; deps == null && i < 12; i++) {
+              execFileSync("sleep", ["10"]);
+              deps = view();
+            }
+            if (deps == null) {
+              console.error(`umbrella ${version} not visible in registry after ~2min`);
+              process.exit(1);
+            }
             const bad = Object.entries(deps || {})
               .filter(([k]) => /^@rasmusjosefsson\/agent-qa-/.test(k) && deps[k] !== version);
             if (bad.length) {
