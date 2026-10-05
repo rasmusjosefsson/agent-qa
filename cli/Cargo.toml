@@ -22,7 +22,7 @@ clap = { version = "4", features = ["derive"] }
 include_dir = "0.7"
 toml = "0.8"
 pathdiff = "0.2"
-which = "6"
+which = "8"
 regex = "1"
 rand = "0.8"
 sha2 = "0.10"
