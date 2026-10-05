@@ -244,7 +244,7 @@ export function PlanDetail({ id }: { id: string }) {
       // Persist scope first so the server runs exactly what's shown.
       await upsertPlan(id, { name: name.trim() || id, description, scope: { setIds, caseIds } })
       const r = await runPlan(id, buildRunOpts())
-      // Refused up front (e.g. the persona's vault creds couldn't resolve) —
+      // Refused up front (e.g. the persona's credential refs couldn't resolve) —
       // nothing was replayed, so surface the reason instead of "Started 0".
       if (r.ok === false) {
         setErr(r.error || 'Run refused')

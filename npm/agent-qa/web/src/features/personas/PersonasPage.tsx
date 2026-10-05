@@ -82,7 +82,7 @@ export function PersonasPage() {
             description={
               <>
                 A persona is a login: a profile + the credentials it signs in with (typed in, or
-                pointed at a vault).
+                resolved by a credentials plugin).
               </>
             }
             action={
@@ -269,16 +269,17 @@ function PersonaDialog({
             {rows.map((r, i) => (
               <div key={i} className="flex items-center gap-1.5">
                 <Input className="h-8 flex-1 font-mono text-xs" placeholder="ENV_VAR" value={r.k} onChange={(e) => setRow(i, { k: e.target.value })} />
-                <Input className="h-8 flex-[1.4] font-mono text-xs" placeholder="value or vault:path:key" value={r.v} onChange={(e) => setRow(i, { v: e.target.value })} />
+                <Input className="h-8 flex-[1.4] font-mono text-xs" placeholder="value or scheme:ref" value={r.v} onChange={(e) => setRow(i, { v: e.target.value })} />
                 <Button variant="ghost" size="icon" className="size-8 shrink-0" onClick={() => setRows((p) => p.filter((_, j) => j !== i))}>
                   <XIcon className="size-4" />
                 </Button>
               </div>
             ))}
             <p className="text-[11px] text-muted-foreground">
-              Env vars the auth plugin reads. A value can be a literal or{' '}
-              <code>vault:&lt;path&gt;:&lt;key&gt;</code> (resolved at run time — run <code>vault login</code> and set{' '}
-              <code>VAULT_ADDR</code> first). Stored locally on this machine.
+              Env vars the auth plugin reads. A value can be a literal or a{' '}
+              <code>&lt;scheme&gt;:&lt;ref&gt;</code> resolved at run time by a credentials plugin
+              (e.g. <code>vault:</code> — install the matching provider plugin first). Stored locally
+              on this machine.
             </p>
           </div>
 

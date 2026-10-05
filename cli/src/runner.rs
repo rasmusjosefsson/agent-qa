@@ -4058,8 +4058,8 @@ replays/latest.txt.
                          [REDACTED]).
 --persona <id>           Replay as a persona — reads
                          <scenarios>/_personas/<id>/persona.json, injects
-                         its credentials (literal or vault: refs resolved
-                         via $VAULT_ADDR) into env, and sets the profile
+                         its credentials (literal or <scheme>: refs resolved
+                         via credentials plugins) into env, and sets the profile
                          (session <profile>-session) so env.open's
                          useProfile op authenticates. CLI mirror of the
                          workbench persona picker.

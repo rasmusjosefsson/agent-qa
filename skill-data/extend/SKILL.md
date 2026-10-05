@@ -35,7 +35,7 @@ Typical layout:
 ├── agent-qa.toml           # [skills], [plugins], defaults
 ├── plugins/                # (optional) global plugin binaries
 │   └── agent-qa-plugin-<vendor>
-└── sessions/               # (future) auth/session vault
+└── sessions/               # (future) auth/session credential store
 ```
 
 Minimal `~/.agent-qa/agent-qa.toml`:

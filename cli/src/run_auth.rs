@@ -4,7 +4,7 @@
 //!
 //! Records live under the scenarios root:
 //!   <root>/_personas/<id>/persona.json
-//!       { profile, credentials: { entries: { ENV_VAR: "literal|vault:path:key" } } }
+//!       { profile, credentials: { entries: { ENV_VAR: "literal|<scheme>:<ref>" } } }
 //!   <root>/_environments/<id>/environment.json
 //!       { baseUrl, params: {...}, auth: { plugin, loginUrl, config, creds } }
 //!
@@ -13,17 +13,18 @@
 //!     `<profile>-session` name when the caller didn't pass `--session`)
 //!   - environment `params` (+`baseUrl` → `baseUrl`) merge UNDER explicit
 //!     `--param` overrides
-//!   - credential entries (literal or `vault:` ref) resolve into process env
-//!     vars — the auth plugin reads them during the scenario's `useProfile` op
+//!   - credential entries (literal or `<scheme>:` provider ref) resolve into
+//!     process env vars via `credentials` plugins — the auth plugin reads
+//!     them during the scenario's `useProfile` op
 //!   - `AGENT_QA_ENV_*` vars surface the environment's connection config
 //!   - `profile-add` registers the profile↔plugin adapter binding
 //!     (idempotent) so `useProfile` can bootstrap the login
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use serde_json::Value as Json;
 
 use crate::paths;
@@ -96,7 +97,7 @@ pub fn apply(opts: &mut RunOptions) -> Result<()> {
             }
         }
     }
-    for (k, v) in resolve_vault_refs(&entries)? {
+    for (k, v) in crate::creds::resolve_credential_refs(&entries)? {
         std::env::set_var(k, v);
     }
 
@@ -223,110 +224,6 @@ fn safe_record_id(id: &str, label: &str) -> Result<()> {
         bail!("unsafe {label} id: {id:?}");
     }
     Ok(())
-}
-
-fn read_vault_token() -> Option<String> {
-    if let Ok(t) = std::env::var("VAULT_TOKEN") {
-        let t = t.trim().to_string();
-        if !t.is_empty() {
-            return Some(t);
-        }
-    }
-    let home = std::env::var("HOME").ok()?;
-    fs::read_to_string(PathBuf::from(home).join(".vault-token"))
-        .ok()
-        .map(|t| t.trim().to_string())
-        .filter(|t| !t.is_empty())
-}
-
-/// Resolve `vault:<path>:<key>` values via the HashiCorp Vault KV HTTP API —
-/// `GET <VAULT_ADDR>/v1/<path>` with `X-Vault-Token`; reads KV-v2
-/// (`data.data`) then KV-v1 (`data`). Non-vault values pass through. Any
-/// unresolvable ref fails the run up front (mirroring the server) with the
-/// same per-cause reason the workbench reports.
-fn resolve_vault_refs(map: &BTreeMap<String, String>) -> Result<BTreeMap<String, String>> {
-    let needs_vault = map.values().any(|v| v.starts_with("vault:"));
-    let token = if needs_vault {
-        read_vault_token()
-    } else {
-        None
-    };
-    let endpoint = if needs_vault {
-        std::env::var("VAULT_ADDR")
-            .unwrap_or_default()
-            .trim_end_matches('/')
-            .to_string()
-    } else {
-        String::new()
-    };
-    let mut out = BTreeMap::new();
-    let mut unresolved: Vec<String> = Vec::new();
-    let mut reason = String::new();
-    for (name, value) in map {
-        if !value.starts_with("vault:") {
-            out.insert(name.clone(), value.clone());
-            continue;
-        }
-        let parts: Vec<&str> = value["vault:".len()..].split(':').collect();
-        if endpoint.is_empty()
-            || token.is_none()
-            || parts.len() != 2
-            || parts[0].is_empty()
-            || parts[1].is_empty()
-        {
-            out.insert(name.clone(), value.clone());
-            unresolved.push(name.clone());
-            reason = if endpoint.is_empty() {
-                "VAULT_ADDR is not set".to_string()
-            } else if token.is_none() {
-                "no vault token (VAULT_TOKEN / ~/.vault-token) — run `vault login`".to_string()
-            } else {
-                format!("malformed ref {value:?} (expected vault:<path>:<key>)")
-            };
-            continue;
-        }
-        let url = format!("{endpoint}/v1/{}", parts[0]);
-        let lookup = ureq::get(&url)
-            .set("X-Vault-Token", token.as_deref().unwrap_or_default())
-            .call();
-        let resolved = match lookup {
-            Ok(resp) => match resp.into_json::<Json>() {
-                Ok(j) => j
-                    .pointer("/data/data")
-                    .and_then(|d| d.get(parts[1]))
-                    .and_then(|v| v.as_str())
-                    .or_else(|| {
-                        j.pointer("/data")
-                            .and_then(|d| d.get(parts[1]))
-                            .and_then(|v| v.as_str())
-                    })
-                    .map(str::to_string)
-                    .ok_or_else(|| format!("key {:?} missing at {}", parts[1], parts[0])),
-                Err(_) => Err(format!("unparseable vault response for {}", parts[0])),
-            },
-            Err(ureq::Error::Status(code, _)) => Err(format!(
-                "vault lookup failed (HTTP {code} — expired token? run `vault login`)"
-            )),
-            Err(_) => Err(format!("vault unreachable at {endpoint}")),
-        };
-        match resolved {
-            Ok(s) => {
-                out.insert(name.clone(), s);
-            }
-            Err(why) => {
-                out.insert(name.clone(), value.clone());
-                unresolved.push(name.clone());
-                reason = why;
-            }
-        }
-    }
-    if !unresolved.is_empty() {
-        return Err(anyhow!(
-            "could not resolve vault refs: {} — {reason}",
-            unresolved.join(", ")
-        ));
-    }
-    Ok(out)
 }
 
 #[cfg(test)]
@@ -492,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    fn unresolved_vault_ref_errors() {
+    fn unresolved_credential_ref_errors() {
         let _g = lock_env();
         let tmp = TempDir::new().unwrap();
         write_persona(
@@ -504,85 +401,29 @@ mod tests {
             }),
         );
         std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
-        std::env::remove_var("VAULT_ADDR");
-        std::env::remove_var("VAULT_TOKEN");
+        // Isolate discovery: no real plugins must leak in.
+        let prev_home = std::env::var("HOME").ok();
+        let prev_path = std::env::var("PATH").ok();
+        let prev_xdg = std::env::var("XDG_CONFIG_HOME").ok();
+        let prev_plugins = std::env::var("AGENT_QA_PLUGINS").ok();
+        std::env::set_var("HOME", tmp.path());
+        std::env::set_var("PATH", "/usr/bin:/bin");
+        std::env::remove_var("XDG_CONFIG_HOME");
+        std::env::remove_var("AGENT_QA_PLUGINS");
         let mut opts = opts_with_persona("v");
         let err = apply(&mut opts).unwrap_err();
-        assert!(
-            err.to_string().contains("could not resolve vault refs"),
-            "{err}"
-        );
+        assert!(err.to_string().contains("credential refs"), "{err}");
         std::env::remove_var("AGENT_QA_SCENARIOS_DIR");
-    }
-
-    // Serve one canned HTTP response on a loopback port — deterministic
-    // vault-endpoint behavior without network or a real Vault.
-    fn serve_once(status: &str, body: &str) -> String {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let status = status.to_string();
-        let body = body.to_string();
-        std::thread::spawn(move || {
-            use std::io::{Read, Write};
-            if let Ok((mut s, _)) = listener.accept() {
-                // Read the request first — writing before reading risks a TCP
-                // RST that discards the response bytes.
-                let mut buf = [0u8; 4096];
-                let _ = s.read(&mut buf);
-                let resp = format!(
-                    "HTTP/1.1 {status}\r\ncontent-length: {}\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = s.write_all(resp.as_bytes());
-                let _ = s.shutdown(std::net::Shutdown::Write);
+        for (k, v) in [
+            ("HOME", prev_home),
+            ("PATH", prev_path),
+            ("XDG_CONFIG_HOME", prev_xdg),
+            ("AGENT_QA_PLUGINS", prev_plugins),
+        ] {
+            match v {
+                Some(val) => std::env::set_var(k, val),
+                None => std::env::remove_var(k),
             }
-        });
-        format!("http://127.0.0.1:{port}")
-    }
-
-    #[test]
-    fn vault_ref_errors_name_the_cause() {
-        let _g = lock_env();
-        let tmp = TempDir::new().unwrap();
-        // Point HOME at the empty tmpdir so ~/.vault-token can't leak in.
-        let prev_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", tmp.path());
-        std::env::remove_var("VAULT_TOKEN");
-        let mut map = BTreeMap::new();
-        map.insert("V_PASS".to_string(), "vault:secret/x:pw".to_string());
-
-        std::env::remove_var("VAULT_ADDR");
-        let err = resolve_vault_refs(&map).unwrap_err().to_string();
-        assert!(err.contains("VAULT_ADDR is not set"), "{err}");
-
-        std::env::set_var("VAULT_ADDR", "http://127.0.0.1:1");
-        let err = resolve_vault_refs(&map).unwrap_err().to_string();
-        assert!(err.contains("no vault token"), "{err}");
-
-        std::env::set_var("VAULT_TOKEN", "t");
-        std::env::set_var("VAULT_ADDR", serve_once("403 Forbidden", ""));
-        let err = resolve_vault_refs(&map).unwrap_err().to_string();
-        assert!(err.contains("HTTP 403"), "{err}");
-
-        std::env::set_var(
-            "VAULT_ADDR",
-            serve_once("200 OK", r#"{"data":{"data":{}}}"#),
-        );
-        let err = resolve_vault_refs(&map).unwrap_err().to_string();
-        assert!(err.contains("missing at secret/x"), "{err}");
-
-        std::env::set_var(
-            "VAULT_ADDR",
-            serve_once("200 OK", r#"{"data":{"data":{"pw":"s3cret"}}}"#),
-        );
-        let out = resolve_vault_refs(&map).unwrap();
-        assert_eq!(out["V_PASS"], "s3cret");
-
-        std::env::remove_var("VAULT_ADDR");
-        std::env::remove_var("VAULT_TOKEN");
-        match prev_home {
-            Some(h) => std::env::set_var("HOME", h),
-            None => std::env::remove_var("HOME"),
         }
     }
 }

@@ -65,7 +65,7 @@ export async function startReplay(
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(opts ?? {}),
   })
-  // A named persona whose vault refs can't be resolved comes back 200 { ok:false }.
+  // A named persona whose credential refs can't be resolved comes back 200 { ok:false }.
   if (res.ok) {
     const j = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string }
     if (j.ok === false) return { ok: false, error: j.error || 'replay refused' }

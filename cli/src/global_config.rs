@@ -3,7 +3,7 @@
 //! Follows the common per-tool user-config directory convention. Looked up
 //! *in addition to* the per-repo
 //! `agent-qa.toml` walked up from cwd, so a single global file can hold
-//! defaults (plugins, skill-data dirs, future session vault) for every
+//! defaults (plugins, skill-data dirs, future session credential store) for every
 //! invocation regardless of which repo you're in.
 //!
 //! Search order — first existing file wins:

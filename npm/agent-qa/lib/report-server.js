@@ -974,7 +974,7 @@ async function handlePlans(req, res, root, seg, deps) {
       /* no/!json body → defaults */
     }
     // Resolve the run's persona credentials once for the whole batch (an
-    // unresolved vault ref fails the run up front rather than per case).
+    // unresolved credential ref fails the run up front rather than per case).
     const auth = await resolveRunAuthEnv(root, deps, runOpts);
     if (auth.error) return sendJson(res, 200, { ok: false, error: auth.error, started: [], skipped: [] });
     runOpts.env = auth.env;
@@ -1049,7 +1049,7 @@ function runOptsFromBody(body) {
 // Prepare authentication for a persona-scoped replay/plan-run. Mirrors the
 // chat replay + connect flow so an auth-walled scenario replays from the Plans
 // and Runs tabs without a prior Connect click:
-//   - resolve the persona's credentials (env-var → literal | `vault:` ref),
+//   - resolve the persona's credentials (env-var → literal | `<scheme>:` ref),
 //   - surface the environment's connection config as AGENT_QA_ENV_* vars,
 //   - self-bootstrap by registering the profile against the environment's auth
 //     plugin (idempotent `profile-add --adapter`), so replay's own `useProfile`
@@ -1057,7 +1057,7 @@ function runOptsFromBody(body) {
 //     credentials in env — against the fresh replay session (which triggers a
 //     full `auth login`; see cli/src/env_ops.rs).
 // Returns { env, profile } to hand to the replay spawner, or { error } when a
-// vault ref can't be resolved. With no persona it returns just the plugin env
+// credential ref can't be resolved. With no persona it returns just the plugin env
 // (the pre-existing no-auth path), so unauthenticated runs are unchanged.
 async function resolveRunAuthEnv(root, deps, opts) {
   const base = {
@@ -1090,10 +1090,10 @@ async function resolveRunAuthEnv(root, deps, opts) {
     ...(auth.creds || {}),
     ...((persona.credentials && persona.credentials.entries) || {}),
   };
-  const { env: resolvedEnv, unresolved, reason } = await resolveVaultRefs(entries);
+  const { env: resolvedEnv, unresolved, reason } = await resolveCredentialRefs(entries, deps, base);
   if (unresolved.length) {
     return {
-      error: `could not resolve vault refs: ${unresolved.join(', ')} — ${reason}`,
+      error: `could not resolve credential refs: ${unresolved.join(', ')} — ${reason}`,
     };
   }
 
@@ -1143,8 +1143,8 @@ function normalizePersona(id, body, existing) {
     // to the sole persona when nothing is flagged).
     default: typeof body.default === 'boolean' ? body.default : !!existing?.default,
     // Credentials this login hands the auth plugin: env-var name → value. Each
-    // value may be a literal OR a `vault:<path>:<key>` reference resolved at
-    // run time. Stored locally; vault refs hold no secret, just a pointer.
+    // value may be a literal OR a `<scheme>:<ref>` provider reference resolved
+    // at run time by a credentials plugin. Stored locally; refs hold no secret, just a pointer.
     credentials: {
       entries: strMap(cred.entries, existing?.credentials?.entries),
     },
@@ -1154,70 +1154,45 @@ function normalizePersona(id, body, existing) {
   };
 }
 
-// Read a Vault token: $VAULT_TOKEN, else ~/.vault-token (e.g. after
-// `vault login`). Returns null when neither is present.
-async function readVaultToken() {
-  if (process.env.VAULT_TOKEN && process.env.VAULT_TOKEN.trim()) return process.env.VAULT_TOKEN.trim();
-  try {
-    const t = await fsp.readFile(path.join(os.homedir(), '.vault-token'), 'utf8');
-    return t.trim() || null;
-  } catch {
-    return null;
-  }
+// Does a value look like a `<scheme>:<ref>` credential ref? The scheme is
+// opaque to the server — a discovered `credentials` plugin decides which
+// schemes it owns. Mirrors creds.rs::scheme_prefix: alpha-start scheme
+// (>= 2 chars) followed by `:` and a non-`/` char (so https://… literals
+// stay literals). `literal:`-prefixed values are explicit literals.
+function isCredentialRef(value) {
+  const v = String(value);
+  return !v.startsWith('literal:') && /^[a-zA-Z][a-zA-Z0-9._-]+:(?!\/)/.test(v);
 }
 
-// Resolve any `vault:<path>:<key>` values in a {name:value} map via the generic
-// HashiCorp Vault KV HTTP API (GET <VAULT_ADDR>/v1/<path>, X-Vault-Token).
-// Handles KV-v2 (data.data) and KV-v1 (data). Non-vault values pass through;
-// values that can't be resolved are returned in `unresolved` (left literal).
-async function resolveVaultRefs(map) {
-  const out = {};
-  const unresolved = [];
-  let reason = '';
-  const needsVault = Object.values(map).some((v) => typeof v === 'string' && v.startsWith('vault:'));
-  const token = needsVault ? await readVaultToken() : null;
-  const endpoint = needsVault ? String(process.env.VAULT_ADDR || '').replace(/\/$/, '') : '';
-  for (const [name, value] of Object.entries(map)) {
-    if (typeof value !== 'string' || !value.startsWith('vault:')) {
-      out[name] = value;
-      continue;
-    }
-    const parts = value.slice('vault:'.length).split(':');
-    if (!endpoint || !token || parts.length !== 2 || !parts[0] || !parts[1]) {
-      out[name] = value;
-      unresolved.push(name);
-      reason = !endpoint
-        ? 'VAULT_ADDR is not set in the workbench environment'
-        : !token
-          ? 'no vault token (VAULT_TOKEN / ~/.vault-token) — run `vault login`'
-          : `malformed ref "${value}" (expected vault:<path>:<key>)`;
-      continue;
-    }
-    const [vpath, key] = parts;
+// Resolve credential refs in a {name:value} map by delegating to
+// `agent-qa creds-resolve`, which hands `<scheme>:<rest>` values to
+// discovered `credentials` plugins (protocol lives in the CLI — see
+// docs/plugins.md). Literal values pass through untouched. Returns {env}
+// on success; on failure {env, unresolved, reason} with the verb's
+// composed reason (values left literal).
+async function resolveCredentialRefs(map, deps, extraEnv) {
+  const names = Object.keys(map).filter((k) => isCredentialRef(map[k]));
+  if (!names.length) return { env: { ...map }, unresolved: [] };
+  if (!deps || typeof deps.runCli !== 'function') {
+    return {
+      env: { ...map },
+      unresolved: names,
+      reason: 'no agent-qa CLI resolved to delegate credential refs to a credentials plugin',
+    };
+  }
+  const r = await deps.runCli(['creds-resolve', JSON.stringify(map)], extraEnv || {});
+  if (r.code === 0) {
     try {
-      const r = await fetch(`${endpoint}/v1/${vpath}`, { headers: { 'X-Vault-Token': token } });
-      if (!r.ok) {
-        out[name] = value;
-        unresolved.push(name);
-        reason = `vault lookup failed (HTTP ${r.status} — expired token? run \`vault login\`)`;
-        continue;
-      }
-      const j = await r.json();
-      const v2 = j && j.data && j.data.data;
-      const resolved = v2 && typeof v2[key] === 'string' ? v2[key] : j && j.data ? j.data[key] : undefined;
-      if (typeof resolved === 'string') out[name] = resolved;
-      else {
-        out[name] = value;
-        unresolved.push(name);
-        reason = `key "${key}" missing at ${vpath}`;
-      }
+      return { env: JSON.parse(r.stdout), unresolved: [] };
     } catch {
-      out[name] = value;
-      unresolved.push(name);
-      reason = `vault unreachable at ${endpoint}`;
+      /* fall through to the error shape */
     }
   }
-  return { env: out, unresolved, reason };
+  return {
+    env: { ...map },
+    unresolved: names,
+    reason: String(r.stderr || r.stdout || `creds-resolve exited ${r.code}`).trim(),
+  };
 }
 
 // A trusted extension may declare a non-shell credential-preparation command.
@@ -1256,7 +1231,7 @@ function normalizeEnvironment(id, body, existing) {
       loginUrl: String(auth.loginUrl ?? ''),
       config: strMap(auth.config, existing?.auth?.config),
       // Shared/app-level credentials for this environment (env-var name → value
-      // | `vault:` ref), injected as bare env vars and MERGED UNDER a persona's
+      // | `<scheme>:` provider ref), injected as bare env vars and MERGED UNDER a persona's
       // own creds at connect/run time. Put what every identity shares here (e.g.
       // the OAuth client id); keep per-identity email/password on the persona.
       creds: strMap(auth.creds, existing?.auth?.creds),
@@ -1824,22 +1799,22 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
 
   const log = [];
 
-  // Credentials for the plugin (env-var → value | `vault:` ref, resolved here).
+  // Credentials for the plugin (env-var → literal | `<scheme>:` provider ref).
   // The environment's shared creds (e.g. the OAuth client id) are the base; the
   // persona's identity creds (email/password) merge on top and win on any key
-  // collision. Values may be literals or vault refs (token from `vault login` /
-  // VAULT_TOKEN, endpoint from VAULT_ADDR).
+  // collision. Values may be literals or `<scheme>:` provider refs delegated
+  // to discovered credentials plugins (`creds-resolve`).
   const entries = {
     ...(auth.creds || {}),
     ...((persona.credentials && persona.credentials.entries) || {}),
   };
-  const { env: resolvedEnv, unresolved, reason: vaultReason } = await resolveVaultRefs(entries);
+  const { env: resolvedEnv, unresolved, reason: credsReason } = await resolveCredentialRefs(entries, deps, extraEnv);
   if (unresolved.length) {
     log.push({
-      step: 'vault',
+      step: 'credentials',
       code: 1,
       stdout: '',
-      stderr: `could not resolve vault refs: ${unresolved.join(', ')} — ${vaultReason}`,
+      stderr: `could not resolve credential refs: ${unresolved.join(', ')} — ${credsReason}`,
       spawnError: null,
     });
     return sendJson(res, 200, {
@@ -1906,7 +1881,7 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
     if (!authenticated) {
       detail = connectFailureDetail(log);
       // An empty credential set usually means the persona's secret env vars /
-      // vault refs were never configured — the plugin had nothing to sign in
+      // provider refs were never configured — the plugin had nothing to sign in
       // with. Worth saying out loud; the plugin's own message may not.
       if (Object.keys(entries).length === 0) {
         detail = `${detail ? `${detail} ` : ''}(no credential entries configured for this persona or environment)`;
@@ -3754,7 +3729,7 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
   // Replay a scenario the chat recorded, re-authenticating via the connected
   // persona. The agent CANNOT run `agent-qa replay` itself for an auth-walled
   // flow — replay's `useProfile` op needs the persona's credentials (incl.
-  // vault refs) which only the workbench resolves. So this endpoint mirrors
+  // provider refs) which only the workbench resolves. So this endpoint mirrors
   // /connect: resolve creds → run replay in THIS chat's (already-signed-in)
   // session with the profile + creds in env. Synchronous: returns pass/fail.
   if (sub === 'replay' && req.method === 'POST') {
