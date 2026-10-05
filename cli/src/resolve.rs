@@ -16,6 +16,13 @@
 //! Response (stdout):
 //!   { "ref": "e54", "confidence": 0.83 }   // confidence optional
 //!   { "ref": null }                        // no confident pick → normal miss
+//!
+//! Batch form (speculative fan-out — one plugin call, many questions):
+//!   { "descriptions": [{"id":"q1","description":"...","role":null}, ...],
+//!     "candidates": [...] }                // candidates shared across all
+//!   → { "answers": {"q1": {"ref": "e54", "confidence": 0.83}, ...} }
+//! Plugins that do not understand `descriptions` must return a
+//! no-pick per question or error; single-question callers are unaffected.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -149,19 +156,68 @@ fn resolve_inner(
         "role": preferred_role,
         "candidates": candidates
             .iter()
-            .map(|c| {
-                json!({
-                    "ref": c.ref_id,
-                    "role": c.role,
-                    "name": c.name,
-                    "line": c.line,
-                })
-            })
+            .map(candidate_json)
             .collect::<Vec<_>>(),
     });
     let outcome = host::invoke(&binary, KIND, None, request, INVOKE_TIMEOUT)
         .map_err(|e| anyhow::anyhow!("resolve plugin {}: {e}", binary.display()))?;
     Ok(parse_pick(&outcome.response, &candidates))
+}
+
+fn candidate_json(c: &Candidate) -> Value {
+    json!({
+        "ref": c.ref_id,
+        "role": c.role,
+        "name": c.name,
+        "line": c.line,
+    })
+}
+
+/// Speculative fan-out: resolve MANY descriptions against the same live
+/// snapshot in ONE plugin call. The shared candidate list is enumerated
+/// once; the plugin answers every question in a single invocation
+/// (Jev's batch-questions pattern — ~10x cheaper than one call each).
+///
+/// Returns one Option<ResolvedPick> per input description, in order.
+/// Plugins that don't support the batch shape get the request anyway —
+/// the contract tolerates `answers` missing question ids → None slots.
+pub(crate) fn resolve_elements_batch(
+    session: &str,
+    descriptions: &[(String, Option<String>)],
+) -> Result<Vec<Option<ResolvedPick>>> {
+    let empty: Vec<Option<ResolvedPick>> = vec![None; descriptions.len()];
+    let Some(binary) = find_plugin()? else {
+        return Ok(empty);
+    };
+    let snapshot = browser::snapshot_full(session)
+        .map_err(|e| anyhow::anyhow!("resolve: snapshot for candidates: {e}"))?;
+    let candidates = candidates_from_snapshot(&snapshot, None, MAX_CANDIDATES);
+    if candidates.is_empty() {
+        return Ok(empty);
+    }
+    let request = json!({
+        "descriptions": descriptions
+            .iter()
+            .enumerate()
+            .map(|(i, (d, r))| json!({"id": format!("q{i}"), "description": d, "role": r}))
+            .collect::<Vec<_>>(),
+        "candidates": candidates.iter().map(candidate_json).collect::<Vec<_>>(),
+    });
+    let outcome = host::invoke(&binary, KIND, None, request, INVOKE_TIMEOUT)
+        .map_err(|e| anyhow::anyhow!("resolve plugin {}: {e}", binary.display()))?;
+    let answers = outcome
+        .response
+        .get("answers")
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_default();
+    Ok((0..descriptions.len())
+        .map(|i| {
+            answers
+                .get(&format!("q{i}"))
+                .and_then(|a| parse_pick(a, &candidates))
+        })
+        .collect())
 }
 
 /// Map the plugin's response to a candidate: `{ref: "eN"}` picks that
@@ -274,6 +330,9 @@ pub fn run(args: &[String]) -> Result<u8> {
             "no `resolve` plugin configured — add one to agent-qa.toml:\n  [plugins]\n  resolve = \"<plugin-binary>\""
         );
     }
+    if let Some(descriptions) = &opts.batch {
+        return run_batch(&session, descriptions, opts.json);
+    }
     match resolve_element(&session, &opts.description, opts.role.as_deref())? {
         Some(pick) => {
             if opts.json {
@@ -309,15 +368,62 @@ pub fn run(args: &[String]) -> Result<u8> {
     }
 }
 
+fn run_batch(session: &str, descriptions: &[String], json_out: bool) -> Result<u8> {
+    let qs: Vec<(String, Option<String>)> =
+        descriptions.iter().map(|d| (d.clone(), None)).collect();
+    let picks = resolve_elements_batch(session, &qs)?;
+    let mut misses = 0u8;
+    if json_out {
+        let rows: Vec<Value> = descriptions
+            .iter()
+            .zip(&picks)
+            .map(|(d, p)| match p {
+                Some(p) => json!({
+                    "description": d,
+                    "ref": p.candidate.ref_id,
+                    "role": p.candidate.role,
+                    "name": p.candidate.name,
+                    "confidence": p.confidence,
+                }),
+                None => json!({"description": d, "ref": null}),
+            })
+            .collect();
+        misses = picks.iter().filter(|p| p.is_none()).count() as u8;
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+    } else {
+        for (d, p) in descriptions.iter().zip(&picks) {
+            match p {
+                Some(p) => {
+                    let conf = p
+                        .confidence
+                        .map(|c| format!(" (confidence {c:.2})"))
+                        .unwrap_or_default();
+                    println!(
+                        "resolved {d:?} → {} {:?} [{}]{conf}",
+                        p.candidate.role, p.candidate.name, p.candidate.ref_id
+                    );
+                }
+                None => {
+                    misses += 1;
+                    println!("resolved {d:?} → no confident pick");
+                }
+            }
+        }
+    }
+    Ok(if misses == 0 { 0 } else { 1 })
+}
+
 fn print_help() {
     println!(
-        "agent-qa resolve - ask the resolve plugin which element a description means\n\nUsage:\n  agent-qa resolve \"<description>\" [--role <role>] [--session <name>] [--json]\n\nEnumerates the live page's interactive elements (ARIA snapshot), hands\nthem + the description to the configured `resolve` plugin, and prints the\npick (role, name, ref, confidence). Exits 1 when the plugin has no\nconfident pick. smart-click and smart-fill run the same resolution as\ntheir last fallback rung automatically.\n\nPlugins are configured in agent-qa.toml: [plugins] resolve = \"<binary>\"."
+        "agent-qa resolve - ask the resolve plugin which element a description means\n\nUsage:\n  agent-qa resolve \"<description>\" [--role <role>] [--session <name>] [--json]\n  agent-qa resolve --batch <descriptions...> [--session <name>] [--json]\n\nEnumerates the live page's interactive elements (ARIA snapshot), hands\nthem + the description to the configured `resolve` plugin, and prints the\npick (role, name, ref, confidence). Exits 1 when the plugin has no\nconfident pick. smart-click and smart-fill run the same resolution as\ntheir last fallback rung automatically.\n\n--batch resolves several descriptions in ONE plugin call (the plugin's\nspeculative fan-out: one snapshot + one API round-trip for all questions).\n\nPlugins are configured in agent-qa.toml: [plugins] resolve = \"<binary>\"."
     );
 }
 
 #[derive(Debug, Clone)]
 struct Opts {
     description: String,
+    /// --batch mode: multiple descriptions resolved in one plugin call.
+    batch: Option<Vec<String>>,
     role: Option<String>,
     session: Option<String>,
     json: bool,
@@ -325,15 +431,30 @@ struct Opts {
 
 fn parse_args(args: &[String]) -> Result<Opts> {
     let mut description: Option<String> = None;
+    let mut batch: Option<Vec<String>> = None;
     let mut role = None;
     let mut session = None;
     let mut json = false;
-    let mut it = args.iter();
+    let mut it = args.iter().peekable();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--help" | "-h" => {
                 print_help();
                 std::process::exit(0);
+            }
+            "--batch" => {
+                // Everything after --batch is a description (stop at a flag).
+                let mut ds = Vec::new();
+                while let Some(n) = it.peek() {
+                    if n.starts_with('-') {
+                        break;
+                    }
+                    ds.push(it.next().unwrap().clone());
+                }
+                if ds.is_empty() {
+                    anyhow::bail!("resolve: --batch requires at least one description");
+                }
+                batch = Some(ds);
             }
             "--role" => {
                 role = Some(
@@ -359,9 +480,12 @@ fn parse_args(args: &[String]) -> Result<Opts> {
             }
         }
     }
-    let description = description.context("resolve: <description> is required")?;
+    if batch.is_none() && description.is_none() {
+        anyhow::bail!("resolve: <description> is required");
+    }
     Ok(Opts {
-        description,
+        description: description.unwrap_or_default(),
+        batch,
         role,
         session,
         json,
@@ -437,5 +561,30 @@ mod tests {
         assert!(parse_pick(&json!({"ref": null}), &c).is_none());
         assert!(parse_pick(&json!({"ref": "e999"}), &c).is_none());
         assert!(parse_pick(&json!({}), &c).is_none());
+    }
+
+    #[test]
+    fn parse_args_batch_collects_descriptions_until_flag() {
+        let args = vec![
+            "--batch".into(),
+            "the save button".into(),
+            "the export thing".into(),
+            "--session".into(),
+            "s".into(),
+        ];
+        let o = parse_args(&args).unwrap();
+        assert_eq!(
+            o.batch.unwrap(),
+            vec![
+                "the save button".to_string(),
+                "the export thing".to_string()
+            ]
+        );
+        assert_eq!(o.session.as_deref(), Some("s"));
+
+        assert!(parse_args(&["--batch".into()]).is_err()); // needs ≥1
+        let o = parse_args(&["single".into()]).unwrap();
+        assert!(o.batch.is_none());
+        assert_eq!(o.description, "single");
     }
 }
