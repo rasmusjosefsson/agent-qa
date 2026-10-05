@@ -518,6 +518,24 @@ fn list(
     Ok(0)
 }
 
+/// Scenario-level flake score, 0–100 (100 = rock stable). Three weighted
+/// signals over the scenario's run history:
+///   - outcome churn: adjacent pass<->fail flips across scored runs (x0.5)
+///   - fail rate:     failing runs / scored runs (x0.3)
+///   - heal rate:     runs with auto-heals / all runs (x0.2)
+/// None with fewer than 2 scored runs — one observation cannot flake.
+fn flake_score(outcomes: &[bool], healed_runs: usize, total_runs: usize) -> Option<f64> {
+    if outcomes.len() < 2 {
+        return None;
+    }
+    let flips = outcomes.windows(2).filter(|w| w[0] != w[1]).count() as f64;
+    let flip_rate = flips / (outcomes.len() - 1) as f64;
+    let fail_rate = outcomes.iter().filter(|o| !**o).count() as f64 / outcomes.len() as f64;
+    let heal_rate = healed_runs as f64 / total_runs.max(1) as f64;
+    let s = 100.0 * (1.0 - (0.5 * flip_rate + 0.3 * fail_rate + 0.2 * heal_rate));
+    Some(s.clamp(0.0, 100.0))
+}
+
 fn stats(
     positionals: &[String],
     json_out: bool,
@@ -542,6 +560,8 @@ fn stats(
     let mut tag_counts: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
     let mut profile_counts: std::collections::BTreeMap<String, u32> =
         std::collections::BTreeMap::new();
+    let mut outcomes: Vec<bool> = Vec::new();
+    let mut healed_runs = 0usize;
 
     for run in &runs {
         let run_id = run
@@ -574,13 +594,22 @@ fn stats(
         match audit.as_ref().and_then(|a| a.get("exitCode")?.as_i64()) {
             Some(0) => {
                 passes += 1;
+                outcomes.push(true);
                 last_pass = Some(run_id.clone());
             }
             Some(_) => {
                 failures += 1;
+                outcomes.push(false);
                 last_fail = Some(run_id.clone());
             }
             None => unknown += 1,
+        }
+        if audit
+            .as_ref()
+            .and_then(|a| a.get("autoHealed")?.as_array())
+            .is_some_and(|v| !v.is_empty())
+        {
+            healed_runs += 1;
         }
         if let Some(tag) = audit.as_ref().and_then(|a| a.get("tag")?.as_str()) {
             *tag_counts.entry(tag.to_string()).or_insert(0) += 1;
@@ -627,6 +656,8 @@ fn stats(
             last_fail: Option<String>,
             tag_counts: std::collections::BTreeMap<String, u32>,
             profile_counts: std::collections::BTreeMap<String, u32>,
+            flake_score: Option<f64>,
+            healed_runs: usize,
         }
         let report = Report {
             sid: sid.clone(),
@@ -641,6 +672,8 @@ fn stats(
             last_fail,
             tag_counts,
             profile_counts,
+            flake_score: flake_score(&outcomes, healed_runs, total as usize),
+            healed_runs,
         };
         println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(0);
@@ -651,6 +684,10 @@ fn stats(
     println!("  failures      : {failures}");
     println!("  unknown       : {unknown}");
     println!("  pass rate     : {:.0}%", pass_rate * 100.0);
+    match flake_score(&outcomes, healed_runs, total as usize) {
+        Some(s) => println!("  flake score   : {:.0}/100", s),
+        None => println!("  flake score   : n/a (<2 scored runs)"),
+    }
     if duration_ms_count > 0 {
         println!("  avg duration  : {avg_duration_secs:.3}s");
     }
@@ -1268,6 +1305,8 @@ fn stats_all(json_out: bool, since_ms: Option<u64>, until_ms: Option<u64>) -> Re
         avg_duration_secs: f64,
         last_pass: Option<String>,
         last_fail: Option<String>,
+        flake_score: Option<f64>,
+        healed_runs: usize,
     }
     let mut rows: Vec<Row> = Vec::with_capacity(scenarios.len());
     let mut tot_total = 0u32;
@@ -1288,6 +1327,8 @@ fn stats_all(json_out: bool, since_ms: Option<u64>, until_ms: Option<u64>) -> Re
         let mut last_fail: Option<String> = None;
         let mut dur_ms_total: u64 = 0;
         let mut dur_ms_count: u64 = 0;
+        let mut outcomes: Vec<bool> = Vec::new();
+        let mut healed_runs = 0usize;
         for run in &runs {
             let run_id = run
                 .file_name()
@@ -1316,13 +1357,22 @@ fn stats_all(json_out: bool, since_ms: Option<u64>, until_ms: Option<u64>) -> Re
             match audit.as_ref().and_then(|a| a.get("exitCode")?.as_i64()) {
                 Some(0) => {
                     passes += 1;
+                    outcomes.push(true);
                     last_pass = Some(run_id.clone());
                 }
                 Some(_) => {
                     failures += 1;
+                    outcomes.push(false);
                     last_fail = Some(run_id.clone());
                 }
                 None => unknown += 1,
+            }
+            if audit
+                .as_ref()
+                .and_then(|a| a.get("autoHealed")?.as_array())
+                .is_some_and(|v| !v.is_empty())
+            {
+                healed_runs += 1;
             }
             if let (Some(s), Some(f)) = (
                 audit.as_ref().and_then(|a| a.get("startedAt")?.as_str()),
@@ -1360,6 +1410,8 @@ fn stats_all(json_out: bool, since_ms: Option<u64>, until_ms: Option<u64>) -> Re
             avg_duration_secs,
             last_pass,
             last_fail,
+            flake_score: flake_score(&outcomes, healed_runs, total as usize),
+            healed_runs,
         });
     }
     let overall_pass_rate = if tot_passes + tot_failures == 0 {
@@ -1411,14 +1463,19 @@ fn stats_all(json_out: bool, since_ms: Option<u64>, until_ms: Option<u64>) -> Re
     let pass_h = "pass";
     let fail_h = "fail";
     let rate_h = "rate";
-    println!("{sid_h:<24}  {total_h:>5}  {pass_h:>5}  {fail_h:>5}  {rate_h:>5}");
+    let flake_h = "flake";
+    println!("{sid_h:<24}  {total_h:>5}  {pass_h:>5}  {fail_h:>5}  {rate_h:>5}  {flake_h:>5}");
     for r in &rows {
         let sid = &r.sid;
         let total = r.total;
         let pass = r.passes;
         let fail = r.failures;
         let rate = format!("{:.0}%", r.pass_rate * 100.0);
-        println!("{sid:<24}  {total:>5}  {pass:>5}  {fail:>5}  {rate:>5}");
+        let flake = r
+            .flake_score
+            .map(|s| format!("{s:.0}"))
+            .unwrap_or_else(|| "-".to_string());
+        println!("{sid:<24}  {total:>5}  {pass:>5}  {fail:>5}  {rate:>5}  {flake:>5}");
     }
     let rate = format!("{:.0}%", overall_pass_rate * 100.0);
     println!(
@@ -2805,6 +2862,26 @@ mod tests {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
         }
+    }
+
+    #[test]
+    fn flake_score_weights_flips_fails_and_heals() {
+        // Perfectly stable: all pass, no heals.
+        assert_eq!(flake_score(&[true, true, true], 0, 3), Some(100.0));
+        // <2 scored runs — insufficient data.
+        assert_eq!(flake_score(&[true], 0, 1), None);
+        assert_eq!(flake_score(&[], 0, 0), None);
+        // Constant alternation P/F/P/F over 4 runs: flip_rate=1,
+        // fail_rate=0.5 → 100 - (50 + 15) = 35.
+        let s = flake_score(&[true, false, true, false], 0, 4).unwrap();
+        assert!((s - 35.0).abs() < 1e-9, "score {s}");
+        // Healed-but-green runs degrade the score: 4 passes all healed →
+        // heal_rate 1 → 100 - 20 = 80.
+        let s = flake_score(&[true, true, true, true], 4, 4).unwrap();
+        assert!((s - 80.0).abs() < 1e-9, "score {s}");
+        // Never below zero.
+        let s = flake_score(&[false, false], 2, 2).unwrap();
+        assert!((0.0..=100.0).contains(&s));
     }
 
     #[test]
