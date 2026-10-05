@@ -121,10 +121,20 @@ Response payload:
 treated as no pick. `confidence` is optional and informational only; the
 plugin applies its own threshold and returns `{"ref": null}` below it.
 
-Resolution never reaches replay: the recorded step keeps the picked
-element's concrete role+name locator, so a scenario authored with a
-resolver replays identically without one. With no `resolve` plugin
-configured the fallback rung is skipped entirely.
+Resolution never changes what lands in the scenario: the recorded step
+keeps the picked element's concrete role+name locator, so a scenario
+authored with a resolver replays identically without one. With no
+`resolve` plugin configured the fallback rung is skipped entirely.
+
+One opt-in exception at replay: **auto-heal**. When a recorded step's
+locator misses AND the deterministic strategy ladder finds no unique
+candidate, the plugin gets a last rung — it sees the live candidates of
+the step's role and may pick the element the recorded name meant. A
+plugin pick heals like any strategy (`strategy: "plugin-resolve"` in
+`heal.jsonl`, plus the `heal-promote` patch), is retried once, and is
+disabled together with the rest of auto-heal under `AGENT_QA_NO_HEAL`.
+A plugin that errors is treated as a no-pick, so a broken resolver can
+never wedge or fail a replay.
 
 A reference implementation lives in `examples/plugins/jev-resolve/` — it
 answers via Jev (typesafe.ai)'s System One decision API out of the box,
