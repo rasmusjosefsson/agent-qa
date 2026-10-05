@@ -6,6 +6,31 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-05
+### Added
+
+- Workbench shot diffs get a draggable before/after slider: the step
+  detail's Visual diff card now wipes the stored baseline against the
+  run's capture (the red diff map stays one toggle away), and compare
+  view screenshot rows expand into the same run-A-vs-run-B slider. A new
+  `GET /api/scenarios/:sid/baselines/<name>` endpoint serves the stored
+  goldens the slider reads.
+
+### Changed
+
+- pi chat backend targets `@earendil-works/pi-coding-agent` 1.0.3 — the
+  1.x API replaces `AuthStorage`/`ModelRegistry` with `ModelRuntime`
+  (`create()`, `getAvailableSnapshot()`, `getModel(provider, id)`) and
+  `createAgentSession` takes `modelRuntime`.
+- Cargo majors landed together: rand 0.10, sha2/sha1 0.11 + hmac 0.13,
+  jsonschema 0.24.
+
+### Fixed
+
+- Release workflow: the umbrella verification now polls `npm view` for
+  freshly published platform packages instead of racing the registry
+  read (~25min indexing lag).
+
 ## [0.4.0] - 2026-10-05
 ### Fixed
 
