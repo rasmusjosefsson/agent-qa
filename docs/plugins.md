@@ -31,7 +31,8 @@ parse JSON. A 10-line shell script is enough to be a valid plugin (see
 
 - `<kind>` — the extension point. The universal `ping` kind must be
   implemented by every plugin. Other kinds: `auth`, `session-policy`,
-  `setup-hook`, `heal-strategy`, `discovery-defaults`, `resolve`.
+  `setup-hook`, `heal-strategy`, `discovery-defaults`, `resolve`,
+  `triage`.
   (Per-kind payload shapes land alongside each verb's port.)
 - `<op>` — optional sub-operation for kinds that have multiple verbs (e.g.
   `auth probe` vs `auth login`). Currently no kind uses `<op>`; reserved for
@@ -189,6 +190,56 @@ locator previously cost a human retry loop (read candidates, guess an
 exact name, re-run — tens of seconds per element); with a resolver it's a
 one-shot ~3s pick. Jev's Choice primitive handles hundreds of options
 per call, so the 100-candidate cap bounds payload, not the model.
+
+## The `triage` kind
+
+Optional **post-run** drift triage. `agent-qa triage <sid> [<runId>]`
+assembles the run's evidence — `audit.json` (exitCode, summary,
+autoHealed, quarantined), the failed rows from `events.jsonl`,
+`heal.jsonl` rows, and the diff artifact paths — into one payload and
+hands it to the plugin. The plugin answers with a triage summary plus
+optional issues; agent-qa writes `triage.md` + `triage.json` into the
+run dir and prints the summary. Intended use: a decision model that
+reads the run and says "drift — promote these heals" vs "real
+regression — file this".
+
+Request payload:
+
+```json
+{
+  "scenarioId": "checkout",
+  "runId": "2026-10-05T06-17-48-630Z__4b65d4df",
+  "exitCode": 1,
+  "summary": "SUMMARY: 8/9 (FAIL)",
+  "quarantined": false,
+  "autoHealed": ["s4"],
+  "failures": [
+    {"id": "s9", "intent": "check home matches golden", "kind": "check",
+     "error": "shot 's1' differs …"}
+  ],
+  "heals": [{"stepId": "s4", "strategy": "plugin-resolve"}],
+  "diffs": ["shots-diff/s1.diff.png"],
+  "runDir": "/abs/path/to/scenarios/checkout/replays/<runId>"
+}
+```
+
+`failures` and `heals` are truncated to the last 50 rows each — the
+plugin can always read the full files from `runDir`.
+
+Response:
+
+```json
+{
+  "summary": "Locator drift only — promote s4, s7; s9 is a real regression.",
+  "issues": [
+    {"title": "Shot golden drifted", "detail": "s1 diff is a hero-banner rebrand"}
+  ]
+}
+```
+
+`summary` is required text; `issues` is an optional list of `{title,
+detail}`. With no `triage` plugin configured the verb errors with setup
+instructions.
 
 ## Discovery
 

@@ -89,6 +89,7 @@ mod telemetry;
 mod test_util;
 mod time;
 mod totp;
+mod triage;
 mod truncate;
 mod value;
 mod verb;
@@ -164,6 +165,7 @@ fn main() -> ExitCode {
         "smart-hover" => smart_hover::run(rest),
         "smart-select" => smart_select::run(rest),
         "resolve" => resolve::run(rest),
+        "triage" => triage::run(rest),
         "heal-respond" => heal_respond::run(rest),
         "heal-promote" => heal_promote::run(rest),
         "heal-apply" => heal_apply::run(rest),
@@ -184,7 +186,7 @@ fn main() -> ExitCode {
         "notify" => notify::run(rest),
         _ => {
             eprintln!(
-                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, smart-fill, smart-assert, smart-hover, smart-select, resolve, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, domshot-accept, layout-accept, baselines, run-report, init, ingest, mcp, migrate, compile, describe, mail, discover, totp, notify."
+                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, smart-fill, smart-assert, smart-hover, smart-select, resolve, triage, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, domshot-accept, layout-accept, baselines, run-report, init, ingest, mcp, migrate, compile, describe, mail, discover, totp, notify."
             );
             eprintln!("Run `agent-qa --help` for usage.");
             Ok(2)
@@ -343,6 +345,7 @@ Verbs:
   smart-hover \"<desc>\" [--role <r>]    Hover an element by description + auto-record
   smart-select \"<desc>\" --value <v>    Pick an option by control description + auto-record
   resolve \"<description>\" [--role <r>]    Ask the resolve plugin which element a description means
+  triage <sid> [<runId|latest>]         Post-run drift triage via the triage plugin
   heal-respond <sid> --step <id> (--value <…> | --reject)   Record a caller-driven heal
   heal-promote <sid> [--run <id>] [--steps <…>] [--apply]   Promote replay-side patches
   heal-apply <sid> --step <id> [--target-step <…>] [--dry-run]   Patch buffer in place
