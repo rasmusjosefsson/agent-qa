@@ -211,6 +211,56 @@ test('createChatHub getState reflects session presence', async () => {
   hub.dispose();
 });
 
+test('createChatHub getState resumes a persisted session instead of reporting empty', async () => {
+  const { createChatHub } = await chatAgent();
+  const fake = makeFakeSession();
+  fake.session.messages = [{ role: 'user', content: 'earlier turn' }];
+  let made = 0;
+  const hub = createChatHub({
+    createSession: () => {
+      made++;
+      return fake.session;
+    },
+    hasPersisted: () => true,
+  });
+  // No prompt yet — /state still rehydrates the transcript, which is what
+  // makes revisiting a chat after idle teardown show its history again.
+  const st = await hub.getState();
+  assert.equal(made, 1);
+  assert.equal(st.started, true);
+  assert.deepEqual(st.messages, [{ role: 'user', content: 'earlier turn' }]);
+  hub.dispose();
+});
+
+test('createChatHub getState stays lazy with no persisted session', async () => {
+  const { createChatHub } = await chatAgent();
+  let made = 0;
+  const hub = createChatHub({
+    createSession: () => {
+      made++;
+      return makeFakeSession().session;
+    },
+    hasPersisted: () => false,
+  });
+  const st = await hub.getState();
+  assert.equal(made, 0);
+  assert.equal(st.started, false);
+  assert.deepEqual(st.messages, []);
+  hub.dispose();
+});
+
+test('createChatHub getState tolerates a failed resume', async () => {
+  const { createChatHub } = await chatAgent();
+  const hub = createChatHub({
+    createSession: () => Promise.reject(new Error('resume broke')),
+    hasPersisted: () => true,
+  });
+  const st = await hub.getState();
+  assert.equal(st.started, false);
+  assert.deepEqual(st.messages, []);
+  hub.dispose();
+});
+
 test('createChatHub getState lists models via listModels (before any session)', async () => {
   const { createChatHub } = await chatAgent();
   const models = [
@@ -441,7 +491,7 @@ function boot(root, deps) {
 
 test('chat routes drive the hub', async (t) => {
   const hub = makeStubHub();
-  const { server, base } = await boot('/tmp/whatever', { chat: { hub } });
+  const { server, base } = await boot(fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-chat-test-')), { chat: { hub } });
   t.after(() => server.close());
 
   await t.test('GET /api/chat/state returns available + state', async () => {
@@ -497,7 +547,7 @@ test('chat routes drive the hub', async (t) => {
 });
 
 test('chat is unavailable when no SDK/config is wired', async (t) => {
-  const { server, base } = await boot('/tmp/whatever', {});
+  const { server, base } = await boot(fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-chat-test-')), {});
   t.after(() => server.close());
 
   const state = await fetch(`${base}/api/chat/state`);
@@ -514,7 +564,7 @@ test('chat is unavailable when no SDK/config is wired', async (t) => {
 });
 
 test('chat reports unavailable when the hub factory throws', async (t) => {
-  const { server, base } = await boot('/tmp/whatever', {
+  const { server, base } = await boot(fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-chat-test-')), {
     chat: {
       createHub: () => {
         throw new Error('SDK not found');
@@ -538,7 +588,7 @@ test('chat reports unavailable when the hub factory throws', async (t) => {
 
 test('GET /api/root advertises chat availability', async (t) => {
   const hub = makeStubHub();
-  const { server, base } = await boot('/tmp/whatever', { chat: { hub } });
+  const { server, base } = await boot(fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-chat-test-')), { chat: { hub } });
   t.after(() => server.close());
   const res = await fetch(`${base}/api/root`);
   const body = await res.json();
@@ -552,7 +602,7 @@ test('GET /api/chat/browser-stream subscribes the live screencast bridge', async
     subscribe: (res) => res.write('data: {"data":"BBBB"}\n\n'),
     unsubscribe: () => {},
   };
-  const { server, base } = await boot('/tmp/whatever', {
+  const { server, base } = await boot(fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-chat-test-')), {
     chat: { hub },
     liveForSession: (session) => {
       seen.push(session);
@@ -575,7 +625,7 @@ test('GET /api/chat/browser-stream subscribes the live screencast bridge', async
 test('GET /api/chat/browser-stream honors ?session and rejects unsafe names', async (t) => {
   const hub = makeStubHub();
   const seen = [];
-  const { server, base } = await boot('/tmp/whatever', {
+  const { server, base } = await boot(fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-chat-test-')), {
     chat: { hub },
     liveForSession: (session) => {
       seen.push(session);
@@ -595,7 +645,7 @@ test('GET /api/chat/browser-stream honors ?session and rejects unsafe names', as
 
 test('GET /api/chat/browser-stream without a CLI runner → 503', async (t) => {
   const hub = makeStubHub();
-  const { server, base } = await boot('/tmp/whatever', { chat: { hub } }); // no liveForSession
+  const { server, base } = await boot(fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-chat-test-')), { chat: { hub } }); // no liveForSession
   t.after(() => server.close());
   const res = await fetch(`${base}/api/chat/browser-stream`);
   assert.equal(res.status, 503);
@@ -603,7 +653,7 @@ test('GET /api/chat/browser-stream without a CLI runner → 503', async (t) => {
 
 test('GET /api/root advertises liveBrowser when a session bridge exists', async (t) => {
   const hub = makeStubHub();
-  const { server, base } = await boot('/tmp/whatever', {
+  const { server, base } = await boot(fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-chat-test-')), {
     chat: { hub },
     liveForSession: () => ({ subscribe: () => {}, unsubscribe: () => {} }),
   });
@@ -615,7 +665,7 @@ test('GET /api/root advertises liveBrowser when a session bridge exists', async 
 
 test('POST /api/chat/model forwards the selection to hub.setModel', async (t) => {
   const hub = makeStubHub();
-  const { server, base } = await boot('/tmp/whatever', { chat: { hub } });
+  const { server, base } = await boot(fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-chat-test-')), { chat: { hub } });
   t.after(() => server.close());
   const res = await fetch(`${base}/api/chat/model`, {
     method: 'POST',
@@ -630,7 +680,7 @@ test('POST /api/chat/model forwards the selection to hub.setModel', async (t) =>
 
 test('POST /api/chat/thinking forwards the level to hub.setThinkingLevel', async (t) => {
   const hub = makeStubHub();
-  const { server, base } = await boot('/tmp/whatever', { chat: { hub } });
+  const { server, base } = await boot(fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-chat-test-')), { chat: { hub } });
   t.after(() => server.close());
   const res = await fetch(`${base}/api/chat/thinking`, {
     method: 'POST',
@@ -644,7 +694,7 @@ test('POST /api/chat/thinking forwards the level to hub.setThinkingLevel', async
 test('POST /api/chat/browser-navigate drives the live bridge', async (t) => {
   const hub = makeStubHub();
   const inputs = [];
-  const { server, base } = await boot('/tmp/whatever', {
+  const { server, base } = await boot(fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-chat-test-')), {
     chat: { hub },
     liveForSession: () => ({
       subscribe: () => {},
@@ -677,7 +727,7 @@ test('POST /api/chat/browser-navigate drives the live bridge', async (t) => {
 
 test('POST /api/chat/browser-navigate → 409 when the bridge is not connected', async (t) => {
   const hub = makeStubHub();
-  const { server, base } = await boot('/tmp/whatever', {
+  const { server, base } = await boot(fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-chat-test-')), {
     chat: { hub },
     liveForSession: () => ({ subscribe: () => {}, unsubscribe: () => {}, input: () => false }),
   });
@@ -692,7 +742,7 @@ test('POST /api/chat/browser-navigate → 409 when the bridge is not connected',
 
 test('POST /api/chat/browser-navigate without a CLI runner → 503', async (t) => {
   const hub = makeStubHub();
-  const { server, base } = await boot('/tmp/whatever', { chat: { hub } }); // no liveForSession
+  const { server, base } = await boot(fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-chat-test-')), { chat: { hub } }); // no liveForSession
   t.after(() => server.close());
   const res = await fetch(`${base}/api/chat/browser-navigate`, {
     method: 'POST',
@@ -704,7 +754,7 @@ test('POST /api/chat/browser-navigate without a CLI runner → 503', async (t) =
 
 test('multi-chat: list / create / per-chat routes / delete', async (t) => {
   const hub = makeStubHub();
-  const { server, base } = await boot('/tmp/whatever', { chat: { hub } });
+  const { server, base } = await boot(fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-chat-test-')), { chat: { hub } });
   t.after(() => server.close());
 
   // no chats until one is created
@@ -765,7 +815,7 @@ test('multi-chat: list / create / per-chat routes / delete', async (t) => {
 
 test('flat chat routes operate on the auto-created primary chat', async (t) => {
   const hub = makeStubHub();
-  const { server, base } = await boot('/tmp/whatever', { chat: { hub } });
+  const { server, base } = await boot(fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-chat-test-')), { chat: { hub } });
   t.after(() => server.close());
 
   // hitting a flat route auto-creates the primary chat
@@ -1087,7 +1137,7 @@ test('opencode session adapter speaks the pi contract (subscribe/prompt/abort)',
 });
 
 test('chat state reports the backend + install hint when unavailable', async (t) => {
-  const { server, base } = await boot('/tmp/whatever', {
+  const { server, base } = await boot(fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-chat-test-')), {
     chat: { createHub: () => Promise.reject(new Error('SDK not found')) },
   });
   t.after(() => server.close());

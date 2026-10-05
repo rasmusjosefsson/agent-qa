@@ -6,11 +6,13 @@ import {
   Suspense,
   useTransition,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from 'react'
 import {
   Loader2Icon,
   PlusIcon,
   XIcon,
+  InfoIcon,
   PlugZapIcon,
   CopyIcon,
   CheckIcon,
@@ -27,7 +29,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { useChat } from './useChat'
-import type { ChatItem, ChatUsage, ModelInfo } from '@/lib/types'
+import type { ChatInfo, ChatItem, ChatUsage, ModelInfo } from '@/lib/types'
 import { WorkingIndicator } from '@/components/working-indicator'
 import BrowserPane from './BrowserPane'
 import { Message } from './components/Message'
@@ -52,6 +54,7 @@ import {
   createChat,
   deleteChat,
   getRecording,
+  getChatInfo,
   type ChatMeta,
   type RecordingState,
 } from '@/lib/api'
@@ -412,6 +415,7 @@ function ChatConversation({
     useChat(cid)
   const [text, setText] = useState('')
   const [copied, setCopied] = useState(false)
+  const [infoOpen, setInfoOpen] = useState(false)
   const threadRef = useRef<HTMLDivElement | null>(null)
   const atBottomRef = useRef(true)
 
@@ -573,16 +577,31 @@ function ChatConversation({
             >
               {backendUsageLabel(state.backend, state.model, state.usage)}
             </span>
-            <button
-              type="button"
-              onClick={() => void copyTranscript()}
-              disabled={empty}
-              title="Copy the whole conversation (markdown) to share"
-              className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
-            >
-              {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
-              {copied ? 'Copied' : 'Copy chat'}
-            </button>
+            <div className="relative flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setInfoOpen((v) => !v)}
+                title="What this chat is running with — backend, model, plugins, session"
+                aria-label="Chat environment info"
+                className={cn(
+                  'inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+                  infoOpen && 'bg-muted text-foreground'
+                )}
+              >
+                <InfoIcon className="size-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => void copyTranscript()}
+                disabled={empty}
+                title="Copy the whole conversation (markdown) to share"
+                className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+              >
+                {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
+                {copied ? 'Copied' : 'Copy chat'}
+              </button>
+              {infoOpen ? <ChatInfoPopover cid={cid} onClose={() => setInfoOpen(false)} /> : null}
+            </div>
           </div>
           <div
             ref={threadRef}
@@ -1078,6 +1097,115 @@ function ChatSetupNotice({
         {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
         {copied ? 'Copied' : installCmd}
       </button>
+    </div>
+  )
+}
+
+// The header "i" button's popover — what this chat's agent is actually
+// running with (backend/model, bound browser session, credential plugins the
+// spawned CLIs can reach, persona sign-in state). Fetched on open; cheap
+// file-backed route, one call per open.
+function ChatInfoPopover({ cid, onClose }: { cid: string; onClose: () => void }) {
+  const [info, setInfo] = useState<ChatInfo | null | undefined>(undefined)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    void getChatInfo(cid).then((body) => {
+      if (alive) setInfo(body)
+    })
+    return () => {
+      alive = false
+    }
+  }, [cid])
+
+  // Click-outside / Escape to dismiss.
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) onClose()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [onClose])
+
+  const row = (label: string, value: ReactNode, title?: string) =>
+    value == null || value === '' ? null : (
+      <div className="flex items-baseline justify-between gap-3 px-3 py-1" key={label}>
+        <span className="shrink-0 text-muted-foreground">{label}</span>
+        <span className="min-w-0 truncate text-right font-mono text-foreground/90" title={title}>
+          {value}
+        </span>
+      </div>
+    )
+
+  const pluginLabel = (p: { path: string; source: string; name?: string }) =>
+    p.name || p.path.split('/').pop() || p.path
+
+  return (
+    <div
+      ref={rootRef}
+      className="absolute right-0 top-full z-50 mt-1 w-80 max-w-[85vw] rounded-xl border border-border bg-card p-2 text-xs shadow-lg"
+    >
+      {info === undefined ? (
+        <div className="px-3 py-2 text-muted-foreground">Loading…</div>
+      ) : info === null ? (
+        <div className="px-3 py-2 text-muted-foreground">Chat info unavailable</div>
+      ) : (
+        <div className="space-y-0.5">
+          <div className="px-3 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Agent
+          </div>
+          {row('Backend', info.backend)}
+          {row('Model', info.model ? info.model.label || info.model.id : null)}
+          {row('Thinking', info.thinkingLevel)}
+          {row('pi session', info.sessionId, info.sessionId || undefined)}
+          {row('Browser', info.browserSession)}
+          <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Plugins
+          </div>
+          {info.jev?.enabled ? (
+            <div className="flex items-baseline justify-between gap-3 px-3 py-1">
+              <span className="shrink-0 text-muted-foreground">jev-resolve</span>
+              <span className="text-right font-mono text-foreground/90">
+                bundled, resolve — {info.jev.hasKey ? 'key set' : 'no key'}
+                {info.jev.envForced ? ' (env)' : ''}
+              </span>
+            </div>
+          ) : null}
+          {(info.plugins || [])
+            .filter((p) => p.source === 'registry')
+            .map((p) => row('plugin', pluginLabel(p), p.path))}
+          {!info.jev?.enabled && !(info.plugins || []).length ? (
+            <div className="px-3 py-1 text-muted-foreground">none</div>
+          ) : null}
+          <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Sign-in
+          </div>
+          {info.connected ? (
+            <>
+              {row('Profile', info.connected.profile)}
+              {row('Persona', info.connected.personaId)}
+              {row('Environment', info.connected.environmentId)}
+            </>
+          ) : info.autoConnect?.state === 'connecting' ? (
+            <div className="px-3 py-1 text-muted-foreground">connecting…</div>
+          ) : info.autoConnect?.state === 'failed' ? (
+            <div className="px-3 py-1 text-muted-foreground" title={info.autoConnect.detail}>
+              not connected{info.autoConnect.detail ? ` — ${info.autoConnect.detail}` : ''}
+            </div>
+          ) : (
+            <div className="px-3 py-1 text-muted-foreground">none</div>
+          )}
+          {info.recordDir ? row('Record dir', info.recordDir.split('/').slice(-2).join('/'), info.recordDir) : null}
+        </div>
+      )}
     </div>
   )
 }

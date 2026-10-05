@@ -185,6 +185,21 @@ credentials. With `--persona` and no `--environment` the
 `default:true` (or sole) environment is picked up automatically —
 `--environment <id>` pins one explicitly.
 
+## Chats
+
+The workbench persists each chat as a record under the scenarios root:
+
+```
+<scenarios>/_chats/<id>.json
+```
+
+The record holds the chat id, title, bound agent-browser session name
+(`chat-<rand>`), and persona sign-in binding. Because the browser name is
+stable across restarts, the chat's record scratch dir
+(`<record>/chat-<rand>/`) — and the pi conversation inside it
+(`agent-session/` JSONL) — stay addressable: restarting `agent-qa web`
+restores the chat list, and reopening a chat resumes its conversation.
+
 ## Discovery
 
 `agent-qa.toml` is found by walking from `cwd` up to the filesystem

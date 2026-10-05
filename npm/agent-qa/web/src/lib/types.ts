@@ -101,3 +101,29 @@ export interface ChatState {
   // Cumulative session usage (cost $ + tokens) for the model badge.
   usage?: ChatUsage | null;
 }
+
+// /api/chat/c/<id>/info — what the chat's agent is running with. Shown by the
+// header info popover.
+export interface ChatInfo {
+  chatId: string;
+  backend?: string | null;
+  model?: ModelInfo | null;
+  thinkingLevel?: string | null;
+  sessionId?: string | null;
+  browserSession?: string | null;
+  recordDir?: string | null;
+  scenariosRoot?: string | null;
+  connected?: {
+    profile?: string;
+    personaId?: string | null;
+    environmentId?: string | null;
+  } | null;
+  autoConnect?: {
+    state: string;
+    personaId?: string;
+    environmentId?: string;
+    detail?: string;
+  } | null;
+  jev?: { enabled: boolean; hasKey: boolean; envForced: boolean };
+  plugins?: { path: string; source: string; name?: string }[];
+}

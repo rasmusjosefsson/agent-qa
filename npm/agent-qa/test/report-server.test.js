@@ -1678,6 +1678,119 @@ test("POST /api/chat/c/:id/prompt annotates the text with the pane's current pag
   assert.equal(prompts[1], 'record this page');
 });
 
+test("GET /api/chat/c/:id/info reports the chat's agent/browser/plugin wiring", async (t) => {
+  const fx = makeFixture();
+  const { server, base } = await boot(fx.root, {
+    chat: {
+      hub: {
+        getState: async () => ({
+          backend: 'pi',
+          model: { provider: 'anthropic', id: 'claude-x', label: 'Claude X' },
+          sessionId: 'sess-1',
+          thinkingLevel: 'off',
+        }),
+      },
+    },
+    runCli: async () => ({ code: 0, stdout: 'ok', stderr: '' }),
+  });
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, {
+      method: m,
+      headers: { 'content-type': 'application/json' },
+      body: b ? JSON.stringify(b) : undefined,
+    });
+  const chat = await (await j('POST', '/api/chat/create')).json();
+
+  const res = await j('GET', `/api/chat/c/${chat.id}/info`);
+  assert.equal(res.status, 200);
+  const info = await res.json();
+  assert.equal(info.chatId, chat.id);
+  assert.equal(info.backend, 'pi');
+  assert.equal(info.model.id, 'claude-x');
+  assert.equal(info.sessionId, 'sess-1');
+  assert.equal(info.browserSession, chat.session);
+  assert.equal(info.scenariosRoot, fx.root);
+  assert.equal(info.jev.enabled, false);
+  assert.equal(info.jev.hasKey, false);
+  assert.deepEqual(info.plugins, []);
+  assert.equal(info.connected, null);
+});
+
+test('GET /api/chat/c/:id/info lists a bundled jev plugin when enabled', async (t) => {
+  const fx = makeFixture();
+  const { server, base } = await boot(fx.root, {
+    chat: { hub: {} }, // no getState — info still answers
+    runCli: async () => ({ code: 0, stdout: 'ok', stderr: '' }),
+  });
+  t.after(() => server.close());
+  await fs.promises.mkdir(`${fx.root}/_config`, { recursive: true });
+  await fs.promises.writeFile(
+    `${fx.root}/_config/jev.json`,
+    JSON.stringify({ schema: 'jev/1', enabled: true, apiKey: 'k' })
+  );
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, {
+      method: m,
+      headers: { 'content-type': 'application/json' },
+      body: b ? JSON.stringify(b) : undefined,
+    });
+  const chat = await (await j('POST', '/api/chat/create')).json();
+  const info = await (await j('GET', `/api/chat/c/${chat.id}/info`)).json();
+  assert.equal(info.backend, null);
+  assert.equal(info.jev.enabled, true);
+  assert.equal(info.jev.hasKey, true);
+  const bundled = info.plugins.find((p) => p.source === 'bundled');
+  assert.equal(bundled.name, 'jev-resolve');
+});
+
+test('chats persist under <root>/_chats and restore with the same session name', async (t) => {
+  const fx = makeFixture();
+  const deps = {
+    chat: { hub: {} },
+    runCli: async () => ({ code: 0, stdout: 'ok', stderr: '' }),
+  };
+  const mk = (b) => (m, p, body) =>
+    fetch(`${b}${p}`, {
+      method: m,
+      headers: { 'content-type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+  const first = await boot(fx.root, deps);
+  const chat = await (await mk(first.base)('POST', '/api/chat/create')).json();
+
+  const recPath = path.join(fx.root, '_chats', `${chat.id}.json`);
+  assert.ok(fs.existsSync(recPath));
+  const rec = JSON.parse(fs.readFileSync(recPath, 'utf8'));
+  assert.equal(rec.schema, 'chat/1');
+  assert.equal(rec.id, chat.id);
+  assert.equal(rec.browserSession, chat.session);
+
+  // Restart against the same root — the chat list and its bound browser
+  // session name come back, so recordDir/agent-session stay addressable.
+  await new Promise((r) => first.server.close(r));
+  const second = await boot(fx.root, deps);
+  t.after(() => second.server.close());
+  const j = mk(second.base);
+
+  const list = await (await j('GET', '/api/chat/list')).json();
+  const restored = list.chats.find((c) => c.id === chat.id);
+  assert.ok(restored, 'restored chat in list');
+  assert.equal(restored.session, chat.session);
+  // Info reflects the restored binding.
+  const info = await (await j('GET', `/api/chat/c/${chat.id}/info`)).json();
+  assert.equal(info.browserSession, chat.session);
+
+  // Disconnect persists the guest flag across a further restart.
+  await j('POST', `/api/chat/c/${chat.id}/disconnect`);
+  assert.equal(JSON.parse(fs.readFileSync(recPath, 'utf8')).guest, true);
+
+  // Delete removes the record.
+  await j('POST', `/api/chat/c/${chat.id}/delete`);
+  assert.equal(fs.existsSync(recPath), false);
+});
+
 test('POST /api/chat/c/:id/disconnect drops the persona binding into guest mode', async (t) => {
   const fx = makeFixture();
   const deps = {
