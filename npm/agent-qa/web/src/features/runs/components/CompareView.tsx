@@ -4,7 +4,8 @@
 // while active — the run header stays so context isn't lost.
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
-import { compareShotUrl } from '@/lib/runs-api'
+import { artifactUrl, compareShotUrl } from '@/lib/runs-api'
+import { BeforeAfterSlider } from './BeforeAfterSlider'
 import { ChevronDownIcon, ChevronRightIcon, XIcon } from 'lucide-react'
 import { relRunTime } from '../rows'
 import type { RunsApi } from '../useRuns'
@@ -113,18 +114,19 @@ export function CompareView({ runs }: { runs: RunsApi }) {
             <ul className="space-y-px">
               {r.screenshots.map((s) => {
                 const open = openShot === s.stepId
+                const expandable = s.hasDiffPng || s.outcome === 'ONLY-A' || s.outcome === 'ONLY-B'
                 return (
                   <li key={s.stepId}>
                     <button
                       type="button"
-                      disabled={!s.hasDiffPng}
+                      disabled={!expandable}
                       onClick={() => setOpenShot(open ? null : s.stepId)}
                       className={cn(
                         'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
-                        s.hasDiffPng ? 'hover:bg-muted/60' : 'opacity-80'
+                        expandable ? 'hover:bg-muted/60' : 'opacity-80'
                       )}
                     >
-                      {s.hasDiffPng ? (
+                      {expandable ? (
                         open ? (
                           <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground" />
                         ) : (
@@ -141,20 +143,44 @@ export function CompareView({ runs }: { runs: RunsApi }) {
                         </span>
                       )}
                     </button>
-                    {open && s.hasDiffPng && (
-                      <a
-                        href={compareShotUrl(r.sid, r.folder, s.stepId)}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="mx-2 mb-1 block"
-                        title="Open full-size in a new tab"
-                      >
-                        <img
-                          src={compareShotUrl(r.sid, r.folder, s.stepId)}
-                          alt={`pixel diff for ${s.stepId}`}
-                          className="max-h-80 rounded-md border border-border"
-                        />
-                      </a>
+                    {open && (
+                      <div className="mx-2 mb-1 space-y-1.5">
+                        {s.outcome === 'CHANGED' && r.runA && r.runB && (
+                          <BeforeAfterSlider
+                            before={artifactUrl(r.sid, r.runA, 'screenshots', s.stepId)}
+                            after={artifactUrl(r.sid, r.runB, 'screenshots', s.stepId)}
+                            beforeLabel={relRunTime(r.runA)}
+                            afterLabel={relRunTime(r.runB)}
+                          />
+                        )}
+                        {s.outcome !== 'CHANGED' && (s.outcome === 'ONLY-A' ? r.runA : r.runB) && (
+                          <img
+                            src={artifactUrl(
+                              r.sid,
+                              s.outcome === 'ONLY-A' ? r.runA! : r.runB!,
+                              'screenshots',
+                              s.stepId
+                            )}
+                            alt={`screenshot for ${s.stepId}`}
+                            className="rounded-md border border-border"
+                          />
+                        )}
+                        {s.hasDiffPng && (
+                          <a
+                            href={compareShotUrl(r.sid, r.folder, s.stepId)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block"
+                            title="Open pixel-diff full-size in a new tab"
+                          >
+                            <img
+                              src={compareShotUrl(r.sid, r.folder, s.stepId)}
+                              alt={`pixel diff for ${s.stepId}`}
+                              className="max-h-48 rounded-md border border-border"
+                            />
+                          </a>
+                        )}
+                      </div>
                     )}
                   </li>
                 )

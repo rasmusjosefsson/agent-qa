@@ -234,6 +234,10 @@ export function artifactUrl(sid: string, runId: string, kind: string, stepId: st
   return `/api/scenarios/${encodeURIComponent(sid)}/runs/${encodeURIComponent(runId)}/artifact/${kind}/${encodeURIComponent(stepId)}`
 }
 
+export function baselineShotUrl(sid: string, name: string): string {
+  return `/api/scenarios/${encodeURIComponent(sid)}/baselines/${encodeURIComponent(name)}`
+}
+
 export function runFileUrl(sid: string, runId: string, name: string): string {
   return `/api/scenarios/${encodeURIComponent(sid)}/runs/${encodeURIComponent(runId)}/file/${encodeURIComponent(name)}`
 }

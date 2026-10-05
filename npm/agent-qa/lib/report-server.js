@@ -5066,6 +5066,31 @@ function createRequestHandler(root, deps, chat) {
             return sendJson(res, 200, { sid, trend: null });
           }
         }
+        // GET /api/scenarios/:sid/baselines/<name> → the stored baseline image
+        // behind a shot/domshot claim (screenshots/<stepId>.png's counterpart).
+        if (seg[3] === 'baselines' && seg.length === 5 && req.method === 'GET') {
+          const name = decodeURIComponent(seg[4]);
+          if (!isSafeSegment(name) || !name.endsWith('.png')) return badRequest(res, 'unsafe path');
+          const bdir = path.resolve(root, sid, 'baselines');
+          const full = path.resolve(bdir, name);
+          if (full !== bdir && !full.startsWith(bdir + path.sep)) {
+            return badRequest(res, 'path escapes baselines dir');
+          }
+          let stat;
+          try {
+            stat = await fsp.stat(full);
+          } catch {
+            return notFound(res, 'no baseline');
+          }
+          if (!stat.isFile()) return notFound(res, 'no baseline');
+          res.writeHead(200, {
+            'content-type': 'image/png',
+            'content-length': stat.size,
+            'cache-control': 'no-store',
+          });
+          streamFile(res, full);
+          return undefined;
+        }
         // GET /api/scenarios/:sid/compare/<folder>/shots/<stepId> → that
         // step's pixel-diff png written by a `compare` run (the POST compare
         // route lives with the other POST dispatches, earlier in this handler).
