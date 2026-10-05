@@ -9,7 +9,7 @@
     "eval:qaplayground": "bun run run.ts --suite qaplayground",
     "eval:automation-exercise": "bun run run.ts --suite automation-exercise",
     "golden:a11y:tc01": "bun golden/a11y-tc01.ts",
-    "golden:automation-exercise": "bun golden/automation-exercise-all.ts",
+    "eval:automation-exercise-all": "bun golden/automation-exercise-all.ts",
     "golden:forms:tc01": "bun golden/forms-tc01.ts",
     "golden:forms:tc02": "bun golden/forms-tc02.ts",
     "golden:forms:tc03": "bun golden/forms-tc03.ts",
