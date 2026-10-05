@@ -296,7 +296,7 @@ export function PlanDetail({ id }: { id: string }) {
       setRunMsg(
         r.authenticated
           ? `Connected — ${r.profile} is authenticated.`
-          : `Connect ran but ${r.profile} is not authenticated yet (check the auth plugin / secrets).`
+          : `Connect ran but ${r.profile} is not authenticated yet.${r.detail ? ` ${r.detail}` : ' Check the auth plugin / secrets.'}`
       )
     } catch (e) {
       setErr(String((e as Error).message || e))

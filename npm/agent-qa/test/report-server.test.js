@@ -1568,6 +1568,85 @@ test("POST /api/chat/c/:id/connect bootstraps auth into THAT chat's own session"
   assert.equal((await j('POST', `/api/chat/c/${created.id}/connect`, {})).status, 400);
 });
 
+test('reportedAuthenticated reads the status line, not the JSON body', () => {
+  // The printed JSON response can contain the word "authenticated" inside a
+  // message — that must not count.
+  assert.equal(
+    srv._test.reportedAuthenticated(
+      'profile admin-user → expired\n{\n  "status": "expired",\n  "detail": "token authenticated at 10:00 has expired"\n}',
+    ),
+    false,
+  );
+  assert.equal(
+    srv._test.reportedAuthenticated('profile admin-user → authenticated\n{\n  "status": "authenticated"\n}'),
+    true,
+  );
+  // Bare CLI line without a JSON body (e.g. --quiet style or older builds).
+  assert.equal(srv._test.reportedAuthenticated('admin-user: authenticated'), true);
+  assert.equal(srv._test.reportedAuthenticated('admin-user: signed out'), false);
+});
+
+test('connectFailureDetail distills the failing step for the UI', () => {
+  const detail = srv._test.connectFailureDetail([
+    { step: 'profile-add', code: 0, stdout: 'ok', stderr: '', spawnError: null },
+    {
+      step: 'profile-status',
+      code: 1,
+      stdout: 'profile admin-user → on-login\n{\n  "status": "on-login",\n  "message": "credentials rejected"\n}',
+      stderr: '',
+      spawnError: null,
+    },
+  ]);
+  assert.match(detail, /on-login/);
+  assert.match(detail, /credentials rejected/);
+
+  // No parseable plugin output → fall back to stderr.
+  assert.match(
+    srv._test.connectFailureDetail([
+      { step: 'profile-bootstrap', code: 1, stdout: '', stderr: 'auth-failed: EMAIL unset', spawnError: null },
+    ]),
+    /auth-failed: EMAIL unset/,
+  );
+  assert.equal(srv._test.connectFailureDetail([{ step: 'x', code: 0, stdout: '', stderr: '' }]), '');
+});
+
+test('connect failure returns a human-readable detail (and the no-credentials hint)', async (t) => {
+  const fx = makeFixture();
+  const deps = {
+    chat: { hub: {} },
+    runCli: async (args) => {
+      if (args[0] === 'profile-status') {
+        return {
+          code: 1,
+          stdout: 'profile admin-user → on-login\n{\n  "status": "on-login",\n  "message": "still on the login page"\n}',
+          stderr: '',
+        };
+      }
+      return { code: 0, stdout: 'ok', stderr: '' };
+    },
+  };
+  const booted = await boot(fx.root, deps);
+  t.after(() => booted.server.close());
+  const j = (m, p, b) =>
+    fetch(`${booted.base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+  const created = await (await j('POST', '/api/chat/create')).json();
+  // Persona with NO credential entries → the hint names the likely cause.
+  await j('POST', '/api/personas/admin', { name: 'Admin', profile: 'admin-user' });
+  await j('POST', '/api/environments/staging', { name: 'Staging', auth: { plugin: 'agent-qa-plugin-acme' } });
+
+  const out = await (
+    await j('POST', `/api/chat/c/${created.id}/connect`, { personaId: 'admin', environmentId: 'staging' })
+  ).json();
+  assert.equal(out.authenticated, false);
+  assert.match(out.detail, /status "on-login"/);
+  assert.match(out.detail, /still on the login page/);
+  assert.match(out.detail, /no credential entries configured/);
+  // The failed auto-connect never ran (chat was created before the persona
+  // existed), so the poll endpoint stays disconnected.
+  const connection = await (await j('GET', `/api/chat/c/${created.id}/connection`)).json();
+  assert.equal(connection.state, 'disconnected');
+});
+
 test("POST /api/chat/c/:id/prompt annotates the text with the pane's current page", async (t) => {
   const fx = makeFixture();
   const prompts = [];
@@ -1740,6 +1819,10 @@ test('persona credentials inject into the plugin env; unresolved vault refs fail
   const r2 = await (await j('POST', '/api/personas/vaulted/connect', { environmentId: 'staging' })).json();
   assert.equal(r2.ok, false);
   assert.ok(r2.log.some((s) => s.step === 'vault'));
+  assert.match(r2.detail, /VAULT_ADDR is not set/);
+  // No remediation declared on the environment → none offered; provider
+  // login commands stay downstream (auth.remediation).
+  assert.equal(r2.remediation, undefined);
   assert.ok(!calls.some((c) => c.args[0] === 'profile-bootstrap'));
 });
 
@@ -1959,13 +2042,20 @@ test('autoConnectDefault runs an extension-declared remediation before retrying 
   const j = (m, p, b) =>
     fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
 
-  await j('POST', '/api/environments/staging', {
-    name: 'Staging',
-    auth: {
-      plugin: 'agent-qa-plugin-acme',
-      remediation: { label: 'Sign in to credentials provider', argv: ['credential-login', '--browser'], automatic: true },
-    },
-  });
+  // Remediation argv only counts from trusted records — write the env file
+  // directly (as a shipped package record / hand edit would), not via POST.
+  fs.mkdirSync(path.join(fx.root, '_environments', 'staging'), { recursive: true });
+  fs.writeFileSync(
+    path.join(fx.root, '_environments', 'staging', 'environment.json'),
+    JSON.stringify({
+      id: 'staging',
+      name: 'Staging',
+      auth: {
+        plugin: 'agent-qa-plugin-acme',
+        remediation: { label: 'Sign in to credentials provider', argv: ['credential-login', '--browser'], automatic: true },
+      },
+    }),
+  );
   await j('POST', '/api/personas/admin', { name: 'Admin', profile: 'admin-user' });
 
   const entry = { browser: { name: 'chat-test' }, recordDir: () => null };
@@ -1995,10 +2085,17 @@ test('chat remediation runs the extension command and retries that chat connecti
   const j = (m, p, b) =>
     fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
 
-  await j('POST', '/api/environments/staging', {
-    name: 'Staging',
-    auth: { remediation: { label: 'Prepare credentials', argv: ['credential-login'], automatic: false } },
-  });
+  // Remediation argv only counts from trusted records — write the env file
+  // directly rather than POSTing it through the API.
+  fs.mkdirSync(path.join(fx.root, '_environments', 'staging'), { recursive: true });
+  fs.writeFileSync(
+    path.join(fx.root, '_environments', 'staging', 'environment.json'),
+    JSON.stringify({
+      id: 'staging',
+      name: 'Staging',
+      auth: { remediation: { label: 'Prepare credentials', argv: ['credential-login'], automatic: false } },
+    }),
+  );
   await j('POST', '/api/personas/admin', { name: 'Admin', profile: 'admin-user' });
   const chat = await (await j('POST', '/api/chat/create')).json();
 
@@ -2006,6 +2103,46 @@ test('chat remediation runs the extension command and retries that chat connecti
   assert.deepEqual(commands, [['credential-login']]);
   assert.equal(result.authenticated, true);
   assert.equal(result.session, chat.session);
+});
+
+test('environment POST cannot plant remediation argv (trusted records only)', async (t) => {
+  const fx = makeFixture();
+  const commands = [];
+  const deps = {
+    chat: { hub: {} },
+    runAuthRemediation: async (argv) => {
+      commands.push(argv);
+      return { ok: true };
+    },
+    runCli: async () => ({ code: 0, stdout: 'ok', stderr: '' }),
+  };
+  const { server, base } = await boot(fx.root, deps);
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  // A browser-supplied remediation argv must be stripped at write time —
+  // otherwise any local page could plant a command /remediate would exec.
+  const res = await j('POST', '/api/environments/evil', {
+    name: 'Evil',
+    auth: { remediation: { label: 'x', argv: ['planted'], automatic: true } },
+  });
+  assert.equal(res.status, 200);
+  const saved = JSON.parse(
+    fs.readFileSync(path.join(fx.root, '_environments', 'evil', 'environment.json'), 'utf8'),
+  );
+  assert.equal(saved.auth.remediation, null);
+  assert.equal(commands.length, 0);
+
+  // …and editing the same record preserves a remediation that a trusted
+  // (hand-written/package) record already had on disk.
+  saved.auth.remediation = { label: 'Keep', argv: ['keep'], automatic: false };
+  fs.writeFileSync(path.join(fx.root, '_environments', 'evil', 'environment.json'), JSON.stringify(saved));
+  await j('POST', '/api/environments/evil', { name: 'Renamed' });
+  const after = JSON.parse(
+    fs.readFileSync(path.join(fx.root, '_environments', 'evil', 'environment.json'), 'utf8'),
+  );
+  assert.deepEqual(after.auth.remediation, { label: 'Keep', argv: ['keep'], automatic: false });
 });
 
 test('chat recording controls run buffer verbs in the chat record dir', async (t) => {
