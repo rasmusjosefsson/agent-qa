@@ -1231,6 +1231,20 @@ fn check_shot(
     std::fs::create_dir_all(&diff_dir).ok();
     let diff_path = diff_dir.join(format!("{shot}.diff.png"));
     let _ = diff_img.save(&diff_path);
+    let regions = crate::compare::screenshots::diff_regions(&diff_img);
+    let region_note = if regions.is_empty() {
+        String::new()
+    } else {
+        let (rx, ry, rw, rh, _) = regions[0];
+        format!(
+            " in {} region(s), largest {}x{} at {},{}",
+            regions.len(),
+            rw,
+            rh,
+            rx,
+            ry
+        )
+    };
     // RCA-lite: map the diff's pixel bounds back to CSS space and list the
     // elements intersecting it — "which element moved" without a human
     // squinting at the diff map. Best-effort: an eval failure never masks
@@ -1246,9 +1260,10 @@ fn check_shot(
         tol,
     );
     bail!(
-        "shot '{shot}' differs from baseline: {:.2}% pixels changed (tolerance {:.2}%) — diff at {}{}",
+        "shot '{shot}' differs from baseline: {:.2}% pixels changed (tolerance {:.2}%){} — diff at {}{}",
         frac * 100.0,
         tol * 100.0,
+        region_note,
         diff_path.display(),
         rca_note
     )

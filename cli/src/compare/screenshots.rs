@@ -47,6 +47,9 @@ pub(super) struct ShotEntry {
     /// Fraction of differing pixels in [0, 1]. None for outcomes where
     /// the comparison wasn't done (Only-A, Only-B, Size-Mismatch).
     pub differing_fraction: Option<f64>,
+    /// Contiguous changed regions `(x, y, w, h, pixels)`, largest first —
+    /// one structural change = one region. Empty unless outcome is Changed.
+    pub regions: Vec<(u32, u32, u32, u32, u32)>,
 }
 
 #[derive(Debug, Clone)]
@@ -94,6 +97,7 @@ pub(super) fn build(
                         step_id: id,
                         outcome: ShotOutcome::SizeMismatch,
                         differing_fraction: None,
+                        regions: Vec::new(),
                     });
                     continue;
                 }
@@ -103,6 +107,7 @@ pub(super) fn build(
                         step_id: id,
                         outcome: ShotOutcome::Same,
                         differing_fraction: Some(frac),
+                        regions: Vec::new(),
                     });
                 } else {
                     // Write the diff PNG.
@@ -119,6 +124,7 @@ pub(super) fn build(
                         step_id: id,
                         outcome: ShotOutcome::Changed,
                         differing_fraction: Some(frac),
+                        regions: diff_regions(&diff_img),
                     });
                 }
             }
@@ -126,11 +132,13 @@ pub(super) fn build(
                 step_id: id,
                 outcome: ShotOutcome::OnlyA,
                 differing_fraction: None,
+                regions: Vec::new(),
             }),
             (false, true) => entries.push(ShotEntry {
                 step_id: id,
                 outcome: ShotOutcome::OnlyB,
                 differing_fraction: None,
+                regions: Vec::new(),
             }),
             (false, false) => {}
         }
@@ -154,26 +162,155 @@ pub(crate) fn decode_png(path: &Path) -> Result<RgbaImage> {
 /// and Chromium builds — counting those ±1..±30 sub-pixel jitters would flake
 /// every text-heavy golden. 32/255 (~12.5% of a channel) swallows AA noise
 /// while still catching real layout/text/color changes (the same trade-off
-/// pixelmatch's default 0.1 threshold makes).
+/// pixelmatch's default 0.1 threshold makes). On top of the raw delta the
+/// diff also runs pixelmatch's edge-AA detector, which ignores pixels that
+/// read as edge antialiasing rather than real change.
 const AA_DELTA: i16 = 32;
 
-fn pixel_changed(a: &Rgba<u8>, b: &Rgba<u8>, aa_delta: i16) -> bool {
+fn channel_delta(a: &Rgba<u8>, b: &Rgba<u8>) -> i16 {
     (0..4)
         .map(|i| (a[i] as i16 - b[i] as i16).abs())
         .max()
         .unwrap_or(0)
-        > aa_delta
 }
 
-/// Returns (differing-fraction, delta-map image). Delta map shows the
-/// baseline (`a`) faded to 50% greyscale; differing pixels are red.
-pub(crate) fn pixel_diff(a: &RgbaImage, b: &RgbaImage) -> (f64, RgbaImage) {
-    pixel_diff_with(a, b, AA_DELTA)
+/// True when `p` has at least 3 equal neighbours in `img` — pixelmatch's
+/// "identical siblings" test used by the antialiasing detector.
+fn has_many_siblings(img: &RgbaImage, x: u32, y: u32, w: u32, h: u32) -> bool {
+    let p = *img.get_pixel(x, y);
+    let mut count = 0u32;
+    for dy in -1i64..=1 {
+        for dx in -1i64..=1 {
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            let (nx, ny) = (x as i64 + dx, y as i64 + dy);
+            if nx < 0 || ny < 0 || nx >= w as i64 || ny >= h as i64 {
+                continue;
+            }
+            if *img.get_pixel(nx as u32, ny as u32) == p {
+                count += 1;
+                if count > 2 {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
-/// `pixel_diff` with a caller-chosen AA delta — the shot claim's
-/// `tolerance.preset`/`tolerance.aa` knobs land here.
-pub(crate) fn pixel_diff_with(a: &RgbaImage, b: &RgbaImage, aa_delta: i16) -> (f64, RgbaImage) {
+/// Perceived luminance delta between two RGBA pixels (pixelmatch's Y
+/// formula on the RGB channels, blended with the alpha difference).
+fn luminance_delta(a: &Rgba<u8>, b: &Rgba<u8>) -> f64 {
+    let dr = a[0] as f64 - b[0] as f64;
+    let dg = a[1] as f64 - b[1] as f64;
+    let db = a[2] as f64 - b[2] as f64;
+    let da = a[3] as f64 - b[3] as f64;
+    0.298895 * dr + 0.586622 * dg + 0.114482 * db + 0.297 * da
+}
+
+/// Pixelmatch-style antialiasing detection: a pixel is AA when it sits on
+/// an edge — its brightness is between its neighbours' min and max — and
+/// its darkest or brightest neighbour is a stable part of the image (has
+/// 3+ identical siblings in BOTH images). Real shifts lack one of those
+/// halves, so they stay "changed".
+fn antialiased(img: &RgbaImage, x: u32, y: u32, w: u32, h: u32, other: &RgbaImage) -> bool {
+    let p = *img.get_pixel(x, y);
+    // Edge pixels have fewer than 8 real neighbours — pixelmatch credits
+    // them one "equal" up front since the missing side can't contradict.
+    let mut zeros = u32::from(x == 0 || y == 0 || x == w - 1 || y == h - 1);
+    let mut min = 0.0f64;
+    let mut max = 0.0f64;
+    let mut min_xy = (0u32, 0u32);
+    let mut max_xy = (0u32, 0u32);
+    for dy in -1i64..=1 {
+        for dx in -1i64..=1 {
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            let (nx, ny) = (x as i64 + dx, y as i64 + dy);
+            if nx < 0 || ny < 0 || nx >= w as i64 || ny >= h as i64 {
+                continue;
+            }
+            let q = *img.get_pixel(nx as u32, ny as u32);
+            let d = luminance_delta(&p, &q);
+            if d.abs() < f64::EPSILON {
+                zeros += 1;
+                if zeros > 2 {
+                    return false; // flat area — not an edge
+                }
+            } else if d < min {
+                min = d;
+                min_xy = (nx as u32, ny as u32);
+            } else if d > max {
+                max = d;
+                max_xy = (nx as u32, ny as u32);
+            }
+        }
+    }
+    // A real AA pixel sits mid-edge: it must have BOTH a darker and a
+    // brighter neighbour. One side missing (all neighbours uniformly
+    // darker/lighter) means the pixel is a fill change, not an edge.
+    if min == 0.0 || max == 0.0 {
+        return false;
+    }
+    (has_many_siblings(img, min_xy.0, min_xy.1, w, h)
+        && has_many_siblings(other, min_xy.0, min_xy.1, w, h))
+        || (has_many_siblings(img, max_xy.0, max_xy.1, w, h)
+            && has_many_siblings(other, max_xy.0, max_xy.1, w, h))
+}
+
+/// Connected-component clustering of the diff mask (4-neighbour flood
+/// fill). Returns bounding boxes `(x, y, w, h, pixel_count)` of each
+/// contiguous changed region — one structural change = one cluster, even
+/// if it spans many pixels. Used for RCA + reporting; diff of ≤ `min_size`
+/// pixels still counts as a region (a lone pixel IS a region).
+pub(crate) fn diff_regions(diff: &RgbaImage) -> Vec<(u32, u32, u32, u32, u32)> {
+    let (w, h) = diff.dimensions();
+    let mut visited = vec![false; (w * h) as usize];
+    let is_diff = |x: u32, y: u32| diff.get_pixel(x, y)[0] == 255 && diff.get_pixel(x, y)[1] == 0;
+    let mut regions = Vec::new();
+    for y in 0..h {
+        for x in 0..w {
+            let idx = (y * w + x) as usize;
+            if visited[idx] || !is_diff(x, y) {
+                continue;
+            }
+            // BFS flood fill.
+            let mut stack = vec![(x, y)];
+            visited[idx] = true;
+            let (mut rx0, mut ry0, mut rx1, mut ry1) = (x, y, x, y);
+            let mut count = 0u32;
+            while let Some((cx, cy)) = stack.pop() {
+                count += 1;
+                rx0 = rx0.min(cx);
+                ry0 = ry0.min(cy);
+                rx1 = rx1.max(cx);
+                ry1 = ry1.max(cy);
+                for (dx, dy) in [(1i64, 0), (-1, 0), (0, 1), (0, -1)] {
+                    let (nx, ny) = (cx as i64 + dx, cy as i64 + dy);
+                    if nx < 0 || ny < 0 || nx >= w as i64 || ny >= h as i64 {
+                        continue;
+                    }
+                    let nidx = (ny as u32 * w + nx as u32) as usize;
+                    if !visited[nidx] && is_diff(nx as u32, ny as u32) {
+                        visited[nidx] = true;
+                        stack.push((nx as u32, ny as u32));
+                    }
+                }
+            }
+            regions.push((rx0, ry0, rx1 - rx0 + 1, ry1 - ry0 + 1, count));
+        }
+    }
+    regions.sort_by_key(|r| std::cmp::Reverse(r.4));
+    regions
+}
+
+/// Perceptual diff (pixelmatch-flavoured): a pixel counts as changed when
+/// its channel delta exceeds `aa_delta` AND it isn't antialiasing on an
+/// edge — checked against both images. `aa_delta <= 0` disables the AA
+/// filter entirely (strict byte-compare).
+fn perceptual_diff(a: &RgbaImage, b: &RgbaImage, aa_delta: i16) -> (f64, RgbaImage) {
     let (w, h) = a.dimensions();
     let total = (w as u64) * (h as u64);
     let mut diff = RgbaImage::new(w, h);
@@ -182,7 +319,10 @@ pub(crate) fn pixel_diff_with(a: &RgbaImage, b: &RgbaImage, aa_delta: i16) -> (f
         for x in 0..w {
             let pa = a.get_pixel(x, y);
             let pb = b.get_pixel(x, y);
-            if pixel_changed(pa, pb, aa_delta) {
+            let changed = channel_delta(pa, pb) > aa_delta
+                && (aa_delta <= 0
+                    || (!antialiased(a, x, y, w, h, b) && !antialiased(b, x, y, w, h, a)));
+            if changed {
                 differing += 1;
                 diff.put_pixel(x, y, Rgba([255, 0, 0, 255]));
             } else {
@@ -198,6 +338,18 @@ pub(crate) fn pixel_diff_with(a: &RgbaImage, b: &RgbaImage, aa_delta: i16) -> (f
         differing as f64 / total as f64
     };
     (frac, diff)
+}
+
+/// Returns (differing-fraction, delta-map image). Delta map shows the
+/// baseline (`a`) faded to 50% greyscale; differing pixels are red.
+pub(crate) fn pixel_diff(a: &RgbaImage, b: &RgbaImage) -> (f64, RgbaImage) {
+    pixel_diff_with(a, b, AA_DELTA)
+}
+
+/// `pixel_diff` with a caller-chosen AA delta — the shot claim's
+/// `tolerance.preset`/`tolerance.aa` knobs land here.
+pub(crate) fn pixel_diff_with(a: &RgbaImage, b: &RgbaImage, aa_delta: i16) -> (f64, RgbaImage) {
+    perceptual_diff(a, b, aa_delta)
 }
 
 #[cfg(test)]
@@ -244,6 +396,75 @@ mod tests {
         b.put_pixel(0, 0, Rgba([255, 0, 0, 255]));
         let (frac, _) = pixel_diff(&a, &b);
         assert_eq!(frac, 0.25);
+    }
+
+    #[test]
+    fn perceptual_ignores_edge_antialiasing() {
+        // An AA fringe: a grey column (mid-luminance) between a solid
+        // black core and the white background — how hinting actually
+        // renders text edges. B renders the same fringe a few levels
+        // different (> AA_DELTA), as another rasterizer would. The edge
+        // detector forgives it; the raw-delta diff would flag it.
+        let (w, h) = (6, 4);
+        let mut a = RgbaImage::from_pixel(w, h, Rgba([255, 255, 255, 255]));
+        let mut b = a.clone();
+        for y in 0..h {
+            a.put_pixel(2, y, Rgba([0, 0, 0, 255]));
+            b.put_pixel(2, y, Rgba([0, 0, 0, 255]));
+            a.put_pixel(3, y, Rgba([140, 140, 140, 255]));
+            b.put_pixel(3, y, Rgba([190, 190, 190, 255]));
+        }
+        let (frac, _) = pixel_diff(&a, &b);
+        assert_eq!(frac, 0.0);
+    }
+
+    #[test]
+    fn perceptual_flags_solid_edge_shift() {
+        // A SOLID colour edge moved one pixel: not AA (no mid-luminance
+        // pixels) — pixelmatch correctly reports it as a real change.
+        let (w, h) = (8, 4);
+        let mut a = RgbaImage::from_pixel(w, h, Rgba([255, 255, 255, 255]));
+        let mut b = a.clone();
+        for y in 0..h {
+            a.put_pixel(2, y, Rgba([0, 0, 0, 255]));
+            b.put_pixel(3, y, Rgba([0, 0, 0, 255]));
+        }
+        let (frac, _) = pixel_diff(&a, &b);
+        assert!(frac > 0.0);
+    }
+
+    #[test]
+    fn perceptual_counts_real_fills() {
+        // A solid block change (no edge neighbourhood) is NOT antialiasing.
+        let a = RgbaImage::from_pixel(8, 8, Rgba([255, 255, 255, 255]));
+        let mut b = a.clone();
+        for y in 2..6 {
+            for x in 2..6 {
+                b.put_pixel(x, y, Rgba([0, 0, 0, 255]));
+            }
+        }
+        let (frac, diff) = pixel_diff(&a, &b);
+        // Block edges have both darker+brighter neighbours, so the AA
+        // detector forgives the outline pixels; the interior stays diff.
+        assert!(frac > 0.0);
+        let regions = diff_regions(&diff);
+        assert!(!regions.is_empty());
+    }
+
+    #[test]
+    fn diff_regions_clusters_separate_changes() {
+        // Two disconnected changed areas → two regions, largest first.
+        let a = RgbaImage::from_pixel(12, 4, Rgba([255; 4]));
+        let mut b = a.clone();
+        for x in 0..3 {
+            b.put_pixel(x, 0, Rgba([0, 0, 0, 255]));
+        }
+        b.put_pixel(10, 3, Rgba([0, 0, 0, 255]));
+        let (_, diff) = pixel_diff(&a, &b);
+        let regions = diff_regions(&diff);
+        assert_eq!(regions.len(), 2);
+        assert_eq!(regions[0].4, 3); // the 3-px strip first
+        assert_eq!(regions[1], (10, 3, 1, 1, 1));
     }
 
     #[test]
