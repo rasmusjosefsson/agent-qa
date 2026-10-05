@@ -1897,6 +1897,7 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
         opts.entry.connectedPersonaId = personaId;
         opts.entry.connectedEnvironmentId = (env && env.id) || null;
         opts.entry.guest = false;
+        if (typeof opts.entry.persist === 'function') opts.entry.persist();
       }
       if (opts.recordDir) await bindRecordingProfile(deps.runCli, profile);
     }
@@ -2408,9 +2409,9 @@ function listBrowserSessions() {
 // it. New chat rotates to a fresh name (a clean browser); the old daemon is
 // closed for cleanup. Editor/replay strip this var so they keep their own
 // sessions.
-function makeChatBrowserBinding() {
+function makeChatBrowserBinding(initial) {
   const mint = () => `chat-${crypto.randomBytes(4).toString('hex')}`;
-  let name = mint();
+  let name = initial && isSafeSegment(initial) ? initial : mint();
   return {
     get name() {
       return name;
@@ -3252,6 +3253,7 @@ async function autoConnectDefault(root, entry, deps) {
       entry.connectedProfile = null;
       entry.connectedPersonaId = null;
       entry.connectedEnvironmentId = null;
+      if (typeof entry.persist === 'function') entry.persist();
     }
   } catch {
     if (entry) entry.autoConnect = { state: 'failed', at: Date.now() };
@@ -3267,16 +3269,84 @@ function createChatManager(deps, root) {
   const baseUrl = deps && deps.baseUrl;
   const chats = new Map();
 
-  function makeEntry() {
-    const id = crypto.randomBytes(4).toString('hex');
-    const browser = makeChatBrowserBinding();
+  // ---- durability ----
+  // Chat records live at <root>/_chats/<id>.json — like _config/jev.json — so
+  // the chat list, each chat's bound browser session name, its record dir
+  // (recordRoot/<browserName>), and therefore its persisted pi conversation
+  // (<recordDir>/agent-session) all survive a workbench restart. Writes are
+  // atomic (tmp + rename); a missing/corrupt record degrades to an empty list.
+  const chatsDir = () => (root ? path.join(root, '_chats') : null);
+  const recordFile = (id) => path.join(chatsDir(), `${id}.json`);
+
+  function persistEntry(e) {
+    const dir = chatsDir();
+    if (!dir) return;
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      const rec = {
+        schema: 'chat/1',
+        id: e.id,
+        title: e.title,
+        createdAt: e.createdAt,
+        browserSession: e.browser.name,
+        guest: !!e.guest,
+        connectedProfile: e.connectedProfile || null,
+        connectedPersonaId: e.connectedPersonaId || null,
+        connectedEnvironmentId: e.connectedEnvironmentId || null,
+      };
+      const tmp = `${recordFile(e.id)}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(rec, null, 2) + '\n');
+      fs.renameSync(tmp, recordFile(e.id));
+    } catch {
+      /* persistence is best-effort — never break chat */
+    }
+  }
+
+  function restore() {
+    const dir = chatsDir();
+    if (!dir) return;
+    let files = [];
+    try {
+      files = fs.readdirSync(dir);
+    } catch {
+      return;
+    }
+    const recs = [];
+    for (const f of files) {
+      if (!f.endsWith('.json')) continue;
+      try {
+        const rec = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+        if (rec && isSafeSegment(rec.id) && isSafeSegment(rec.browserSession || '')) {
+          recs.push(rec);
+        }
+      } catch {
+        /* skip corrupt record */
+      }
+    }
+    // Stable list order across restarts.
+    recs.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    for (const rec of recs) chats.set(rec.id, makeEntry(rec));
+  }
+
+  function makeEntry(saved) {
+    const id =
+      saved && isSafeSegment(saved.id) ? saved.id : crypto.randomBytes(4).toString('hex');
+    const browser = makeChatBrowserBinding(saved && saved.browserSession);
     let hubPromise = null;
     let resolvedHub = null;
     const entry = {
       id,
       browser,
-      createdAt: Date.now(),
-      title: 'New chat',
+      createdAt: (saved && saved.createdAt) || Date.now(),
+      title: (saved && saved.title) || 'New chat',
+      guest: !!(saved && saved.guest),
+      connectedProfile: (saved && saved.connectedProfile) || null,
+      connectedPersonaId: (saved && saved.connectedPersonaId) || null,
+      connectedEnvironmentId: (saved && saved.connectedEnvironmentId) || null,
+      autoConnect: null,
+      persist() {
+        persistEntry(entry);
+      },
       // Per-chat record scratch dir so concurrent recordings don't collide and
       // the chat's pane can detect its own active recording.
       recordDir: () => (recordRoot ? path.join(recordRoot, browser.name) : null),
@@ -3359,6 +3429,7 @@ function createChatManager(deps, root) {
   function create() {
     const entry = makeEntry();
     chats.set(entry.id, entry);
+    persistEntry(entry);
     // Pre-warm the hub so the first /state fetch doesn't pay the full pi SDK
     // init latency — makes "New chat" feel responsive. Best-effort; the real
     // /state await reuses this same in-flight promise (no double build).
@@ -3395,6 +3466,12 @@ function createChatManager(deps, root) {
     chats.clear();
   }
 
+  // Rehydrate the chat list from <root>/_chats/*.json on boot — after a
+  // workbench restart the same chat ids + bound browser sessions come back,
+  // and the pi sessionDir markers point at the still-existing JSONL
+  // transcripts, so /state resumes each conversation.
+  restore();
+
   return {
     create,
     primary,
@@ -3406,6 +3483,11 @@ function createChatManager(deps, root) {
       e.dispose();
       closeBrowserSession(deps && deps.agentBrowserBin, e.browser.name);
       chats.delete(id);
+      try {
+        if (chatsDir()) fs.rmSync(recordFile(id), { force: true });
+      } catch {
+        /* ignore */
+      }
       return true;
     },
     dispose,
@@ -3723,6 +3805,7 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
     entry.connectedEnvironmentId = null;
     entry.guest = true;
     entry.autoConnect = { state: 'disconnected', at: Date.now() };
+    if (typeof entry.persist === 'function') entry.persist();
     return sendJson(res, 200, { state: 'disconnected', guest: true });
   }
 
@@ -3911,6 +3994,9 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
       // daemon (clean browser for the reset conversation).
       const old = entry.browser.name;
       entry.browser.rotate();
+      // New browser name → new recordDir/sessionDir — persist so a restart
+      // rebinds to the rotated session, not the stale one.
+      if (typeof entry.persist === 'function') entry.persist();
       closeBrowserSession(deps && deps.agentBrowserBin, old);
       return sendJson(res, 200, { ok: true });
     }

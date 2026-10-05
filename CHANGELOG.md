@@ -19,6 +19,10 @@ All notable changes to agent-qa are documented here. This project follows
 
 ### Added
 
+- Chats are durable: each chat persists as `<root>/_chats/<id>.json` (id,
+  title, bound browser session name, persona sign-in binding). A workbench
+  restart restores the chat list with the same bindings, so the record dir
+  and the pi conversation (`agent-session/` JSONL) resume in place.
 - `GET /api/chat/c/<id>/info` + a chat-header info button — shows what the
   chat's agent is running with: backend, model, thinking level, session id,
   bound browser session, credential plugins reachable (registered paths +

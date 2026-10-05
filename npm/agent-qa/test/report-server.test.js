@@ -1744,6 +1744,53 @@ test('GET /api/chat/c/:id/info lists a bundled jev plugin when enabled', async (
   assert.equal(bundled.name, 'jev-resolve');
 });
 
+test('chats persist under <root>/_chats and restore with the same session name', async (t) => {
+  const fx = makeFixture();
+  const deps = {
+    chat: { hub: {} },
+    runCli: async () => ({ code: 0, stdout: 'ok', stderr: '' }),
+  };
+  const mk = (b) => (m, p, body) =>
+    fetch(`${b}${p}`, {
+      method: m,
+      headers: { 'content-type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+  const first = await boot(fx.root, deps);
+  const chat = await (await mk(first.base)('POST', '/api/chat/create')).json();
+
+  const recPath = path.join(fx.root, '_chats', `${chat.id}.json`);
+  assert.ok(fs.existsSync(recPath));
+  const rec = JSON.parse(fs.readFileSync(recPath, 'utf8'));
+  assert.equal(rec.schema, 'chat/1');
+  assert.equal(rec.id, chat.id);
+  assert.equal(rec.browserSession, chat.session);
+
+  // Restart against the same root — the chat list and its bound browser
+  // session name come back, so recordDir/agent-session stay addressable.
+  await new Promise((r) => first.server.close(r));
+  const second = await boot(fx.root, deps);
+  t.after(() => second.server.close());
+  const j = mk(second.base);
+
+  const list = await (await j('GET', '/api/chat/list')).json();
+  const restored = list.chats.find((c) => c.id === chat.id);
+  assert.ok(restored, 'restored chat in list');
+  assert.equal(restored.session, chat.session);
+  // Info reflects the restored binding.
+  const info = await (await j('GET', `/api/chat/c/${chat.id}/info`)).json();
+  assert.equal(info.browserSession, chat.session);
+
+  // Disconnect persists the guest flag across a further restart.
+  await j('POST', `/api/chat/c/${chat.id}/disconnect`);
+  assert.equal(JSON.parse(fs.readFileSync(recPath, 'utf8')).guest, true);
+
+  // Delete removes the record.
+  await j('POST', `/api/chat/c/${chat.id}/delete`);
+  assert.equal(fs.existsSync(recPath), false);
+});
+
 test('POST /api/chat/c/:id/disconnect drops the persona binding into guest mode', async (t) => {
   const fx = makeFixture();
   const deps = {
