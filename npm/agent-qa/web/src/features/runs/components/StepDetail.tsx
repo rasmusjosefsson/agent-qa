@@ -2,7 +2,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { BugIcon, WrenchIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { acceptDomshot, acceptShot, artifactUrl, fetchArtifactText, getScenarioDef, promoteHeal } from '@/lib/runs-api'
+import { acceptDomshot, acceptShot, artifactUrl, baselineShotUrl, fetchArtifactText, getScenarioDef, promoteHeal } from '@/lib/runs-api'
+import { BeforeAfterSlider } from './BeforeAfterSlider'
 import { collapseEvents, fmtMs, icon } from '../rows'
 import type { DetailTab, HealRow, RunDetail, RunEvent, ScenarioDef, ScenarioStep } from '../types'
 import type { RunsApi as Api } from '../useRuns'
@@ -442,6 +443,7 @@ export function ShotDiffCard({
   const url = artifactUrl(sid, runId, 'shots-diff', shotStep)
   const caption = `Visual diff · ${shotStep}`
   const [accept, setAccept] = useState<'idle' | 'busy' | 'done' | 'error'>('idle')
+  const [view, setView] = useState<'slider' | 'diff'>('slider')
   const remint = async () => {
     setAccept('busy')
     const r = await acceptShot(sid, runId, shotStep)
@@ -452,10 +454,34 @@ export function ShotDiffCard({
       <div className="mb-1.5 flex items-center gap-1.5 font-medium text-info">
         <WrenchIcon className="size-3.5 shrink-0" />
         Visual diff — shot “{shotStep}” changed vs baseline
+        <span className="ml-auto flex gap-1">
+          {(['slider', 'diff'] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => setView(v)}
+              className={cn(
+                'rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors',
+                view === v ? 'bg-info/25 text-info' : 'text-info/60 hover:bg-info/15'
+              )}
+            >
+              {v === 'slider' ? 'before/after' : 'diff map'}
+            </button>
+          ))}
+        </span>
       </div>
-      <button type="button" onClick={() => onLightbox(url, caption)} className="block w-full">
-        <img src={url} alt={caption} loading="lazy" className="w-full rounded border border-border" />
-      </button>
+      {view === 'slider' ? (
+        <BeforeAfterSlider
+          before={baselineShotUrl(sid, `${shotStep}.png`)}
+          after={artifactUrl(sid, runId, 'screenshots', shotStep)}
+          beforeLabel="baseline"
+          afterLabel="this run"
+        />
+      ) : (
+        <button type="button" onClick={() => onLightbox(url, caption)} className="block w-full">
+          <img src={url} alt={caption} loading="lazy" className="w-full rounded border border-border" />
+        </button>
+      )}
       <div className="mt-1.5 flex items-center gap-2 text-muted-foreground">
         {accept === 'done' ? (
           <span className="text-success">Baseline re-minted — re-run to confirm.</span>
