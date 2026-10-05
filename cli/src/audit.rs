@@ -523,6 +523,7 @@ fn list(
 ///   - outcome churn: adjacent pass<->fail flips across scored runs (x0.5)
 ///   - fail rate:     failing runs / scored runs (x0.3)
 ///   - heal rate:     runs with auto-heals / all runs (x0.2)
+///
 /// None with fewer than 2 scored runs — one observation cannot flake.
 fn flake_score(outcomes: &[bool], healed_runs: usize, total_runs: usize) -> Option<f64> {
     if outcomes.len() < 2 {
