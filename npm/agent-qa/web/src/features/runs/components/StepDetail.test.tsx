@@ -3,11 +3,14 @@ import { describe, expect, it } from 'vitest'
 import { DomshotDiffCard, RunTraffic, ShotDiffCard } from './StepDetail'
 
 describe('ShotDiffCard', () => {
-  it('renders the diff map via the shots-diff artifact route', () => {
+  it('defaults to the before/after slider (baseline vs run) with a diff-map toggle', () => {
     const html = renderToStaticMarkup(
       <ShotDiffCard sid="s1" runId="r9" shotStep="openDialog" onLightbox={() => {}} />
     )
-    expect(html).toContain('/api/scenarios/s1/runs/r9/artifact/shots-diff/openDialog')
+    expect(html).toContain('/api/scenarios/s1/baselines/openDialog.png')
+    expect(html).toContain('/api/scenarios/s1/runs/r9/artifact/screenshots/openDialog')
+    expect(html).toContain('before/after')
+    expect(html).toContain('diff map')
     expect(html).toContain('Visual diff')
     expect(html).toContain('Re-mint baseline')
   })
