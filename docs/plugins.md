@@ -312,11 +312,6 @@ retries the normal auth flow. Otherwise, the chat shows the label as an explicit
 user action. Keep provider names, commands, and authentication details in the
 downstream extension—not in agent-qa.
 
-One built-in fallback exists: when an environment or persona uses `vault:`
-credential refs that can't resolve, and no remediation is declared, the
-workbench offers `vault login -method=oidc` itself (only when `VAULT_ADDR`
-is set and a `vault` CLI is on `PATH`). A declared remediation always wins.
-
 ## Surface verbs
 
 | Verb                                    | What                                            |

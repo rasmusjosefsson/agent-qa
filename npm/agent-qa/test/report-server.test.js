@@ -1820,81 +1820,10 @@ test('persona credentials inject into the plugin env; unresolved vault refs fail
   assert.equal(r2.ok, false);
   assert.ok(r2.log.some((s) => s.step === 'vault'));
   assert.match(r2.detail, /VAULT_ADDR is not set/);
-  // No remediation is offered without VAULT_ADDR — `vault login` can't run.
+  // No remediation declared on the environment → none offered; provider
+  // login commands stay downstream (auth.remediation).
   assert.equal(r2.remediation, undefined);
   assert.ok(!calls.some((c) => c.args[0] === 'profile-bootstrap'));
-});
-
-test('vaultLoginRemediation gates on vault refs, VAULT_ADDR, and the CLI', () => {
-  const prev = process.env.VAULT_ADDR;
-  try {
-    process.env.VAULT_ADDR = 'https://vault.invalid';
-    assert.deepEqual(srv._test.vaultLoginRemediation({ A: 'vault:x:y' }, true), {
-      label: 'Sign in to Vault',
-      argv: ['vault', 'login', '-method=oidc'],
-      automatic: true,
-    });
-    assert.equal(srv._test.vaultLoginRemediation({ A: 'vault:x:y' }, false), null); // no CLI
-    assert.equal(srv._test.vaultLoginRemediation({ A: 'literal' }, true), null); // no refs
-    process.env.VAULT_ADDR = '';
-    assert.equal(srv._test.vaultLoginRemediation({ A: 'vault:x:y' }, true), null); // no addr
-  } finally {
-    if (prev === undefined) delete process.env.VAULT_ADDR;
-    else process.env.VAULT_ADDR = prev;
-  }
-});
-
-test('unresolved vault refs offer a built-in vault-login remediation', async (t) => {
-  const fx = makeFixture();
-  const remediationRuns = [];
-  const deps = {
-    chat: { hub: {} },
-    runCli: async () => ({ code: 0, stdout: 'ok', stderr: '' }),
-    runAuthRemediation: async (argv) => {
-      remediationRuns.push(argv);
-      return { ok: true };
-    },
-  };
-  const { server, base } = await boot(fx.root, deps);
-  t.after(() => server.close());
-  const j = (m, p, b) =>
-    fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
-
-  const prevAddr = process.env.VAULT_ADDR;
-  // Unroutable endpoint: token present or not, the refs stay unresolved.
-  process.env.VAULT_ADDR = 'https://vault.invalid';
-  t.after(() => {
-    if (prevAddr === undefined) delete process.env.VAULT_ADDR;
-    else process.env.VAULT_ADDR = prevAddr;
-  });
-
-  // Chat created BEFORE the persona/env exist — its background auto-connect
-  // no-ops, so only the explicit connect + remediate below run remediation.
-  const created = await (await j('POST', '/api/chat/create')).json();
-  await j('POST', '/api/environments/staging', { name: 'Staging', auth: { plugin: 'agent-qa-plugin-acme' } });
-  await j('POST', '/api/personas/vaulted', {
-    name: 'Vaulted',
-    profile: 'vaulted',
-    credentials: { entries: { APP_EMAIL: 'vault:dev/data/x:EMAIL' } },
-  });
-
-  const out = await (
-    await j('POST', `/api/chat/c/${created.id}/connect`, { personaId: 'vaulted', environmentId: 'staging' })
-  ).json();
-  assert.equal(out.authenticated, false);
-  assert.match(out.detail, /could not resolve vault refs: APP_EMAIL/);
-  if (srv._test.vaultCliOnPath()) {
-    assert.equal(out.remediation.label, 'Sign in to Vault');
-    // The remediate endpoint accepts the synthesized (non-declared) action too.
-    const r = await j('POST', `/api/chat/c/${created.id}/remediate`, {
-      personaId: 'vaulted',
-      environmentId: 'staging',
-    });
-    assert.equal(r.status, 200);
-    assert.deepEqual(remediationRuns, [['vault', 'login', '-method=oidc']]);
-  } else {
-    assert.equal(out.remediation, undefined);
-  }
 });
 
 test('plan run + scenario replay inject the persona credentials and self-bootstrap the profile', async (t) => {

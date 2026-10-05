@@ -22,7 +22,7 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const path = require('node:path');
 const { createReadStream } = require('node:fs');
-const { execFile, spawnSync } = require('node:child_process');
+const { execFile } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 const { createLiveBridge } = require('./live-bridge.js');
 const { findExtensionDir, zipExtensionDir } = require('./extension-zip.js');
@@ -1220,31 +1220,6 @@ async function resolveVaultRefs(map) {
   return { env: out, unresolved, reason };
 }
 
-// A core-provided credential preparation for `vault:` refs that can't resolve:
-// when the workbench knows VAULT_ADDR and a `vault` CLI is on PATH, offer
-// `vault login -method=oidc` — browser SSO that writes ~/.vault-token, which
-// resolveVaultRefs then picks up. Used only when the environment declared no
-// remediation of its own; a declared one always wins.
-let vaultCliChecked;
-function vaultCliOnPath() {
-  if (vaultCliChecked === undefined) {
-    try {
-      const r = spawnSync('vault', ['version'], { timeout: 5000 });
-      vaultCliChecked = !r.error && r.status === 0;
-    } catch {
-      vaultCliChecked = false;
-    }
-  }
-  return vaultCliChecked;
-}
-
-function vaultLoginRemediation(map, cliOk) {
-  const hasRefs = Object.values(map || {}).some((v) => typeof v === 'string' && v.startsWith('vault:'));
-  const ok = cliOk === undefined ? vaultCliOnPath() : cliOk;
-  if (!hasRefs || !process.env.VAULT_ADDR || !ok) return null;
-  return { label: 'Sign in to Vault', argv: ['vault', 'login', '-method=oidc'], automatic: true };
-}
-
 // A trusted extension may declare a non-shell credential-preparation command.
 // The host never accepts this from a chat request or exposes its argv to the
 // browser; it only runs the array supplied by the installed environment record.
@@ -1806,7 +1781,7 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
   // is why a persona-only connect used to fail with "auth-failed: <cred> unset".
   if (!env) env = await pickDefaultEnvironment(root);
   const auth = (env && env.auth) || {};
-  let remediation = normalizeAuthRemediation(auth.remediation);
+  const remediation = normalizeAuthRemediation(auth.remediation);
   // An auth plugin can come from three places: the workbench's own registry
   // (UI-imported → AGENT_QA_PLUGINS), an environment's auth.plugin adapter
   // preference, or the CLI's native discovery (agent-qa.toml [plugins] /
@@ -1853,10 +1828,6 @@ async function handleConnect(req, res, root, personaId, deps, opts = {}) {
   };
   const { env: resolvedEnv, unresolved, reason: vaultReason } = await resolveVaultRefs(entries);
   if (unresolved.length) {
-    // No declared remediation? Offer the built-in vault login when the CLI is
-    // available — the user gets a button (or auto-connect runs it) instead of
-    // a dead-end message.
-    if (!remediation) remediation = vaultLoginRemediation(entries);
     log.push({
       step: 'vault',
       code: 1,
@@ -1972,12 +1943,7 @@ async function handleChatRemediation(res, root, entry, deps, body) {
   const envId = body.environmentId ? String(body.environmentId) : '';
   let env = envId && isSafeSegment(envId) ? await loadEnvironmentById(root, envId) : null;
   if (!env) env = await pickDefaultEnvironment(root);
-  const remediation =
-    normalizeAuthRemediation(env && env.auth && env.auth.remediation) ||
-    vaultLoginRemediation({
-      ...((env && env.auth && env.auth.creds) || {}),
-      ...((persona.credentials && persona.credentials.entries) || {}),
-    });
+  const remediation = normalizeAuthRemediation(env && env.auth && env.auth.remediation);
   if (!remediation || !deps || typeof deps.runAuthRemediation !== 'function') {
     return badRequest(res, 'this environment has no credential preparation action');
   }
@@ -3269,12 +3235,7 @@ async function autoConnectDefault(root, entry, deps) {
     if (!root || !deps || typeof deps.runCli !== 'function') return;
     const [persona, env] = await Promise.all([pickDefaultPersona(root), pickDefaultEnvironment(root)]);
     if (!persona || !env) return;
-    const remediation =
-      normalizeAuthRemediation(env.auth && env.auth.remediation) ||
-      vaultLoginRemediation({
-        ...((env.auth && env.auth.creds) || {}),
-        ...((persona.credentials && persona.credentials.entries) || {}),
-      });
+    const remediation = normalizeAuthRemediation(env.auth && env.auth.remediation);
     entry.autoConnect = { state: 'connecting', personaId: persona.id, environmentId: env.id, at: Date.now() };
     const connect = async () => {
       const res = makeCaptureRes();
@@ -5315,8 +5276,6 @@ module.exports = {
     parseAuthStepOutput,
     reportedAuthenticated,
     connectFailureDetail,
-    vaultLoginRemediation,
-    vaultCliOnPath,
     makeBrowserModePreparer,
     launchReplay,
     finalizeIncompleteReplay,
