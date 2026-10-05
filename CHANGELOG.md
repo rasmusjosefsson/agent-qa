@@ -6,6 +6,7 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-05
 ### Fixed
 
 - Revisiting a chat after its agent session idled out showed an empty
