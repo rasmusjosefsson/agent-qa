@@ -6,6 +6,7 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-05
 ### Added
 
 - `credentials` plugin kind — credential values shaped `<scheme>:<ref>`
