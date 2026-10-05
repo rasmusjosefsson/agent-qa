@@ -1476,6 +1476,13 @@ async function handleSimpleRecords(req, res, root, seg, cfg) {
       } catch (e) {
         return badRequest(res, String((e && e.message) || e));
       }
+      // Remediation argv may only arrive via trusted records — a shipped
+      // package env or a hand-written file. A browser POST must not plant a
+      // command /remediate (or an automatic auto-connect) would later exec;
+      // an existing on-disk remediation is preserved by the normalize merge.
+      if (cfg.stripRemediation && body && typeof body.auth === 'object' && body.auth) {
+        body = { ...body, auth: { ...body.auth, remediation: undefined } };
+      }
       const rec = normalize(id, body, localRec);
       await fsp.mkdir(dir, { recursive: true });
       await fsp.writeFile(file, JSON.stringify(rec, null, 2) + '\n');
@@ -4005,6 +4012,7 @@ function createRequestHandler(root, deps, chat) {
           key: 'environment',
           plural: 'environments',
           normalize: normalizeEnvironment,
+          stripRemediation: true,
         });
       }
 
