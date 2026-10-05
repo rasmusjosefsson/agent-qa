@@ -6,6 +6,8 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-05
+
 ### Added
 
 - Perceptual shot diffing — pixelmatch-style antialiasing detection: a
