@@ -1,6 +1,6 @@
 # Locator tolerance metadata is advisory — runtime gates are env vars
 
-The scenario/2 schema accepts a `tolerate` object on role locators:
+The scenario schema accepts a `tolerate` object on role locators:
 
 ```jsonc
 {

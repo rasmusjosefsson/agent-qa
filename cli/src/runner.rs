@@ -4015,7 +4015,7 @@ fn looks_like_path(s: &str) -> bool {
 }
 
 fn help_text() -> &'static str {
-    "agent-qa replay — re-execute a scenario/2 document end-to-end
+    "agent-qa replay — re-execute a scenario document end-to-end
 
 Usage:
   agent-qa replay <sid | path/to/scenario.json>

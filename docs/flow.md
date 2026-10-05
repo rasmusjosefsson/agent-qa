@@ -2,7 +2,7 @@
 
 The flow DSL is a compact line format for writing scenarios by hand or having
 an agent draft them: one step per line, grouped blocks with `group`/`when`, and
-a `compile` step that emits a standard `scenario/2` document. Replay,
+a `compile` step that emits a standard scenario document. Replay,
 lint, goldens — everything downstream is unchanged because the output is an
 ordinary scenario file.
 
@@ -22,7 +22,7 @@ shot dashboard
 ```
 
 ```bash
-agent-qa compile sign-in.flow            # writes sign-in.json (scenario/2)
+agent-qa compile sign-in.flow            # writes sign-in.json (scenario)
 agent-qa compile sign-in.flow --check    # validate only, no output file
 agent-qa describe sign-in                # scenario → line DSL on stdout
 agent-qa describe sign-in --out back.flow

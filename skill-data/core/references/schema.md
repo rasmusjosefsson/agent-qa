@@ -288,7 +288,7 @@ depth cap; a missing file fails the run with the resolved path.
 ### Flow DSL (compile/describe)
 
 Scenarios can be authored as one-line-per-step text and compiled to
-`scenario/2` JSON — `agent-qa compile file.flow`; `agent-qa describe
+scenario JSON — `agent-qa compile file.flow`; `agent-qa describe
 <sid>` prints a scenario back in the same text (round-trip stable). The
 grammar (full reference in `docs/flow.md`):
 

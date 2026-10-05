@@ -26,7 +26,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `truncate` | Drop the trailing N steps from the in-flight scenario |
 | `flush` | Persist the recorder buffer to `scenario.json` |
 | `verify [--fix]` | Check the active recording — dense step ids + paired snapshot/screenshot sidecars. `--fix` renumbers to dense s0.. ids, rewiring `{"from":"step"}` refs and moving sidecar files to match. |
-| `compile <file.flow> [--out <scenario.json>] [--check]` | Compile the line-DSL (one step per line: `open`/`click`/`fill`/`check`/`shot`/`group`/`when`/`include`/`end`) to a `scenario/2` document — see `docs/flow.md`. |
+| `compile <file.flow> [--out <scenario.json>] [--check]` | Compile the line-DSL (one step per line: `open`/`click`/`fill`/`check`/`shot`/`group`/`when`/`include`/`end`) to a scenario document — see `docs/flow.md`. |
 | `describe <scenario.json\|sid> [--out <file>]` | Print a scenario's line-DSL form for review or hand-editing. `describe → compile` is byte-stable on steps + env + inputs + intents; steps the DSL can't express emit `# unsupported:` comments + a stderr warning. |
 
 > `run-step`, `aria-snapshot`, and `buffer` are the primitives the local

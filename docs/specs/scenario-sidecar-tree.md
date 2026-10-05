@@ -1,7 +1,7 @@
 # `scenario-sidecar-tree/v1` — sidecar path convention
 
 **Spec version:** `scenario-sidecar-tree/v1`
-**Status:** convention spec for the `scenario/2` artifact contract.
+**Status:** convention spec for the scenario artifact contract (`scenario/2`).
 **Companion schema:** [`../../cli/src/scenario-schema.json`](../../cli/src/scenario-schema.json) — the schema's top-level `description` defers to this document.
 
 ## Purpose

@@ -136,7 +136,7 @@ running from a repo checkout.
 - `references/gotchas.md` — known footguns (env vars, daemon recovery,
   smart-click limits). Read this first if a command result looks wrong.
 - `references/verbs.md` lists the recording and replay commands.
-- `references/schema.md` describes `scenario/2`.
+- `references/schema.md` describes the scenario format (`scenario/2`).
 - `references/scenario-authoring.md` describes recorded setup.
 - `references/anatomy.md` — what a recorded `scenario.json` looks like end to end.
 - `references/asserts.md` — `record-step check` claim JSON grammar (role/name,

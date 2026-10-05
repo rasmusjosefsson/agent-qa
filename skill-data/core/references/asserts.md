@@ -1,6 +1,6 @@
 # Checks
 
-Use `record-step check` to record a scenario/2 claim after the browser reaches
+Use `record-step check` to record a scenario claim after the browser reaches
 the intended state. A check draft omits `id` and `kind`.
 
 ```bash
