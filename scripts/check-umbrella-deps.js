@@ -46,7 +46,10 @@ function onRegistry(name, v) {
   }
 }
 
-const deadline = Date.now() + 10 * 60 * 1000; // npm indexing can take minutes
+// Observed: a fresh provenance-signed publish took ~25 min to index, so the
+// cap has to clear that. The release workflow re-runs are cheap enough that a
+// long-but-bounded wait beats a spurious failure mid-release.
+const deadline = Date.now() + 30 * 60 * 1000;
 let missing = [];
 for (;;) {
   missing = own
@@ -55,7 +58,7 @@ for (;;) {
     .map(([name, v]) => `${name}@${v}`);
   if (!missing.length) break;
   if (Date.now() > deadline) {
-    console.error('check-umbrella-deps: platform packages not on the registry after 10 min:');
+    console.error('check-umbrella-deps: platform packages not on the registry after 30 min:');
     for (const m of missing) console.error(`  ${m}`);
     console.error('Publish the platform packages first (release.yml does this before the umbrella).');
     process.exit(1);
