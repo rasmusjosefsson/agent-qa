@@ -5,8 +5,6 @@ All notable changes to agent-qa are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-
-## [0.1.9] - 2026-10-05
 ### Added
 
 - Auto-heal `resolve`-plugin rung — when a replay step's locator misses
