@@ -300,7 +300,7 @@ fn resolve_baseline(opts: &Opts) -> RecorderBaseline {
 fn mint_sid() -> String {
     let timestamp = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%S-%3fZ");
     let mut bytes = [0u8; 4];
-    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut bytes);
+    rand::Rng::fill_bytes(&mut rand::rng(), &mut bytes);
     format!(
         "s-{timestamp}__{}",
         bytes

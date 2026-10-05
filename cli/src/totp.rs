@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use serde_json::Value as Json;
 use sha1::Sha1;
 use sha2::Sha256;
@@ -97,12 +97,12 @@ pub(crate) fn totp(
 fn hotp(key: &[u8], counter: u64, digits: u64, algorithm: &str) -> Result<String> {
     let msg = counter.to_be_bytes();
     let mac: Vec<u8> = match algorithm.to_ascii_lowercase().as_str() {
-        "sha1" => <Hmac<Sha1> as Mac>::new_from_slice(key)?
+        "sha1" => <Hmac<Sha1> as KeyInit>::new_from_slice(key)?
             .chain_update(msg)
             .finalize()
             .into_bytes()
             .to_vec(),
-        "sha256" | "sha-256" => <Hmac<Sha256> as Mac>::new_from_slice(key)?
+        "sha256" | "sha-256" => <Hmac<Sha256> as KeyInit>::new_from_slice(key)?
             .chain_update(msg)
             .finalize()
             .into_bytes()

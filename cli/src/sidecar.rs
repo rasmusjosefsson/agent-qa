@@ -24,7 +24,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use rand::RngCore;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
@@ -195,7 +195,7 @@ pub fn mint_run_id(profile: Option<&str>) -> String {
 
 fn random_hex(bytes: usize) -> String {
     let mut buf = vec![0u8; bytes];
-    rand::thread_rng().fill_bytes(&mut buf);
+    rand::rng().fill_bytes(&mut buf);
     use std::fmt::Write;
     let mut s = String::with_capacity(bytes * 2);
     for b in buf {
