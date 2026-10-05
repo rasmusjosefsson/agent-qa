@@ -6,6 +6,50 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+
+- `credentials` plugin kind — credential values shaped `<scheme>:<ref>`
+  (e.g. `vault:…`, `op://…`) in persona `credentials.entries` and
+  environment `auth.creds` are delegated to discovered `credentials`
+  plugins (`<plugin> credentials resolve`: `{refs: {NAME: ref}}` →
+  `{values: {…}, unresolved: {NAME: reason}}`). Multiple provider plugins
+  compose in discovery order, a name no plugin claims stays literal, and
+  `literal:<v>` escapes colon-bearing literals. New
+  `agent-qa creds-resolve <json-map|->` verb backs the workbench and
+  `replay --persona` alike — see `docs/plugins.md`.
+- Workbench Connect failures now surface a distilled `detail` — the
+  failing step's plugin status + error/message, or stderr — in the chat
+  sign-in bar, the `/connection` poll (auto-connect), and the Plans page,
+  plus a "Retry in a visible browser" action for interactive SSO/MFA.
+- Environments may declare `auth.remediation` — a trusted
+  credential-preparation command (`label`, `argv`, optional `automatic`)
+  offered on a failed connect or run before an auto-connect retry.
+- `creds-resolve`, Connect `detail`, and remediation are generic:
+  provider-specific resolution and login commands live downstream in the
+  installed extension.
+
+### Changed
+
+- Provider-specific credential resolution moved out of core: the bundled
+  `vault:` KV lookup in the workbench and CLI is replaced by the
+  `credentials` plugin kind — `VAULT_ADDR`/`VAULT_TOKEN` and the KV
+  response shape now belong to whichever provider plugin an org installs.
+  `vault:` refs keep working once a plugin claims the scheme.
+
+### Fixed
+
+- `authenticated` detection no longer misfires when a plugin's status
+  JSON body mentions "authenticated" inside an error detail — it reads
+  the reported status line / `status` field.
+
+### Security
+
+- `POST /api/environments` no longer accepts `auth.remediation.argv` —
+  an API-planted `automatic: true` command would have run on the next
+  auto-connect failure. Remediation argv now only counts from trusted
+  records (package-shipped or hand-written files); existing on-disk
+  values are preserved across edits.
+
 ## [0.2.0] - 2026-10-05
 
 ### Added
