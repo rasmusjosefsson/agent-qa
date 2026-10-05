@@ -719,7 +719,7 @@ having verified nothing, or an artifact disappears without a trace:
 
 `--shard` bounds reject `0/2`/`5/2`; `check-all`/`validate-all`/`lint-all`
 tolerate an empty root deliberately (`init --ci` CI runs before scenarios
-exist); vault-ref resolution names unresolvable keys; the npm launcher's
+exist); credential-ref resolution names unresolvable keys; the npm launcher's
 missing-binary paths name the platform package to install; `record-step`
 binds the recording's own session (no redirect flag to mis-set);
 `scenario rename` guards same-sid/unsafe/missing-source/in-flight/

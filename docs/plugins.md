@@ -261,6 +261,66 @@ Response:
 detail}`. With no `triage` plugin configured the verb errors with setup
 instructions.
 
+## The `credentials` kind
+
+Optional **credential reference resolution**. Persona `credentials.entries`
+and environment `auth.creds` hold `ENV_VAR → value` maps; a value is either
+a literal or a *provider ref* shaped `<scheme>:<rest>` (e.g.
+`vault:kv/qa:x`, `op://vault/item/field`, `awssm:prod/db`). The scheme is
+opaque to agent-qa — the plugin that claims it defines the rest. Before any
+auth flow runs, the refs are delegated to `credentials` plugins so a
+credential provider (secrets manager, password store, keychain) can live
+outside core: installable per org, and the auth plugin still receives only
+resolved env vars.
+
+A value counts as ref-shaped when it starts with an alphabetic scheme of at
+least two `[a-z0-9._-]` characters followed by `:` and a non-`/` character —
+`https://…` URLs and `x:y` stay literals. `literal:<v>` forces a literal
+(strips the marker). Ref-shaped values with **no** `credentials` plugin
+installed fail up front with the scheme named; a value every installed
+plugin leaves unclaimed passes through as a literal.
+
+Plugins are invoked as `<plugin> credentials resolve` — declared via
+`[plugins] credentials = "<binary>"`, `AGENT_QA_PLUGINS`, or an
+`agent-qa-plugin-*` binary on `$PATH` reporting `"credentials"` in its ping
+`kinds`. Multiple provider plugins compose: each gets the still-unresolved
+names in discovery order.
+
+Request payload (only the still-unresolved, ref-shaped entries):
+
+```json
+{
+  "refs": {
+    "APP_EMAIL": "vault:kv/qa/admin:email",
+    "APP_CLIENT_ID": "awssm:prod/app"
+  }
+}
+```
+
+Response payload:
+
+```json
+{
+  "values":     { "APP_EMAIL": "admin@example.com" },
+  "unresolved": { "APP_CLIENT_ID": "no such secret prod/app" }
+}
+```
+
+- `values` — resolved secrets. Returning a name removes it from the
+  remaining set (later plugins don't see it).
+- `unresolved` — `{name: reason}`; the reason is surfaced to the user.
+- Omitting a name entirely means "not a ref I handle" → the host treats it
+  as a literal (so a `pa:ss`-looking password is never a hard failure).
+
+Any name still `unresolved` after every plugin fails the connect/replay up
+front with the plugin's reason — a mistyped or unreachable secret must be
+loud, not a cryptic downstream sign-in failure.
+
+The host entry points: `agent-qa creds-resolve <json-map>` (what the
+workbench calls; prints the resolved map or exits 1 with the reason), and
+`replay --persona/--environment` which resolves inline before spawning the
+browser.
+
 ## Discovery
 
 agent-qa locates plugins in this priority order (first match wins per

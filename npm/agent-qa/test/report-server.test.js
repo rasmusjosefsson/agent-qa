@@ -1779,12 +1779,26 @@ test('POST /api/chat/c/:id/replay re-auths via the connected persona, in its ses
   assert.equal((await j('POST', `/api/chat/c/${created.id}/replay`, {})).status, 400);
 });
 
-test('persona credentials inject into the plugin env; unresolved vault refs fail connect', async (t) => {
+test('persona credentials inject into the plugin env; unresolved credential refs fail connect', async (t) => {
   const fx = makeFixture();
   const calls = [];
   const deps = {
     runCli: async (args, extraEnv) => {
       calls.push({ args, extraEnv });
+      // creds-resolve: resolve everything except `vault:` refs (no plugin
+      // claims them in this fixture) — mirrors the verb's contract.
+      if (args[0] === 'creds-resolve') {
+        const map = JSON.parse(args[1]);
+        const unresolved = Object.keys(map).filter((k) => String(map[k]).startsWith('vault:'));
+        if (unresolved.length) {
+          return {
+            code: 1,
+            stdout: '',
+            stderr: `could not resolve credential refs: ${unresolved.join(', ')} — no credentials plugin serves scheme(s) vault`,
+          };
+        }
+        return { code: 0, stdout: JSON.stringify(map), stderr: '' };
+      }
       if (args[0] === 'profile-status') return { code: 0, stdout: 'authenticated', stderr: '' };
       return { code: 0, stdout: 'ok', stderr: '' };
     },
@@ -1808,8 +1822,9 @@ test('persona credentials inject into the plugin env; unresolved vault refs fail
   assert.equal(bootCall.extraEnv.APP_EMAIL, 'a@b.com');
   assert.equal(bootCall.extraEnv.APP_PASSWORD, 'pw');
 
-  // a vault: ref with no VAULT_ADDR can't resolve → connect fails, no bootstrap
-  process.env.VAULT_ADDR = ''; // force "no endpoint" so the ref is unresolvable (no network)
+  // a scheme ref no installed plugin claims can't resolve → connect fails,
+  // no bootstrap. (The CLI's creds-resolve reports the cause; here the stub
+  // answers it like a missing provider would.)
   await j('POST', '/api/personas/vaulted', {
     name: 'Vaulted',
     profile: 'vaulted',
@@ -1818,8 +1833,8 @@ test('persona credentials inject into the plugin env; unresolved vault refs fail
   calls.length = 0;
   const r2 = await (await j('POST', '/api/personas/vaulted/connect', { environmentId: 'staging' })).json();
   assert.equal(r2.ok, false);
-  assert.ok(r2.log.some((s) => s.step === 'vault'));
-  assert.match(r2.detail, /VAULT_ADDR is not set/);
+  assert.ok(r2.log.some((s) => s.step === 'credentials'));
+  assert.match(r2.detail, /no credentials plugin/);
   // No remediation declared on the environment → none offered; provider
   // login commands stay downstream (auth.remediation).
   assert.equal(r2.remediation, undefined);
@@ -1833,6 +1848,18 @@ test('plan run + scenario replay inject the persona credentials and self-bootstr
   const deps = {
     runCli: async (args, extraEnv) => {
       calls.push({ args, extraEnv });
+      if (args[0] === 'creds-resolve') {
+        const map = JSON.parse(args[1]);
+        const unresolved = Object.keys(map).filter((k) => String(map[k]).startsWith('vault:'));
+        if (unresolved.length) {
+          return {
+            code: 1,
+            stdout: '',
+            stderr: `could not resolve credential refs: ${unresolved.join(', ')} — no credentials plugin serves scheme(s) vault`,
+          };
+        }
+        return { code: 0, stdout: JSON.stringify(map), stderr: '' };
+      }
       return { code: 0, stdout: 'ok', stderr: '' };
     },
     replay: async (sid, session, opts) => {
@@ -1886,8 +1913,7 @@ test('plan run + scenario replay inject the persona credentials and self-bootstr
   assert.equal(replays[0].opts.profile, 'admin-user');
   assert.equal(replays[0].opts.env.APP_EMAIL, 'a@b.com');
 
-  // A persona whose vault ref can't resolve fails the run up front — no replay.
-  process.env.VAULT_ADDR = '';
+  // A persona whose scheme ref can't resolve fails the run up front — no replay.
   await j('POST', '/api/personas/vaulted', {
     name: 'Vaulted',
     profile: 'vaulted',
@@ -1896,7 +1922,7 @@ test('plan run + scenario replay inject the persona credentials and self-bootstr
   replays.length = 0;
   const bad = await (await j('POST', '/api/plans/p1/run', { personaId: 'vaulted', environmentId: 'staging' })).json();
   assert.equal(bad.ok, false);
-  assert.match(bad.error, /vault/i);
+  assert.match(bad.error, /credential refs/i);
   assert.equal(replays.length, 0);
 });
 

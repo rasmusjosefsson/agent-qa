@@ -13,7 +13,7 @@ export interface PersonaRecord {
   // sole persona when nothing is flagged).
   default?: boolean
   // Credentials handed to the auth plugin (env var → value). Each value may be
-  // a literal or a `vault:<path>:<key>` reference resolved at run time.
+  // a literal or a `<scheme>:<ref>` reference resolved by a credentials plugin.
   credentials: { entries: Record<string, string> }
   description: string
   createdAt: number

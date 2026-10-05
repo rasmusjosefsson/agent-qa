@@ -166,9 +166,10 @@ root (the same files the workbench reads and writes):
 ```
 
 `replay --persona <id>` loads the persona: its `credentials.entries`
-land in the process env (a `vault:` ref resolves via
-`GET $VAULT_ADDR/v1/<path>` with `$VAULT_TOKEN`/`~/.vault-token`,
-KV-v2 `data.data` or `data` layout auto-detected) and the persona's
+land in the process env (literal values pass through; a `<scheme>:<ref>`
+provider ref — e.g. `vault:kv/qa/admin:password` — is delegated to a
+discovered `credentials` plugin; see `docs/plugins.md`. A value that is
+a literal containing `:` can be forced with `literal:<v>`) and the persona's
 `profile` becomes the run's profile (`--session` stays
 `<profile>-session`, overridable as usual) so an
 `env.open useProfile` op replays through that profile's auth
@@ -222,8 +223,9 @@ agent-browser and pings each plugin.
 | `AGENT_QA_PI_SDK`          | Explicit path to the pi SDK (`@earendil-works/pi-coding-agent`)     |
 | `AGENT_QA_OPENCODE_SDK`    | Explicit path to the opencode SDK (`@opencode-ai/sdk`, v2 surface)  |
 | `AGENT_QA_NO_CHAT`         | `1` disables the in-app Chat tab entirely                           |
-| `VAULT_ADDR`               | Vault base URL for `vault:<path>:<key>` credential refs             |
-| `VAULT_TOKEN`              | Vault token (falls back to `~/.vault-token` when unset)             |
+
+Credential provider variables (`VAULT_ADDR`, `OP_…`, `AWS_…`) belong to
+the `credentials` plugin you install, not to agent-qa — see its README.
 
 The `opencode` backend needs the `opencode` CLI on `PATH` (`npm i -g
 opencode-ai`) — each chat spawns its own `opencode serve` process with that

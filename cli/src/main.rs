@@ -21,6 +21,7 @@ mod claims;
 mod compare;
 mod config;
 mod crawl;
+mod creds;
 mod design;
 mod discover;
 mod doctor;
@@ -182,11 +183,12 @@ fn main() -> ExitCode {
         "compile" => flow::compile_cli(rest),
         "describe" => flow::describe_cli(rest),
         "mail" => mail::run(rest),
+        "creds-resolve" => creds::run(rest),
         "totp" => totp::run(rest),
         "notify" => notify::run(rest),
         _ => {
             eprintln!(
-                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, smart-fill, smart-assert, smart-hover, smart-select, resolve, triage, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, domshot-accept, layout-accept, baselines, run-report, init, ingest, mcp, migrate, compile, describe, mail, discover, totp, notify."
+                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, smart-fill, smart-assert, smart-hover, smart-select, resolve, triage, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, domshot-accept, layout-accept, baselines, run-report, init, ingest, mcp, migrate, compile, describe, mail, discover, creds-resolve, totp, notify."
             );
             eprintln!("Run `agent-qa --help` for usage.");
             Ok(2)
@@ -346,6 +348,9 @@ Verbs:
   smart-select \"<desc>\" --value <v>    Pick an option by control description + auto-record
   resolve \"<description>\" [--role <r>]    Ask the resolve plugin which element a description means
   triage <sid> [<runId|latest>]         Post-run drift triage via the triage plugin
+  creds-resolve <json-map|->            Resolve <scheme>: credential refs via
+                                credentials plugins; prints the resolved map
+                                (the workbench calls this for connect/replay)
   heal-respond <sid> --step <id> (--value <…> | --reject)   Record a caller-driven heal
   heal-promote <sid> [--run <id>] [--steps <…>] [--apply]   Promote replay-side patches
   heal-apply <sid> --step <id> [--target-step <…>] [--dry-run]   Patch buffer in place

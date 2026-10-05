@@ -371,7 +371,7 @@ function EnvironmentDialog({
               {credRows.map((r, i) => (
                 <div key={i} className="flex items-center gap-1.5">
                   <Input className="h-8 flex-1 font-mono text-xs" placeholder="ENV_VAR" value={r.k} onChange={(e) => setCredRow(i, { k: e.target.value })} />
-                  <Input className="h-8 flex-[1.4] font-mono text-xs" placeholder="value or vault:path:key" value={r.v} onChange={(e) => setCredRow(i, { v: e.target.value })} />
+                  <Input className="h-8 flex-[1.4] font-mono text-xs" placeholder="value or scheme:ref" value={r.v} onChange={(e) => setCredRow(i, { v: e.target.value })} />
                   <Button
                     variant="ghost"
                     size="icon"
@@ -385,8 +385,8 @@ function EnvironmentDialog({
               <p className="text-[11px] text-muted-foreground">
                 App-level creds every persona here reuses (e.g. an OAuth client id). Injected as env
                 vars and merged <em>under</em> a persona's own creds — the persona wins on conflict,
-                so it only carries what varies (email/password). Literal or{' '}
-                <code>vault:&lt;path&gt;:&lt;key&gt;</code>.
+                so it only carries what varies (email/password). Literal or a{' '}
+                <code>&lt;scheme&gt;:&lt;ref&gt;</code> resolved by a credentials plugin.
               </p>
             </div>
           </div>

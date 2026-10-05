@@ -115,10 +115,11 @@ function resolveResources(pkgDir) {
   return { plugins, skills, personas, environments };
 }
 
-// Scan a package's persona dirs for LITERAL (non-`vault:`) credential values
-// and return their file paths. Shipping literal secrets in a shareable package
-// is a leak; `install` warns (doesn't block). Best-effort — unreadable/!json
-// files are skipped.
+// Scan a package's persona dirs for LITERAL credential values and return
+// their file paths — i.e. values that are neither `<scheme>:` provider refs
+// (vault:, op:, awssm:…) nor explicitly `literal:`-escaped. Shipping literal
+// secrets in a shareable package is a leak; `install` warns (doesn't block).
+// Best-effort — unreadable/!json files are skipped.
 function personasWithLiteralSecrets(personaDirs) {
   const bad = [];
   for (const dir of personaDirs || []) {
@@ -133,7 +134,11 @@ function personasWithLiteralSecrets(personaDirs) {
         const rec = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
         const entries = (rec && rec.credentials && rec.credentials.entries) || {};
         const leak = Object.values(entries).some(
-          (v) => typeof v === 'string' && v.trim() && !v.startsWith('vault:')
+          (v) =>
+            typeof v === 'string' &&
+            v.trim() &&
+            !v.startsWith('literal:') &&
+            !/^[a-zA-Z][a-zA-Z0-9._-]+:(?!\/)/.test(v)
         );
         if (leak) bad.push(path.join(dir, f));
       } catch {
@@ -300,13 +305,13 @@ function install(input) {
   const { plugins, skills, personas, environments } = resolveResources(pkgDir);
   const pluginRecs = plugins.map((p) => ({ path: p, kinds: pingKinds(p) }));
   // Guard against shipping real secrets: shared packages should carry only
-  // `vault:` references, never literal credential values.
+  // `<scheme>:` credential-provider references, never literal credential values.
   const leaks = personasWithLiteralSecrets(personas);
   if (leaks.length) {
     console.error(
-      `warning: ${src.name} ships persona(s) with LITERAL credential values (not vault: refs):\n` +
+      `warning: ${src.name} ships persona(s) with LITERAL credential values (not provider refs):\n` +
         leaks.map((f) => `  - ${f}`).join('\n') +
-        `\n  Anyone who installs this package gets those secrets. Use vault: references instead.`
+        `\n  Anyone who installs this package gets those secrets. Use <scheme>: references (resolved by a credentials plugin) instead.`
     );
   }
   const reg = readRegistry();
