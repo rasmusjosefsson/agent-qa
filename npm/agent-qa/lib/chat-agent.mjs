@@ -304,11 +304,22 @@ export function createChatHub({
     if (!sel || !sel.id) throw new Error('model id is required');
     const s = await ensureSession();
     touch();
-    const reg = s.modelRegistry;
+    // pi SDK 1.x exposes `modelRuntime` (getModel/getAvailableSnapshot); the
+    // opencode adapter keeps a `modelRegistry` shim (find/getAvailable).
+    const reg = s.modelRuntime || s.modelRegistry;
     let m = null;
-    if (reg && typeof reg.find === 'function') m = reg.find(sel.provider, sel.id);
-    if (!m && reg && typeof reg.getAvailable === 'function') {
-      m = (reg.getAvailable() || []).find(
+    if (sel.provider && reg && typeof reg.getModel === 'function') {
+      m = reg.getModel(sel.provider, sel.id) || null;
+    }
+    if (!m && reg && typeof reg.find === 'function') m = reg.find(sel.provider, sel.id);
+    if (!m && reg) {
+      const list =
+        typeof reg.getAvailableSnapshot === 'function'
+          ? reg.getAvailableSnapshot()
+          : typeof reg.getAvailable === 'function'
+            ? reg.getAvailable()
+            : [];
+      m = (list || []).find(
         (x) => x && x.id === sel.id && (!sel.provider || x.provider === sel.provider),
       );
     }
@@ -765,8 +776,7 @@ async function openOrCreateSessionManager({ SessionManager, cwd, sessionDir, rem
 function makeSessionFactory(sdk, config = {}, shared = {}) {
   const {
     createAgentSession,
-    AuthStorage,
-    ModelRegistry,
+    ModelRuntime,
     SessionManager,
     SettingsManager,
     DefaultResourceLoader,
@@ -793,13 +803,18 @@ function makeSessionFactory(sdk, config = {}, shared = {}) {
   return async function createSession({ fresh } = {}) {
     // Share one AuthStorage + ModelRegistry with the hub's model picker so the
     // model listed in /state is the same object setModel() resolves against.
-    const authStorage = shared.authStorage || AuthStorage.create();
-    const modelRegistry = shared.modelRegistry || ModelRegistry.create(authStorage);
+    // pi SDK 1.x: one ModelRuntime owns auth + model availability (auth.json
+    // + models.json under the agent dir by default). createAgentSession
+    // builds its own default when we can't share one.
+    const modelRuntime =
+      shared.modelRuntime ||
+      (ModelRuntime && typeof ModelRuntime.create === 'function'
+        ? await ModelRuntime.create().catch(() => undefined)
+        : undefined);
     const opts = {
       cwd,
-      authStorage,
-      modelRegistry,
     };
+    if (modelRuntime) opts.modelRuntime = modelRuntime;
     if (agentDir) opts.agentDir = agentDir;
 
     // Make the chat agent agent-qa-aware. A custom resource loader keeps every
@@ -873,7 +888,9 @@ function makeSessionFactory(sdk, config = {}, shared = {}) {
     // reports a concrete model instead of an empty picker.
     try {
       const avail =
-        (typeof modelRegistry.getAvailable === 'function' ? modelRegistry.getAvailable() : []) || [];
+        (modelRuntime && typeof modelRuntime.getAvailableSnapshot === 'function'
+          ? modelRuntime.getAvailableSnapshot()
+          : []) || [];
       const want = (process.env.AGENT_QA_CHAT_MODEL || '').toLowerCase();
       const key = (m) =>
         `${m?.provider || ''}/${m?.id || ''} ${m?.label || m?.name || ''}`.toLowerCase();
@@ -1446,20 +1463,24 @@ export async function createChatBackend(config = {}) {
 
 async function createPiBackend(config = {}) {
   const { sdk } = await loadPiSdk(config);
-  const { AuthStorage, ModelRegistry } = sdk;
-  // One registry, shared between the session factory and the model picker.
-  const authStorage = AuthStorage.create();
-  const modelRegistry = ModelRegistry.create(authStorage);
+  const { ModelRuntime } = sdk;
+  // One runtime, shared between the session factory and the model picker.
+  const modelRuntime =
+    ModelRuntime && typeof ModelRuntime.create === 'function'
+      ? await ModelRuntime.create().catch(() => null)
+      : null;
   const listModels = () => {
     try {
       const all =
-        typeof modelRegistry.getAvailable === 'function' ? modelRegistry.getAvailable() : [];
+        modelRuntime && typeof modelRuntime.getAvailableSnapshot === 'function'
+          ? modelRuntime.getAvailableSnapshot()
+          : [];
       return (all || []).map(modelInfo).filter(Boolean);
     } catch {
       return [];
     }
   };
-  const createSession = makeSessionFactory(sdk, config, { authStorage, modelRegistry });
+  const createSession = makeSessionFactory(sdk, config, { modelRuntime });
   return createChatHub({
     createSession,
     listModels,
