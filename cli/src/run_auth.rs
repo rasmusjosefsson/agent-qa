@@ -242,7 +242,8 @@ fn read_vault_token() -> Option<String> {
 /// Resolve `vault:<path>:<key>` values via the HashiCorp Vault KV HTTP API —
 /// `GET <VAULT_ADDR>/v1/<path>` with `X-Vault-Token`; reads KV-v2
 /// (`data.data`) then KV-v1 (`data`). Non-vault values pass through. Any
-/// unresolvable ref fails the run up front (mirroring the server).
+/// unresolvable ref fails the run up front (mirroring the server) with the
+/// same per-cause reason the workbench reports.
 fn resolve_vault_refs(map: &BTreeMap<String, String>) -> Result<BTreeMap<String, String>> {
     let needs_vault = map.values().any(|v| v.starts_with("vault:"));
     let token = if needs_vault {
@@ -260,51 +261,68 @@ fn resolve_vault_refs(map: &BTreeMap<String, String>) -> Result<BTreeMap<String,
     };
     let mut out = BTreeMap::new();
     let mut unresolved: Vec<String> = Vec::new();
+    let mut reason = String::new();
     for (name, value) in map {
         if !value.starts_with("vault:") {
             out.insert(name.clone(), value.clone());
             continue;
         }
         let parts: Vec<&str> = value["vault:".len()..].split(':').collect();
-        let mut resolved: Option<String> = None;
-        if !endpoint.is_empty()
-            && token.is_some()
-            && parts.len() == 2
-            && !parts[0].is_empty()
-            && !parts[1].is_empty()
+        if endpoint.is_empty()
+            || token.is_none()
+            || parts.len() != 2
+            || parts[0].is_empty()
+            || parts[1].is_empty()
         {
-            let url = format!("{endpoint}/v1/{}", parts[0]);
-            if let Ok(resp) = ureq::get(&url)
-                .set("X-Vault-Token", token.as_deref().unwrap_or_default())
-                .call()
-            {
-                if let Ok(j) = resp.into_json::<Json>() {
-                    resolved = j
-                        .pointer("/data/data")
-                        .and_then(|d| d.get(parts[1]))
-                        .and_then(|v| v.as_str())
-                        .or_else(|| {
-                            j.pointer("/data")
-                                .and_then(|d| d.get(parts[1]))
-                                .and_then(|v| v.as_str())
-                        })
-                        .map(str::to_string);
-                }
-            }
+            out.insert(name.clone(), value.clone());
+            unresolved.push(name.clone());
+            reason = if endpoint.is_empty() {
+                "VAULT_ADDR is not set".to_string()
+            } else if token.is_none() {
+                "no vault token (VAULT_TOKEN / ~/.vault-token) — run `vault login`".to_string()
+            } else {
+                format!("malformed ref {value:?} (expected vault:<path>:<key>)")
+            };
+            continue;
         }
+        let url = format!("{endpoint}/v1/{}", parts[0]);
+        let lookup = ureq::get(&url)
+            .set("X-Vault-Token", token.as_deref().unwrap_or_default())
+            .call();
+        let resolved = match lookup {
+            Ok(resp) => match resp.into_json::<Json>() {
+                Ok(j) => j
+                    .pointer("/data/data")
+                    .and_then(|d| d.get(parts[1]))
+                    .and_then(|v| v.as_str())
+                    .or_else(|| {
+                        j.pointer("/data")
+                            .and_then(|d| d.get(parts[1]))
+                            .and_then(|v| v.as_str())
+                    })
+                    .map(str::to_string)
+                    .ok_or_else(|| format!("key {:?} missing at {}", parts[1], parts[0])),
+                Err(_) => Err(format!("unparseable vault response for {}", parts[0])),
+            },
+            Err(ureq::Error::Status(code, _)) => Err(format!(
+                "vault lookup failed (HTTP {code} — expired token? run `vault login`)"
+            )),
+            Err(_) => Err(format!("vault unreachable at {endpoint}")),
+        };
         match resolved {
-            Some(s) => {
+            Ok(s) => {
                 out.insert(name.clone(), s);
             }
-            None => {
+            Err(why) => {
                 out.insert(name.clone(), value.clone());
                 unresolved.push(name.clone());
+                reason = why;
             }
         }
     }
     if !unresolved.is_empty() {
         return Err(anyhow!(
-            "could not resolve vault refs: {}. Run `vault login` and set VAULT_ADDR.",
+            "could not resolve vault refs: {} — {reason}",
             unresolved.join(", ")
         ));
     }
@@ -495,5 +513,76 @@ mod tests {
             "{err}"
         );
         std::env::remove_var("AGENT_QA_SCENARIOS_DIR");
+    }
+
+    // Serve one canned HTTP response on a loopback port — deterministic
+    // vault-endpoint behavior without network or a real Vault.
+    fn serve_once(status: &str, body: &str) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let status = status.to_string();
+        let body = body.to_string();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            if let Ok((mut s, _)) = listener.accept() {
+                // Read the request first — writing before reading risks a TCP
+                // RST that discards the response bytes.
+                let mut buf = [0u8; 4096];
+                let _ = s.read(&mut buf);
+                let resp = format!(
+                    "HTTP/1.1 {status}\r\ncontent-length: {}\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = s.write_all(resp.as_bytes());
+                let _ = s.shutdown(std::net::Shutdown::Write);
+            }
+        });
+        format!("http://127.0.0.1:{port}")
+    }
+
+    #[test]
+    fn vault_ref_errors_name_the_cause() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        // Point HOME at the empty tmpdir so ~/.vault-token can't leak in.
+        let prev_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", tmp.path());
+        std::env::remove_var("VAULT_TOKEN");
+        let mut map = BTreeMap::new();
+        map.insert("V_PASS".to_string(), "vault:secret/x:pw".to_string());
+
+        std::env::remove_var("VAULT_ADDR");
+        let err = resolve_vault_refs(&map).unwrap_err().to_string();
+        assert!(err.contains("VAULT_ADDR is not set"), "{err}");
+
+        std::env::set_var("VAULT_ADDR", "http://127.0.0.1:1");
+        let err = resolve_vault_refs(&map).unwrap_err().to_string();
+        assert!(err.contains("no vault token"), "{err}");
+
+        std::env::set_var("VAULT_TOKEN", "t");
+        std::env::set_var("VAULT_ADDR", serve_once("403 Forbidden", ""));
+        let err = resolve_vault_refs(&map).unwrap_err().to_string();
+        assert!(err.contains("HTTP 403"), "{err}");
+
+        std::env::set_var(
+            "VAULT_ADDR",
+            serve_once("200 OK", r#"{"data":{"data":{}}}"#),
+        );
+        let err = resolve_vault_refs(&map).unwrap_err().to_string();
+        assert!(err.contains("missing at secret/x"), "{err}");
+
+        std::env::set_var(
+            "VAULT_ADDR",
+            serve_once("200 OK", r#"{"data":{"data":{"pw":"s3cret"}}}"#),
+        );
+        let out = resolve_vault_refs(&map).unwrap();
+        assert_eq!(out["V_PASS"], "s3cret");
+
+        std::env::remove_var("VAULT_ADDR");
+        std::env::remove_var("VAULT_TOKEN");
+        match prev_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
     }
 }
