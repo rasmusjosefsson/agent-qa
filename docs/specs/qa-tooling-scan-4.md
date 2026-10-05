@@ -32,6 +32,12 @@ Revisit when the API stabilizes or when a need it uniquely covers appears:
 subagent task graphs with checkpointed mid-turn resume, or cross-session
 durable task state.
 
+Re-checked at pi-durable 1.0.3 (Oct 2026): the HOLD stands, and the case is
+now stronger — the README still carries the Experimental banner, and
+pi-coding-agent 1.0.3 itself does NOT depend on pi-durable (its session
+persistence stays on `SessionManager` JSONL). If pi's own product hasn't
+moved onto the harness, neither should the workbench.
+
 ## What exists
 
 **lastest** (self-hosted visual regression platform) — three diff engines
