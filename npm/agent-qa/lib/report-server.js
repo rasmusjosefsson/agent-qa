@@ -3844,6 +3844,45 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
     return undefined;
   }
 
+  // What this chat's agent is running with: backend/model/session, bound
+  // browser session + record dir, credential plugins it can reach (registered
+  // paths + bundled jev), and its persona sign-in state. Feeds the chat
+  // header's info popover.
+  if (sub === 'info' && req.method === 'GET') {
+    const st =
+      hub && typeof hub.getState === 'function' ? (await hub.getState()) || {} : {};
+    const jev = await readJevConfig(scenariosRoot);
+    const pluginPaths = await readPluginPaths(scenariosRoot);
+    const bundled = jev.enabled ? bundledJevPlugin() : null;
+    return sendJson(res, 200, {
+      chatId: entry.id,
+      backend: st.backend || null,
+      model: st.model || null,
+      thinkingLevel: st.thinkingLevel || null,
+      sessionId: st.sessionId || null,
+      browserSession: entry.browser.name,
+      recordDir: entry.recordDir(),
+      scenariosRoot,
+      connected: entry.connectedProfile
+        ? {
+            profile: entry.connectedProfile,
+            personaId: entry.connectedPersonaId || null,
+            environmentId: entry.connectedEnvironmentId || null,
+          }
+        : null,
+      autoConnect: entry.autoConnect || null,
+      jev: {
+        enabled: !!jev.enabled,
+        hasKey: !!jev.apiKey,
+        envForced: !!process.env.TYPESAFE_API_KEY,
+      },
+      plugins: [
+        ...pluginPaths.map((p) => ({ path: p, source: 'registry' })),
+        ...(bundled ? [{ path: bundled, source: 'bundled', name: 'jev-resolve' }] : []),
+      ],
+    });
+  }
+
   if (req.method !== 'POST') {
     return sendJson(res, 405, { error: 'method not allowed' });
   }

@@ -1,6 +1,6 @@
 // web/src/lib/api.ts
 
-import type { ChatState, RootInfo } from './types';
+import type { ChatInfo, ChatState, RootInfo } from './types';
 
 export interface ChatMeta {
   id: string;
@@ -71,6 +71,16 @@ export async function getChatState(cid: string): Promise<ChatState> {
 
 export function createChatEventSource(cid: string): EventSource {
   return new EventSource(`${chatBase(cid)}/stream`);
+}
+
+export async function getChatInfo(cid: string): Promise<ChatInfo | null> {
+  try {
+    const r = await fetch(`${chatBase(cid)}/info`, { headers: { accept: 'application/json' } });
+    if (!r.ok) return null;
+    return (await r.json()) as ChatInfo;
+  } catch {
+    return null;
+  }
 }
 
 // A dead report server rejects the fetch — without a catch that rejection

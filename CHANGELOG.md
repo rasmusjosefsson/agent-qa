@@ -6,6 +6,24 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Revisiting a chat after its agent session idled out showed an empty
+  conversation even though the persisted session file was still on disk —
+  `/api/chat/c/<id>/state` reported `messages: []` without attempting a
+  resume, and the web client cached that first (empty) response for the
+  page's lifetime. `/state` now resumes a persisted session (pi's
+  `sessionDir/current.path` marker), and the chat view re-pulls state on
+  every mount so switching back refreshes instead of replaying a stale
+  snapshot.
+
+### Added
+
+- `GET /api/chat/c/<id>/info` + a chat-header info button — shows what the
+  chat's agent is running with: backend, model, thinking level, session id,
+  bound browser session, credential plugins reachable (registered paths +
+  bundled jev-resolve with key state), persona sign-in state, and record dir.
+
 ## [0.3.0] - 2026-10-05
 ### Added
 

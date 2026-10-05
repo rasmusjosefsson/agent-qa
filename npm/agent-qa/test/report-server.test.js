@@ -1678,6 +1678,72 @@ test("POST /api/chat/c/:id/prompt annotates the text with the pane's current pag
   assert.equal(prompts[1], 'record this page');
 });
 
+test("GET /api/chat/c/:id/info reports the chat's agent/browser/plugin wiring", async (t) => {
+  const fx = makeFixture();
+  const { server, base } = await boot(fx.root, {
+    chat: {
+      hub: {
+        getState: async () => ({
+          backend: 'pi',
+          model: { provider: 'anthropic', id: 'claude-x', label: 'Claude X' },
+          sessionId: 'sess-1',
+          thinkingLevel: 'off',
+        }),
+      },
+    },
+    runCli: async () => ({ code: 0, stdout: 'ok', stderr: '' }),
+  });
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, {
+      method: m,
+      headers: { 'content-type': 'application/json' },
+      body: b ? JSON.stringify(b) : undefined,
+    });
+  const chat = await (await j('POST', '/api/chat/create')).json();
+
+  const res = await j('GET', `/api/chat/c/${chat.id}/info`);
+  assert.equal(res.status, 200);
+  const info = await res.json();
+  assert.equal(info.chatId, chat.id);
+  assert.equal(info.backend, 'pi');
+  assert.equal(info.model.id, 'claude-x');
+  assert.equal(info.sessionId, 'sess-1');
+  assert.equal(info.browserSession, chat.session);
+  assert.equal(info.scenariosRoot, fx.root);
+  assert.equal(info.jev.enabled, false);
+  assert.equal(info.jev.hasKey, false);
+  assert.deepEqual(info.plugins, []);
+  assert.equal(info.connected, null);
+});
+
+test('GET /api/chat/c/:id/info lists a bundled jev plugin when enabled', async (t) => {
+  const fx = makeFixture();
+  const { server, base } = await boot(fx.root, {
+    chat: { hub: {} }, // no getState — info still answers
+    runCli: async () => ({ code: 0, stdout: 'ok', stderr: '' }),
+  });
+  t.after(() => server.close());
+  await fs.promises.mkdir(`${fx.root}/_config`, { recursive: true });
+  await fs.promises.writeFile(
+    `${fx.root}/_config/jev.json`,
+    JSON.stringify({ schema: 'jev/1', enabled: true, apiKey: 'k' })
+  );
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, {
+      method: m,
+      headers: { 'content-type': 'application/json' },
+      body: b ? JSON.stringify(b) : undefined,
+    });
+  const chat = await (await j('POST', '/api/chat/create')).json();
+  const info = await (await j('GET', `/api/chat/c/${chat.id}/info`)).json();
+  assert.equal(info.backend, null);
+  assert.equal(info.jev.enabled, true);
+  assert.equal(info.jev.hasKey, true);
+  const bundled = info.plugins.find((p) => p.source === 'bundled');
+  assert.equal(bundled.name, 'jev-resolve');
+});
+
 test('POST /api/chat/c/:id/disconnect drops the persona binding into guest mode', async (t) => {
   const fx = makeFixture();
   const deps = {

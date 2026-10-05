@@ -85,6 +85,11 @@ export function createChatHub({
   listModels = null,
   idleMs = DEFAULT_IDLE_MS,
   timers = { set: setTimeout, clear: clearTimeout },
+  // Reports whether a persisted conversation exists for this chat (pi's
+  // sessionDir marker). When it does, getState() resumes it so revisiting a
+  // chat after idle teardown rehydrates the transcript instead of reporting
+  // an empty conversation that only comes back on the next prompt.
+  hasPersisted = null,
   logger = () => {},
 } = {}) {
   if (typeof createSession !== 'function') {
@@ -235,6 +240,14 @@ export function createChatHub({
 
   async function getState() {
     const models = currentModels();
+    if (!session && hasPersisted && hasPersisted()) {
+      try {
+        await ensureSession();
+        touch();
+      } catch {
+        /* resume failure → report the not-started state below */
+      }
+    }
     if (!session) {
       return {
         started: false,
@@ -1451,6 +1464,11 @@ async function createPiBackend(config = {}) {
     createSession,
     listModels,
     idleMs: config.idleMs,
+    // pi persists the conversation as a JSONL under sessionDir, with
+    // `current.path` marking the file to reopen — its existence means a /state
+    // poll should resume rather than report an empty chat.
+    hasPersisted: () =>
+      !!(config.sessionDir && existsSync(join(config.sessionDir, 'current.path'))),
     logger: config.logger,
   });
 }

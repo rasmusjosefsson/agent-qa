@@ -31,6 +31,24 @@ export function useChat(cid: string) {
   const streamingRef = useRef(false)
   streamingRef.current = state.streaming
 
+  // Re-pull /state on (re)mount. The seed resource promise is cached per cid
+  // for the page's lifetime, so revisiting a chat would otherwise show the
+  // stale first snapshot — e.g. empty when the agent session had idled out
+  // (the server resumes a persisted session in /state, so this fetch is what
+  // brings the transcript back). init_state rebuilds from server truth; SSE
+  // deltas continue to apply on top.
+  useEffect(() => {
+    let alive = true;
+    getChatState(cid)
+      .then((body) => {
+        if (alive) dispatch({ type: 'init_state', payload: body });
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [cid]);
+
   // Open this chat's live event stream once it's known to be available. Keyed
   // on `cid`; the seeded initial state already carries the saved history.
   useEffect(() => {

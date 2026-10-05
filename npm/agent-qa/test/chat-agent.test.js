@@ -211,6 +211,56 @@ test('createChatHub getState reflects session presence', async () => {
   hub.dispose();
 });
 
+test('createChatHub getState resumes a persisted session instead of reporting empty', async () => {
+  const { createChatHub } = await chatAgent();
+  const fake = makeFakeSession();
+  fake.session.messages = [{ role: 'user', content: 'earlier turn' }];
+  let made = 0;
+  const hub = createChatHub({
+    createSession: () => {
+      made++;
+      return fake.session;
+    },
+    hasPersisted: () => true,
+  });
+  // No prompt yet — /state still rehydrates the transcript, which is what
+  // makes revisiting a chat after idle teardown show its history again.
+  const st = await hub.getState();
+  assert.equal(made, 1);
+  assert.equal(st.started, true);
+  assert.deepEqual(st.messages, [{ role: 'user', content: 'earlier turn' }]);
+  hub.dispose();
+});
+
+test('createChatHub getState stays lazy with no persisted session', async () => {
+  const { createChatHub } = await chatAgent();
+  let made = 0;
+  const hub = createChatHub({
+    createSession: () => {
+      made++;
+      return makeFakeSession().session;
+    },
+    hasPersisted: () => false,
+  });
+  const st = await hub.getState();
+  assert.equal(made, 0);
+  assert.equal(st.started, false);
+  assert.deepEqual(st.messages, []);
+  hub.dispose();
+});
+
+test('createChatHub getState tolerates a failed resume', async () => {
+  const { createChatHub } = await chatAgent();
+  const hub = createChatHub({
+    createSession: () => Promise.reject(new Error('resume broke')),
+    hasPersisted: () => true,
+  });
+  const st = await hub.getState();
+  assert.equal(st.started, false);
+  assert.deepEqual(st.messages, []);
+  hub.dispose();
+});
+
 test('createChatHub getState lists models via listModels (before any session)', async () => {
   const { createChatHub } = await chatAgent();
   const models = [
