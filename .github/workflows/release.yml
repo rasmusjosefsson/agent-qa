@@ -163,12 +163,12 @@ jobs:
               }
             };
             let deps = view();
-            for (let i = 0; deps == null && i < 12; i++) {
+            for (let i = 0; deps == null && i < 180; i++) {
               execFileSync("sleep", ["10"]);
               deps = view();
             }
             if (deps == null) {
-              console.error(`umbrella ${version} not visible in registry after ~2min`);
+              console.error(`umbrella ${version} not visible in registry after ~30min`);
               process.exit(1);
             }
             const bad = Object.entries(deps || {})
