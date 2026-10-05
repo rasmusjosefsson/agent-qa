@@ -330,17 +330,35 @@ fn write_outputs(
     for e in &r.entries {
         md.push_str(&format!("| {} | {} |\n", e.step_id, e.outcome.label()));
     }
-    md.push_str("\n## screenshots\n\n| step | outcome | differing pixels |\n|---|---|---|\n");
+    md.push_str(
+        "\n## screenshots\n\n| step | outcome | differing pixels | regions |\n|---|---|---|---|\n",
+    );
     for e in &shots.entries {
         let frac = e
             .differing_fraction
             .map(|f| format!("{:.4}", f))
             .unwrap_or_else(|| "-".into());
+        let regions = if e.regions.is_empty() {
+            "-".to_string()
+        } else {
+            let mut s = e
+                .regions
+                .iter()
+                .take(5)
+                .map(|(x, y, w, h, n)| format!("{x},{y} {w}x{h} ({n}px)"))
+                .collect::<Vec<_>>()
+                .join("<br>");
+            if e.regions.len() > 5 {
+                s += &format!("<br>+{} more", e.regions.len() - 5);
+            }
+            s
+        };
         md.push_str(&format!(
-            "| {} | {} | {} |\n",
+            "| {} | {} | {} | {} |\n",
             e.step_id,
             e.outcome.label(),
-            frac
+            frac,
+            regions
         ));
     }
     md.push_str("\n## network\n\n");
@@ -385,7 +403,18 @@ fn render_text(r: &ReportData, shots: &screenshots::ShotReport, net: &network::N
                 .differing_fraction
                 .map(|f| format!("  ({:.2}% differing)", f * 100.0))
                 .unwrap_or_default();
-            println!("  {:<7}  {}{}", e.outcome.label(), e.step_id, pct);
+            let regions = if e.regions.is_empty() {
+                String::new()
+            } else {
+                format!(" — {} region(s)", e.regions.len())
+            };
+            println!(
+                "  {:<7}  {}{}{}",
+                e.outcome.label(),
+                e.step_id,
+                pct,
+                regions
+            );
         }
     }
     if !net.present_a && !net.present_b {
