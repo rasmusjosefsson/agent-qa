@@ -9,19 +9,19 @@
 use std::sync::OnceLock;
 
 use anyhow::{anyhow, Context, Result};
-use jsonschema::JSONSchema;
+use jsonschema::Validator;
 use serde_json::Value as Json;
 
 const SCHEMA_TEXT: &str = include_str!("../../schema/scenario-schema.json");
 
-fn compiled() -> &'static JSONSchema {
-    static CELL: OnceLock<JSONSchema> = OnceLock::new();
+fn compiled() -> &'static Validator {
+    static CELL: OnceLock<Validator> = OnceLock::new();
     CELL.get_or_init(|| {
         let parsed: Json =
             serde_json::from_str(SCHEMA_TEXT).expect("embedded scenario-schema.json is valid JSON");
-        JSONSchema::options()
+        jsonschema::options()
             .with_draft(jsonschema::Draft::Draft202012)
-            .compile(&parsed)
+            .build(&parsed)
             .expect("embedded scenario-schema.json compiles as a 2020-12 schema")
     })
 }

@@ -155,7 +155,12 @@ struct ManifestEntry {
 }
 
 fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    use std::fmt::Write;
+    let mut s = String::with_capacity(64);
+    for b in Sha256::digest(bytes).iter() {
+        write!(s, "{b:02x}").unwrap();
+    }
+    s
 }
 
 fn baselines_dir(scenario_dir: &Path) -> PathBuf {

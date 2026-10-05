@@ -26,7 +26,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 use anyhow::{anyhow, bail, Result};
-use rand::RngCore;
+use rand::Rng;
 use regex::Regex;
 use serde_json::Value as Json;
 
@@ -268,7 +268,7 @@ fn as_mint_value(v: &Json) -> Option<MintRef<'_>> {
 
 fn mint_hex() -> String {
     let mut bytes = [0u8; 4];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     let mut s = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         use std::fmt::Write;
