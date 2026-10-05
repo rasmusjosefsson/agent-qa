@@ -254,8 +254,8 @@ Verbs:
   plan run <id> [flags]          Replay every member case's scenario (CI gate)
   audit show <sid> <runId|latest>  Pretty-print one replay's audit.json
   audit list <sid>                 Table of every run under the scenario
-  audit stats <sid>                Pass/fail/tag rollup across all runs
-  audit stats-all                  Per-scenario + overall pass/fail rollup
+  audit stats <sid>                Pass/fail/tag + flake score across all runs
+  audit stats-all                  Per-scenario + overall rollup (incl. flake)
   audit diff <sid> <runIdA> <runIdB>  Unified diff between two replays
   audit summary <sid> <runId|latest>  Print just the summary line
   audit exit-code <sid> <runId|latest>  Print just the exitCode (-1 if missing)
