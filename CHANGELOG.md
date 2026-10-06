@@ -5,6 +5,8 @@ All notable changes to agent-qa are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.6.0] - 2026-10-06
 ### Added
 
 - Drift fingerprint + known-drift ledger: every shot miss now writes a
