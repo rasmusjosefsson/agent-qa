@@ -335,6 +335,14 @@ const RUN_STALE_MS = Math.max(
   Number(process.env.AGENT_QA_RUN_STALE_MS) || 5 * 60 * 1000,
 );
 
+// Directory names under <sid>/replays/ that are NOT replay runs — the
+// `recorded/` capture sidecar (network.har for --mock-from) would otherwise
+// list as a phantom "running" run forever.
+const NON_RUN_DIRS = new Set(['recorded']);
+function isRunDir(ent) {
+  return ent.isDirectory() && isSafeSegment(ent.name) && !NON_RUN_DIRS.has(ent.name);
+}
+
 // Resolve the effective state of a run: raw `status.state` for a terminal
 // state; anything that still looks active ('running', or status.json
 // missing/stateless — a run dir minted but abandoned before the runner
@@ -371,9 +379,8 @@ async function listRuns(scenarioDir) {
   }
   const runs = [];
   for (const ent of entries) {
-    if (!ent.isDirectory()) continue;
+    if (!isRunDir(ent)) continue;
     const runId = ent.name;
-    if (!isSafeSegment(runId)) continue;
     const statusPath = path.join(replaysDir, runId, 'status.json');
     const [audit, status] = await Promise.all([
       readJson(path.join(replaysDir, runId, 'audit.json')),
@@ -421,7 +428,7 @@ async function findActiveRunId(scenarioDir) {
   }
   let active = null;
   for (const ent of entries) {
-    if (!ent.isDirectory() || !isSafeSegment(ent.name)) continue;
+    if (!isRunDir(ent)) continue;
     const statusPath = path.join(replaysDir, ent.name, 'status.json');
     const status = await readJson(statusPath);
     if ((await runState(statusPath, status)) === 'running' && (active == null || ent.name > active)) {
@@ -2574,7 +2581,7 @@ function replayRunIds(root, sid) {
   try {
     return fs
       .readdirSync(path.join(root, sid, 'replays'), { withFileTypes: true })
-      .filter((e) => e.isDirectory() && isSafeSegment(e.name))
+      .filter(isRunDir)
       .map((e) => e.name);
   } catch {
     return [];
@@ -4809,7 +4816,7 @@ function createRequestHandler(root, deps, chat) {
           const latest = ((await readText(latestPath)) || '').trim();
           if (latest === runId) {
             const entries = await fsp.readdir(replaysDir, { withFileTypes: true }).catch(() => []);
-            const runs = entries.filter((e) => e.isDirectory()).map((e) => e.name).sort();
+            const runs = entries.filter(isRunDir).map((e) => e.name).sort();
             if (runs.length) await fsp.writeFile(latestPath, runs[runs.length - 1] + '\n');
             else await fsp.rm(latestPath, { force: true });
           }
