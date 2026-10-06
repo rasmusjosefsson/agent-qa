@@ -1077,6 +1077,25 @@ test('run dir with no status.json resolves stale vs running by freshness', async
   assert.equal(runs2.find((r) => r.runId === freshRun).state, 'running');
 });
 
+test('the recorded/ capture sidecar never lists as a run', async (t) => {
+  // flush writes replays/recorded/network.har — a HAR sidecar, not a run.
+  // Unfiltered, it walked the same "fresh dir → running" path as a live run
+  // and showed a phantom "Signing in…" row forever.
+  const fx = makeFixture();
+  const recDir = path.join(fx.root, fx.sid, 'replays', 'recorded');
+  fs.mkdirSync(recDir, { recursive: true });
+  fs.writeFileSync(path.join(recDir, 'network.har'), '{}');
+
+  const { server, base } = await boot(fx.root);
+  t.after(() => server.close());
+
+  const runs = (await (await fetch(`${base}/api/scenarios/${fx.sid}/runs`)).json()).replays;
+  assert.ok(!runs.some((r) => r.runId === 'recorded'), 'recorded/ must not list as a run');
+
+  const sc = (await (await fetch(`${base}/api/scenarios`)).json()).scenarios[0];
+  assert.notEqual(sc.activeRunId, 'recorded', 'recorded/ must not count as the active run');
+});
+
 test('GET /api/extension.zip downloads the bundled extension sources', async (t) => {
   const fx = makeFixture();
   const { server, base } = await boot(fx.root);
