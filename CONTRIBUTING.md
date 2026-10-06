@@ -17,6 +17,20 @@ workspace. Tests run against fake `agent-browser` shell scripts (see
 `cli/src/test_util.rs` for the shared env-lock plumbing); no real
 Chromium is spawned during `cargo test`.
 
+### Workbench against a dev binary
+
+```bash
+npm --prefix npm/agent-qa run dev          # cargo build + agent-qa web on :7878
+npm --prefix npm/agent-qa run dev -- --port 7890   # pass any `web` args through
+```
+
+`dev` (`scripts/dev-web.js`) launches the workbench with
+`AGENT_QA_BINARY_PATH` pointed at `cli/target/debug/agent-qa`. The
+workbench shells the CLI per action, so iterating on Rust code is just
+`cargo build` — the next UI action runs the new binary; no restart.
+For a release-profile build wired into the repo's platform package,
+`npm --prefix npm/agent-qa run build:cli`.
+
 ## Adding a verb
 
 Each verb is one module under `cli/src/<verb_name>.rs` exporting
