@@ -1237,6 +1237,9 @@ function normalizeEnvironment(id, body, existing) {
       creds: strMap(auth.creds, existing?.auth?.creds),
       remediation: normalizeAuthRemediation(auth.remediation ?? existing?.auth?.remediation),
     },
+    // The target new chats auto-sign-in to — only when BOTH an environment
+    // and a persona are flagged (see autoConnectDefault).
+    default: typeof body.default === 'boolean' ? body.default : !!existing?.default,
     description: String(body.description ?? existing?.description ?? ''),
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
@@ -3208,15 +3211,20 @@ function makeCaptureRes() {
 // Sign the default persona into a freshly-created chat's browser session, in the
 // background, so the agent navigates an ALREADY-authenticated page instead of
 // racing to connect (and recording a sign-in-page step first). Best-effort +
-// non-blocking; only fires when a default/sole persona AND environment resolve
-// (a configured, auth-walled workbench) — a no-op otherwise. Reuses the exact
+// non-blocking; only fires when BOTH a persona and an environment are flagged
+// `default: true` — a no-op otherwise (a sole unflagged record stays guest). Reuses the exact
 // connect path the agent would call, so it also sets entry.connectedProfile
 // (which makes `agent-qa start` record a useProfile baseline automatically).
 async function autoConnectDefault(root, entry, deps) {
   try {
     if (entry && entry.guest) return; // user opted out of sign-in for this chat
     if (!root || !deps || typeof deps.runCli !== 'function') return;
-    const [persona, env] = await Promise.all([pickDefaultPersona(root), pickDefaultEnvironment(root)]);
+    // Auto-connect only on an explicit `default: true` pairing — a sole
+    // persona/environment record must NOT count, or every new chat kicks
+    // off credential resolution (vault lookups) even for public pages.
+    const [personas, envs] = await Promise.all([listAllPersonas(root), listAllEnvironments(root)]);
+    const persona = personas.find((p) => p.default) || null;
+    const env = envs.find((e) => e.default) || null;
     if (!persona || !env) return;
     const remediation = normalizeAuthRemediation(env.auth && env.auth.remediation);
     entry.autoConnect = { state: 'connecting', personaId: persona.id, environmentId: env.id, at: Date.now() };

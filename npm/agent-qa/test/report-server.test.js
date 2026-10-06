@@ -2135,14 +2135,16 @@ test('autoConnectDefault signs in the default persona for a new chat (background
   const j = (m, p, b) =>
     fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
 
-  // A single persona + environment (sole → treated as default).
+  // Both records must be flagged `default` — a sole record stays guest.
   await j('POST', '/api/environments/staging', {
     name: 'Staging',
+    default: true,
     auth: { plugin: 'agent-qa-plugin-acme', creds: { APP_CLIENT_ID: 'cid' } },
   });
   await j('POST', '/api/personas/admin', {
     name: 'Admin',
     profile: 'admin-user',
+    default: true,
     credentials: { entries: { APP_EMAIL: 'a@b.com' } },
   });
 
@@ -2193,9 +2195,10 @@ test('autoConnectDefault runs an extension-declared remediation before retrying 
         plugin: 'agent-qa-plugin-acme',
         remediation: { label: 'Sign in to credentials provider', argv: ['credential-login', '--browser'], automatic: true },
       },
+      default: true,
     }),
   );
-  await j('POST', '/api/personas/admin', { name: 'Admin', profile: 'admin-user' });
+  await j('POST', '/api/personas/admin', { name: 'Admin', profile: 'admin-user', default: true });
 
   const entry = { browser: { name: 'chat-test' }, recordDir: () => null };
   await srv.autoConnectDefault(fx.root, entry, deps);
@@ -2377,6 +2380,42 @@ test('autoConnectDefault is a no-op when no persona/environment is configured', 
   await autoConnectDefault(fx.root, entry, deps);
   assert.equal(entry.autoConnect, undefined); // nothing to connect → never started
   assert.ok(!calls.some((a) => a[0] === 'profile-bootstrap'));
+});
+
+test('autoConnectDefault is a no-op for a sole unflagged persona/environment', async (t) => {
+  const fx = makeFixture();
+  const calls = [];
+  const deps = {
+    runCli: async (args, extraEnv) => {
+      calls.push({ args, extraEnv });
+      if (args[0] === 'profile-status') return { code: 0, stdout: 'authenticated', stderr: '' };
+      return { code: 0, stdout: 'ok', stderr: '' };
+    },
+  };
+  const { server, base } = await boot(fx.root, deps);
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  // One persona + one environment, neither flagged default — new chats must
+  // not auto-connect (no vault lookup against public-page work).
+  await j('POST', '/api/environments/staging', {
+    name: 'Staging',
+    auth: { plugin: 'agent-qa-plugin-acme', creds: { APP_CLIENT_ID: 'cid' } },
+  });
+  await j('POST', '/api/personas/admin', {
+    name: 'Admin',
+    profile: 'admin-user',
+    credentials: { entries: { APP_EMAIL: 'a@b.com' } },
+  });
+
+  const { autoConnectDefault } = require('../lib/report-server.js');
+  const entry = { browser: { name: 'chat-test' }, recordDir: () => null };
+  await autoConnectDefault(fx.root, entry, deps);
+
+  assert.equal(entry.autoConnect, undefined);
+  assert.equal(entry.connectedProfile, undefined);
+  assert.ok(!calls.some((c) => c.args[0] === 'profile-bootstrap'));
 });
 
 test('package-provided personas are discovered read-only; local shadows; writes refused', async (t) => {
