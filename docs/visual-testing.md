@@ -166,3 +166,20 @@ changed path matches a glob (`*`/`**`/`?`). Scenarios without `onlyWhen`
 always run; skipped ones report as SKIP rows, not failures — the cheap way
 to keep the full golden suite green-checked on every PR while only
 replaying what the diff touched.
+
+## Inspecting a diff (diff viewer)
+
+When a golden PR comment or a workbench run shows a shot miss, open the
+interactive diff viewer: a wipe slider you drag between baseline and
+current, a **blink** mode that alternates the two so the changed region
+flickers in place, side-by-side, the red diff map, a blend overlay, and
+cursor-anchored zoom (wheel, `+`/`−`/`0`/`1`; `[`/`]` cycle modes).
+
+- **In the PR comment**: each failed shot's details block links
+  *open diff viewer* — it ships with the docs site
+  (`<owner>.github.io/<repo>/diff-viewer.html`) and loads the published
+  diff images.
+- **In the workbench**: the shot-diff card toggles
+  `before/after | blink | diff map` with a 50–250% zoom slider.
+- **Standalone**: `viewer.html?b=<baseline.png>&c=<current.png>&d=<diff.png>`
+  — no build, works from any static host or `file://`.
