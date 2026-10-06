@@ -176,8 +176,9 @@ flickers in place, side-by-side, the red diff map, a blend overlay, and
 cursor-anchored zoom (wheel, `+`/`−`/`0`/`1`; `[`/`]` cycle modes).
 
 - **In the PR comment**: each failed shot's details block links
-  *open diff viewer* — it serves `evals/diff-viewer/viewer.html` off the
-  scratch branch where the diff images are published.
+  *open diff viewer* — it ships with the docs site
+  (`<owner>.github.io/<repo>/diff-viewer.html`) and loads the published
+  diff images.
 - **In the workbench**: the shot-diff card toggles
   `before/after | blink | diff map` with a 50–250% zoom slider.
 - **Standalone**: `viewer.html?b=<baseline.png>&c=<current.png>&d=<diff.png>`
