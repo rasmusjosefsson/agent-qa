@@ -1,8 +1,8 @@
 <!doctype html>
 <!--
   agent-qa golden diff viewer — standalone, no deps, no build.
-  Workflows copy this file next to a PR's staged diff images and the PR
-  comment links to it through an HTML preview service.
+  Ships in site/public → deployed to <owner>.github.io/<repo>/diff-viewer.html;
+  PR goldens comments link here with the diff image URLs as params.
 
   Query params:
     b   baseline image URL (required)
@@ -53,8 +53,10 @@
   label.mix input { accent-color: var(--accent); }
 
   main { flex: 1; position: relative; overflow: hidden; }
+  img { -webkit-user-drag: none; user-select: none; }
   #stage {
     position: absolute; inset: 0; overflow: hidden; cursor: grab;
+    touch-action: none;
     background:
       linear-gradient(45deg, #1c2128 25%, transparent 25%, transparent 75%, #1c2128 75%),
       linear-gradient(45deg, #1c2128 25%, transparent 25%, transparent 75%, #1c2128 75%);
@@ -232,7 +234,12 @@ function setWipeAt(clientX) {
   const r = stage.getBoundingClientRect();
   setWipePos((clientX - r.left) / r.width);
 }
+// Native image drag steals pointermove until drop — block it.
+for (const img of document.querySelectorAll('img')) img.draggable = false;
+stage.addEventListener('dragstart', (e) => e.preventDefault());
 stage.addEventListener('pointerdown', (e) => {
+  e.preventDefault(); // also suppresses native image drag in Firefox
+  stage.focus(); // preventDefault blocks focus; keep arrow-key wipe working
   stage.setPointerCapture(e.pointerId);
   dragging = true; panDrag = scale !== 0;
   lastX = e.clientX; lastY = e.clientY;
@@ -244,6 +251,7 @@ stage.addEventListener('pointermove', (e) => {
   else if (mode === 'wipe') setWipeAt(e.clientX);
 });
 stage.addEventListener('pointerup', () => { dragging = false; panDrag = false; });
+stage.addEventListener('pointercancel', () => { dragging = false; panDrag = false; });
 
 // ---- modes ----
 let mode = 'wipe';
