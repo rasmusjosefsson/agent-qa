@@ -3,6 +3,11 @@ name: evals-nightly
 # sites — live-page drift fails loudly here instead of the next time someone
 # runs evals by hand. `golden:all` enumerates every golden:* script, so new
 # cases join automatically.
+#
+# The suite is ~350 cases ≈ hours sequential — far beyond one runner slot,
+# and GitHub regularly reclaims long runners mid-suite (~30min). Fan out:
+# each shard runs every 20th case of the sorted list (~18 cases, ~15min),
+# so a reclaimed runner only loses its shard and failures stay localized.
 on:
   schedule:
     - cron: "0 3 * * *" # 03:00 UTC
@@ -13,9 +18,13 @@ permissions:
 
 jobs:
   golden:
-    name: golden suite
+    name: golden suite (${{ matrix.shard }}/20)
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -46,11 +55,12 @@ jobs:
           AGENT_QA_EVAL_AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
           AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
           AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
+          GOLDEN_SHARD: "${{ matrix.shard }}/20"
         run: bun golden-all.ts
       - name: upload golden results
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: golden-results
+          name: golden-results-shard-${{ matrix.shard }}
           path: evals/results/
           retention-days: 30
