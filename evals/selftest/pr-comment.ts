@@ -23,6 +23,9 @@ const latestPath = resolve(__dirname, "results", "latest.json");
 const runUrl = arg("run-url") || "";
 const artifactName = arg("artifact") || "ui-goldens";
 const diffBase = (arg("diff-base") || "").replace(/\/+$/, "");
+// The scratch branch also carries evals/diff-viewer/viewer.html — serve it
+// through a raw-HTML preview so the comment can link a live compare UI.
+const viewerBase = diffBase.replace("raw.githubusercontent.com", "raw.githack.com");
 
 /** Failed shot diffs for one scenario's latest run: `shots-diff/<step>.diff.png`. */
 function failedShots(sid: string): string[] {
@@ -82,6 +85,8 @@ if (!existsSync(latestPath)) {
           lines.push(
             `| ${img(`${base}.baseline.png`, "baseline")} | ${img(`${base}.current.png`, "this PR")} | ${img(`${base}.diff.png`, "diff")} |`,
           );
+          const viewer = `${viewerBase}/viewer.html?b=${base}.baseline.png&c=${base}.current.png&d=${base}.diff.png&sid=${r.sid}&step=${step}`;
+          lines.push(`[open diff viewer](${viewer}) — wipe, blink, zoom, blend`);
           lines.push("");
           lines.push("</details>");
           lines.push("");

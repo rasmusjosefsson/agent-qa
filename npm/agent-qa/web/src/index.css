@@ -304,6 +304,19 @@
   .aqa-ping::after { animation: none; }
 }
 
+/* Shot-diff blink — alternate baseline/current so the changed region
+   flickers in place (same idea as the evals/diff-viewer blink mode). */
+@keyframes aqa-blink {
+  0%, 49.9% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+.aqa-blink {
+  animation: aqa-blink 1.1s steps(1, end) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .aqa-blink { animation: none; }
+}
+
 /* Data tables: card-framed, soft header band, tinted row hover. Plain
    (unlayered) rules so they sit above the per-cell Tailwind utilities. */
 .aqa-table-card {

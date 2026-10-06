@@ -441,9 +441,12 @@ export function ShotDiffCard({
   onLightbox: (url: string, caption: string) => void
 }) {
   const url = artifactUrl(sid, runId, 'shots-diff', shotStep)
+  const beforeUrl = baselineShotUrl(sid, `${shotStep}.png`)
+  const afterUrl = artifactUrl(sid, runId, 'screenshots', shotStep)
   const caption = `Visual diff · ${shotStep}`
   const [accept, setAccept] = useState<'idle' | 'busy' | 'done' | 'error'>('idle')
-  const [view, setView] = useState<'slider' | 'diff'>('slider')
+  const [view, setView] = useState<'slider' | 'blink' | 'diff'>('slider')
+  const [zoom, setZoom] = useState(100)
   const remint = async () => {
     setAccept('busy')
     const r = await acceptShot(sid, runId, shotStep)
@@ -454,8 +457,8 @@ export function ShotDiffCard({
       <div className="mb-1.5 flex items-center gap-1.5 font-medium text-info">
         <WrenchIcon className="size-3.5 shrink-0" />
         Visual diff — shot “{shotStep}” changed vs baseline
-        <span className="ml-auto flex gap-1">
-          {(['slider', 'diff'] as const).map((v) => (
+        <span className="ml-auto flex items-center gap-1">
+          {(['slider', 'blink', 'diff'] as const).map((v) => (
             <button
               key={v}
               type="button"
@@ -465,23 +468,45 @@ export function ShotDiffCard({
                 view === v ? 'bg-info/25 text-info' : 'text-info/60 hover:bg-info/15'
               )}
             >
-              {v === 'slider' ? 'before/after' : 'diff map'}
+              {v === 'slider' ? 'before/after' : v === 'blink' ? 'blink' : 'diff map'}
             </button>
           ))}
+          <label className="ml-1 flex items-center gap-1 text-[10px] font-normal text-info/80">
+            <input
+              type="range"
+              min={50}
+              max={250}
+              step={25}
+              value={zoom}
+              onChange={(e) => setZoom(Number(e.target.value))}
+              className="w-16 accent-info"
+              title={`zoom ${zoom}%`}
+            />
+            {zoom}%
+          </label>
         </span>
       </div>
-      {view === 'slider' ? (
-        <BeforeAfterSlider
-          before={baselineShotUrl(sid, `${shotStep}.png`)}
-          after={artifactUrl(sid, runId, 'screenshots', shotStep)}
-          beforeLabel="baseline"
-          afterLabel="this run"
-        />
-      ) : (
-        <button type="button" onClick={() => onLightbox(url, caption)} className="block w-full">
-          <img src={url} alt={caption} loading="lazy" className="w-full rounded border border-border" />
-        </button>
-      )}
+      <div className="overflow-auto">
+        <div style={{ width: `${zoom}%` }}>
+          {view === 'slider' ? (
+            <BeforeAfterSlider
+              before={beforeUrl}
+              after={afterUrl}
+              beforeLabel="baseline"
+              afterLabel="this run"
+            />
+          ) : view === 'blink' ? (
+            <button type="button" onClick={() => onLightbox(afterUrl, `this run · ${shotStep}`)} className="relative block w-full">
+              <img src={beforeUrl} alt={`baseline · ${shotStep}`} loading="lazy" className="w-full rounded border border-border" />
+              <img src={afterUrl} alt={`this run · ${shotStep}`} loading="lazy" className="aqa-blink absolute inset-0 w-full rounded" />
+            </button>
+          ) : (
+            <button type="button" onClick={() => onLightbox(url, caption)} className="block w-full">
+              <img src={url} alt={caption} loading="lazy" className="w-full rounded border border-border" />
+            </button>
+          )}
+        </div>
+      </div>
       <div className="mt-1.5 flex items-center gap-2 text-muted-foreground">
         {accept === 'done' ? (
           <span className="text-success">Baseline re-minted — re-run to confirm.</span>
