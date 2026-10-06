@@ -25,7 +25,8 @@ const artifactName = arg("artifact") || "docs-goldens";
 const diffBase = (arg("diff-base") || "").replace(/\/+$/, "");
 // The scratch branch also carries evals/diff-viewer/viewer.html — serve it
 // through a raw-HTML preview so the comment can link a live compare UI.
-const viewerBase = diffBase.replace("raw.githubusercontent.com", "raw.githack.com");
+// htmlpreview renders inline (raw.githack shows a click-through interstitial).
+const viewerBase = `https://htmlpreview.github.io/?${diffBase}`;
 
 /** Failed shot diffs for one scenario's latest run: `shots-diff/<step>.diff.png`. */
 function failedShots(sid: string): string[] {
