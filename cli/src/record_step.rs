@@ -294,7 +294,15 @@ pub(crate) fn parse_draft(kind: StepKind, payload: &Json, step_id: &str) -> Resu
         "intent": "validate recorded step",
         "steps": [&draft],
     }))
-    .context("recorded step failed scenario schema validation")?;
+    .map_err(|e| {
+        let base = "recorded step failed scenario schema validation";
+        match kind {
+            StepKind::Check => e.context(format!(
+                "{base} — a check claim is {{\"subject\": <element {{role,name?}} | element {{raw}} | url | network | file | dialog | shot | domshot | ...>, \"predicate\": isVisible | equals | contains | matches | ...}}; locator keys are role/name only (use \"attribute\" for level/text), see references/asserts.md"
+            )),
+            _ => e.context(base),
+        }
+    })?;
     let step: Step = serde_json::from_value(Json::Object(draft)).with_context(|| {
         match kind {
             StepKind::Do => {

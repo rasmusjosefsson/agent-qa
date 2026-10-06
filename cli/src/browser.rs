@@ -818,6 +818,11 @@ pub struct CapturedRequest {
     /// absent on plain HTTP entries. Lets claims match frame payloads.
     #[serde(default)]
     pub ws_frames: Vec<serde_json::Value>,
+    /// Daemon-reported capture time, epoch ms. Absent on synthesized
+    /// entries (redirect hops, worker fetches, mock log) — `flush` uses
+    /// it to drop traffic captured before the recording window opened.
+    #[serde(default)]
+    pub timestamp: Option<i64>,
 }
 
 fn json_data(verb: &str, stdout: &str) -> Result<serde_json::Value, AgentBrowserError> {
@@ -917,6 +922,7 @@ fn mocked_requests(session: &str) -> Vec<CapturedRequest> {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
             ws_frames: vec![],
+            timestamp: None,
         })
         .collect()
 }

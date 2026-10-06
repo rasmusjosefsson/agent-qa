@@ -348,6 +348,7 @@ pub fn redirect_entries(session: &str) -> Vec<crate::browser::CapturedRequest> {
                     mime_type: None,
                     post_data: None,
                     ws_frames: vec![],
+                    timestamp: None,
                 })
                 .collect()
         })
@@ -376,6 +377,7 @@ pub fn worker_entries(session: &str) -> Vec<crate::browser::CapturedRequest> {
                     mime_type: None,
                     post_data: None,
                     ws_frames: vec![],
+                    timestamp: None,
                 })
                 .collect()
         })

@@ -269,6 +269,13 @@ fn start(opts: &Opts) -> Result<StartSummary> {
         browser::open(&opts.session_name, url)
             .with_context(|| format!("agent-browser open {url}"))?;
         summary.opened_url = Some(url.clone());
+        // The daemon's netlog accumulates for the session's whole life —
+        // traffic from whatever the tab had open before `start` (or other
+        // tabs on a shared browser) would otherwise mint auto-network
+        // claims that can never replay. Clear it now that a page exists.
+        if let Err(e) = browser::network_clear(&opts.session_name) {
+            eprintln!("[v2-record] netlog clear skipped: {e}");
+        }
     }
     // Record the session's traffic alongside the steps: flush stops it into
     // `replays/recorded/network.har`, and `replay --mock-from recorded`

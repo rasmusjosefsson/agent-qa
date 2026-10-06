@@ -74,6 +74,12 @@ fn continue_scenario(args: &[String]) -> Result<u8> {
             );
         }
     }
+    // The replay (or hand-driven catch-up) filled the session's netlog —
+    // clear it so flush's auto-network claims cover only what the user
+    // records from here, not a second copy of the replayed traffic.
+    if let Err(e) = crate::browser::network_clear(&session) {
+        eprintln!("[v2-record] netlog clear skipped: {e}");
+    }
     let steps = crate::buffer::load_into_buffer(&sid, &session, false)?;
     println!("continuing {sid}: {steps} step(s) loaded, session {session:?} at end state — new captures append after s{}", steps.saturating_sub(1));
     Ok(0)
