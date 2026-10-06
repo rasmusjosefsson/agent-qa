@@ -5,6 +5,18 @@ All notable changes to agent-qa are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+
+- Golden-diff viewer: `evals/diff-viewer/viewer.html` — a self-contained
+  compare UI (wipe slider, blink flicker, side-by-side, diff map,
+  diff-blend, wheel/cursor-anchored zoom, keyboard shortcuts) driven by
+  `?b=&c=&d=` query params. The docs-goldens and ui-goldens workflows now
+  publish it next to each PR's diff images on the scratch branch, and the
+  goldens PR comment links every failed shot to it via a raw-HTML preview
+  ("open diff viewer").
+- Workbench shot-diff card: blink mode (baseline/current alternate in
+  place) and a 50–250% zoom control, alongside the existing before/after
+  slider and diff map.
 
 ## [0.6.0] - 2026-10-06
 ### Added
