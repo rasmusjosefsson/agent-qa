@@ -106,6 +106,17 @@ then a configured `resolve` plugin picks the intended element
 `$PATH`). The plugin is authoring-time only — the recorded draft keeps
 the picked element's concrete role+name, so replays never invoke it.
 
+Before flushing, prune dead steps from the buffer. Every action you take
+is recorded as a real step — including the mistakes. If a fill or click
+failed and you retried (wrong credentials, wrong element, a no-op
+navigation), the failed attempt is still in the buffer and will replay
+as noise. Review and delete it before sealing:
+
+```bash
+agent-qa buffer list            # see what's actually recorded
+agent-qa buffer delete s2       # drop a mistaken step
+```
+
 Flush and verify the sealed contract.
 
 ```bash
