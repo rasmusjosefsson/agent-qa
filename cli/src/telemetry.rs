@@ -54,6 +54,10 @@ const TELEMETRY_HOSTS: &[&str] = &[
     "tr.snapchat.com",
     "alb.reddit.com",
     "pixel.onaudience.com",
+    // Google's client-side instrumentation beacon (csi.gstatic.com/csi) —
+    // fires opportunistically off Google-hosted js; a captured POST here
+    // is never guaranteed to refire on replay.
+    "csi.gstatic.com",
 ];
 
 /// Same-origin beacon paths a host blocklist can't see. `/cdn-cgi/` is
@@ -111,6 +115,9 @@ mod tests {
         assert!(is_telemetry_url("https://ads.amazon-adsystem.com/aax"));
         assert!(is_telemetry_url(
             "https://app.example.com/_vercel/insights/view"
+        ));
+        assert!(is_telemetry_url(
+            "https://csi.gstatic.com/csi?v=3&s=page&action=login"
         ));
         assert!(!is_telemetry_url("https://api.optimizelyx.com/v1"));
         assert!(!is_telemetry_url("https://example.com/api/customers"));

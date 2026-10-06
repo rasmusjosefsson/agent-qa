@@ -15,6 +15,10 @@
  *   GOLDEN_ONLY       — comma-separated substring filters on script name;
  *                       a case runs when it matches ANY entry (local
  *                       debugging + CI subsets, e.g. fixture-only gates)
+ *   GOLDEN_SHARD      — "i/n" runs every n-th case of the sorted list
+ *                       starting at index i-1 (CI matrix fan-out; the
+ *                       full suite is hours long — one job can never
+ *                       finish it in a single runner slot)
  *
  * Exit: 0 when every case passed, 1 otherwise. A JSON rollup lands in
  * results/golden-all-<ts>.json next to each case's own golden-report.json.
@@ -35,13 +39,27 @@ const only = (process.env.GOLDEN_ONLY || "")
   .map((s) => s.trim())
   .filter(Boolean);
 
-const names = Object.keys(pkg.scripts)
+const allNames = Object.keys(pkg.scripts)
   .filter((n) => n.startsWith("golden:") && n !== "golden:all")
   .filter((n) => only.length === 0 || only.some((o) => n.includes(o)))
   .sort();
 
+let shardSpec = "";
+let names = allNames;
+const shardMatch = (process.env.GOLDEN_SHARD || "").match(/^(\d+)\s*\/\s*(\d+)$/);
+if (shardMatch) {
+  const i = Number(shardMatch[1]);
+  const n = Number(shardMatch[2]);
+  if (i < 1 || n < 1 || i > n) {
+    console.error(`golden-all: invalid GOLDEN_SHARD=${process.env.GOLDEN_SHARD} — want "i/n" with 1<=i<=n`);
+    process.exit(2);
+  }
+  shardSpec = `${i}/${n}`;
+  names = allNames.filter((_, idx) => idx % n === i - 1);
+}
+
 if (names.length === 0) {
-  console.error(`golden-all: no golden:* scripts matched${only.length ? ` (GOLDEN_ONLY=${only.join(",")})` : ""}`);
+  console.error(`golden-all: no golden:* scripts matched${only.length ? ` (GOLDEN_ONLY=${only.join(",")})` : ""}${shardSpec ? ` (GOLDEN_SHARD=${shardSpec})` : ""}`);
   process.exit(2);
 }
 
@@ -90,6 +108,7 @@ writeFileSync(
       failed: failed.length,
       results,
       filter: only.length ? only : undefined,
+      shard: shardSpec || undefined,
     },
     null,
     2,
