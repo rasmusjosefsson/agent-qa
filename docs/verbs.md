@@ -112,6 +112,24 @@ re-mint with `shot-accept` when the change is legitimate.
 {"check": {"shot": "s3"}, "predicate": "matches", "tolerance": {"preset": "relaxed"}}
 ```
 
+Every miss also writes `<run>/shots-diff/<stepId>.diff.json` — the diff's
+**fingerprint** (a stable hash of the diff's region shape) plus the region list.
+The same regression produces the same fingerprint across runs, so the error names
+earlier runs that drifted identically ("same drift as run N"). When a drift is
+triaged as known-flaky, mint it into the scenario's ledger:
+
+```
+agent-qa known-drift accept <sid> <runId> <stepId>   # record this run's fingerprint
+agent-qa known-drift list <sid>                      # show accepted fingerprints
+```
+
+A shot claim that opts in with `tolerance.knownDrift: true` then treats that exact
+fingerprint as a warning instead of a failure — a *different* drift still fails:
+
+```json
+{"check": {"shot": "s3"}, "predicate": "matches", "tolerance": {"knownDrift": true}}
+```
+
 `mask` lists CSS selectors to hide (`visibility:hidden`) around every step
 screenshot — the ignore-regions escape hatch for volatile UI like timestamps,
 live badges, or user avatars. Masks union across all shot claims in the

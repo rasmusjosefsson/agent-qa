@@ -661,7 +661,9 @@ Metrics: `fcp`, `lcp`, `cls`, `tbt`, `ttfb`, `load` (values in ms; `cls` is
 the unitless score). `exists`/`notExists` test whether the metric was
 recorded — `lcp` before any paint is absent; `cls`/`tbt` with no offending
 entries report `0`. `maxDwellMs` bounds how long observer-buffered metrics
-wait for entries (default 1500).
+wait for entries (default 1500). `"trace": true` on the matcher records a
+DevTools trace for the claim window to `<run>/perf/<metric>.trace.json` —
+RCA material for a budget miss (DevTools/Perfetto-compatible).
 
 ### Quarantine (opt-in containment)
 

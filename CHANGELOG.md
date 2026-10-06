@@ -5,6 +5,24 @@ All notable changes to agent-qa are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+
+- Drift fingerprint + known-drift ledger: every shot miss now writes a
+  `<run>/shots-diff/<step>.diff.json` sidecar carrying a stable
+  fingerprint of the diff's region signature (position/mass buckets —
+  identical regressions hash identically). A repeat drift's error names
+  the earlier runs it matches ("same drift as run N"). Opt a claim in
+  with `tolerance.knownDrift: true` and `agent-qa known-drift accept
+  <sid> <runId> <stepId>` records the fingerprint in the scenario's
+  `known-drift.json` ledger — that reviewed drift downgrades to a
+  warning on future runs while any NEW fingerprint still fails.
+  `agent-qa known-drift list <sid>` prints the ledger.
+- Perf trace artifact: `"trace": true` on a perf claim
+  (`{"perf": {"metric": "load", "trace": true}}`) wraps the check in a
+  CDP `Tracing` capture on a dedicated socket (the pooled command
+  socket stays reply-only) and writes the events to
+  `<run>/perf/<metric>.trace.json` — a budget miss carries its own RCA
+  evidence. Best-effort: no CDP page → warn and skip, claim unaffected.
 
 ## [0.5.0] - 2026-10-05
 ### Added

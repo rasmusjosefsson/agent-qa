@@ -306,6 +306,45 @@ pub(crate) fn diff_regions(diff: &RgbaImage) -> Vec<(u32, u32, u32, u32, u32)> {
     regions
 }
 
+/// A stable fingerprint for *this* drift — the SHA-256 (truncated to 16
+/// hex chars) of the quantized region signature + image size. Quantizing
+/// each region's geometry to an 8px bucket and its pixel mass to a
+/// percent-of-area band absorbs the subpixel/AA jitter a flaky diff
+/// throws while still distinguishing a genuinely different change — the
+/// idea Argos calls a "change fingerprint".
+///
+/// The same UI regression against the same baseline produces the same
+/// fingerprint across runs, which is what lets a run report say "same
+/// drift as run N" and lets `known-drift.json` suppress a triaged one.
+/// Empty region list (shouldn't happen on a Changed diff) still hashes —
+/// to the signature of just the dimensions.
+pub fn drift_fingerprint(regions: &[(u32, u32, u32, u32, u32)], width: u32, height: u32) -> String {
+    use sha2::{Digest, Sha256};
+    let area = (width as u64 * height as u64).max(1);
+    let mut sig = format!("{width}x{height}");
+    // Sort by (x,y) so the hash doesn't depend on the largest-first
+    // ordering the regions list is presented in.
+    let mut rs: Vec<(u32, u32, u32, u32, u32)> = regions.to_vec();
+    rs.sort_by_key(|r| (r.0, r.1));
+    for (x, y, w, h, px) in rs {
+        // 8px buckets for geometry; percent band for mass (>=1% steps,
+        // then 10% bands past 10% — a diff that doubles in size is a
+        // different change).
+        let mass = px as u64 * 100 / area;
+        let band = if mass < 10 { mass } else { mass / 10 * 10 };
+        sig.push_str(&format!(
+            "|{},{},{},{},{}",
+            x / 8,
+            y / 8,
+            w.max(1) / 8,
+            h.max(1) / 8,
+            band
+        ));
+    }
+    let digest = Sha256::digest(sig.as_bytes());
+    digest.iter().take(8).map(|b| format!("{b:02x}")).collect()
+}
+
 /// Perceptual diff (pixelmatch-flavoured): a pixel counts as changed when
 /// its channel delta exceeds `aa_delta` AND it isn't antialiasing on an
 /// edge — checked against both images. `aa_delta <= 0` disables the AA
@@ -465,6 +504,33 @@ mod tests {
         assert_eq!(regions.len(), 2);
         assert_eq!(regions[0].4, 3); // the 3-px strip first
         assert_eq!(regions[1], (10, 3, 1, 1, 1));
+    }
+
+    #[test]
+    fn fingerprint_stable_across_aa_jitter() {
+        // The same structural change plus a few jittered pixels must keep
+        // one fingerprint — that's what makes ledger suppression safe.
+        let mk = |jitter: u32| {
+            let a = RgbaImage::from_pixel(64, 64, Rgba([255; 4]));
+            let mut b = a.clone();
+            for x in 8..24 {
+                b.put_pixel(x, 10, Rgba([0, 0, 0, 255]));
+            }
+            b.put_pixel(50, 50 + jitter, Rgba([0, 0, 0, 255]));
+            let (_, d) = pixel_diff(&a, &b);
+            drift_fingerprint(&diff_regions(&d), d.width(), d.height())
+        };
+        // A lone 1px jitter shifts inside the same 8px bucket → same fp.
+        assert_eq!(mk(0), mk(1));
+        // A completely different change is a different fingerprint.
+        let a = RgbaImage::from_pixel(64, 64, Rgba([255; 4]));
+        let mut c = a.clone();
+        for x in 40..56 {
+            c.put_pixel(x, 40, Rgba([0, 0, 0, 255]));
+        }
+        let (_, d2) = pixel_diff(&a, &c);
+        let other = drift_fingerprint(&diff_regions(&d2), d2.width(), d2.height());
+        assert_ne!(mk(0), other);
     }
 
     #[test]

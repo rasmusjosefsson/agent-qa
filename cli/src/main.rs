@@ -16,6 +16,7 @@ mod buffer;
 mod byo_doctor;
 mod cdp;
 mod cdp_net;
+mod cdp_trace;
 mod cdp_url;
 mod claims;
 mod compare;
@@ -27,6 +28,7 @@ mod discover;
 mod doctor;
 mod dom_activate;
 mod domshot_accept;
+mod drift;
 mod env_ops;
 mod file_chooser;
 mod fill_unique;
@@ -172,6 +174,7 @@ fn main() -> ExitCode {
         "heal-apply" => heal_apply::run(rest),
         "heal-list" => heal_list::run(rest),
         "heal-chronic" => heal_chronic::run(rest),
+        "known-drift" => drift::run(rest),
         "shot-accept" => shot_accept::run(rest),
         "domshot-accept" => domshot_accept::run(rest),
         "layout-accept" => layout_accept::run(rest),
@@ -188,7 +191,7 @@ fn main() -> ExitCode {
         "notify" => notify::run(rest),
         _ => {
             eprintln!(
-                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, smart-fill, smart-assert, smart-hover, smart-select, resolve, triage, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, shot-accept, domshot-accept, layout-accept, baselines, run-report, init, ingest, mcp, migrate, compile, describe, mail, discover, creds-resolve, totp, notify."
+                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, smart-fill, smart-assert, smart-hover, smart-select, resolve, triage, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, known-drift, shot-accept, domshot-accept, layout-accept, baselines, run-report, init, ingest, mcp, migrate, compile, describe, mail, discover, creds-resolve, totp, notify."
             );
             eprintln!("Run `agent-qa --help` for usage.");
             Ok(2)
@@ -357,6 +360,7 @@ Verbs:
   heal-list <sid> [--run <id>] [--json]    List heal-responses + applied state
   heal-chronic <sid> [--min-runs N] [--json] [--issue]  Flag steps that self-heal across runs
   shot-accept <sid> [--run <id>] [--steps <…>] [--json]   Mint screenshot baselines for shot claims
+  known-drift accept|list <sid> [<runId> <stepId>]   Ledger of triaged drift fingerprints
   domshot-accept <sid> [--run <id>] [--steps <…>] [--json]   Mint ARIA-snapshot baselines for domshot claims
   layout-accept <sid> [--run <id>] [--steps <…>] [--json]   Mint element-geometry baselines for layout claims
   baselines pull|push|revert|status [<sid>|--all] [--json]   Sync goldens with the [baselines] remote store
