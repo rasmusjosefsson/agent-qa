@@ -136,3 +136,12 @@
   beacon hosts (any host not in the telemetry list) still become claims
   whose nonce URLs never refire. On ad/analytics-heavy pages, flush
   `--no-auto-network` and hand-author the claims that matter.
+
+- **`--auto-network` claims cover the recording window only.** The
+  daemon's request log accumulates for the session's whole life —
+  `start --open` clears it, and flush drops timestamped requests older
+  than the recording, so a page the tab had open earlier can't leak
+  `fired` claims into the scenario. Requests other tabs fire *during*
+  the recording can still land on browsers where sessions share one
+  Chrome — flush `--no-auto-network` if the claim list shows traffic
+  the page never made.

@@ -4514,6 +4514,7 @@ mod tests {
             mime_type: None,
             post_data: None,
             ws_frames: vec![],
+            timestamp: None,
         }
     }
 
@@ -4703,6 +4704,7 @@ mod tests {
                 ws_frames: vec![
                     serde_json::json!({"dir": "received", "opcode": 1, "payload": "pong:hello"}),
                 ],
+                timestamp: None,
             }];
             let got = filter_by_ws_payload(entries.iter().collect(), Some("pong:hello"));
             assert_eq!(got.len(), 1);

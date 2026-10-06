@@ -445,13 +445,25 @@ fn normalize_volatile_path_segments(url_path: &str) -> String {
 /// API calls whatever the resource type reports). Document/script/css
 /// traffic is covered implicitly by the goto steps already in the buffer.
 /// Capped at 12 so a chatty page doesn't flood the scenario.
+///
+/// `recorded_from_ms` is `state.started_at` as epoch ms: the daemon's
+/// netlog accumulates for the session's whole life, so requests captured
+/// before the recording opened (the tab's previous page, another tab on a
+/// shared browser) are dropped — claims for them can never replay.
+/// Entries without a timestamp (redirect hops, workers, mocks) are kept.
 fn insert_auto_network_claims(
     steps: &mut Vec<crate::scenario::Step>,
     requests: &[crate::browser::CapturedRequest],
+    recorded_from_ms: Option<i64>,
 ) {
     let mut seen = std::collections::BTreeSet::new();
     let mut added = 0usize;
     for r in requests {
+        if let (Some(ts), Some(from)) = (r.timestamp, recorded_from_ms) {
+            if ts < from {
+                continue;
+            }
+        }
         let rt = r.resource_type.as_deref().unwrap_or("");
         let is_api =
             matches!(rt, "XHR" | "Fetch" | "EventSource" | "WebSocket") || r.method != "GET";
@@ -558,8 +570,13 @@ fn flush(
         );
     }
     if auto_network {
+        let recorded_from_ms = chrono::DateTime::parse_from_rfc3339(&state.started_at)
+            .ok()
+            .map(|d| d.timestamp_millis());
         match crate::browser::network_requests(&state.session) {
-            Ok(requests) => insert_auto_network_claims(&mut state.steps, &requests),
+            Ok(requests) => {
+                insert_auto_network_claims(&mut state.steps, &requests, recorded_from_ms)
+            }
             Err(e) => eprintln!("[v2-record] auto-network skipped: {e}"),
         }
     }
@@ -947,6 +964,7 @@ mod tests {
             mime_type: None,
             post_data: None,
             ws_frames: vec![],
+            timestamp: None,
         };
         let mut steps = vec![crate::scenario::Step::Do {
             id: "s0".into(),
@@ -965,7 +983,7 @@ mod tests {
             req("GET", "https://x/api/me", "Fetch"),
             req("POST", "https://x/app;jsessionid=abc123?x=1", "XHR"),
         ];
-        insert_auto_network_claims(&mut steps, &requests);
+        insert_auto_network_claims(&mut steps, &requests, None);
         // css is dropped, the dup POST collapses to one claim → 3 appended
         assert_eq!(steps.len(), 4);
         let subj = &steps[1];
@@ -1001,6 +1019,7 @@ mod tests {
             mime_type: None,
             post_data: None,
             ws_frames: vec![],
+            timestamp: None,
         };
         let mut steps = vec![];
         insert_auto_network_claims(
@@ -1020,6 +1039,7 @@ mod tests {
                 req("GET", "https://x/api/items/1234567", "XHR"),
                 req("GET", "https://x/api/v2/users", "XHR"),
             ],
+            None,
         );
         assert_eq!(steps.len(), 3);
         let urls: Vec<String> = steps
@@ -1051,6 +1071,7 @@ mod tests {
                 mime_type: None,
                 post_data: None,
                 ws_frames: vec![],
+                timestamp: None,
             },
             CapturedRequest {
                 request_id: String::new(),
@@ -1061,6 +1082,7 @@ mod tests {
                 mime_type: None,
                 post_data: None,
                 ws_frames: vec![],
+                timestamp: None,
             },
             CapturedRequest {
                 request_id: String::new(),
@@ -1071,9 +1093,10 @@ mod tests {
                 mime_type: None,
                 post_data: None,
                 ws_frames: vec![],
+                timestamp: None,
             },
         ];
-        insert_auto_network_claims(&mut steps, &requests);
+        insert_auto_network_claims(&mut steps, &requests, None);
         let json = serde_json::to_value(&steps[0]).unwrap();
         assert_eq!(
             json["claim"]["subject"]["network"]["urlMatches"],
@@ -1103,6 +1126,7 @@ mod tests {
             mime_type: None,
             post_data: None,
             ws_frames: vec![],
+            timestamp: None,
         };
         let mut steps = vec![];
         let requests = vec![
@@ -1112,13 +1136,49 @@ mod tests {
             req("POST", "https://x/cdn-cgi/rum", "XHR"),
             req("GET", "https://x/api/me", "Fetch"),
         ];
-        insert_auto_network_claims(&mut steps, &requests);
+        insert_auto_network_claims(&mut steps, &requests, None);
         assert_eq!(steps.len(), 1);
         let json = serde_json::to_value(&steps[0]).unwrap();
         assert_eq!(
             json["claim"]["subject"]["network"]["urlMatches"],
             "https://x/api/me"
         );
+    }
+
+    #[test]
+    fn flush_auto_network_claims_drop_pre_recording_traffic() {
+        use crate::browser::CapturedRequest;
+        let req = |url: &str, ts: Option<i64>| CapturedRequest {
+            request_id: String::new(),
+            url: url.to_string(),
+            method: "POST".to_string(),
+            status: Some(200),
+            resource_type: Some("XHR".to_string()),
+            mime_type: None,
+            post_data: None,
+            ws_frames: vec![],
+            timestamp: ts,
+        };
+        let mut steps = vec![];
+        let requests = vec![
+            // fired before `start` opened the recording window — the tab's
+            // previous page or a shared browser's other tab
+            req("https://other.example/api/session", Some(1_000)),
+            req("https://x/api/login", Some(2_500)),
+            // synthesized entries carry no timestamp — never dropped
+            req("https://x/api/mock", None),
+        ];
+        insert_auto_network_claims(&mut steps, &requests, Some(2_000));
+        let urls: Vec<String> = steps
+            .iter()
+            .map(|s| {
+                serde_json::to_value(s).unwrap()["claim"]["subject"]["network"]["urlMatches"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(urls, ["https://x/api/login", "https://x/api/mock"]);
     }
 
     #[test]

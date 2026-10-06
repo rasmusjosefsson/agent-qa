@@ -16,6 +16,9 @@ const TELEMETRY_HOSTS: &[&str] = &[
     "newrelic.com",
     "nr-data.net",
     "fullstory.com",
+    // Feature-flag SDK: evalx/goals/events calls carry per-session
+    // base64 contexts — the calls can't refire identically on replay.
+    "launchdarkly.com",
     "logrocket.com",
     "pendo.io",
     "heapanalytics.com",
@@ -108,6 +111,12 @@ mod tests {
             "https://pagead2.googlesyndication.com/pagead/x"
         ));
         assert!(is_telemetry_url("https://sb.scorecardresearch.com/beacon"));
+        assert!(is_telemetry_url(
+            "https://app.launchdarkly.com/sdk/evalx/abc123/contexts/xyz"
+        ));
+        assert!(is_telemetry_url(
+            "https://events.launchdarkly.com/events/bulk/abc123"
+        ));
         assert!(is_telemetry_url("https://ads.amazon-adsystem.com/aax"));
         assert!(is_telemetry_url(
             "https://app.example.com/_vercel/insights/view"

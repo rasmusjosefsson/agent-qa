@@ -584,6 +584,7 @@ mod tests {
             mime_type: None,
             post_data: None,
             ws_frames: vec![],
+            timestamp: None,
         }
     }
 
