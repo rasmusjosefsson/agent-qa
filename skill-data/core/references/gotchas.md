@@ -131,17 +131,13 @@
   shadow boundaries, and `element` attribute claims on role locators
   read the snapshot's own `value`/`text`/state fields.
 
-- **Telemetry-heavy pages flood `--auto-network`.** Flush's default
-  auto-claims cover same-origin `/cdn-cgi/` beacons, but third-party
-  beacon hosts (any host not in the telemetry list) still become claims
-  whose nonce URLs never refire. On ad/analytics-heavy pages, flush
-  `--no-auto-network` and hand-author the claims that matter.
-
-- **`--auto-network` claims cover the recording window only.** The
-  daemon's request log accumulates for the session's whole life —
-  `start --open` clears it, and flush drops timestamped requests older
-  than the recording, so a page the tab had open earlier can't leak
-  `fired` claims into the scenario. Requests other tabs fire *during*
-  the recording can still land on browsers where sessions share one
-  Chrome — flush `--no-auto-network` if the claim list shows traffic
-  the page never made.
+- **`--auto-network` is opt-in.** Pass it when the API calls *are* the
+  contract (signup hit the backend, the save POST fired). Without it
+  flush appends only the landing-URL and pageError gates — a recorded
+  nav shouldn't assert every request the page happened to make. When
+  enabled it claims distinct XHR/fetch/non-GET calls from inside the
+  recording window (OPTIONS/HEAD preflights and probes are never
+  claimed — they're browser plumbing, and the telemetry host list drops
+  collector beacons). Requests other tabs fire *during* the recording
+  can still land on browsers where sessions share one Chrome — skip the
+  flag if the claim list shows traffic the page never made.
