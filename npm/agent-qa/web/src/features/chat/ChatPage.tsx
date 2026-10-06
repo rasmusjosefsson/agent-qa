@@ -85,7 +85,7 @@ const SUGGESTIONS: { title: string; hint: string; icon: LucideIcon; prompt: stri
     hint: 'Sign in and assert the dashboard',
     icon: LogInIcon,
     prompt:
-      'Record a scenario: open https://qaplayground.com/bank, sign in with username "admin" and password "admin123", click the login button, wait for the URL to be /bank/dashboard, assert the page title reads "SecureBank Dashboard", then save it as bank-login.json.',
+      'Record a scenario: open https://qaplayground.com/bank, sign in using the test credentials listed on the page, click the login button, wait for the URL to be /bank/dashboard, assert you landed on the dashboard, then save it as bank-login.json.',
   },
   {
     title: 'Replay & summarize',
