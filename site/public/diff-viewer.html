@@ -142,7 +142,11 @@
   drag: move wipe / pan when zoomed · wheel: zoom · <kbd>+</kbd>/<kbd>−</kbd>/<kbd>0</kbd>/<kbd>1</kbd> zoom · <kbd>←</kbd>/<kbd>→</kbd> wipe · <kbd>[</kbd>/<kbd>]</kbd> modes
 </footer>
 <script>
-const q = new URLSearchParams(location.search);
+// Raw-HTML wrappers (htmlpreview.github.io) nest this page's URL inside
+// their own query — the inner `?` then marks where OUR params start.
+const raw = location.search;
+const inner = raw.indexOf('?', 1);
+const q = new URLSearchParams(inner > 0 ? raw.slice(inner) : raw);
 const B = q.get('b'), C = q.get('c'), D = q.get('d');
 const sid = q.get('sid'), step = q.get('step');
 if (sid || step) {

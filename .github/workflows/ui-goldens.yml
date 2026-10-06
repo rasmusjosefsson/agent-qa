@@ -90,7 +90,6 @@ jobs:
           set -u
           STAGE="$(mktemp -d)/pr-$PR_NUMBER"
           mkdir -p "$STAGE"
-          cp evals/diff-viewer/viewer.html "$STAGE/viewer.html"
           found=0
           for sid_dir in evals/selftest/scenarios/*/; do
             sid="$(basename "$sid_dir")"

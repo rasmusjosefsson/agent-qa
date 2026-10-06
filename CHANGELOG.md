@@ -7,13 +7,14 @@ All notable changes to agent-qa are documented here. This project follows
 ## [Unreleased]
 ### Added
 
-- Golden-diff viewer: `evals/diff-viewer/viewer.html` — a self-contained
+- Golden-diff viewer: `site/public/diff-viewer.html` — a self-contained
   compare UI (wipe slider, blink flicker, side-by-side, diff map,
   diff-blend, wheel/cursor-anchored zoom, keyboard shortcuts) driven by
-  `?b=&c=&d=` query params. The docs-goldens and ui-goldens workflows now
-  publish it next to each PR's diff images on the scratch branch, and the
-  goldens PR comment links every failed shot to it via a raw-HTML preview
-  ("open diff viewer").
+  `?b=&c=&d=` query params, served with the docs site at
+  `<owner>.github.io/<repo>/diff-viewer.html`. The docs-goldens and
+  ui-goldens PR comments link every failed shot to it
+  ("open diff viewer"), loading the images from the published diff
+  artifacts.
 - Workbench shot-diff card: blink mode (baseline/current alternate in
   place) and a 50–250% zoom control, alongside the existing before/after
   slider and diff map.
