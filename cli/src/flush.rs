@@ -14,9 +14,10 @@ use crate::sidecar::atomic_write_file;
 
 pub fn run(args: &[String]) -> Result<u8> {
     let mut auto_shots = false;
-    let mut auto_network = true;
+    let mut auto_network = false;
     let mut auto_errors = true;
     let mut auto_secrets = true;
+    let mut auto_url = true;
     for arg in args {
         match arg.as_str() {
             "-h" | "--help" | "help" => {
@@ -27,13 +28,15 @@ pub fn run(args: &[String]) -> Result<u8> {
             "--auto-network" => auto_network = true,
             "--auto-errors" => auto_errors = true,
             "--auto-secrets" => auto_secrets = true,
+            "--auto-url" => auto_url = true,
             "--no-auto-network" => auto_network = false,
             "--no-auto-errors" => auto_errors = false,
             "--no-auto-secrets" => auto_secrets = false,
+            "--no-auto-url" => auto_url = false,
             other => bail!("flush: unknown argument {other:?}"),
         }
     }
-    let summary = flush(auto_shots, auto_network, auto_errors, auto_secrets)?;
+    let summary = flush(auto_shots, auto_network, auto_errors, auto_secrets, auto_url)?;
     println!("flushed sid={} steps={}", summary.sid, summary.steps);
     println!("wrote   {}", summary.scenario_file.display());
     Ok(0)
@@ -52,12 +55,21 @@ Options:
                 baselines with `agent-qa shot-accept <sid>` after the first
                 replay.
   --auto-network Append a {{\"network\": {{urlMatches,method}},ofKind:fired}}
-                check per distinct XHR/fetch/non-GET request the session
-                made — replays then prove the same API calls still happen
-                (max 12). ON by default; --no-auto-network disables.
+                check per distinct XHR/fetch/non-GET request made inside
+                the recording window — replays then prove the same API
+                calls still happen (max 12). OFF by default: the claims are
+                a network contract, useful on flows whose API calls are the
+                point — as a blanket default they bury intent under page
+                plumbing. OPTIONS/HEAD are never claimed (preflights and
+                probes are browser plumbing, not app behavior).
   --auto-errors  Append a {{\"pageError\": true}} notExists check — a page
                 that starts throwing uncaught exceptions fails the replay.
                 ON by default; --no-auto-errors disables.
+  --auto-url     Append a {{\"url\": true}} equals check asserting the page
+                the session ended on — catches replays that land somewhere
+                else (bounced to a login, wrong redirect). Query and hash
+                are stripped: landing URLs carry nonces that can't refire.
+                ON by default; --no-auto-url disables.
   --auto-secrets Lift literal values typed into password-shaped fields out
                 of scenario.json: each becomes a {{from: input}} ref + a
                 sensitive inputs entry, and the real value lands in
@@ -464,6 +476,12 @@ fn insert_auto_network_claims(
                 continue;
             }
         }
+        // OPTIONS preflights and HEAD probes are browser plumbing — a
+        // preflight refires only until the browser's preflight cache
+        // absorbs it, so claiming one makes replays nondeterministic.
+        if matches!(r.method.as_str(), "OPTIONS" | "HEAD") {
+            continue;
+        }
         let rt = r.resource_type.as_deref().unwrap_or("");
         let is_api =
             matches!(rt, "XHR" | "Fetch" | "EventSource" | "WebSocket") || r.method != "GET";
@@ -516,6 +534,34 @@ fn insert_auto_network_claims(
     crate::buffer::normalize_ids(steps);
 }
 
+/// Append a `{"url": true}` matches check pinning the page the session
+/// ended on — the cheap "the flow landed where it should" gate. Anchored
+/// `^bare([?#].*)?$`: query and hash carry nonces (`code=`, `state=`) and
+/// tracker params that can't refire identically on replay.
+fn append_auto_url_claim(steps: &mut Vec<crate::scenario::Step>, session: &str) {
+    if let Some(current) = crate::browser::current_url(session) {
+        push_url_claim(steps, &current);
+    }
+}
+
+fn push_url_claim(steps: &mut Vec<crate::scenario::Step>, current: &str) {
+    let bare = current.split(['?', '#']).next().unwrap_or(current);
+    let pattern = format!("^{}([?#].*)?$", regex::escape(bare));
+    steps.push(crate::scenario::Step::Check {
+        id: String::new(),
+        intent: format!("landed on {bare}"),
+        claim: crate::scenario::Claim {
+            subject: crate::scenario::ClaimSubject::Url { url: true },
+            predicate: crate::scenario::Predicate::Matches,
+            value: Some(serde_json::json!(pattern)),
+            tolerance: None,
+        },
+        enabled: None,
+        context: None,
+    });
+    crate::buffer::normalize_ids(steps);
+}
+
 /// Append a `{"pageError": true}` notExists check — an uncaught exception
 /// during replay then fails the scenario the same way a broken element does.
 fn append_auto_error_claims(steps: &mut Vec<crate::scenario::Step>) {
@@ -541,6 +587,7 @@ fn flush(
     auto_network: bool,
     auto_errors: bool,
     auto_secrets: bool,
+    auto_url: bool,
 ) -> Result<Summary> {
     let mut state = RecorderState::load_active()?;
     if state.paused {
@@ -579,6 +626,9 @@ fn flush(
             }
             Err(e) => eprintln!("[v2-record] auto-network skipped: {e}"),
         }
+    }
+    if auto_url {
+        append_auto_url_claim(&mut state.steps, &state.session);
     }
     if auto_errors {
         append_auto_error_claims(&mut state.steps);
@@ -694,7 +744,7 @@ mod tests {
         )
         .unwrap();
 
-        let summary = flush(false, false, false, false).unwrap();
+        let summary = flush(false, false, false, false, false).unwrap();
         let scenario: serde_json::Value =
             serde_json::from_slice(&fs::read(&summary.scenario_file).unwrap()).unwrap();
         assert_eq!(summary.steps, 2);
@@ -724,7 +774,7 @@ mod tests {
         );
         state.save().unwrap();
 
-        let err = flush(false, false, false, false).unwrap_err().to_string();
+        let err = flush(false, false, false, false, false).unwrap_err().to_string();
         assert!(err.contains("nothing recorded"), "unexpected error: {err}");
         // The recording stays active — the operator can still capture or abandon.
         assert!(paths::record_state_file().exists());
@@ -762,7 +812,7 @@ mod tests {
         .unwrap();
         state.save().unwrap();
 
-        let err = flush(false, false, false, false).unwrap_err().to_string();
+        let err = flush(false, false, false, false, false).unwrap_err().to_string();
         assert!(err.contains("refusing to overwrite"), "unexpected: {err}");
         // The unrelated scenario survived untouched, and the recording is
         // still active so the operator can re-flush under a free sid.
@@ -811,7 +861,7 @@ mod tests {
         }))
         .unwrap();
         state.save().unwrap();
-        flush(false, false, false, false).unwrap();
+        flush(false, false, false, false, false).unwrap();
 
         let scenario: serde_json::Value =
             serde_json::from_slice(&fs::read(dir.join("scenario.json")).unwrap()).unwrap();
@@ -846,7 +896,7 @@ mod tests {
         // A plain literal on a non-secret field stays literal.
         record_draft(&mut state, StepKind::Do, &json!({"intent":"type email","verb":"type","on":{"raw":{"kind":"css","value":"input[name=email]"},"reason":"css"},"value":{"from":"literal","literal":"a@b"}}), "default").unwrap();
 
-        let summary = flush(false, false, false, true).unwrap();
+        let summary = flush(false, false, false, true, false).unwrap();
         let scenario: serde_json::Value =
             serde_json::from_slice(&fs::read(&summary.scenario_file).unwrap()).unwrap();
         // The secret became an input ref + a sensitive declaration; the
@@ -890,7 +940,7 @@ mod tests {
             BrowserConnection::default(),
         );
         record_draft(&mut state, StepKind::Do, &json!({"intent":"type password","verb":"type","on":{"raw":{"kind":"css","value":"input[type=password]"},"reason":"css"},"value":{"from":"literal","literal":"hunter2"}}), "default").unwrap();
-        let summary = flush(false, false, false, false).unwrap();
+        let summary = flush(false, false, false, false, false).unwrap();
         let scenario: serde_json::Value =
             serde_json::from_slice(&fs::read(&summary.scenario_file).unwrap()).unwrap();
         assert_eq!(
@@ -935,7 +985,7 @@ mod tests {
         )
         .unwrap();
 
-        let summary = flush(true, false, false, false).unwrap();
+        let summary = flush(true, false, false, false, false).unwrap();
         let scenario: serde_json::Value =
             serde_json::from_slice(&fs::read(&summary.scenario_file).unwrap()).unwrap();
         let steps = scenario["steps"].as_array().unwrap();
@@ -1179,6 +1229,58 @@ mod tests {
             })
             .collect();
         assert_eq!(urls, ["https://x/api/login", "https://x/api/mock"]);
+    }
+
+    #[test]
+    fn flush_auto_network_claims_skip_preflights_and_probes() {
+        use crate::browser::CapturedRequest;
+        let req = |method: &str, url: &str| CapturedRequest {
+            request_id: String::new(),
+            url: url.to_string(),
+            method: method.to_string(),
+            status: Some(200),
+            resource_type: Some("XHR".to_string()),
+            mime_type: None,
+            post_data: None,
+            ws_frames: vec![],
+            timestamp: None,
+        };
+        let mut steps = vec![];
+        let requests = vec![
+            // CORS preflight + HEAD probe — browser plumbing, never contract
+            req("OPTIONS", "https://x/api/login"),
+            req("HEAD", "https://x/api/health"),
+            req("POST", "https://x/api/login"),
+        ];
+        insert_auto_network_claims(&mut steps, &requests, None);
+        assert_eq!(steps.len(), 1);
+        let json = serde_json::to_value(&steps[0]).unwrap();
+        assert_eq!(
+            json["claim"]["subject"]["network"]["urlMatches"],
+            "https://x/api/login"
+        );
+    }
+
+    #[test]
+    fn push_url_claim_pins_page_but_not_query() {
+        let mut steps = vec![];
+        push_url_claim(
+            &mut steps,
+            "https://app.example.com/bank/dashboard?code=abc123&state=xyz#frag",
+        );
+        assert_eq!(steps.len(), 1);
+        let json = serde_json::to_value(&steps[0]).unwrap();
+        assert_eq!(json["kind"], "check");
+        assert_eq!(json["intent"], "landed on https://app.example.com/bank/dashboard");
+        assert_eq!(json["claim"]["subject"]["url"], true);
+        assert_eq!(json["claim"]["predicate"], "matches");
+        let pat = json["claim"]["value"].as_str().unwrap();
+        let re = regex::Regex::new(pat).unwrap();
+        // same page, fresh nonce query → pass
+        assert!(re.is_match("https://app.example.com/bank/dashboard?code=zzz&state=q"));
+        // different path → fail
+        assert!(!re.is_match("https://app.example.com/login"));
+        assert!(!re.is_match("https://app.example.com/bank/dashboardx"));
     }
 
     #[test]
