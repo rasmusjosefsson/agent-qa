@@ -11,10 +11,10 @@ export function runIntent(c: Pick<CaseRecord, 'title' | 'id'>): string {
 }
 
 export function buildRunPrompt(c: CaseRecord, apiBase: string): string {
+  // Verbatim — imported steps may already carry their own numbering.
   const steps = c.steps
     .map((s) => s.trim())
     .filter(Boolean)
-    .map((s, i) => `${i + 1}. ${s}`)
     .join('\n')
 
   const data = Object.entries(c.inputs || {})
@@ -36,23 +36,33 @@ export function buildRunPrompt(c: CaseRecord, apiBase: string): string {
     '',
     'First load the skill: run `agent-qa skills get core`.',
     '',
+    '## Target + sign-in — resolve BEFORE recording',
+    '',
+    'Check the chat sign-in state first:',
+    '  curl -s "$AGENT_QA_BASE/api/chat/c/$AGENT_QA_CHAT_ID/connection"',
+    '',
+    `- Start URL: ${c.startUrl || '(none given — pick the target yourself: list environments via `curl -s "$AGENT_QA_BASE/api/environments"` and pick the one whose routes match the steps, then derive the URL from its baseUrl)'}`,
+    '',
+    'If `state` is "disconnected" and the target needs auth: list personas/environments via /api/personas + /api/environments, pick the matching environment, and connect BEFORE `agent-qa start` —',
+    '  curl -s -X POST "$AGENT_QA_BASE/api/chat/c/$AGENT_QA_CHAT_ID/connect" -H \'content-type: application/json\' -d \'{"personaId":"<id>","environmentId":"<env>"}\'',
+    'Connecting first stamps a useProfile baseline into the scenario so replays re-authenticate. If the user must choose the persona, ask instead of guessing.',
+    '',
     `Test case: "${c.title}"  (case id: ${c.id})`,
-    `Start URL: ${c.startUrl || '(none — infer from the steps)'}`,
   ]
   if (c.preconditions) lines.push(`Preconditions: ${c.preconditions}`)
   lines.push(
     '',
-    'Record these steps in a real browser, one at a time, substituting any [TOKEN] placeholders with the test data below:',
-    steps || '(no steps authored)'
+    'Record these steps in a real browser, one at a time, substituting any [TOKEN] placeholders with the test data below (steps may carry their own numbering — keep it):',
+    steps || '(no steps authored — derive a sensible flow from the title)'
   )
   if (data) lines.push('', 'Test data (placeholders → values):', data)
   lines.push(
     '',
     'Then verify the EXPECTED RESULT and record it as assertion step(s):',
-    `Expected: ${c.expected || '(none specified)'}`,
+    `Expected: ${c.expected || '(none specified — assert the outcome the steps imply)'}`,
     '',
     'Workflow:',
-    `1. Run \`agent-qa start "${intent}" --open "${c.startUrl}"\` to begin recording (this mints the scenario id).`,
+    `1. ${c.startUrl ? `Run \`agent-qa start "${intent}" --open "${c.startUrl}"\`` : `Run \`agent-qa start "${intent}"\``} to begin recording (this mints the scenario id).`,
     '2. Perform and record each step above. Map every [TOKEN] placeholder to the scenario `inputs` so the data stays parameterized.',
     '3. Record assertion step(s) for the expected result.',
     '4. Run `agent-qa flush` to write scenario.json.',
