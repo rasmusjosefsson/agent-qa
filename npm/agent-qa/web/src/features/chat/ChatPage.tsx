@@ -789,6 +789,11 @@ function ConnectBar({ cid }: { cid: string }) {
   // True once the user picks a persona by hand — a guest-state poll must not
   // wipe their selection before they press Connect.
   const pickedRef = useRef(false)
+  // Set once the first connection poll lands — the lone-persona preselect
+  // waits for it AND needs the chat to not be guest, else it flashes the
+  // persona name for a beat before the poll clears it (and again whenever
+  // the personas fetch finishes after that first poll).
+  const connRef = useRef<{ known: boolean; guest: boolean }>({ known: false, guest: false })
   // Connect runs headless; when it fails, offer a retry in a visible browser
   // window so interactive sign-in (SSO, MFA) can complete and failures are
   // watchable. Cleared on the next attempt/success.
@@ -886,7 +891,10 @@ function ConnectBar({ cid }: { cid: string }) {
     const refreshConnection = async () => {
       try {
         const connection = await getChatConnection(cid)
-        if (alive) showConnection(connection)
+        if (alive) {
+          connRef.current = { known: true, guest: !!connection.guest }
+          showConnection(connection)
+        }
       } catch {
         /* connection status is optional */
       }
@@ -898,9 +906,12 @@ function ConnectBar({ cid }: { cid: string }) {
         if (!alive) return
         setPersonas(pe.personas)
         setEnvironments(en.environments)
-        // Preselect a lone persona only when the user hasn't explicitly
-        // chosen guest mode — the connection poll clears this if guest.
-        if (pe.personas.length === 1 && !pickedRef.current) setPersonaId(pe.personas[0].id)
+        // Preselect a lone persona only once the connection poll has landed
+        // and the chat isn't guest — preselecting early flashes the persona
+        // name in the select for a beat before the guest state clears it.
+        if (pe.personas.length === 1 && !pickedRef.current && connRef.current.known && !connRef.current.guest) {
+          setPersonaId(pe.personas[0].id)
+        }
       } catch {
         /* personas optional — bar stays hidden */
       }
