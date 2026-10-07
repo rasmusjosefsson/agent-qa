@@ -1808,7 +1808,8 @@ async function handleSimpleRecords(req, res, root, seg, cfg) {
       }
       const rec = normalize(id, body, localRec);
       await fsp.mkdir(dir, { recursive: true });
-      await fsp.writeFile(file, JSON.stringify(rec, null, 2) + '\n');
+      // Persona records can hold literal credentials — owner-only.
+      await fsp.writeFile(file, JSON.stringify(rec, null, 2) + '\n', { mode: 0o600 });
       return sendJson(res, 200, { ok: true, [key]: rec });
     }
     return sendJson(res, 405, { error: 'method not allowed' });
