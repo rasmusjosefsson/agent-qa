@@ -40,6 +40,12 @@
   and finally an internally resolved ref from a fresh ARIA snapshot. There is no
   public `--ref` flag, stale-ref cross-check, or ambiguity error contract.
 
+- **Resolve-plugin picks are gated by a confidence floor.** A configured
+  `resolve` plugin's pick must report `confidence >= 0.85` (override via
+  `AGENT_QA_RESOLVE_MIN_CONFIDENCE`) or it is rejected — a wrong-but-confident
+  pick clicks the wrong element and records the wrong locator. Picks with no
+  confidence field are trusted.
+
 - **A successful `smart-click` dispatch is not proof that app state changed.**
   The command records after the click path returns successfully, but it has no
   post-click state verifier. Snapshot or assert the resulting state when the
