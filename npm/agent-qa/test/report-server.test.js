@@ -1690,11 +1690,44 @@ test("POST /api/chat/c/:id/prompt annotates the text with the pane's current pag
   assert.match(prompts[0], /browser pane is currently on https:\/\/example\.com\/docs/);
   assert.match(prompts[0], /record this page$/);
 
-  // No tracked page → the text goes through verbatim.
+  // No tracked page → only the sign-in note rides along; the text still ends it.
   bridge.currentUrl = null;
   await j('POST', `/api/chat/c/${chat.id}/prompt`, { text: 'record this page' });
   await new Promise((r) => setTimeout(r, 20));
-  assert.equal(prompts[1], 'record this page');
+  assert.match(prompts[1], /browsing anonymously/);
+  assert.match(prompts[1], /record this page$/);
+});
+
+test('prompt annotation reports a connected persona instead of anonymous', async (t) => {
+  const fx = makeFixture();
+  const prompts = [];
+  const { server, base } = await boot(fx.root, {
+    chat: { hub: { prompt: async (text) => prompts.push(text) } },
+    runCli: async (args) =>
+      args[0] === 'profile-status'
+        ? { code: 0, stdout: 'authenticated', stderr: '' }
+        : { code: 0, stdout: 'ok', stderr: '' },
+  });
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, {
+      method: m,
+      headers: { 'content-type': 'application/json' },
+      body: b ? JSON.stringify(b) : undefined,
+    });
+  const chat = await (await j('POST', '/api/chat/create')).json();
+  await j('POST', '/api/personas/admin', { name: 'Admin', profile: 'admin-user' });
+  await j('POST', '/api/environments/staging', { name: 'Staging' });
+  const conn = await j('POST', `/api/chat/c/${chat.id}/connect`, {
+    personaId: 'admin',
+    environmentId: 'staging',
+  });
+  assert.equal((await conn.json()).authenticated, true);
+
+  await j('POST', `/api/chat/c/${chat.id}/prompt`, { text: 'hi' });
+  await new Promise((r) => setTimeout(r, 20));
+  const last = prompts[prompts.length - 1];
+  assert.match(last, /signed in as the "admin-user" persona/);
 });
 
 test("GET /api/chat/c/:id/info reports the chat's agent/browser/plugin wiring", async (t) => {
