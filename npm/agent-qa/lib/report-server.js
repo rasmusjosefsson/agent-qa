@@ -22,7 +22,7 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const path = require('node:path');
 const { createReadStream } = require('node:fs');
-const { execFile } = require('node:child_process');
+const { execFile, execFileSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 const { createLiveBridge } = require('./live-bridge.js');
 const { findExtensionDir, zipExtensionDir } = require('./extension-zip.js');
@@ -842,6 +842,294 @@ async function handleSets(req, res, root, seg) {
   }
 
   return notFound(res, 'not found');
+}
+
+// -------- knowledge import (read-only external test sources → cases/sets) --------
+//
+// Turns a key (a single issue, or a container of tests) into local
+// case/set records — the Knowledge page's Import button. Deterministic, no
+// agent involved: `acli` (Atlassian CLI, OAuth) supplies issue fields and
+// test-membership JQL; Xray *step* content never reaches the Jira API, so a
+// dedicated scrape session reads the rendered Xray panel through a11y —
+// authenticated by the cookie jar an auth plugin persisted under
+// ~/.agent-qa/<vendor>-auth/cookies.json (any plugin store is discovered by
+// glob; nothing vendor-specific here). Read-only: Jira is only ever GET'ed.
+//
+// POST /api/knowledge/import  {source:'jira', key}
+// POST /api/knowledge/import  {source:'xray', key, container:'plan'|'set'|'story'|'epic'}
+// → {imported:[{id,title,key}], set?{id,name}, warnings:[...]}
+
+const KNOWLEDGE_SCRAPE_SESSION = 'knowledge-import';
+const XRAY_CONTAINER_JQL = { plan: 'testPlanTests', set: 'testSetTests' };
+
+function execOut(bin, args, opts = {}) {
+  try {
+    return {
+      ok: true,
+      out: execFileSync(bin, args, {
+        encoding: 'utf8',
+        timeout: opts.timeout || 60000,
+        maxBuffer: 16 * 1024 * 1024,
+        env: process.env,
+      }),
+    };
+  } catch (e) {
+    return { ok: false, out: String((e && (e.stderr || e.message)) || e) };
+  }
+}
+
+function acliJson(args) {
+  const r = execOut('acli', args, { timeout: 90000 });
+  if (!r.ok) return { error: r.out.trim().slice(0, 400) };
+  try {
+    return { value: JSON.parse(r.out) };
+  } catch {
+    return { error: 'acli returned non-JSON output' };
+  }
+}
+
+// "Site: outreach-io.atlassian.net" from `acli jira auth status`.
+function jiraHost() {
+  const r = execOut('acli', ['jira', 'auth', 'status']);
+  const m = /Site:\s*(\S+)/.exec(r.out || '');
+  return m ? m[1] : null;
+}
+
+// Every plugin cookie store that opted into the convention.
+function loadStoredCookies() {
+  const base = path.join(os.homedir(), '.agent-qa');
+  let stores = [];
+  try {
+    stores = fs.readdirSync(base)
+      .map((n) => path.join(base, n, 'cookies.json'))
+      .filter((f) => fs.existsSync(f));
+  } catch {
+    return [];
+  }
+  const byKey = new Map();
+  for (const f of stores) {
+    try {
+      for (const c of JSON.parse(fs.readFileSync(f, 'utf8')).cookies || []) {
+        byKey.set(`${c.domain}|${c.name}`, c);
+      }
+    } catch {}
+  }
+  const now = Date.now() / 1000;
+  return [...byKey.values()].filter((c) => !c.expires || c.expires > now + 30);
+}
+
+// Push the persisted jar into the scrape session so gated pages (SSO'd
+// Atlassian, build proxies) open as the user — same trick the auth plugins
+// use at connect time.
+function injectSessionCookies(session) {
+  const cookies = loadStoredCookies();
+  let set = 0;
+  for (const c of cookies) {
+    const args = ['--session', session, 'cookies', 'set', c.name, c.value];
+    if (c.domain) {
+      args.push('--domain', c.domain);
+      args.push('--url', `https://${String(c.domain).replace(/^\./, '')}`);
+    }
+    if (c.httpOnly) args.push('--httpOnly');
+    const r = execOut(process.env.AGENT_BROWSER_BIN || 'agent-browser', args);
+    if (r.ok) set++;
+  }
+  return set;
+}
+
+function abOut(args) {
+  return execOut(process.env.AGENT_BROWSER_BIN || 'agent-browser', ['--session', KNOWLEDGE_SCRAPE_SESSION, ...args], { timeout: 45000 });
+}
+
+// Fetch an issue page's accessibility snapshot; returns text lines or error.
+// Jira's SPA + the Xray iframe take a few seconds — retry once.
+async function scrapeIssueLines(issueUrl) {
+  const open = abOut(['open', issueUrl]);
+  if (!open.ok) return { error: open.out.trim().slice(0, 300) };
+  for (let i = 0; i < 2; i++) {
+    await new Promise((r) => setTimeout(r, i === 0 ? 7000 : 5000));
+    const snap = abOut(['snapshot']);
+    if (!snap.ok) continue;
+    const lines = snap.out.split('\n').filter((l) => l.trim());
+    if (lines.some((l) => /Log in to continue|Sign in to continue/i.test(l)))
+      return { error: 'not signed in — the browser session lost its Atlassian login; sign in once in a headed window and retry' };
+    if (lines.length > 30) return { lines };
+  }
+  return { error: 'page did not render (snapshot stayed nearly empty)' };
+}
+
+// Extract Xray step text from an issue-page snapshot. The steps grid lives
+// inside an iframe the a11y tree crosses; rows come out as StaticText lines
+// under the "Test details" panel. Best-effort: drop chrome/tab labels and
+// keep the body lines verbatim.
+const XRAY_PANEL_CHROME = new Set([
+  'Test details', 'Preconditions', 'Test Sets', 'Test Plans', 'Test Executions',
+  'Test Runs', 'More actions for Test details', 'Test Repository', 'Settings',
+  // steps-grid column headers + field labels inside the Xray panel
+  'Test Type', 'Manual', 'Automate Test', 'BETA', 'Dataset', 'Action', 'Data',
+  'Expected Result', 'None', 'New Step', 'Import Step', 'Call Test',
+  'Uses AI. Verify results.',
+]);
+const depth = (l) => /^\s*/.exec(l)[0].length;
+function parseXraySteps(lines) {
+  const idx = lines.findIndex((l) => /Iframe/i.test(l));
+  if (idx === -1) return [];
+  const frameDepth = depth(lines[idx]);
+  const steps = [];
+  let preconditions = '';
+  let inPre = false;
+  let seenContent = false;
+  for (const l of lines.slice(idx + 1)) {
+    if (depth(l) <= frameDepth) break; // iframe subtree ends at the next sibling
+    const m = /StaticText "([^"]*)"/.exec(l);
+    if (!m) continue;
+    const t = m[1].trim();
+    if (!t || XRAY_PANEL_CHROME.has(t) || t.length < 3) continue;
+    if (/^\(\d+\)$|^,$|^, \(opens new window\)$|^Attachments\s*\(\d+\)/.test(t)) continue;
+    if (/^(Edit|Delete|Move|Clone|Add|Remove|Hide|Show|Collapse|Expand)\b/i.test(t)) continue;
+    const pre = /^Pre-?condition\s*:?\s*(.*)$/i.exec(t);
+    if (pre) {
+      seenContent = true;
+      inPre = true;
+      if (pre[1]) preconditions = preconditions ? `${preconditions} ${pre[1]}` : pre[1];
+      continue;
+    }
+    // Lines right after the precondition marker continue it until the first
+    // numbered step — they are the panel's pre-condition actions.
+    if (inPre && !/^\d+\s*[.)]/.test(t)) { preconditions += (preconditions ? ' ' : '') + t; continue; }
+    inPre = false;
+    if (/^\d+\s*[.)]/.test(t)) seenContent = true;
+    // Header noise (repository breadcrumb/field labels) precedes the first
+    // real content marker — drop it.
+    if (!seenContent && steps.length < 10) continue;
+    steps.push(t);
+  }
+  // A trailing unnumbered line after the numbered steps is the Xray
+  // Expected Result cell — lift it into `expected`.
+  let expected = '';
+  if (steps.length > 1 && !/^\d+\s*[.)]/.test(steps[steps.length - 1]) &&
+      /^\d+\s*[.)]/.test(steps[steps.length - 2])) {
+    expected = steps.pop();
+  }
+  return { steps, preconditions, expected };
+}
+
+const issueKeyToCaseId = (key) =>
+  key.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'imported-case';
+
+async function importOneTest(root, host, key, warnings) {
+  const view = acliJson(['jira', 'workitem', 'view', key, '--fields', 'summary,description', '--json']);
+  if (view.error) { warnings.push(`${key}: ${view.error}`); return null; }
+  const f = (view.value && view.value.fields) || {};
+  const title = String(f.summary || key);
+
+  // Steps: only rendered inside the issue's Xray panel — scrape it.
+  let steps = [];
+  let preconditions = '';
+  let expected = '';
+  const scraped = await scrapeIssueLines(`https://${host}/browse/${key}`);
+  if (scraped.error) {
+    warnings.push(`${key}: steps not imported (${scraped.error})`);
+  } else {
+    const parsed = parseXraySteps(scraped.lines);
+    steps = parsed.steps;
+    preconditions = parsed.preconditions || '';
+    expected = parsed.expected || '';
+    if (steps.length === 0) {
+      warnings.push(`${key}: no steps found in the Xray panel`);
+    }
+  }
+
+  const id = issueKeyToCaseId(key);
+  const existing = await readJson(caseFile(root, id));
+  const rec = normalizeCase(id, {
+    title,
+    startUrl: '',
+    preconditions,
+    steps,
+    expected,
+    source: 'xray',
+    sourceRef: key,
+    tags: ['xray'],
+    externalRefs: [{ provider: 'xray', key, url: `https://${host}/browse/${key}` }],
+  }, existing);
+  const dir = path.dirname(caseFile(root, id));
+  await fsp.mkdir(dir, { recursive: true });
+  await fsp.writeFile(caseFile(root, id), JSON.stringify(rec, null, 2) + '\n');
+  return { id, title, key };
+}
+
+async function handleKnowledgeImport(req, res, root) {
+  let body;
+  try { body = await readJsonBody(req); } catch (e) { return badRequest(res, String(e && e.message || e)); }
+  const source = String(body.source || '');
+  const key = String(body.key || '').trim().toUpperCase();
+  const container = String(body.container || 'plan');
+  if (!key) return badRequest(res, 'key is required');
+
+  const host = jiraHost();
+  if (!host) return sendJson(res, 502, { error: 'no authenticated Atlassian site — run `acli jira auth status` to check' });
+
+  const warnings = [];
+
+  if (source === 'jira') {
+    injectSessionCookies(KNOWLEDGE_SCRAPE_SESSION);
+    const one = await importOneTest(root, host, key, warnings);
+    if (!one) return sendJson(res, 502, { error: warnings[0] || `could not fetch ${key}` });
+    return sendJson(res, 200, { imported: [one], warnings });
+  }
+
+  if (source !== 'xray') return badRequest(res, 'source must be "jira" or "xray"');
+
+  // Resolve member test keys.
+  let testKeys;
+  const jqlFn = XRAY_CONTAINER_JQL[container];
+  if (jqlFn) {
+    const r = acliJson(['jira', 'workitem', 'search', '--jql', `issue in ${jqlFn}(${key})`, '--fields', 'summary,issuetype', '--json']);
+    if (r.error) return sendJson(res, 502, { error: `member lookup failed: ${r.error}` });
+    testKeys = (r.value || []).map((i) => i.key);
+  } else {
+    // story/epic: no coverage JQL — read the issue's Xray coverage panel.
+    const scraped = await scrapeIssueLines(`https://${host}/browse/${key}`);
+    if (scraped.error) return sendJson(res, 502, { error: scraped.error });
+    testKeys = [...new Set(
+      scraped.lines.map((l) => /\b([A-Z]+-\d+)\b/.exec(l)?.[1]).filter((k) => k && k !== key)
+    )];
+  }
+  if (!testKeys.length) return sendJson(res, 404, { error: `no tests found under ${key}` });
+
+  // Filter to actual Test-type issues (coverage panels can list other links).
+  const verified = [];
+  for (const k of testKeys.slice(0, 50)) {
+    const v = acliJson(['jira', 'workitem', 'view', k, '--fields', 'issuetype', '--json']);
+    if (!v.error && /test/i.test((v.value && v.value.fields && v.value.fields.issuetype && v.value.fields.issuetype.name) || '')) verified.push(k);
+  }
+  if (!verified.length) return sendJson(res, 404, { error: `none of the keys under ${key} resolve to Test issues` });
+
+  injectSessionCookies(KNOWLEDGE_SCRAPE_SESSION);
+  const imported = [];
+  for (const k of verified) {
+    const one = await importOneTest(root, host, k, warnings);
+    if (one) imported.push(one);
+  }
+
+  const setId = `set-${issueKeyToCaseId(key)}`;
+  const setExisting = await readJson(setFile(root, setId));
+  const setRec = normalizeSet(setId, {
+    name: `${key} (imported)`,
+    mode: 'manual',
+    caseIds: [...new Set([...(setExisting ? setExisting.caseIds || [] : []), ...imported.map((c) => c.id)])],
+    source: 'xray',
+    sourceRef: key,
+  }, setExisting);
+  await fsp.mkdir(path.dirname(setFile(root, setId)), { recursive: true });
+  await fsp.writeFile(setFile(root, setId), JSON.stringify(setRec, null, 2) + '\n');
+
+  return sendJson(res, 200, {
+    imported,
+    set: { id: setId, name: setRec.name, caseCount: setRec.caseIds.length },
+    warnings,
+  });
 }
 
 // -------- test plans (runnable + trackable scope of cases) --------
@@ -4121,6 +4409,11 @@ function createRequestHandler(root, deps, chat) {
       // Like /api/cases, works without a resolved CLI.
       if (segAll[0] === 'api' && segAll[1] === 'sets') {
         return await handleSets(req, res, root, segAll.slice(2));
+      }
+
+      // Knowledge imports (Jira issue / Xray container → cases + set).
+      if (segAll[0] === 'api' && segAll[1] === 'knowledge' && segAll[2] === 'import' && req.method === 'POST') {
+        return await handleKnowledgeImport(req, res, root);
       }
 
       // Test plans (runnable scope of sets/cases) under <root>/_plans. CRUD is

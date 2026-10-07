@@ -14,13 +14,7 @@ import {
 } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import { navigate } from '@/router'
-import {
-  buildJiraImportPrompt,
-  buildXrayImportPrompt,
-  caseIdFromKey,
-  setIdFromKey,
-  type XrayContainer,
-} from './importPrompt'
+import { caseIdFromKey, setIdFromKey, type XrayContainer } from './importPrompt'
 
 // Connectors are imported through the Copilot agent, which holds the actual
 // credentials/MCP access. This hub just frames what's connectable and builds
@@ -41,14 +35,14 @@ const GROUPS: { label: string; hint: string; items: Source[] }[] = [
       {
         key: 'xray',
         name: 'Xray for Jira',
-        blurb: 'Import a test plan, set, story, or epic. The Copilot agent fetches the tests and creates cases + a set.',
+        blurb: 'Import a test plan, set, story, or epic. Fetches the tests read-only and creates cases + a set.',
         tile: 'bg-emerald-600',
         status: 'import-xray',
       },
       {
         key: 'jira',
         name: 'Jira',
-        blurb: 'Import a single issue as a test case via your Atlassian connection.',
+        blurb: 'Import a single issue as a test case, read-only.',
         tile: 'bg-blue-600',
         status: 'import-jira',
       },
@@ -81,18 +75,36 @@ export function KnowledgePage() {
   const [key, setKey] = useState('')
   const [container, setContainer] = useState<XrayContainer>('plan')
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
 
-  const toCopilot = (prompt: string) => {
+  const runImport = async (body: Record<string, string>) => {
     setBusy(true)
-    navigate(`/chat?ask=${encodeURIComponent(prompt)}`)
+    setError('')
+    try {
+      const res = await fetch('/api/knowledge/import', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || `import failed (${res.status})`)
+      if (data.warnings?.length) console.warn('[knowledge import]', data.warnings)
+      setJiraOpen(false)
+      setXrayOpen(false)
+      navigate(data.set ? '/sets' : '/cases')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
   }
   const importJira = () => {
     const k = key.trim()
-    if (k) toCopilot(buildJiraImportPrompt(k, window.location.origin))
+    if (k) void runImport({ source: 'jira', key: k })
   }
   const importXray = () => {
     const k = key.trim()
-    if (k) toCopilot(buildXrayImportPrompt(k, container, window.location.origin))
+    if (k) void runImport({ source: 'xray', key: k, container })
   }
 
   const openJira = () => {
@@ -161,7 +173,7 @@ export function KnowledgePage() {
           <DialogHeader>
             <DialogTitle>Import from Jira</DialogTitle>
             <DialogDescription>
-              Enter an issue key. The Copilot agent will fetch it and create a test case you can run.
+              Enter an issue key. Its fields and Xray steps are fetched read-only and saved as a local test case you can run.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
@@ -181,13 +193,14 @@ export function KnowledgePage() {
                 new case id: {caseIdFromKey(key)}
               </p>
             )}
+            {error && <p className="text-xs text-destructive">{error}</p>}
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setJiraOpen(false)}>
               Cancel
             </Button>
             <Button onClick={importJira} disabled={!key.trim() || busy}>
-              {busy && <Loader2Icon className="animate-spin" />} Import in Copilot
+              {busy && <Loader2Icon className="animate-spin" />} Import
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -198,8 +211,8 @@ export function KnowledgePage() {
           <DialogHeader>
             <DialogTitle>Import from Xray</DialogTitle>
             <DialogDescription>
-              Pick what to import and its key. The Copilot agent fetches the tests and creates a case
-              for each, grouped into a set.
+              Pick what to import and its key. Each test becomes a local case, grouped into a set.
+              Read-only — nothing is written back to Jira.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -240,6 +253,7 @@ export function KnowledgePage() {
                   new set id: {setIdFromKey(key)}
                 </p>
               )}
+              {error && <p className="text-xs text-destructive">{error}</p>}
             </div>
           </div>
           <DialogFooter>
@@ -247,7 +261,7 @@ export function KnowledgePage() {
               Cancel
             </Button>
             <Button onClick={importXray} disabled={!key.trim() || busy}>
-              {busy && <Loader2Icon className="animate-spin" />} Import in Copilot
+              {busy && <Loader2Icon className="animate-spin" />} Import
             </Button>
           </DialogFooter>
         </DialogContent>
