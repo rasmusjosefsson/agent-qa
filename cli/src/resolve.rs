@@ -308,6 +308,23 @@ pub(crate) fn resolve_and_act(
             return None;
         }
     };
+    // Confidence floor: a wrong-but-confident pick is worse than a miss — it
+    // clicks the wrong element AND records the wrong locator. Picks with no
+    // confidence reported are trusted; `AGENT_QA_RESOLVE_MIN_CONFIDENCE`
+    // overrides the floor.
+    let floor = std::env::var("AGENT_QA_RESOLVE_MIN_CONFIDENCE")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(0.85);
+    if let Some(c) = pick.confidence {
+        if c < floor {
+            eprintln!(
+                "[resolve] rejected pick {} {:?} for {description:?} — confidence {c:.2} below floor {floor:.2}",
+                pick.candidate.role, pick.candidate.name
+            );
+            return None;
+        }
+    }
     let sel = format!("@{}", pick.candidate.ref_id);
     match browser::selector_act(session, &sel, act, value) {
         Ok(()) => Some(pick),

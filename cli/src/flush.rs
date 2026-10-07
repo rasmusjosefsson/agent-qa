@@ -547,6 +547,16 @@ fn append_auto_url_claim(steps: &mut Vec<crate::scenario::Step>, session: &str) 
 fn push_url_claim(steps: &mut Vec<crate::scenario::Step>, current: &str) {
     let bare = current.split(['?', '#']).next().unwrap_or(current);
     let pattern = format!("^{}([?#].*)?$", regex::escape(bare));
+    // A re-flushed buffer (`buffer load` pulls sealed auto-gates in) would
+    // otherwise grow a second identical landing claim every cycle.
+    if steps.iter().any(|s| matches!(
+        s,
+        crate::scenario::Step::Check { claim, .. }
+            if matches!(claim.subject, crate::scenario::ClaimSubject::Url { .. })
+                && claim.value == Some(serde_json::json!(pattern))
+    )) {
+        return;
+    }
     steps.push(crate::scenario::Step::Check {
         id: String::new(),
         intent: format!("landed on {bare}"),
@@ -565,6 +575,16 @@ fn push_url_claim(steps: &mut Vec<crate::scenario::Step>, current: &str) {
 /// Append a `{"pageError": true}` notExists check — an uncaught exception
 /// during replay then fails the scenario the same way a broken element does.
 fn append_auto_error_claims(steps: &mut Vec<crate::scenario::Step>) {
+    // Same dedupe as the landing gate — `buffer load` re-imports the sealed
+    // pageError check, so a second flush must not append another.
+    if steps.iter().any(|s| matches!(
+        s,
+        crate::scenario::Step::Check { claim, .. }
+            if matches!(claim.subject, crate::scenario::ClaimSubject::PageError { .. })
+                && matches!(claim.predicate, crate::scenario::Predicate::NotExists)
+    )) {
+        return;
+    }
     steps.push(crate::scenario::Step::Check {
         id: String::new(),
         intent: "page raised no uncaught exceptions".to_string(),
