@@ -1528,13 +1528,16 @@ function pluginsEnv(paths) {
 
 // -------- Jev (typesafe.ai) authoring-time resolve --------
 //
-// `_config/jev.json` enables the bundled jev-resolve plugin without a
-// hand-edited agent-qa.toml: when enabled, the bundled binary is appended
-// to AGENT_QA_PLUGINS for every workbench-spawned CLI call and the stored
-// API key rides as TYPESAFE_API_KEY. A TYPESAFE_API_KEY already in the
-// environment always wins over the stored key — same convention as
-// settings.json.
+// The JEV record lives at the GLOBAL config home — the API key is a
+// user-level secret, not a per-scenario-root one, so it survives workbench
+// launches against different roots. A `<root>/_config/jev.json` written by
+// an older version (or hand-placed) still shadows the global record on read.
+// When enabled, the bundled binary is appended to AGENT_QA_PLUGINS for every
+// workbench-spawned CLI call and the stored API key rides as
+// TYPESAFE_API_KEY — which always wins over a stored key.
 const jevConfigFile = (root) => path.join(root, '_config', 'jev.json');
+const jevGlobalConfigFile = () =>
+  path.join(process.env.AGENT_QA_HOME || path.join(os.homedir(), '.agent-qa'), '_config', 'jev.json');
 // Packaged path (mirrored from examples/plugins at release time) + the repo
 // checkout source so the card works under `npm run dev` too.
 const JEV_PLUGIN_PATHS = [
@@ -1554,15 +1557,21 @@ function normalizeJevConfig(rec) {
 }
 
 async function readJevConfig(root) {
-  return normalizeJevConfig(await readJson(jevConfigFile(root)));
+  // Per-root file shadows the global one — an explicit local override wins.
+  return normalizeJevConfig(
+    (await readJson(jevConfigFile(root))) || (await readJson(jevGlobalConfigFile())),
+  );
 }
 
 function readJevConfigSync(root) {
-  try {
-    return normalizeJevConfig(JSON.parse(fs.readFileSync(jevConfigFile(root), 'utf8')));
-  } catch {
-    return normalizeJevConfig(null);
+  for (const file of [jevConfigFile(root), jevGlobalConfigFile()]) {
+    try {
+      return normalizeJevConfig(JSON.parse(fs.readFileSync(file, 'utf8')));
+    } catch {
+      /* missing/unreadable → try the next source */
+    }
   }
+  return normalizeJevConfig(null);
 }
 
 async function writeJevConfig(root, patch) {
@@ -1572,10 +1581,15 @@ async function writeJevConfig(root, patch) {
     enabled: 'enabled' in patch ? !!patch.enabled : cur.enabled,
     apiKey: 'apiKey' in patch ? String(patch.apiKey || '') : cur.apiKey,
   };
-  await fsp.mkdir(path.join(root, '_config'), { recursive: true });
-  await fsp.writeFile(jevConfigFile(root), JSON.stringify(next, null, 2) + '\n');
+  // Write to the GLOBAL home — the key should work against every scenarios
+  // root, not just this one. A per-root file left over from before the move
+  // would shadow this write, so remove it (it was written by this same API).
+  const file = jevGlobalConfigFile();
+  await fsp.mkdir(path.dirname(file), { recursive: true });
+  await fsp.writeFile(file, JSON.stringify(next, null, 2) + '\n');
+  await fsp.rm(jevConfigFile(root), { force: true }).catch(() => {});
   try {
-    await fsp.chmod(jevConfigFile(root), 0o600);
+    await fsp.chmod(file, 0o600);
   } catch {
     /* best-effort on platforms without chmod */
   }
