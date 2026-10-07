@@ -264,12 +264,14 @@ export function ChatPage() {
 
   // Reflect the active chat in the URL so a chat window is linkable. The ?ask=
   // consumer owns the URL while a seed is pending — don't clobber the param
-  // before it reads it.
+  // before it reads it. Also skip while a switch transition is in flight:
+  // activeId still holds the old chat and writing it back would bounce the
+  // deep-link effect off the new one mid-switch.
   useEffect(() => {
-    if (!chatsReady || !activeId || ask) return
+    if (!chatsReady || !activeId || ask || isPending) return
     if (wantChat === activeId) return
     replaceRoute(`/chat?c=${encodeURIComponent(activeId)}`)
-  }, [activeId, chatsReady, ask, wantChat])
+  }, [activeId, chatsReady, ask, wantChat, isPending])
 
   const onNew = async () => {
     const c = await createChat()
