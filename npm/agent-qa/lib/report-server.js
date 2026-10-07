@@ -3928,7 +3928,7 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
     if (prompt) {
       Promise.resolve(entry.getHub())
         .then((hub) => hub && hub.prompt(annotatePromptWithContext(deps, entry, prompt)))
-        .catch(() => {});
+        .catch((e) => console.error('[chat create] seed prompt failed:', e));
     }
     return sendJson(res, 200, chatMeta(entry));
   }
