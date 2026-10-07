@@ -76,10 +76,12 @@ export function KnowledgePage() {
   const [container, setContainer] = useState<XrayContainer>('plan')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [job, setJob] = useState<{ id: string; phase?: string; current?: number; total?: number } | null>(null)
 
   const runImport = async (body: Record<string, string>) => {
     setBusy(true)
     setError('')
+    setJob(null)
     try {
       const res = await fetch('/api/knowledge/import', {
         method: 'POST',
@@ -88,15 +90,33 @@ export function KnowledgePage() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || `import failed (${res.status})`)
-      if (data.warnings?.length) console.warn('[knowledge import]', data.warnings)
-      setJiraOpen(false)
-      setXrayOpen(false)
-      navigate(data.set ? '/sets' : '/cases')
+      const jobId: string = data.job.id
+      // Poll until the job settles — each case lands as it's imported, so a
+      // cancel still keeps everything that finished.
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 1500))
+        const jr = await fetch(`/api/knowledge/import/${jobId}`)
+        const { job: j } = await jr.json()
+        setJob(j)
+        if (j.status === 'done' || j.status === 'canceled' || j.status === 'failed') {
+          if (j.status === 'failed') throw new Error(j.error || j.result?.error || 'import failed')
+          if (j.result?.warnings?.length) console.warn('[knowledge import]', j.result.warnings)
+          setJiraOpen(false)
+          setXrayOpen(false)
+          navigate(j.result?.set ? '/sets' : '/cases')
+          return
+        }
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(false)
+      setJob(null)
     }
+  }
+
+  const cancelImport = () => {
+    if (job) void fetch(`/api/knowledge/import/${job.id}/cancel`, { method: 'POST' })
   }
   const importJira = () => {
     const k = key.trim()
@@ -195,10 +215,21 @@ export function KnowledgePage() {
             )}
             {error && <p className="text-xs text-destructive">{error}</p>}
           </div>
+          {busy && (
+            <p className="text-xs text-muted-foreground">
+              {job?.total ? `${job.current ?? 0}/${job.total} — ` : ''}{job?.phase || 'starting…'}
+            </p>
+          )}
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setJiraOpen(false)}>
-              Cancel
-            </Button>
+            {busy ? (
+              <Button variant="ghost" onClick={cancelImport}>
+                Stop import
+              </Button>
+            ) : (
+              <Button variant="ghost" onClick={() => setJiraOpen(false)}>
+                Cancel
+              </Button>
+            )}
             <Button onClick={importJira} disabled={!key.trim() || busy}>
               {busy && <Loader2Icon className="animate-spin" />} Import
             </Button>
@@ -256,10 +287,21 @@ export function KnowledgePage() {
               {error && <p className="text-xs text-destructive">{error}</p>}
             </div>
           </div>
+          {busy && (
+            <p className="text-xs text-muted-foreground">
+              {job?.total ? `${job.current ?? 0}/${job.total} — ` : ''}{job?.phase || 'starting…'}
+            </p>
+          )}
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setXrayOpen(false)}>
-              Cancel
-            </Button>
+            {busy ? (
+              <Button variant="ghost" onClick={cancelImport}>
+                Stop import
+              </Button>
+            ) : (
+              <Button variant="ghost" onClick={() => setXrayOpen(false)}>
+                Cancel
+              </Button>
+            )}
             <Button onClick={importXray} disabled={!key.trim() || busy}>
               {busy && <Loader2Icon className="animate-spin" />} Import
             </Button>
