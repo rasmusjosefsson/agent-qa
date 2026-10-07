@@ -243,9 +243,16 @@ export function ChatPage() {
       if (!c) return
       prefetchChatState(c.id)
       setChats((prev) => [...prev, c])
-      setActiveId(c.id)
+      activateChat(c.id)
     })()
   }, [ask, chatsReady])
+
+  // Activate a chat locally: update state AND the URL in the same commit so
+  // the deep-link effect below never sees a stale `c` param and bounces back.
+  const activateChat = (id: string) => {
+    replaceRoute(`/chat?c=${encodeURIComponent(id)}`)
+    startTransition(() => setActiveId(id))
+  }
 
   // Deep link: /chat?c=<id> activates that chat once the list has loaded.
   useEffect(() => {
@@ -269,7 +276,7 @@ export function ChatPage() {
     if (!c) return
     prefetchChatState(c.id)
     setChats((cs) => [...cs, c])
-    startTransition(() => setActiveId(c.id))
+    activateChat(c.id)
   }
 
   const onDelete = async (id: string) => {
@@ -280,7 +287,7 @@ export function ChatPage() {
     if (id === activeId) {
       // Still mounted until the transition commits — let the switch drop it;
       // evicting its resource here would re-suspend the outgoing view.
-      startTransition(() => setActiveId(remaining[0]?.id ?? null))
+      if (remaining[0]) activateChat(remaining[0].id)
     } else {
       dropChatState(id) // not mounted — safe to evict now
     }
@@ -308,7 +315,7 @@ export function ChatPage() {
               >
                 <button
                   type="button"
-                  onClick={() => startTransition(() => setActiveId(c.id))}
+                  onClick={() => activateChat(c.id)}
                   title={
                     `session: ${c.session}` +
                     (c.busy ? ' · working…' : c.live ? ' · ready for input' : '')
