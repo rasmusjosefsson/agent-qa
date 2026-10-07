@@ -191,6 +191,13 @@ export function ChatPage() {
     localStorage.setItem(SPLIT_KEY, String(Math.round(leftPct)))
   }, [leftPct])
 
+  // Activate a chat locally: update state AND the URL in the same commit so
+  // the deep-link effect below never sees a stale `c` param and bounces back.
+  const activateChat = (id: string) => {
+    replaceRoute(`/chat?c=${encodeURIComponent(id)}`)
+    startTransition(() => setActiveId(id))
+  }
+
   useEffect(() => {
     let mounted = true
     ;(async () => {
@@ -204,7 +211,14 @@ export function ChatPage() {
       const firstId = list[0]?.id ?? null
       if (firstId) prefetchChatState(firstId)
       setChats(list)
-      setActiveId((cur) => cur ?? firstId)
+      // ?c=<id> takes precedence — the deep-link effect activates it once
+      // chatsReady flips. Otherwise activate the first chat and pin its id
+      // into the URL so every chat window is linkable.
+      if (wantChat && list.some((c) => c.id === wantChat)) {
+        setActiveId((cur) => cur ?? firstId)
+      } else if (firstId) {
+        activateChat(firstId)
+      }
       setChatsReady(true)
     })()
     return () => {
@@ -247,31 +261,15 @@ export function ChatPage() {
     })()
   }, [ask, chatsReady])
 
-  // Activate a chat locally: update state AND the URL in the same commit so
-  // the deep-link effect below never sees a stale `c` param and bounces back.
-  const activateChat = (id: string) => {
-    replaceRoute(`/chat?c=${encodeURIComponent(id)}`)
-    startTransition(() => setActiveId(id))
-  }
-
-  // Deep link: /chat?c=<id> activates that chat once the list has loaded.
+  // Deep link: /chat?c=<id> activates that chat once the list has loaded. Only
+  // the URL drives this — local switches write ?c themselves (activateChat),
+  // and no effect writes the URL back, so route and state can't disagree.
   useEffect(() => {
     if (!chatsReady || !wantChat || wantChat === activeId) return
     if (chats.some((c) => c.id === wantChat)) {
       startTransition(() => setActiveId(wantChat))
     }
   }, [wantChat, chatsReady, chats, activeId])
-
-  // Reflect the active chat in the URL so a chat window is linkable. The ?ask=
-  // consumer owns the URL while a seed is pending — don't clobber the param
-  // before it reads it. Also skip while a switch transition is in flight:
-  // activeId still holds the old chat and writing it back would bounce the
-  // deep-link effect off the new one mid-switch.
-  useEffect(() => {
-    if (!chatsReady || !activeId || ask || isPending) return
-    if (wantChat === activeId) return
-    replaceRoute(`/chat?c=${encodeURIComponent(activeId)}`)
-  }, [activeId, chatsReady, ask, wantChat, isPending])
 
   const onNew = async () => {
     const c = await createChat()
