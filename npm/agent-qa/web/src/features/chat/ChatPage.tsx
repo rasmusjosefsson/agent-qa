@@ -180,7 +180,9 @@ export function ChatPage() {
   // with that prompt. Reactive to the SPA route so in-app navigations seed
   // without a document reload; consumed once per ask value.
   const route = useRoute()
-  const ask = new URLSearchParams(route.search).get('ask')
+  const routeParams = new URLSearchParams(route.search)
+  const ask = routeParams.get('ask')
+  const wantChat = routeParams.get('c')
   const askRef = useRef<string | null>(null)
   const [seed, setSeed] = useState<{ id: string; prompt: string } | null>(null)
   const [chatsReady, setChatsReady] = useState(false)
@@ -244,6 +246,23 @@ export function ChatPage() {
       setActiveId(c.id)
     })()
   }, [ask, chatsReady])
+
+  // Deep link: /chat?c=<id> activates that chat once the list has loaded.
+  useEffect(() => {
+    if (!chatsReady || !wantChat || wantChat === activeId) return
+    if (chats.some((c) => c.id === wantChat)) {
+      startTransition(() => setActiveId(wantChat))
+    }
+  }, [wantChat, chatsReady, chats, activeId])
+
+  // Reflect the active chat in the URL so a chat window is linkable. The ?ask=
+  // consumer owns the URL while a seed is pending — don't clobber the param
+  // before it reads it.
+  useEffect(() => {
+    if (!chatsReady || !activeId || ask) return
+    if (wantChat === activeId) return
+    replaceRoute(`/chat?c=${encodeURIComponent(activeId)}`)
+  }, [activeId, chatsReady, ask, wantChat])
 
   const onNew = async () => {
     const c = await createChat()
