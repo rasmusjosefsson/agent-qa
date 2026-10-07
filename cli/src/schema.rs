@@ -38,7 +38,18 @@ pub fn validate_value(value: &Json) -> Result<()> {
         Ok(()) => Ok(()),
         Err(errors) => {
             let lines: Vec<String> = errors
-                .map(|e| format!("  at /{}: {}", e.instance_path, e))
+                .map(|e| {
+                    let path = e.instance_path.to_string();
+                    // An env.open op failing its arm of the oneOf gets its
+                    // required fields named — the bare oneOf message never does.
+                    let hint = path
+                        .strip_prefix("/env/open/")
+                        .and_then(|i| i.parse::<usize>().ok())
+                        .and_then(|i| value.pointer(&format!("/env/open/{i}")))
+                        .map(|op| format!(" — {}", env_op_hint(op)))
+                        .unwrap_or_default();
+                    format!("  at /{path}: {e}{hint}")
+                })
                 .collect();
             Err(anyhow!(
                 "{} schema error(s):\n{}",
@@ -55,6 +66,33 @@ pub fn validate_bytes(bytes: &[u8]) -> Result<Json> {
     validate_value(&value)?;
     Ok(value)
 }
+
+/// The oneOf schema error can't name the failing arm; restate the op's own
+/// kind plus its required fields so a malformed env op is self-explanatory.
+/// Used by `record-setup` and by validate error annotation for env.open ops.
+pub fn env_op_hint(raw: &Json) -> String {
+    let kind = raw
+        .get("kind")
+        .and_then(Json::as_str)
+        .unwrap_or("<missing>");
+    match kind {
+        "fresh" => "fresh takes no other fields".to_string(),
+        "useProfile" => "useProfile requires \"name\"".to_string(),
+        "nav" => "nav requires \"url\" (a URI)".to_string(),
+        "cookie" => "cookie requires \"name\" + \"value\"".to_string(),
+        "localStorage" => "localStorage requires \"key\" + \"value\"".to_string(),
+        "gql" => "gql requires \"url\" + \"query\"; \"forEach\" is a Value \
+             ({\"from\":\"literal\",\"literal\":...} or from-step), \
+             \"saveAs\" a bare name"
+            .to_string(),
+        "flag" => "flag requires \"name\" + \"enabled\"".to_string(),
+        other => format!(
+            "kind {other:?} is unknown — valid kinds: fresh, useProfile, nav, cookie, \
+             localStorage, gql, flag"
+        ),
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -178,5 +216,26 @@ mod tests {
         let value: serde_json::Value =
             serde_json::from_str(SMOKE).expect("smoke scenario is valid JSON");
         validate_value(&value).expect("smoke scenario is schema-valid");
+    }
+
+    #[test]
+    fn env_open_error_names_the_ops_required_fields() {
+        let j = json!({
+            "schema": "scenario/2",
+            "id": "j1",
+            "intent": "smoke",
+            "env": { "open": [
+                { "kind": "fresh" },
+                { "kind": "useProfile", "profile": "admin-user" }
+            ]},
+            "steps": [
+                { "id": "s1", "intent": "go", "kind": "do", "verb": "goto" }
+            ]
+        });
+        let err = validate_value(&j).unwrap_err().to_string();
+        assert!(
+            err.contains("useProfile requires"),
+            "expected field hint in error: {err}"
+        );
     }
 }
