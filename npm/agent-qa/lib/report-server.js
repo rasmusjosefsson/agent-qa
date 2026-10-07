@@ -981,7 +981,9 @@ function parseXraySteps(lines) {
   let seenContent = false;
   for (const l of lines.slice(idx + 1)) {
     if (depth(l) <= frameDepth) break; // iframe subtree ends at the next sibling
-    const m = /StaticText "([^"]*)"/.exec(l);
+    // Step content surfaces as StaticText (simple panels) or as the cell's
+    // accessible name (steps grid → LayoutTableCell).
+    const m = /(?:StaticText|LayoutTableCell) "([^"]*)"/.exec(l);
     if (!m) continue;
     const t = m[1].trim();
     if (!t || XRAY_PANEL_CHROME.has(t) || t.length < 3) continue;
