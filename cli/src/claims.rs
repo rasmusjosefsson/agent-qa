@@ -2255,6 +2255,27 @@ fn check_element(
             }
             bail!("expected {predicate:?}, but element still present");
         }
+        Predicate::IsEnabled | Predicate::IsDisabled => {
+            // Poll the `disabled` state — it flips as the app enables
+            // controls, so treat both resolve and state as retryable.
+            let want_disabled = matches!(predicate, Predicate::IsDisabled);
+            let deadline = Instant::now() + timeout;
+            let mut last_err: Option<anyhow::Error> = None;
+            while Instant::now() < deadline {
+                match read_element_attribute(ctx.session, loc, "disabled", scope, ctx.scenario_dir)
+                {
+                    Ok(v) => {
+                        if (v == "true") == want_disabled {
+                            return Ok(());
+                        }
+                        last_err = Some(anyhow!("disabled={v:?}"));
+                    }
+                    Err(err) => last_err = Some(err),
+                }
+                thread::sleep(POLL_INTERVAL);
+            }
+            bail!("element {predicate:?} claim timed out: {}", last_err.map(|e| e.to_string()).unwrap_or_default());
+        }
         other => bail!("element subject does not yet support predicate '{other:?}'"),
     }
 }
