@@ -2671,6 +2671,15 @@ test('GET/POST /api/config/settings round-trips and validates', async (t) => {
 
 test('GET/POST /api/jev enables the bundled plugin and stores the key write-only', async (t) => {
   const fx = makeFixture();
+  // Isolate the global config home so the stored key lands in a temp dir —
+  // JEV writes to $AGENT_QA_HOME/_config/jev.json (shared across roots).
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-home-jev-'));
+  const prevHome = process.env.AGENT_QA_HOME;
+  process.env.AGENT_QA_HOME = home;
+  t.after(() => {
+    if (prevHome === undefined) delete process.env.AGENT_QA_HOME;
+    else process.env.AGENT_QA_HOME = prevHome;
+  });
   const { server, base } = await boot(fx.root);
   t.after(() => server.close());
   const j = (m, p, b) =>
@@ -2682,15 +2691,17 @@ test('GET/POST /api/jev enables the bundled plugin and stores the key write-only
   assert.equal(d0.enabled, false);
   assert.equal(d0.hasKey, false);
 
-  // enable + store key → persisted 0600 config, key never echoed back
+  // enable + store key → persisted 0600 config in the GLOBAL home, key never
+  // echoed back; nothing written under the scenarios root.
   const d1 = await (await j('POST', '/api/jev', { enabled: true, apiKey: 'sk-test-1' })).json();
   assert.equal(d1.ok, true);
   assert.equal(d1.enabled, true);
   assert.equal(d1.hasKey, true);
   assert.equal('apiKey' in d1, false);
-  const onDisk = JSON.parse(fs.readFileSync(path.join(fx.root, '_config', 'jev.json'), 'utf8'));
+  const onDisk = JSON.parse(fs.readFileSync(path.join(home, '_config', 'jev.json'), 'utf8'));
   assert.equal(onDisk.schema, 'jev/1');
   assert.equal(onDisk.apiKey, 'sk-test-1');
+  assert.equal(fs.existsSync(path.join(fx.root, '_config', 'jev.json')), false);
   const d2 = await (await j('GET', '/api/jev')).json();
   assert.equal('apiKey' in d2, false);
   assert.equal(d2.hasKey, true);
@@ -2699,6 +2710,37 @@ test('GET/POST /api/jev enables the bundled plugin and stores the key write-only
   const d3 = await (await j('POST', '/api/jev', { enabled: false })).json();
   assert.equal(d3.enabled, false);
   assert.equal(d3.hasKey, true);
+});
+
+test('a per-root jev.json shadows the global record on read', async (t) => {
+  const fx = makeFixture();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-home-jev-'));
+  const prevHome = process.env.AGENT_QA_HOME;
+  process.env.AGENT_QA_HOME = home;
+  t.after(() => {
+    if (prevHome === undefined) delete process.env.AGENT_QA_HOME;
+    else process.env.AGENT_QA_HOME = prevHome;
+  });
+  // Global says enabled; the root file overrides with disabled.
+  fs.mkdirSync(path.join(home, '_config'), { recursive: true });
+  fs.writeFileSync(
+    path.join(home, '_config', 'jev.json'),
+    JSON.stringify({ schema: 'jev/1', enabled: true, apiKey: 'sk-global' }),
+  );
+  fs.mkdirSync(path.join(fx.root, '_config'), { recursive: true });
+  fs.writeFileSync(
+    path.join(fx.root, '_config', 'jev.json'),
+    JSON.stringify({ schema: 'jev/1', enabled: false, apiKey: 'sk-root' }),
+  );
+
+  const { server, base } = await boot(fx.root);
+  t.after(() => server.close());
+  const j = (m, p, b) =>
+    fetch(`${base}${p}`, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined });
+
+  const d = await (await j('GET', '/api/jev')).json();
+  assert.equal(d.enabled, false); // root shadowed global
+  assert.equal(d.hasKey, true);   // root's key, not global's
 });
 
 test('GET /api/scenarios surfaces a corrupt scenario.json instead of hiding the sid', async (t) => {
