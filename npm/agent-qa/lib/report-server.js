@@ -3524,22 +3524,37 @@ function createChatManager(deps, root) {
   };
 }
 
-// Best-effort context so "record this page" works without the user re-stating
-// the URL: the live bridge tracks which page this chat's browser pane is on.
-// Skipped when the pane has never streamed (no bridge / no URL seen yet); the
-// bridge keeps its last URL after the pane closes, which is still the page.
-function annotatePromptWithPage(deps, entry, text) {
+// Best-effort context so the agent sees what the UI already knows:
+//   • the page this chat's browser pane is on ("record this page" without
+//     the user re-stating the URL; the bridge keeps its last URL after the
+//     pane closes, which is still the page)
+//   • the chat's sign-in state — an anonymous chat can't see the "No
+//     sign-in" dropdown, and without this it burns turns discovering the
+//     SSO wall on an authenticated target
+// Both are best-effort; either half is skipped when its source is absent.
+function annotatePromptWithContext(deps, entry, text) {
   try {
-    if (!deps || typeof deps.liveForSession !== 'function' || !entry || !entry.browser) {
-      return text;
+    const notes = [];
+    if (deps && typeof deps.liveForSession === 'function' && entry && entry.browser) {
+      const url = deps.liveForSession(entry.browser.name).currentUrl;
+      if (url && typeof url === 'string') {
+        notes.push(
+          `this chat's browser pane is currently on ${url} — ` +
+            `treat "this page" / "here" / "the page" as that URL unless the user says otherwise`,
+        );
+      }
     }
-    const url = deps.liveForSession(entry.browser.name).currentUrl;
-    if (!url || typeof url !== 'string') return text;
-    return (
-      `[workbench context: this chat's browser pane is currently on ${url} — ` +
-      `treat "this page" / "here" / "the page" as that URL unless the user says otherwise]` +
-      `\n\n${text}`
-    );
+    if (entry) {
+      notes.push(
+        entry.connectedProfile
+          ? `this chat's browser is signed in as the "${entry.connectedProfile}" persona`
+          : `this chat is browsing anonymously (no persona sign-in) — if the target needs ` +
+              `authentication, connect first via POST /api/chat/c/${entry.id}/connect or ask ` +
+              `the user to sign in from the bar`,
+      );
+    }
+    if (!notes.length) return text;
+    return `[workbench context: ${notes.join('; ')}]\n\n${text}`;
   } catch {
     return text;
   }
@@ -4010,7 +4025,7 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
       }
       // Fire-and-forget: the answer streams over SSE. Errors are broadcast to
       // subscribers by the hub, so swallow the rejection here.
-      Promise.resolve(hub.prompt(annotatePromptWithPage(deps, entry, text), opts)).catch(() => {});
+      Promise.resolve(hub.prompt(annotatePromptWithContext(deps, entry, text), opts)).catch(() => {});
       return sendJson(res, 202, { ok: true });
     }
     case 'abort': {
