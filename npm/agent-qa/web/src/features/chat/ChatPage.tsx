@@ -235,10 +235,11 @@ export function ChatPage() {
     askRef.current = ask
     replaceRoute('/chat')
     void (async () => {
-      const c = await createChat()
+      // Create with the first prompt server-side — one request, no race
+      // between chat creation and the availability-gated local send.
+      const c = await createChat(ask)
       if (!c) return
       prefetchChatState(c.id)
-      setSeed({ id: c.id, prompt: ask })
       setChats((prev) => [...prev, c])
       setActiveId(c.id)
     })()

@@ -37,9 +37,13 @@ export async function listChats(): Promise<ChatMeta[]> {
   }
 }
 
-export async function createChat(): Promise<ChatMeta | null> {
+export async function createChat(prompt?: string): Promise<ChatMeta | null> {
   try {
-    const r = await fetch('/api/chat/create', { method: 'POST' });
+    const r = await fetch('/api/chat/create', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(prompt ? { prompt } : {}),
+    });
     if (!r.ok) return null;
     return (await r.json()) as ChatMeta;
   } catch {

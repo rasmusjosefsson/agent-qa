@@ -973,7 +973,7 @@ const XRAY_PANEL_CHROME = new Set([
 const depth = (l) => /^\s*/.exec(l)[0].length;
 function parseXraySteps(lines) {
   const idx = lines.findIndex((l) => /Iframe/i.test(l));
-  if (idx === -1) return [];
+  if (idx === -1) return { steps: [], preconditions: '', expected: '' };
   const frameDepth = depth(lines[idx]);
   const steps = [];
   let preconditions = '';
@@ -1059,44 +1059,51 @@ async function importOneTest(root, host, key, warnings) {
   return { id, title, key };
 }
 
-async function handleKnowledgeImport(req, res, root) {
-  let body;
-  try { body = await readJsonBody(req); } catch (e) { return badRequest(res, String(e && e.message || e)); }
-  const source = String(body.source || '');
-  const key = String(body.key || '').trim().toUpperCase();
-  const container = String(body.container || 'plan');
-  if (!key) return badRequest(res, 'key is required');
+// Import jobs live only in memory — the work is best-effort progress, and
+// each case lands on disk the moment its test is done, so a cancel or a
+// lost poll doesn't lose finished work.
+const knowledgeJobs = new Map();
+let knowledgeJobSeq = 0;
+
+async function runKnowledgeImport(root, params, job) {
+  const progress = (patch) => { if (job) Object.assign(job, patch); };
+  const canceled = () => !!(job && job.cancel);
+  const source = String(params.source || '');
+  const key = String(params.key || '').trim().toUpperCase();
+  const container = String(params.container || 'plan');
+  if (!key) return { code: 400, body: { error: 'key is required' } };
 
   const host = jiraHost();
-  if (!host) return sendJson(res, 502, { error: 'no authenticated Atlassian site — run `acli jira auth status` to check' });
+  if (!host) return { code: 502, body: { error: 'no authenticated Atlassian site — run `acli jira auth status` to check' } };
 
   const warnings = [];
 
   if (source === 'jira') {
+    progress({ phase: `importing ${key}`, current: 0, total: 1 });
     injectSessionCookies(KNOWLEDGE_SCRAPE_SESSION);
     const one = await importOneTest(root, host, key, warnings);
-    if (!one) return sendJson(res, 502, { error: warnings[0] || `could not fetch ${key}` });
-    return sendJson(res, 200, { imported: [one], warnings });
+    if (!one) return { code: 502, body: { error: warnings[0] || `could not fetch ${key}` } };
+    return { code: 200, body: { imported: [one], warnings } };
   }
 
-  if (source !== 'xray') return badRequest(res, 'source must be "jira" or "xray"');
+  if (source !== 'xray') return { code: 400, body: { error: 'source must be "jira" or "xray"' } };
 
   // Resolve member test keys.
   let testKeys;
   const jqlFn = XRAY_CONTAINER_JQL[container];
   if (jqlFn) {
     const r = acliJson(['jira', 'workitem', 'search', '--jql', `issue in ${jqlFn}(${key})`, '--fields', 'summary,issuetype', '--json']);
-    if (r.error) return sendJson(res, 502, { error: `member lookup failed: ${r.error}` });
+    if (r.error) return { code: 502, body: { error: `member lookup failed: ${r.error}` } };
     testKeys = (r.value || []).map((i) => i.key);
   } else {
     // story/epic: no coverage JQL — read the issue's Xray coverage panel.
     const scraped = await scrapeIssueLines(`https://${host}/browse/${key}`);
-    if (scraped.error) return sendJson(res, 502, { error: scraped.error });
+    if (scraped.error) return { code: 502, body: { error: scraped.error } };
     testKeys = [...new Set(
       scraped.lines.map((l) => /\b([A-Z]+-\d+)\b/.exec(l)?.[1]).filter((k) => k && k !== key)
     )];
   }
-  if (!testKeys.length) return sendJson(res, 404, { error: `no tests found under ${key}` });
+  if (!testKeys.length) return { code: 404, body: { error: `no tests found under ${key}` } };
 
   // Filter to actual Test-type issues (coverage panels can list other links).
   const verified = [];
@@ -1104,13 +1111,20 @@ async function handleKnowledgeImport(req, res, root) {
     const v = acliJson(['jira', 'workitem', 'view', k, '--fields', 'issuetype', '--json']);
     if (!v.error && /test/i.test((v.value && v.value.fields && v.value.fields.issuetype && v.value.fields.issuetype.name) || '')) verified.push(k);
   }
-  if (!verified.length) return sendJson(res, 404, { error: `none of the keys under ${key} resolve to Test issues` });
+  if (!verified.length) return { code: 404, body: { error: `none of the keys under ${key} resolve to Test issues` } };
 
   injectSessionCookies(KNOWLEDGE_SCRAPE_SESSION);
   const imported = [];
+  progress({ phase: 'importing', current: 0, total: verified.length });
   for (const k of verified) {
+    if (canceled()) {
+      progress({ phase: 'canceled' });
+      break;
+    }
+    progress({ phase: `importing ${k}` });
     const one = await importOneTest(root, host, k, warnings);
     if (one) imported.push(one);
+    progress({ current: imported.length });
   }
 
   const setId = `set-${issueKeyToCaseId(key)}`;
@@ -1125,11 +1139,45 @@ async function handleKnowledgeImport(req, res, root) {
   await fsp.mkdir(path.dirname(setFile(root, setId)), { recursive: true });
   await fsp.writeFile(setFile(root, setId), JSON.stringify(setRec, null, 2) + '\n');
 
-  return sendJson(res, 200, {
-    imported,
-    set: { id: setId, name: setRec.name, caseCount: setRec.caseIds.length },
-    warnings,
-  });
+  return {
+    code: 200,
+    body: {
+      imported,
+      set: { id: setId, name: setRec.name, caseCount: setRec.caseIds.length },
+      warnings,
+      canceled: canceled(),
+    },
+  };
+}
+
+// /api/knowledge/import — POST starts a job; GET /:id polls; POST /:id/cancel
+// stops after the in-flight test and still writes the set for what finished.
+async function handleKnowledgeJobs(req, res, root, seg) {
+  if (seg.length === 0 && req.method === 'POST') {
+    let params;
+    try { params = await readJsonBody(req); } catch (e) { return badRequest(res, String(e && e.message || e)); }
+    const id = `imp-${++knowledgeJobSeq}`;
+    const job = { id, status: 'running', phase: 'starting', current: 0, total: 0, cancel: false, startedAt: Date.now() };
+    knowledgeJobs.set(id, job);
+    void runKnowledgeImport(root, params, job).then(({ code, body }) => {
+      job.result = body;
+      job.status = job.cancel ? 'canceled' : code === 200 ? 'done' : 'failed';
+    }).catch((e) => {
+      job.status = 'failed';
+      job.error = String(e && e.message || e);
+    });
+    return sendJson(res, 202, { job });
+  }
+
+  const job = seg.length >= 1 ? knowledgeJobs.get(seg[0]) : null;
+  if (!job) return notFound(res, 'no such import job');
+  if (seg.length === 2 && seg[1] === 'cancel' && req.method === 'POST') {
+    job.cancel = true;
+    job.status = job.status === 'running' ? 'canceling' : job.status;
+    return sendJson(res, 200, { job });
+  }
+  if (seg.length === 1 && req.method === 'GET') return sendJson(res, 200, { job });
+  return sendJson(res, 405, { error: 'method not allowed' });
 }
 
 // -------- test plans (runnable + trackable scope of cases) --------
@@ -3869,7 +3917,20 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
     return sendJson(res, 200, { chats: manager.list() });
   }
   if (route === 'create' && req.method === 'POST') {
-    return sendJson(res, 200, chatMeta(manager.create()));
+    // Optional `prompt` queues the first message atomically — the ?ask=
+    // flows (Runs/Cases/Knowledge import) used to seed client-side, which
+    // raced: double-created chats and a send gated on an availability flag
+    // that could lose the prompt entirely. Server-side is one request.
+    let body = {};
+    try { body = await readJsonBody(req); } catch { /* empty body is fine */ }
+    const entry = manager.create();
+    const prompt = typeof body.prompt === 'string' && body.prompt.trim() ? body.prompt : null;
+    if (prompt) {
+      Promise.resolve(entry.getHub())
+        .then((hub) => hub && hub.prompt(annotatePromptWithContext(deps, entry, prompt)))
+        .catch(() => {});
+    }
+    return sendJson(res, 200, chatMeta(entry));
   }
 
   // Live browser pane: a read-only CDP screencast of the agent-browser session
@@ -4411,9 +4472,10 @@ function createRequestHandler(root, deps, chat) {
         return await handleSets(req, res, root, segAll.slice(2));
       }
 
-      // Knowledge imports (Jira issue / Xray container → cases + set).
-      if (segAll[0] === 'api' && segAll[1] === 'knowledge' && segAll[2] === 'import' && req.method === 'POST') {
-        return await handleKnowledgeImport(req, res, root);
+      // Knowledge imports (Jira issue / Xray container → cases + set):
+      // POST starts a job, GET /:id polls progress, POST /:id/cancel stops.
+      if (segAll[0] === 'api' && segAll[1] === 'knowledge' && segAll[2] === 'import') {
+        return await handleKnowledgeJobs(req, res, root, segAll.slice(3));
       }
 
       // Test plans (runnable scope of sets/cases) under <root>/_plans. CRUD is
