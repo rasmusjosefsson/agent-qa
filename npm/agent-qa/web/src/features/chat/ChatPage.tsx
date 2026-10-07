@@ -17,6 +17,7 @@ import {
   CopyIcon,
   CheckIcon,
   SparklesIcon,
+  GitPullRequestIcon,
   LogInIcon,
   RotateCcwIcon,
   ListIcon,
@@ -86,6 +87,13 @@ const SUGGESTIONS: { title: string; hint: string; icon: LucideIcon; prompt: stri
     icon: LogInIcon,
     prompt:
       'Record a scenario: open https://qaplayground.com/bank, sign in using the test credentials listed on the page, click the login button, wait for the URL to be /bank/dashboard, assert you landed on the dashboard, then save it as bank-login.json.',
+  },
+  {
+    title: 'QA a PR',
+    hint: 'Paste a link — records the claimed flow',
+    icon: GitPullRequestIcon,
+    prompt:
+      'QA this pull request: fetch it with gh, find any deploy/build link in its comments, then record a scenario exercising the change it claims to make and replay it to confirm it passes. PR link: <paste here>',
   },
   {
     title: 'Replay & summarize',
