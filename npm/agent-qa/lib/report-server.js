@@ -888,7 +888,7 @@ function acliJson(args) {
   }
 }
 
-// "Site: outreach-io.atlassian.net" from `acli jira auth status`.
+// "Site: <host>" line from `acli jira auth status`.
 function jiraHost() {
   const r = execOut('acli', ['jira', 'auth', 'status']);
   const m = /Site:\s*(\S+)/.exec(r.out || '');
