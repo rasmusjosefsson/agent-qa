@@ -1433,6 +1433,49 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                         skipped_step_ids.push(id.to_string());
                         continue;
                     }
+                    // `context.onFailure` ("ignore" | "continue" | default
+                    // "abort"): the author scoped the failure policy per step.
+                    // ignore — the step ran, its failure is on record
+                    //          (status "skip" + the real error in `error`,
+                    //          same convention as expected failures), but the
+                    //          run verdict stays green and execution
+                    //          proceeds. For advisory checks on apps whose
+                    //          ambient noise (telemetry, handled promise
+                    //          rejections) is real but not a regression.
+                    // continue — the failure counts (run goes red) but the
+                    //          remaining steps still run; the per-step form
+                    //          of --keep-going.
+                    let on_failure = patched_step.context().and_then(|c| c.on_failure.clone());
+                    if matches!(on_failure, Some(crate::scenario::OnFailure::Ignore)) {
+                        let reason = format!("{e:#}");
+                        emit_step_done(
+                            progress_mode,
+                            idx,
+                            total,
+                            true,
+                            &format!("{label} (ignored failure: {reason})"),
+                            step_ms,
+                        );
+                        let _ = append_event(
+                            &run,
+                            &StepEvent {
+                                idx,
+                                total,
+                                id: id.to_string(),
+                                intent: intent.to_string(),
+                                kind: kind_label.clone(),
+                                status: "skip".to_string(),
+                                ms: Some(step_ms),
+                                error: Some(format!("ignored failure: {reason}")),
+                                screenshot,
+                                snapshot,
+                            },
+                        );
+                        skipped_step_ids.push(id.to_string());
+                        continue;
+                    }
+                    let step_continues =
+                        matches!(on_failure, Some(crate::scenario::OnFailure::Continue));
                     if record_on {
                         rail_outcomes[(idx - 1) as usize] = Some("fail");
                     }
@@ -1518,13 +1561,15 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                                 ClaimSubject::Shot { .. } | ClaimSubject::Domshot { .. }
                             )
                     );
-                    if !opts.keep_going && !golden_miss {
+                    if !opts.keep_going && !golden_miss && !step_continues {
                         break;
                     }
                     eprintln!(
                         "[v2-replay] continuing after step {id}'s failure ({})",
                         if golden_miss {
                             "golden miss"
+                        } else if step_continues {
+                            "context.onFailure=continue"
                         } else {
                             "--keep-going"
                         }

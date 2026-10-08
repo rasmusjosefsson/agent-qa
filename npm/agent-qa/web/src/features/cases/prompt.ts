@@ -64,6 +64,7 @@ export function buildRunPrompt(c: CaseRecord, apiBase: string): string {
     'Recording rules — read carefully:',
     '- `smart-click` / `smart-fill` / `smart-assert` / `smart-select` ALREADY record the step — never call `record-step` for the same action. One action = one recorded step.',
     '- Failed attempts and retries land in the buffer as real steps too. Before flushing, run `agent-qa buffer list` and `agent-qa buffer delete <id>` the dead/duplicate steps — roughly one step per test step.',
+    '- `flush` appends a "page raised no uncaught exceptions" check that gates the run. If the app emits ambient uncaught errors you cannot fix (handled rejections, third-party telemetry): either flush with `--no-auto-errors` (env var AGENT_QA_NO_AUTO_ERRORS also works), or keep the check but demote it with `context.onFailure: "ignore"` so it reports without failing the run.',
     '',
     'Workflow:',
     `1. ${c.startUrl ? `Run \`agent-qa start "${intent}" --open "${c.startUrl}"\`` : `Run \`agent-qa start "${intent}"\``} to begin recording (this mints the scenario id).`,

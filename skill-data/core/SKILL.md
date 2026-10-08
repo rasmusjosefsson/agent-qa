@@ -156,7 +156,8 @@ running from a repo checkout.
 - `references/replay.md` describes deterministic replay and manual healing.
 - `references/unique-tokens.md` describes unique replay values.
 - `references/heal.md`, `references/heal-apply.md`, `references/heal-opt-out.md`
-  — manual correction flow and its limits.
+  — in-run auto-heal, manual correction flow, the bounded repair loop, and
+  their limits.
 - `references/recovery.md` — recording/replay recovery paths.
 - `references/inspect.md` — live-page debug mode with no `scenario.json` produced.
 - `references/perf-snapshot.md` — opt-in performance sidecar, orthogonal to recording.

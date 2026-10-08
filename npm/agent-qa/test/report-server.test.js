@@ -1395,6 +1395,66 @@ test('POST /api/plans/:id/run replays each member scenario via deps.replay', asy
   assert.deepEqual(prepared, [{ session: 'qa-admin-session', headed: true }]);
 });
 
+test('POST /api/plans/:id/run serializes members and writes a last-run ledger', async (t) => {
+  const fx = makeFixture();
+  const calls = [];
+  const dones = [];
+  const deps = {
+    prepareBrowserSession: async () => {},
+    replay: async (sid, session) => {
+      calls.push({ sid, session });
+      // Mint a run dir like a real child would (isRunDir just needs a safe
+      // dir name under replays/) and hand back a controllable done promise.
+      fs.mkdirSync(path.join(fx.root, sid, 'replays', `run-${calls.length}`), {
+        recursive: true,
+      });
+      dones.push({});
+      return {
+        ok: true,
+        done: new Promise((r) => {
+          dones[dones.length - 1].resolve = r;
+        }),
+      };
+    },
+  };
+  const { server, base } = await boot(fx.root, deps);
+  t.after(() => server.close());
+
+  const j = (m, p, body) =>
+    fetch(`${base}${p}`, {
+      method: m,
+      headers: { 'content-type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+  await j('POST', '/api/cases/m1', { title: 'Member one' });
+  await j('POST', '/api/cases/m1/link', { scenarioSid: fx.sid });
+  await j('POST', '/api/cases/m2', { title: 'Member two' });
+  await j('POST', '/api/cases/m2/link', { scenarioSid: fx.sid });
+  await j('POST', '/api/plans/p9', { name: 'P9', scope: { caseIds: ['m1', 'm2'] } });
+
+  const res = await j('POST', '/api/plans/p9/run', { profile: 'qa-admin' });
+  assert.equal(res.status, 202);
+  const out = await res.json();
+  assert.deepEqual(out.started, [
+    { caseId: 'm1', sid: fx.sid },
+    { caseId: 'm2', sid: fx.sid },
+  ]);
+
+  // Member 1 spawned in-request; member 2 must wait for its child to exit.
+  assert.equal(calls.length, 1);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(calls.length, 1, 'member 2 spawned while member 1 was still running');
+  dones[0].resolve({ code: 0 });
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(calls.length, 2, 'member 2 did not start after member 1 exited');
+  dones[1].resolve({ code: 0 });
+  await new Promise((r) => setTimeout(r, 60));
+  const ledger = await (await j('GET', '/api/plans/p9/last-run')).json();
+  const statuses = ledger.rows.map((r) => `${r.caseId}:${r.status}`);
+  assert.deepEqual(statuses, ['m1:running', 'm1:pass', 'm2:running', 'm2:pass']);
+});
+
 test('persona + environment CRUD (run-config records)', async (t) => {
   const fx = makeFixture();
   const { server, base } = await boot(fx.root);

@@ -267,6 +267,15 @@ green when the known-broken-under-that-profile step fails. All three are
 silent no-ops on an untagged run except `runFor`, which skips — that's
 the point of tagging it.
 
+`context.onFailure` scopes what a step failure does to the run —
+`"abort"` (default) fails the run and stops, `"continue"` fails the run
+but the remaining steps still execute (the per-step form of
+`--keep-going`), `"ignore"` runs the step, records the failure as a
+skip-status event ("ignored failure: …"), and keeps the run green. The
+failure stays in the event stream and audit — ignore is for advisory
+checks on apps whose ambient noise is real but not a regression, not for
+masking genuinely broken assertions.
+
 ### Shared step files (include)
 
 An `include` do-step inlines a step list from another JSON file relative

@@ -32,9 +32,9 @@ describe('runIntent', () => {
 describe('buildRunPrompt', () => {
   const p = buildRunPrompt(base, 'http://127.0.0.1:7878')
 
-  it('numbers the steps and includes the start url + expected result', () => {
-    expect(p).toContain('1. Enter [EMAIL]')
-    expect(p).toContain('3. Click Sign in')
+  it('keeps the steps verbatim and includes the start url + expected result', () => {
+    expect(p).toContain('Enter [EMAIL]')
+    expect(p).toContain('Click Sign in')
     expect(p).toContain('--open "https://app.example.com/login"')
     expect(p).toContain('Expected: Dashboard loads')
   })

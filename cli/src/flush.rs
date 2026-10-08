@@ -15,7 +15,7 @@ use crate::sidecar::atomic_write_file;
 pub fn run(args: &[String]) -> Result<u8> {
     let mut auto_shots = false;
     let mut auto_network = false;
-    let mut auto_errors = true;
+    let mut auto_errors = std::env::var_os("AGENT_QA_NO_AUTO_ERRORS").is_none();
     let mut auto_secrets = true;
     let mut auto_url = true;
     for arg in args {
@@ -63,8 +63,9 @@ Options:
                 plumbing. OPTIONS/HEAD are never claimed (preflights and
                 probes are browser plumbing, not app behavior).
   --auto-errors  Append a {{\"pageError\": true}} notExists check — a page
-                that starts throwing uncaught exceptions fails the replay.
-                ON by default; --no-auto-errors disables.
+                that throws uncaught exceptions fails the replay. ON by
+                default; --no-auto-errors or the AGENT_QA_NO_AUTO_ERRORS env
+                var (e.g. exported per-session for noisy apps) disables.
   --auto-url     Append a {{\"url\": true}} equals check asserting the page
                 the session ended on — catches replays that land somewhere
                 else (bounced to a login, wrong redirect). Query and hash
@@ -572,6 +573,64 @@ fn push_url_claim(steps: &mut Vec<crate::scenario::Step>, current: &str) {
     crate::buffer::normalize_ids(steps);
 }
 
+/// Auto gates are identified by shape: the `{"pageError": true}` notExists
+/// check and the "landed on …" url claim append unconditionally unless one
+/// is already in the buffer. When the buffer came from `buffer load`, a gate
+/// present in the sealed document but missing from the buffer was deleted
+/// deliberately — re-appending it would silently undo that edit.
+#[derive(Clone, Copy)]
+enum AutoGate {
+    PageError,
+    Url,
+}
+
+fn auto_gate_removed(state: &RecorderState, gate: AutoGate) -> bool {
+    let Some(orig) = &state.original else {
+        return false;
+    };
+    let sealed_had = orig
+        .get("steps")
+        .and_then(|s| s.as_array())
+        .is_some_and(|steps| steps.iter().any(|s| gate_matches_json(s, gate)));
+    sealed_had && !state.steps.iter().any(|s| gate_matches_step(s, gate))
+}
+
+fn gate_matches_json(s: &serde_json::Value, gate: AutoGate) -> bool {
+    let claim = s.get("claim");
+    let subject = claim.and_then(|c| c.get("subject"));
+    match gate {
+        AutoGate::PageError => {
+            subject.and_then(|su| su.get("pageError")).is_some()
+                && claim.and_then(|c| c.get("predicate")).and_then(|p| p.as_str())
+                    == Some("notExists")
+        }
+        AutoGate::Url => {
+            subject.and_then(|su| su.get("url")).is_some()
+                && s.get("intent")
+                    .and_then(|i| i.as_str())
+                    .is_some_and(|i| i.starts_with("landed on "))
+        }
+    }
+}
+
+fn gate_matches_step(s: &crate::scenario::Step, gate: AutoGate) -> bool {
+    let crate::scenario::Step::Check { claim, intent, .. } = s else {
+        return false;
+    };
+    match gate {
+        AutoGate::PageError => {
+            matches!(
+                claim.subject,
+                crate::scenario::ClaimSubject::PageError { .. }
+            ) && matches!(claim.predicate, crate::scenario::Predicate::NotExists)
+        }
+        AutoGate::Url => {
+            matches!(claim.subject, crate::scenario::ClaimSubject::Url { .. })
+                && intent.starts_with("landed on ")
+        }
+    }
+}
+
 /// Append a `{"pageError": true}` notExists check — an uncaught exception
 /// during replay then fails the scenario the same way a broken element does.
 fn append_auto_error_claims(steps: &mut Vec<crate::scenario::Step>) {
@@ -647,10 +706,10 @@ fn flush(
             Err(e) => eprintln!("[v2-record] auto-network skipped: {e}"),
         }
     }
-    if auto_url {
+    if auto_url && !auto_gate_removed(&state, AutoGate::Url) {
         append_auto_url_claim(&mut state.steps, &state.session);
     }
-    if auto_errors {
+    if auto_errors && !auto_gate_removed(&state, AutoGate::PageError) {
         append_auto_error_claims(&mut state.steps);
     }
     let mut scenario_json = assemble_scenario(&state)?;
@@ -1395,5 +1454,93 @@ mod tests {
                 .as_slice(),
             b"b"
         );
+    }
+
+    #[test]
+    fn deleted_auto_gates_stay_deleted_on_reflush() {
+        // `buffer load` seals `original` with the loaded doc — a gate the
+        // sealed scenario had but the buffer no longer contains was
+        // deleted deliberately and must not be re-appended at flush.
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var(paths::RECORD_DIR_ENV, tmp.path().join("record"));
+        let mut state = RecorderState::new(
+            "s".into(),
+            "flow".into(),
+            "default".into(),
+            RecorderBaseline::Fresh,
+            None,
+            BrowserConnection::default(),
+        );
+        state.original = Some(serde_json::json!({
+            "steps": [
+                {"kind":"check","intent":"page raised no uncaught exceptions",
+                 "claim":{"subject":{"pageError":true},"predicate":"notExists"}},
+                {"kind":"check","intent":"landed on https://example.com/",
+                 "claim":{"subject":{"url":true},"predicate":"matches","value":"^https://example\\.com/$"}}
+            ]
+        }));
+        record_draft(
+            &mut state,
+            StepKind::Do,
+            &serde_json::json!({"intent":"open","verb":"goto","value":{"from":"literal","literal":"https://example.com/"}}),
+            "default",
+        )
+        .unwrap();
+        assert!(auto_gate_removed(&state, AutoGate::PageError));
+        assert!(auto_gate_removed(&state, AutoGate::Url));
+        std::env::remove_var(paths::RECORD_DIR_ENV);
+    }
+
+    #[test]
+    fn kept_auto_gates_are_not_marked_removed() {
+        // Same sealed doc, but the buffer still carries both gates — the
+        // in-buffer dedupe (not the removed-check) suppresses re-append.
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var(paths::RECORD_DIR_ENV, tmp.path().join("record"));
+        let mut state = RecorderState::new(
+            "s".into(),
+            "flow".into(),
+            "default".into(),
+            RecorderBaseline::Fresh,
+            None,
+            BrowserConnection::default(),
+        );
+        state.original = Some(serde_json::json!({
+            "steps": [
+                {"kind":"check","intent":"page raised no uncaught exceptions",
+                 "claim":{"subject":{"pageError":true},"predicate":"notExists"}}
+            ]
+        }));
+        record_draft(
+            &mut state,
+            StepKind::Check,
+            &serde_json::json!({"intent":"page raised no uncaught exceptions",
+                "claim":{"subject":{"pageError":true},"predicate":"notExists"}}),
+            "default",
+        )
+        .unwrap();
+        assert!(!auto_gate_removed(&state, AutoGate::PageError));
+        // A gate the sealed doc never had is not "removed" either — it
+        // simply appends as usual.
+        assert!(!auto_gate_removed(&state, AutoGate::Url));
+        std::env::remove_var(paths::RECORD_DIR_ENV);
+    }
+
+    #[test]
+    fn auto_gate_removed_requires_a_loaded_original() {
+        // Fresh recording (original=None): nothing was deleted, gates
+        // append normally.
+        let state = RecorderState::new(
+            "s".into(),
+            "flow".into(),
+            "default".into(),
+            RecorderBaseline::Fresh,
+            None,
+            BrowserConnection::default(),
+        );
+        assert!(!auto_gate_removed(&state, AutoGate::PageError));
+        assert!(!auto_gate_removed(&state, AutoGate::Url));
     }
 }

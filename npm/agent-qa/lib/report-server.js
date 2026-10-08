@@ -1329,6 +1329,7 @@ async function handlePlans(req, res, root, seg, deps) {
     const byId = new Map(allCases.map((c) => [c.id, c]));
     const started = [];
     const skipped = [];
+    const launchable = [];
     for (const cid of memberIds) {
       const c = byId.get(cid);
       const sid = c && c.scenarioSid;
@@ -1341,18 +1342,112 @@ async function handlePlans(req, res, root, seg, deps) {
         skipped.push({ caseId: cid, reason: 'scenario missing or unreadable' });
         continue;
       }
-      const session = sessionForReplay(sid, runOpts.profile);
-      let out;
+      launchable.push({ caseId: cid, sid });
+    }
+    // Launch members serially, one child at a time. Persona replays share
+    // the `<profile>-session` browser and the session lock refuses a second
+    // concurrent run — spawning the whole batch at once made every member
+    // after the first exit before minting a run dir, while the 202 still
+    // claimed "started". Member 1's spawn is awaited in-request so the
+    // response is truthful; the rest chain off each child's exit in the
+    // background, and per-member outcomes land in `last-run.jsonl`
+    // (GET /api/plans/:id/last-run) so a member that dies before its first
+    // step is visible instead of silent.
+    const ledgerFile = path.join(dir, 'last-run.jsonl');
+    await fsp.writeFile(ledgerFile, '', 'utf8').catch(() => {});
+    const ledger = (row) =>
+      fsp
+        .appendFile(ledgerFile, JSON.stringify({ at: new Date().toISOString(), ...row }) + '\n')
+        .catch(() => {});
+    const spawnMember = async (m) => {
+      const session = sessionForReplay(m.sid, runOpts.profile);
+      const before = new Set(replayRunIds(root, m.sid));
       try {
-        out = await launchReplay(deps, sid, session, runOpts);
+        const out = await launchReplay(deps, m.sid, session, runOpts);
+        return { out, before };
       } catch (e) {
-        skipped.push({ caseId: cid, reason: String((e && e.message) || e) });
+        return { error: String((e && e.message) || e), before };
+      }
+    };
+    const finishMember = async (m, spawn) => {
+      if (spawn.error || !spawn.out || !spawn.out.ok) {
+        return ledger({
+          caseId: m.caseId,
+          sid: m.sid,
+          status: 'error',
+          reason: spawn.error || (spawn.out && spawn.out.error) || 'replay failed to start',
+        });
+      }
+      await ledger({ caseId: m.caseId, sid: m.sid, status: 'running' });
+      const fin =
+        spawn.out.done && typeof spawn.out.done.then === 'function'
+          ? await spawn.out.done
+          : null;
+      const minted = replayRunIds(root, m.sid).some((r) => !spawn.before.has(r));
+      if (fin && !minted) {
+        return ledger({
+          caseId: m.caseId,
+          sid: m.sid,
+          status: 'error',
+          reason: `replay exited (code ${fin.code ?? fin.signal}) before producing a run — see replay log`,
+        });
+      }
+      return ledger({
+        caseId: m.caseId,
+        sid: m.sid,
+        status: fin == null ? 'finished' : fin.code === 0 ? 'pass' : 'fail',
+      });
+    };
+    let chain = Promise.resolve();
+    for (const [i, m] of launchable.entries()) {
+      if (i === 0) {
+        const spawn = await spawnMember(m);
+        if (spawn.out && spawn.out.ok) {
+          started.push({ caseId: m.caseId, sid: m.sid });
+          chain = chain.then(() => finishMember(m, spawn));
+        } else {
+          skipped.push({
+            caseId: m.caseId,
+            reason: spawn.error || (spawn.out && spawn.out.error) || 'replay failed to start',
+          });
+          await ledger({
+            caseId: m.caseId,
+            sid: m.sid,
+            status: 'error',
+            reason: spawn.error || (spawn.out && spawn.out.error) || 'replay failed to start',
+          });
+        }
         continue;
       }
-      if (out.ok) started.push({ caseId: cid, sid });
-      else skipped.push({ caseId: cid, reason: out.error || 'replay failed to start' });
+      started.push({ caseId: m.caseId, sid: m.sid });
+      chain = chain
+        .then(() => spawnMember(m))
+        .then((spawn) => finishMember(m, spawn));
     }
+    chain.catch((e) => console.error(`[plan ${id}] member chain error: ${(e && e.message) || e}`));
     return sendJson(res, 202, { ok: true, started, skipped });
+  }
+
+  if (seg.length === 2 && seg[1] === 'last-run' && method === 'GET') {
+    // Per-member outcome ledger from the most recent `run` action.
+    let rows = [];
+    try {
+      const text = await fsp.readFile(path.join(dir, 'last-run.jsonl'), 'utf8');
+      rows = text
+        .split('\n')
+        .filter(Boolean)
+        .map((l) => {
+          try {
+            return JSON.parse(l);
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean);
+    } catch {
+      /* no run yet */
+    }
+    return sendJson(res, 200, { rows });
   }
 
   if (seg.length === 2 && seg[1] === 'delete' && method === 'POST') {
