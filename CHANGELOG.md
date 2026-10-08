@@ -5,6 +5,8 @@ All notable changes to agent-qa are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.7.0] - 2026-10-08
 ### Added
 
 - Golden-diff viewer: `site/public/diff-viewer.html` — a self-contained
