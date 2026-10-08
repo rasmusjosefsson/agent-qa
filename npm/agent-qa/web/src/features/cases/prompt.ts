@@ -2,6 +2,7 @@
 // Builds the instruction handed to the Copilot (chat agent) via /chat?ask=…
 // so it drives + records the case into a replayable scenario.json, then links
 // the resulting sid back to the case.
+import type { ScenarioSummary } from '@/features/runs/types'
 import type { CaseRecord } from './types'
 
 // The scenario `intent` we ask the agent to record under. Carries the case id
@@ -76,4 +77,38 @@ export function buildRunPrompt(c: CaseRecord, apiBase: string): string {
     `   curl -s -X POST "${linkUrl}" -H 'content-type: application/json' -d '{"scenarioSid":"<sid>"}'`
   )
   return lines.join('\n')
+}
+
+// Repair side of the loop: a case whose linked scenario just ran red gets a
+// prompt that walks the agent through diagnose → classify → fix → re-replay.
+export function buildRepairPrompt(
+  c: CaseRecord,
+  scenario: ScenarioSummary,
+  apiBase: string
+): string {
+  const run = scenario.latestRun
+  const sid = scenario.sid
+  return [
+    `The recorded scenario for this QA test case is failing. Use the agent-qa skill's repair loop to diagnose it, apply the right repair, and re-run until it passes — or prove a real product regression and keep it red.`,
+    '',
+    'First load the skill: run `agent-qa skills get core`. The repair loop is documented in references/heal.md §5.',
+    '',
+    `Test case: "${c.title}"  (case id: ${c.id})`,
+    `Scenario sid: ${sid}`,
+    `Latest run: ${run?.runId ?? '(unknown)'} — ${run?.summary ?? run?.state ?? 'failed'}`,
+    `Expected: ${c.expected || '(none specified)'}`,
+    '',
+    'Loop — at most 3 repair cycles, then stop and report:',
+    `1. Run \`agent-qa audit explain ${sid}\` — it prints the failed step, screenshot/snapshot paths, console + network signals, and the \`next:\` commands.`,
+    '2. Classify and repair:',
+    '   - locator/value drift → in-run auto-heal may already have recovered it (check heal.jsonl); otherwise `heal-respond` a corrected value + `replay --heal-from-run`, then `heal-promote --apply` when it holds.',
+    `   - wrong flow/route → \`agent-qa buffer load ${sid}\`, \`buffer insert|delete|edit\` the offending steps, \`flush\`, replay. Look at sibling scenarios' proven patterns before inventing a new flow.`,
+    '   - ambient uncaught-error noise only → demote that check via `buffer edit` with `context.onFailure: "ignore"` — it still reports but stops gating. Never delete assertions that verify the case.',
+    '   - auth/environment failure → fix the connection and retry; do not patch the scenario around it.',
+    '   - product regression → STOP, keep the run red, report the evidence.',
+    `3. Replay again: \`agent-qa replay ${sid} --profile <persona>\` (personas: \`curl -s "${apiBase}/api/personas"\` — reuse the one the chat is connected as).`,
+    '4. Report one line: SCENARIO_VERDICT=<pass|blocked|regression> plus the reason.',
+    '',
+    `Sign-in check first: \`curl -s "${apiBase}/api/chat/c/$AGENT_QA_CHAT_ID/connection"\` — if disconnected, connect before replaying.`,
+  ].join('\n')
 }
