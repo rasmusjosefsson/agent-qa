@@ -43,7 +43,8 @@ function buildRunPromptText(c, apiBase) {
     '',
     'If `state` is "disconnected" and the target needs auth: list personas/environments via /api/personas + /api/environments, pick the matching environment, and connect BEFORE `agent-qa start` —',
     '  curl -s -X POST "$AGENT_QA_BASE/api/chat/c/$AGENT_QA_CHAT_ID/connect" -H \'content-type: application/json\' -d \'{"personaId":"<id>","environmentId":"<env>"}\'',
-    'Connecting first stamps a useProfile baseline into the scenario so replays re-authenticate. If the user must choose the persona, ask instead of guessing.',
+    'Connecting first stamps a useProfile baseline into the scenario so replays re-authenticate.',
+    'Persona selection: use the persona marked `default: true`. If none is marked, use a persona already connected on this chat. NEVER pick a different persona on your own — different personas can sign into different organizations/tenants. If no default exists and the chat is anonymous, ask instead of guessing.',
     '',
     `Test case: "${c.title}"  (case id: ${c.id})`,
   ];
