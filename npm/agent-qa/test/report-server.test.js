@@ -1455,6 +1455,42 @@ test('POST /api/plans/:id/run serializes members and writes a last-run ledger', 
   assert.deepEqual(statuses, ['m1:running', 'm1:pass', 'm2:running', 'm2:pass']);
 });
 
+test('POST /api/plans/:id/run autoRepair spawns a repair chat per failed member', async (t) => {
+  const fx = makeFixture();
+  const deps = {
+    prepareBrowserSession: async () => {},
+    replay: async (sid) => {
+      fs.mkdirSync(path.join(fx.root, sid, 'replays', 'run-fail'), { recursive: true });
+      return { ok: true, done: Promise.resolve({ code: 1 }) };
+    },
+  };
+  const { server, base } = await boot(fx.root, deps);
+  t.after(() => server.close());
+
+  const j = (m, p, body) =>
+    fetch(`${base}${p}`, {
+      method: m,
+      headers: { 'content-type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+  await j('POST', '/api/cases/m1', { title: 'Member one' });
+  await j('POST', '/api/cases/m1/link', { scenarioSid: fx.sid });
+  await j('POST', '/api/plans/p10', { name: 'P10', scope: { caseIds: ['m1'] } });
+
+  const res = await j('POST', '/api/plans/p10/run', { autoRepair: true });
+  assert.equal((await res.json()).autoRepair, true);
+
+  // Member fails → repair chat is spawned after the chain settles; the
+  // ledger records a 'repair' row carrying the chat id.
+  await new Promise((r) => setTimeout(r, 150));
+  const ledger = await (await j('GET', '/api/plans/p10/last-run')).json();
+  const statuses = ledger.rows.map((r) => `${r.caseId}:${r.status}`);
+  assert.deepEqual(statuses, ['m1:running', 'm1:fail', 'm1:repair']);
+  const repair = ledger.rows.find((r) => r.status === 'repair');
+  assert.ok(repair.chatId, 'repair row should carry the spawned chat id');
+});
+
 test('persona + environment CRUD (run-config records)', async (t) => {
   const fx = makeFixture();
   const { server, base } = await boot(fx.root);

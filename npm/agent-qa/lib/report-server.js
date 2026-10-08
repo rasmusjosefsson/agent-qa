@@ -26,6 +26,7 @@ const { execFile, execFileSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 const { createLiveBridge } = require('./live-bridge.js');
 const { findExtensionDir, zipExtensionDir } = require('./extension-zip.js');
+const { buildRepairPromptText } = require('./case-prompts.js');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
@@ -1259,7 +1260,7 @@ async function listPlans(root) {
 // /api/plans[/:id[/delete|cases|run]] — GET list/one/resolved-cases, POST
 // upsert/delete/run. The `run` action replays each member scenario and needs
 // the launcher-resolved CLI (deps.replay); everything else is pure JSON.
-async function handlePlans(req, res, root, seg, deps) {
+async function handlePlans(req, res, root, seg, deps, chat) {
   const method = req.method;
 
   if (seg.length === 0) {
@@ -1311,10 +1312,15 @@ async function handlePlans(req, res, root, seg, deps) {
     }
     const rec = await readJson(file);
     if (!rec) return notFound(res, 'no such plan');
-    // Optional persona/environment for this run: { profile, params }.
+    // Optional persona/environment for this run: { profile, params },
+    // plus autoRepair — failed members each get a repair chat seeded with
+    // the audit-digest prompt once the run settles.
     let runOpts = {};
+    let autoRepair = false;
     try {
-      runOpts = runOptsFromBody(await readJsonBody(req));
+      const body = await readJsonBody(req);
+      runOpts = runOptsFromBody(body);
+      autoRepair = body && body.autoRepair === true;
     } catch {
       /* no/!json body → defaults */
     }
@@ -1359,6 +1365,40 @@ async function handlePlans(req, res, root, seg, deps) {
       fsp
         .appendFile(ledgerFile, JSON.stringify({ at: new Date().toISOString(), ...row }) + '\n')
         .catch(() => {});
+    // Auto-repair: failed members each get a repair chat seeded with the
+    // audit-digest prompt — the same loop the Cases page's "Repair with
+    // agent" drives, just unattended. Held until the whole run settles so
+    // repair replays don't fight member replays over the shared profile
+    // session.
+    const failures = [];
+    const spawnRepairs = async () => {
+      if (!autoRepair || !chat || !failures.length) return;
+      const apiBase = `http://${req.headers.host || '127.0.0.1'}`;
+      for (const m of failures) {
+        try {
+          const caseRec =
+            (await readJson(caseFile(root, m.caseId))) || { id: m.caseId, title: m.caseId };
+          const entry = chat.create();
+          const prompt = buildRepairPromptText(
+            caseRec,
+            { sid: m.sid },
+            { runId: m.runId, state: 'failed' },
+            apiBase
+          );
+          await ledger({ caseId: m.caseId, sid: m.sid, status: 'repair', chatId: entry.id });
+          Promise.resolve(entry.getHub())
+            .then((hub) => hub && hub.prompt(annotatePromptWithContext(deps, entry, prompt)))
+            .catch((e) => console.error(`[plan ${id}] repair seed for ${m.caseId} failed:`, e));
+        } catch (e) {
+          await ledger({
+            caseId: m.caseId,
+            sid: m.sid,
+            status: 'error',
+            reason: `repair spawn failed: ${String((e && e.message) || e)}`,
+          });
+        }
+      }
+    };
     const spawnMember = async (m) => {
       const session = sessionForReplay(m.sid, runOpts.profile);
       const before = new Set(replayRunIds(root, m.sid));
@@ -1383,7 +1423,8 @@ async function handlePlans(req, res, root, seg, deps) {
         spawn.out.done && typeof spawn.out.done.then === 'function'
           ? await spawn.out.done
           : null;
-      const minted = replayRunIds(root, m.sid).some((r) => !spawn.before.has(r));
+      const newRuns = replayRunIds(root, m.sid).filter((r) => !spawn.before.has(r));
+      const minted = newRuns.length > 0;
       if (fin && !minted) {
         return ledger({
           caseId: m.caseId,
@@ -1391,6 +1432,10 @@ async function handlePlans(req, res, root, seg, deps) {
           status: 'error',
           reason: `replay exited (code ${fin.code ?? fin.signal}) before producing a run — see replay log`,
         });
+      }
+      if (fin && fin.code !== 0) {
+        // carry the failing runId so the repair prompt can point at it.
+        failures.push({ ...m, runId: newRuns[newRuns.length - 1] || null });
       }
       return ledger({
         caseId: m.caseId,
@@ -1424,8 +1469,9 @@ async function handlePlans(req, res, root, seg, deps) {
         .then(() => spawnMember(m))
         .then((spawn) => finishMember(m, spawn));
     }
+    chain = chain.then(() => spawnRepairs());
     chain.catch((e) => console.error(`[plan ${id}] member chain error: ${(e && e.message) || e}`));
-    return sendJson(res, 202, { ok: true, started, skipped });
+    return sendJson(res, 202, { ok: true, started, skipped, autoRepair });
   }
 
   if (seg.length === 2 && seg[1] === 'last-run' && method === 'GET') {
@@ -4579,7 +4625,7 @@ function createRequestHandler(root, deps, chat) {
       // Test plans (runnable scope of sets/cases) under <root>/_plans. CRUD is
       // pure JSON; the /run action needs deps.replay (handled within).
       if (segAll[0] === 'api' && segAll[1] === 'plans') {
-        return await handlePlans(req, res, root, segAll.slice(2), deps);
+        return await handlePlans(req, res, root, segAll.slice(2), deps, chatManager);
       }
 
       // Personas (login identities → --profile) and environments (target
