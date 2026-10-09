@@ -2274,7 +2274,10 @@ fn check_element(
                 }
                 thread::sleep(POLL_INTERVAL);
             }
-            bail!("element {predicate:?} claim timed out: {}", last_err.map(|e| e.to_string()).unwrap_or_default());
+            bail!(
+                "element {predicate:?} claim timed out: {}",
+                last_err.map(|e| e.to_string()).unwrap_or_default()
+            );
         }
         other => bail!("element subject does not yet support predicate '{other:?}'"),
     }

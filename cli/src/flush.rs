@@ -36,7 +36,13 @@ pub fn run(args: &[String]) -> Result<u8> {
             other => bail!("flush: unknown argument {other:?}"),
         }
     }
-    let summary = flush(auto_shots, auto_network, auto_errors, auto_secrets, auto_url)?;
+    let summary = flush(
+        auto_shots,
+        auto_network,
+        auto_errors,
+        auto_secrets,
+        auto_url,
+    )?;
     println!("flushed sid={} steps={}", summary.sid, summary.steps);
     println!("wrote   {}", summary.scenario_file.display());
     Ok(0)
@@ -550,12 +556,14 @@ fn push_url_claim(steps: &mut Vec<crate::scenario::Step>, current: &str) {
     let pattern = format!("^{}([?#].*)?$", regex::escape(bare));
     // A re-flushed buffer (`buffer load` pulls sealed auto-gates in) would
     // otherwise grow a second identical landing claim every cycle.
-    if steps.iter().any(|s| matches!(
-        s,
-        crate::scenario::Step::Check { claim, .. }
-            if matches!(claim.subject, crate::scenario::ClaimSubject::Url { .. })
-                && claim.value == Some(serde_json::json!(pattern))
-    )) {
+    if steps.iter().any(|s| {
+        matches!(
+            s,
+            crate::scenario::Step::Check { claim, .. }
+                if matches!(claim.subject, crate::scenario::ClaimSubject::Url { .. })
+                    && claim.value == Some(serde_json::json!(pattern))
+        )
+    }) {
         return;
     }
     steps.push(crate::scenario::Step::Check {
@@ -601,7 +609,9 @@ fn gate_matches_json(s: &serde_json::Value, gate: AutoGate) -> bool {
     match gate {
         AutoGate::PageError => {
             subject.and_then(|su| su.get("pageError")).is_some()
-                && claim.and_then(|c| c.get("predicate")).and_then(|p| p.as_str())
+                && claim
+                    .and_then(|c| c.get("predicate"))
+                    .and_then(|p| p.as_str())
                     == Some("notExists")
         }
         AutoGate::Url => {
@@ -636,12 +646,14 @@ fn gate_matches_step(s: &crate::scenario::Step, gate: AutoGate) -> bool {
 fn append_auto_error_claims(steps: &mut Vec<crate::scenario::Step>) {
     // Same dedupe as the landing gate — `buffer load` re-imports the sealed
     // pageError check, so a second flush must not append another.
-    if steps.iter().any(|s| matches!(
-        s,
-        crate::scenario::Step::Check { claim, .. }
-            if matches!(claim.subject, crate::scenario::ClaimSubject::PageError { .. })
-                && matches!(claim.predicate, crate::scenario::Predicate::NotExists)
-    )) {
+    if steps.iter().any(|s| {
+        matches!(
+            s,
+            crate::scenario::Step::Check { claim, .. }
+                if matches!(claim.subject, crate::scenario::ClaimSubject::PageError { .. })
+                    && matches!(claim.predicate, crate::scenario::Predicate::NotExists)
+        )
+    }) {
         return;
     }
     steps.push(crate::scenario::Step::Check {
@@ -853,7 +865,9 @@ mod tests {
         );
         state.save().unwrap();
 
-        let err = flush(false, false, false, false, false).unwrap_err().to_string();
+        let err = flush(false, false, false, false, false)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("nothing recorded"), "unexpected error: {err}");
         // The recording stays active — the operator can still capture or abandon.
         assert!(paths::record_state_file().exists());
@@ -891,7 +905,9 @@ mod tests {
         .unwrap();
         state.save().unwrap();
 
-        let err = flush(false, false, false, false, false).unwrap_err().to_string();
+        let err = flush(false, false, false, false, false)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("refusing to overwrite"), "unexpected: {err}");
         // The unrelated scenario survived untouched, and the recording is
         // still active so the operator can re-flush under a free sid.
@@ -1350,7 +1366,10 @@ mod tests {
         assert_eq!(steps.len(), 1);
         let json = serde_json::to_value(&steps[0]).unwrap();
         assert_eq!(json["kind"], "check");
-        assert_eq!(json["intent"], "landed on https://app.example.com/bank/dashboard");
+        assert_eq!(
+            json["intent"],
+            "landed on https://app.example.com/bank/dashboard"
+        );
         assert_eq!(json["claim"]["subject"]["url"], true);
         assert_eq!(json["claim"]["predicate"], "matches");
         let pat = json["claim"]["value"].as_str().unwrap();

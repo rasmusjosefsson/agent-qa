@@ -93,7 +93,6 @@ pub fn env_op_hint(raw: &Json) -> String {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
