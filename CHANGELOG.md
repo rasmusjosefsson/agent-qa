@@ -6,6 +6,52 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+
+- Plan auto-repair: `POST /api/plans/:id/run` accepts `autoRepair`; once
+  the serialized member chain settles, a repair chat is spawned per
+  failed member, seeded with the audit-digest repair prompt, and recorded
+  as a `repair` row in the plan's `last-run.jsonl` ledger.
+- "Repair with agent" on the Cases page: a failed scenario gets a button
+  that seeds a repair chat with the same diagnose → classify → fix →
+  re-replay loop (shared prompt builders in `lib/case-prompts.js`).
+- `context.onFailure` on steps is now enforced: `abort` (default) fails
+  and stops, `continue` fails but keeps stepping, `ignore` records the
+  failure (`ignored failure: <err>`, skip-status event) without gating
+  the run — for advisory checks on noisy apps.
+- `AGENT_QA_NO_AUTO_ERRORS` env opt-out for flush's auto-appended
+  page-error gate; `flush` also stops re-adding a gate that was
+  deliberately deleted from a `buffer load`'d scenario.
+- Plan runs write a per-member outcome ledger to
+  `_plans/<id>/last-run.jsonl`, served at
+  `GET /api/plans/:id/last-run` — running/pass/fail/error/repair rows
+  instead of trusting spawn.
+
+### Fixed
+
+- Plan-run silently dropped members: member replays spawned
+  concurrently, collided on the shared `<profile>-session` lock, and
+  exited before minting a run dir while the API reported them started.
+  Members now launch serially (first spawn verified in-request), chained
+  on each child's exit.
+- `replay --persona/--environment` ignored package records resolved via
+  `[personas]`/`[environments]` extra-dirs in `agent-qa.toml` — the CLI
+  now mirrors the workbench's local-then-package lookup, so
+  persona+environment replays work without copying records or exporting
+  credentials by hand.
+- Environment params crashed inputless scenarios: ambient params were
+  merged as input overrides and tripped the declared-inputs check. Only
+  params matching declared `inputs` merge; explicit `--param` still wins.
+- Case run/repair prompts pin the persona: `buildRunPromptText` /
+  `buildRepairPromptText` accept `{personaId, environmentId}` — an
+  explicit "use exactly this persona" instruction — and otherwise mandate
+  the `default: true` persona instead of letting the agent pick (a
+  free-picked persona can sign into a different tenant).
+- `heal.md` rewritten to describe the shipped auto-heal ladder plus the
+  bounded repair loop (audit explain → classify →
+  heal-respond/buffer-edit/demote → re-replay, max 3 cycles), and
+  `schema.md` documents `context.onFailure`.
+
 ## [0.7.0] - 2026-10-08
 ### Added
 
