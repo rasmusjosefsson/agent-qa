@@ -49,6 +49,6 @@ describe('buildXrayImportPrompt', () => {
   it('adapts wording for a story', () => {
     const s = buildXrayImportPrompt('PROJ-9', 'story', 'http://x')
     expect(s).toContain('Xray story PROJ-9')
-    expect(s).toContain('tests covering it')
+    expect(s).toContain('coverage/tests panel')
   })
 })

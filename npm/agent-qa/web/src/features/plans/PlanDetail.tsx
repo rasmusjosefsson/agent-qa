@@ -90,6 +90,7 @@ export function PlanDetail({ id }: { id: string }) {
   const [personaId, setPersonaId] = useState('')
   const [envId, setEnvId] = useState('')
   const [headed, setHeaded] = useState(false)
+  const [autoRepair, setAutoRepair] = useState(false)
   // Seed from the workbench "headed by default" setting once it loads.
   useEffect(() => {
     void effectiveSettings()
@@ -147,6 +148,7 @@ export function PlanDetail({ id }: { id: string }) {
       params: Object.keys(params).length ? params : undefined,
       personaId: personaId || undefined,
       environmentId: envId || undefined,
+      autoRepair,
     }
   }
 
@@ -394,6 +396,10 @@ export function PlanDetail({ id }: { id: string }) {
           options={environments.map((e) => ({ value: e.id, label: e.name }))}
         />
         <BrowserModeToggle headed={headed} onChange={setHeaded} disabled={busy} />
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground" title="After the run settles, spawn a repair chat for each failed member (audit digest → classify → fix → re-replay)">
+          <Checkbox checked={autoRepair} onCheckedChange={(v) => setAutoRepair(v === true)} />
+          Auto-repair
+        </label>
         <Button
           variant="ghost"
           size="sm"

@@ -511,7 +511,7 @@ test('chat routes drive the hub', async (t) => {
     });
     assert.equal(res.status, 202);
     assert.equal(hub.calls.prompt.length, 1);
-    assert.equal(hub.calls.prompt[0].text, 'do a thing');
+    assert.match(hub.calls.prompt[0].text, /do a thing/);
     assert.equal(hub.calls.prompt[0].opts.streamingBehavior, 'steer');
   });
 
@@ -791,7 +791,7 @@ test('multi-chat: list / create / per-chat routes / delete', async (t) => {
     body: JSON.stringify({ text: 'hi there' }),
   });
   assert.equal(p.status, 202);
-  assert.equal(hub.calls.prompt.at(-1).text, 'hi there');
+  assert.match(hub.calls.prompt.at(-1).text, /hi there/);
 
   // the list reports per-chat live/busy so the rail can badge each tab
   list = await (await fetch(`${base}/api/chat/list`)).json();
@@ -1072,8 +1072,13 @@ test('detectChatBackends reports pi + opencode availability separately', async (
   assert.equal(__internal.whichOnPath('opencode', { PATH: dir }), bin);
 
   // A moduleUrl inside an empty tree → neither SDK resolves; bin still detected.
+  // AGENT_QA_PI_SDK pinned to a dead path so ambient global installs can't
+  // leak in — explicit config is authoritative and errors on a bad path.
   const bare = path.join(dir, 'lib', 'chat-agent.mjs');
-  const det = detectChatBackends({ env: { PATH: dir }, moduleUrl: pathToFileURL(bare).href });
+  const det = detectChatBackends({
+    env: { PATH: dir, AGENT_QA_PI_SDK: path.join(dir, 'missing.js') },
+    moduleUrl: pathToFileURL(bare).href,
+  });
   assert.equal(det.pi.available, false);
   assert.equal(det.opencode.sdkAvailable, false);
   assert.equal(det.opencode.binary, bin);

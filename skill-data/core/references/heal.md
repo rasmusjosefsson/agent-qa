@@ -1,27 +1,40 @@
-# Manual correction and recovery
+# Replay healing: auto-heal, manual correction, and the repair loop
 
-agent-qa currently provides **manual correction tools**. Replay does not yet
-classify failures, generate heal requests, create locator patch suggestions, or
-run an autonomous locator-heal strategy ladder.
+Two layers compose: replay heals **locator drift** automatically in-run, and
+what it can't fix gets a bounded, evidence-driven repair loop between runs.
 
-## What replay does today
+## 1. In-run auto-heal (built in, on by default)
 
-For each step, replay dispatches the recorded action or check. There are two
-built-in robustness paths around clicks:
+A do-step whose role+name locator misses usually means accessible-name
+drift ("Save" → "Save changes", a volatile count, a generated suffix). Instead
+of failing, the runner collects the page's live role candidates and walks an
+ordered strategy ladder — strict to permissive — that fires only when
+**exactly one** candidate matches; it refuses to guess when ambiguous. On a
+match the step retries once; a matched-but-still-failing retry is a hard
+failure.
 
-- role/name DOM activation tries exact, substring, and digit-normalized name
-  matching for a broad set of interactive roles;
-- when an option or menu-item click fails, replay can re-fire the previous
-  opener and retry that popup-content click once.
+Each successful heal is persisted for review:
 
-Other failures stop the run. Replay does not write `heal.jsonl`, does not emit a
-caller-driven exit code, and does not create files under `diffs/` or
-`heal-requests/`.
+- `replays/<runId>/heal.jsonl` — `heal-row/v1` rows with mode
+  `locator-correction`
+- `replays/<runId>/diffs/<stepId>.patch.json` — a `heal-patch/v1` file that
+  `heal-promote --apply` writes back into `scenario.json` when you accept it
 
-## Correct a replay value manually
+Failures no strategy can heal are probed for a value rejection (visible
+alert/toast/banner) and classified in the audit — never retried.
 
-Use this when you have inspected a failed run and decided that a do-step needs a
-different string value.
+Env gates:
+
+- `AGENT_QA_NO_HEAL` — disable auto-heal entirely (CI runs that must fail hard
+  on any drift)
+- `AGENT_QA_HEAL_STRICT` — a run that needed any heal exits non-zero even when
+  every step passed, so drift surfaces for review instead of silently
+  self-correcting
+
+## 2. Correct a replay value manually
+
+Use this when you have inspected a failed run and decided that a do-step needs
+a different string value.
 
 ```bash
 # Record the decision against a failed run.
@@ -48,14 +61,13 @@ check steps, and unknown step ids do not produce an override.
 
 Important limits:
 
-- core replay does not create the response or ask for one automatically;
 - corrections are strings, not arbitrary JSON objects;
 - the override is useful only for verbs that consume `step.value`;
 - the scenario contract is not changed by replay.
 
 Use `agent-qa heal-list <sid> [--run <runId>]` to inspect recorded responses.
 
-## Patch an in-flight recording buffer
+## 3. Patch an in-flight recording buffer
 
 `heal-apply` can consume the same value-correction response and patch one row in
 the active recording buffer:
@@ -70,36 +82,53 @@ It updates the value argument consumed by the recorded action in
 browser; re-position the tab and re-issue the corrected gesture yourself. See
 [`heal-apply.md`](./heal-apply.md) and [`recovery.md`](./recovery.md).
 
-## Promote an externally supplied locator patch
+## 4. Promote a locator patch into the scenario
 
-`heal-promote` is a consumer for locator patch files:
+`heal-promote` consumes `heal-patch/v1` files — whether written by in-run
+auto-heal or supplied externally:
 
 ```bash
 agent-qa heal-promote <sid> [--run <runId>] [--steps <id,...>] [--apply]
 ```
 
-It reads files under:
+It reads `<sid>/replays/<runId>/diffs/<stepId>.patch.json`. Without `--apply`
+it is a dry run. With `--apply` it atomically updates the matching step
+locator in `scenario.json`. A `scenarioContentHash` mismatch returns exit 3
+rather than overwriting a changed contract.
+
+## 5. The repair loop — what auto-heal cannot fix
+
+When a run fails, the verdict comes first — then the classification decides
+the action. Bounded: a few cycles, never an unbounded retry storm.
 
 ```text
-<sid>/replays/<runId>/diffs/<stepId>.patch.json
+replay → if FAIL: audit explain → classify →
+  locator/value drift   → auto-heal already handled it, or
+                          heal-respond + replay --heal-from-run →
+                          heal-promote --apply to keep it
+  wrong flow or route   → buffer load <sid> → buffer insert/delete/edit →
+                          flush → replay
+  known ambient noise   → demote the check: context.onFailure "ignore"
+                          (reports, never gates) or flush --no-auto-errors
+  auth/environment      → fix the connection/persona, retry
+  product regression    → STOP — keep the run red and report the evidence
 ```
 
-The current core replay does **not** generate those files. An external tool
-may supply them using the `heal-patch/v1` shape expected by
-`cli/src/heal_promote.rs`. Without `--apply`, the command is a dry run. With
-`--apply`, it atomically updates the matching step locator in `scenario.json`.
-A `scenarioContentHash` mismatch returns exit 3 rather than overwriting a
-changed contract.
+`agent-qa audit explain <sid> [runId]` is the single read that drives this —
+it prints the failed step, screenshot/snapshot paths, console and network
+signals, and the `next:` commands. `agent-qa triage` gives the same
+classification for a batch.
+
+Rules that keep this honest:
+
+- never make a real regression green by weakening assertions — delete or
+  demote only checks whose failure is proven ambient noise;
+- `buffer` edits write through `flush` so the scenario stays schema-valid;
+- stop after a small bounded number of cycles and mark the case blocked with
+  the audit digest attached.
 
 ## Locator tolerance metadata
 
 The scenario schema accepts `Locator.tolerate` metadata, but the current runner
 does not enforce it. Do not rely on those fields to enable or disable matching.
 See [`heal-opt-out.md`](./heal-opt-out.md).
-
-## Planned work
-
-The backlog for autonomous locator classification, one-shot retry, audit rows,
-strict mode, and suggested patches is tracked in
-[`docs/specs/replay-robustness-followups.md`](../../../docs/specs/replay-robustness-followups.md).
-Do not document that design as shipped behavior until the runner and tests land.

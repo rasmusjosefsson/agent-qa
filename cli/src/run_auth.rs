@@ -20,15 +20,15 @@
 //!   - `profile-add` registers the profile↔plugin adapter binding
 //!     (idempotent) so `useProfile` can bootstrap the login
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use serde_json::Value as Json;
 
 use crate::paths;
-use crate::runner::RunOptions;
+use crate::runner::{RunOptions, ScenarioSource};
 
 pub fn apply(opts: &mut RunOptions) -> Result<()> {
     if opts.persona.is_none() && opts.environment.is_none() {
@@ -38,8 +38,14 @@ pub fn apply(opts: &mut RunOptions) -> Result<()> {
     let env_rec = load_environment(&root, opts.environment.as_deref())?;
 
     // Environment params → param defaults. An explicit `--param k=v` still
-    // wins — env values fill in what the command line didn't name.
+    // wins — env values fill in what the command line didn't name. Only keys
+    // the scenario declares in `inputs` merge: an environment record
+    // describes ambient run context (baseUrl, deployment, tags…) and a
+    // scenario legitimately declares none or a subset, so pushing every env
+    // key into input_overrides would trip the declared-inputs check on
+    // values nothing can reference.
     if let Some(env) = &env_rec {
+        let declared = declared_input_names(opts).unwrap_or_default();
         let mut defaults: BTreeMap<String, String> = BTreeMap::new();
         if let Some(params) = env.get("params").and_then(|p| p.as_object()) {
             for (k, v) in params {
@@ -54,7 +60,9 @@ pub fn apply(opts: &mut RunOptions) -> Result<()> {
             }
         }
         for (k, v) in defaults {
-            opts.input_overrides.entry(k).or_insert(v);
+            if declared.contains(&k) {
+                opts.input_overrides.entry(k).or_insert(v);
+            }
         }
     }
 
@@ -152,29 +160,43 @@ pub fn apply(opts: &mut RunOptions) -> Result<()> {
 fn load_persona(root: &Path, id: &str) -> Result<Json> {
     safe_record_id(id, "persona")?;
     let file = root.join("_personas").join(id).join("persona.json");
-    let body = fs::read_to_string(&file).with_context(|| {
-        format!(
-            "no such persona: {id} — available: {}",
-            available_ids(&root.join("_personas"), "persona.json")
-        )
-    })?;
-    serde_json::from_str(&body)
-        .with_context(|| format!("unparseable persona record {}", file.display()))
+    if file.is_file() {
+        let body = fs::read_to_string(&file).with_context(|| format!("read {}", file.display()))?;
+        return serde_json::from_str(&body)
+            .with_context(|| format!("unparseable persona record {}", file.display()));
+    }
+    // Package-provided personas (installed extension packages register
+    // flat <id>.json records under [personas] extra-dirs — same lookup the
+    // workbench performs; local records shadow by id).
+    for rec in package_records("personas") {
+        if rec.get("id").and_then(|v| v.as_str()) == Some(id) {
+            return Ok(rec);
+        }
+    }
+    bail!(
+        "no such persona: {id} — available: {}",
+        available_persona_ids(root)
+    )
 }
 
-/// Subdirectory ids holding a `<marker>` record, comma-joined — the
-/// available choices for a "no such <record>" error.
-fn available_ids(dir: &Path, marker: &str) -> String {
-    let mut ids: Vec<String> = fs::read_dir(dir)
-        .map(|entries| {
+/// Local persona ids + package-provided ones, for the not-found message.
+fn available_persona_ids(root: &Path) -> String {
+    let mut ids: Vec<String> = Vec::new();
+    if let Ok(entries) = fs::read_dir(root.join("_personas")) {
+        ids.extend(
             entries
                 .flatten()
-                .filter(|e| e.path().join(marker).is_file())
-                .filter_map(|e| e.file_name().to_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
+                .filter(|e| e.path().join("persona.json").is_file())
+                .filter_map(|e| e.file_name().to_str().map(str::to_string)),
+        );
+    }
+    for rec in package_records("personas") {
+        if let Some(id) = rec.get("id").and_then(|v| v.as_str()) {
+            ids.push(id.to_string());
+        }
+    }
     ids.sort();
+    ids.dedup();
     if ids.is_empty() {
         "(none defined)".to_string()
     } else {
@@ -182,41 +204,188 @@ fn available_ids(dir: &Path, marker: &str) -> String {
     }
 }
 
-/// Resolve the environment record: the named one, else the default-flagged
-/// one, else the sole record. Returns `None` when none are defined.
+/// Resolve the environment record: the named one (local first, then a
+/// package-provided record by id — same shadowing the workbench uses), else
+/// the default-flagged one, else the sole record. Returns `None` when none
+/// are defined.
 fn load_environment(root: &Path, id: Option<&str>) -> Result<Option<Json>> {
     if let Some(id) = id {
         safe_record_id(id, "environment")?;
         let file = root.join("_environments").join(id).join("environment.json");
-        let body = fs::read_to_string(&file).with_context(|| {
-            format!(
-                "no such environment: {id} — available: {}",
-                available_ids(&root.join("_environments"), "environment.json")
-            )
-        })?;
-        return serde_json::from_str(&body)
-            .with_context(|| format!("unparseable environment record {}", file.display()))
-            .map(Some);
+        if file.is_file() {
+            let body =
+                fs::read_to_string(&file).with_context(|| format!("read {}", file.display()))?;
+            return serde_json::from_str(&body)
+                .with_context(|| format!("unparseable environment record {}", file.display()))
+                .map(Some);
+        }
+        for rec in package_records("environments") {
+            if rec.get("id").and_then(|v| v.as_str()) == Some(id) {
+                return Ok(Some(rec));
+            }
+        }
+        bail!(
+            "no such environment: {id} — available: {}",
+            available_environment_ids(root)
+        );
     }
-    let dir = root.join("_environments");
     let mut records: Vec<Json> = Vec::new();
-    let entries = match fs::read_dir(&dir) {
-        Ok(e) => e,
-        Err(_) => return Ok(None),
-    };
-    for entry in entries.flatten() {
-        let file = entry.path().join("environment.json");
-        if let Ok(body) = fs::read_to_string(&file) {
-            if let Ok(rec) = serde_json::from_str::<Json>(&body) {
-                records.push(rec);
+    let dir = root.join("_environments");
+    if let Ok(entries) = fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let file = entry.path().join("environment.json");
+            if let Ok(body) = fs::read_to_string(&file) {
+                if let Ok(rec) = serde_json::from_str::<Json>(&body) {
+                    records.push(rec);
+                }
             }
         }
     }
+    records.extend(package_records("environments"));
     Ok(records
         .iter()
         .find(|e| e.get("default").and_then(|d| d.as_bool()) == Some(true))
         .cloned()
         .or_else(|| (records.len() == 1).then(|| records[0].clone())))
+}
+
+/// Local environment ids + package-provided ones, for the not-found message.
+fn available_environment_ids(root: &Path) -> String {
+    let mut ids: Vec<String> = Vec::new();
+    if let Ok(entries) = fs::read_dir(root.join("_environments")) {
+        ids.extend(
+            entries
+                .flatten()
+                .filter(|e| e.path().join("environment.json").is_file())
+                .filter_map(|e| e.file_name().to_str().map(str::to_string)),
+        );
+    }
+    for rec in package_records("environments") {
+        if let Some(id) = rec.get("id").and_then(|v| v.as_str()) {
+            ids.push(id.to_string());
+        }
+    }
+    ids.sort();
+    ids.dedup();
+    if ids.is_empty() {
+        "(none defined)".to_string()
+    } else {
+        ids.join(", ")
+    }
+}
+
+/// Read-only records installed packages ship: flat `<id>.json` files under
+/// each `[personas]`/`[environments]` `extra-dirs` entry of the user config.
+/// Mirrors the workbench's packageRecordDirs/readPackageRecords so a
+/// packaged persona/environment works for `replay --persona/--environment`
+/// without being copied under `<root>/_personas`/`_environments`.
+fn package_records(table: &str) -> Vec<Json> {
+    let mut out = Vec::new();
+    for dir in package_record_dirs(table) {
+        let entries = match fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let file = entry.path();
+            if file.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(body) = fs::read_to_string(&file) else {
+                continue;
+            };
+            let Ok(mut rec) = serde_json::from_str::<Json>(&body) else {
+                continue;
+            };
+            if rec.get("id").is_none() {
+                if let Some(stem) = file.file_stem().and_then(|s| s.to_str()) {
+                    rec["id"] = Json::String(stem.to_string());
+                }
+            }
+            out.push(rec);
+        }
+    }
+    out
+}
+
+/// `[<table>] extra-dirs` from the user-level config files — the global
+/// `~/.agent-qa/agent-qa.toml` (or `$AGENT_QA_HOME/agent-qa.toml`) plus the
+/// repo `agent-qa.toml` walked up from cwd, matching how `skills` merges its
+/// own extra-dirs. Best-effort: unreadable/typo'd files are skipped (the
+/// skills loader already warns on those).
+fn package_record_dirs(table: &str) -> Vec<PathBuf> {
+    #[derive(serde::Deserialize)]
+    struct RecordConfig {
+        personas: Option<ExtraDirs>,
+        environments: Option<ExtraDirs>,
+    }
+    #[derive(serde::Deserialize)]
+    struct ExtraDirs {
+        #[serde(rename = "extra-dirs", alias = "extra_dirs")]
+        extra_dirs: Option<Vec<String>>,
+    }
+
+    let mut files = crate::global_config::existing_global_config_files();
+    if let Some(home) = std::env::var_os("AGENT_QA_HOME") {
+        let p = PathBuf::from(home).join("agent-qa.toml");
+        if p.is_file() && !files.contains(&p) {
+            files.insert(0, p);
+        }
+    }
+    // Repo-level config: same walk-up convention `skills` uses.
+    if let Ok(cwd) = std::env::current_dir() {
+        let mut cur: Option<&Path> = Some(cwd.as_path());
+        while let Some(d) = cur {
+            for name in ["agent-qa.toml", ".agent-qa.toml"] {
+                let candidate = d.join(name);
+                if candidate.is_file() && !files.contains(&candidate) {
+                    files.push(candidate);
+                }
+            }
+            cur = d.parent();
+        }
+    }
+
+    let mut dirs = Vec::new();
+    for toml_path in files {
+        let Ok(bytes) = fs::read_to_string(&toml_path) else {
+            continue;
+        };
+        let Ok(cfg) = toml::from_str::<RecordConfig>(&bytes) else {
+            continue;
+        };
+        let section = match table {
+            "personas" => cfg.personas,
+            "environments" => cfg.environments,
+            _ => None,
+        };
+        let Some(specs) = section.and_then(|s| s.extra_dirs) else {
+            continue;
+        };
+        let base = toml_path.parent().unwrap_or_else(|| Path::new("."));
+        for spec in specs {
+            let expanded = crate::global_config::expand_tilde(&spec);
+            dirs.push(if expanded.is_absolute() {
+                expanded
+            } else {
+                base.join(expanded)
+            });
+        }
+    }
+    dirs
+}
+
+/// Names the scenario declares in `inputs` — used to scope environment
+/// params to references the scenario can actually resolve.
+fn declared_input_names(opts: &RunOptions) -> Option<BTreeSet<String>> {
+    let file = match &opts.source {
+        ScenarioSource::Sid(sid) => paths::scenario_dir(sid).ok()?.join("scenario.json"),
+        ScenarioSource::Path(p) => p.clone(),
+    };
+    let body = fs::read_to_string(&file).ok()?;
+    let doc: Json = serde_json::from_str(&body).ok()?;
+    let keys = doc.get("inputs")?.as_object()?;
+    Some(keys.keys().cloned().collect())
 }
 
 fn safe_record_id(id: &str, label: &str) -> Result<()> {
@@ -243,6 +412,50 @@ mod tests {
         let dir = root.join("_environments").join(id);
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("environment.json"), rec.to_string()).unwrap();
+    }
+
+    /// The sid `t` scenario `base_opts()` points at — writes a scenario.json
+    /// declaring the given input names so environment params can merge.
+    fn write_scenario_with_inputs(root: &Path, input_names: &[&str]) {
+        let dir = root.join("t");
+        fs::create_dir_all(&dir).unwrap();
+        let inputs: serde_json::Map<String, Json> = input_names
+            .iter()
+            .map(|n| (n.to_string(), json!({"type": "string"})))
+            .collect();
+        fs::write(
+            dir.join("scenario.json"),
+            json!({"schema": "scenario/1", "title": "t", "steps": [], "inputs": Json::Object(inputs)})
+                .to_string(),
+        )
+        .unwrap();
+    }
+
+    /// A package-style record dir (flat `<id>.json` files) plus a global
+    /// config file registering it under `[<table>] extra-dirs`.
+    fn write_package_dir(root: &Path, table: &str, record: Json) -> PathBuf {
+        let home = root.join("qa-home");
+        let pkg = root.join("pkg-records");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&pkg).unwrap();
+        let id = record
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap()
+            .to_string();
+        fs::write(pkg.join(format!("{id}.json")), record.to_string()).unwrap();
+        fs::write(
+            home.join("agent-qa.toml"),
+            // Forward slashes so the path stays a valid TOML string on Windows
+            // (backslashes would read as escapes and break the parse).
+            format!(
+                "[{table}]\nextra-dirs = [\"{}\"]\n",
+                pkg.display().to_string().replace('\\', "/")
+            ),
+        )
+        .unwrap();
+        std::env::set_var("AGENT_QA_HOME", &home);
+        home
     }
 
     fn base_opts() -> RunOptions {
@@ -308,6 +521,7 @@ mod tests {
                 "auth": {}
             }),
         );
+        write_scenario_with_inputs(tmp.path(), &["baseUrl", "tenant", "locale"]);
         std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
         let mut opts = opts_with_env("staging");
         opts.input_overrides
@@ -327,6 +541,141 @@ mod tests {
             Some("en")
         );
         std::env::remove_var("AGENT_QA_SCENARIOS_DIR");
+    }
+
+    #[test]
+    fn environment_params_skip_undeclared_inputs() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        write_environment(
+            tmp.path(),
+            "staging",
+            json!({
+                "schema": "environment/1", "id": "staging",
+                "baseUrl": "https://staging.example.com",
+                "params": { "tenant": "acme", "locale": "sv" },
+                "auth": {}
+            }),
+        );
+        // The scenario declares only `baseUrl` — the environment's other
+        // params are ambient context, not errors.
+        write_scenario_with_inputs(tmp.path(), &["baseUrl"]);
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        let mut opts = opts_with_env("staging");
+        apply(&mut opts).unwrap();
+        assert_eq!(
+            opts.input_overrides.get("baseUrl").map(String::as_str),
+            Some("https://staging.example.com")
+        );
+        assert!(!opts.input_overrides.contains_key("tenant"));
+        assert!(!opts.input_overrides.contains_key("locale"));
+        std::env::remove_var("AGENT_QA_SCENARIOS_DIR");
+    }
+
+    #[test]
+    fn environment_params_merge_nothing_for_inputless_scenario() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        write_environment(
+            tmp.path(),
+            "staging",
+            json!({
+                "schema": "environment/1", "id": "staging",
+                "baseUrl": "https://staging.example.com",
+                "params": { "tenant": "acme" },
+                "auth": {}
+            }),
+        );
+        // Scenario with no inputs key at all — env params merge nothing
+        // rather than tripping the declared-inputs check downstream.
+        let dir = tmp.path().join("t");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("scenario.json"),
+            json!({"schema": "scenario/1", "title": "t", "steps": []}).to_string(),
+        )
+        .unwrap();
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        let mut opts = opts_with_env("staging");
+        apply(&mut opts).unwrap();
+        assert!(opts.input_overrides.is_empty());
+        std::env::remove_var("AGENT_QA_SCENARIOS_DIR");
+    }
+
+    #[test]
+    fn package_persona_resolves_via_extra_dirs() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var("HOME", tmp.path()); // isolate from real ~/.agent-qa
+        write_package_dir(
+            tmp.path(),
+            "personas",
+            json!({
+                "schema": "persona/1", "id": "pack-admin", "profile": "pack-p",
+                "credentials": { "entries": {} }
+            }),
+        );
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        let rec = load_persona(tmp.path(), "pack-admin").unwrap();
+        assert_eq!(rec.get("profile").and_then(|v| v.as_str()), Some("pack-p"));
+        let mut opts = opts_with_persona("pack-admin");
+        apply(&mut opts).unwrap();
+        assert_eq!(opts.profile.as_deref(), Some("pack-p"));
+        assert_eq!(opts.session_name, "pack-p-session");
+        std::env::remove_var("AGENT_QA_SCENARIOS_DIR");
+        std::env::remove_var("AGENT_QA_HOME");
+    }
+
+    #[test]
+    fn package_environment_resolves_via_extra_dirs() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var("HOME", tmp.path());
+        write_package_dir(
+            tmp.path(),
+            "environments",
+            json!({
+                "schema": "environment/1", "id": "pack-env",
+                "baseUrl": "https://pack.example.com", "params": {}, "auth": {}
+            }),
+        );
+        write_scenario_with_inputs(tmp.path(), &["baseUrl"]);
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        let mut opts = opts_with_env("pack-env");
+        apply(&mut opts).unwrap();
+        assert_eq!(
+            opts.input_overrides.get("baseUrl").map(String::as_str),
+            Some("https://pack.example.com")
+        );
+        std::env::remove_var("AGENT_QA_SCENARIOS_DIR");
+        std::env::remove_var("AGENT_QA_HOME");
+    }
+
+    #[test]
+    fn local_persona_shadows_package_record() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        std::env::set_var("HOME", tmp.path());
+        write_package_dir(
+            tmp.path(),
+            "personas",
+            json!({
+                "schema": "persona/1", "id": "admin", "profile": "pack-p",
+                "credentials": { "entries": {} }
+            }),
+        );
+        write_persona(
+            tmp.path(),
+            "admin",
+            json!({"schema": "persona/1", "id": "admin", "profile": "local-p",
+                   "credentials": { "entries": {} }}),
+        );
+        std::env::set_var("AGENT_QA_SCENARIOS_DIR", tmp.path());
+        let mut opts = opts_with_persona("admin");
+        apply(&mut opts).unwrap();
+        assert_eq!(opts.profile.as_deref(), Some("local-p"));
+        std::env::remove_var("AGENT_QA_SCENARIOS_DIR");
+        std::env::remove_var("AGENT_QA_HOME");
     }
 
     #[test]

@@ -6,6 +6,7 @@ import {
   RotateCwIcon,
   ExternalLinkIcon,
   Trash2Icon,
+  WrenchIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -29,8 +30,8 @@ import { navigate, useSpaLink } from '@/router'
 import type { ScenarioSummary } from '@/features/runs/types'
 import type { CaseRecord, InputDecl } from './types'
 import { extractTokens, reconcileInputs } from './tokens'
-import { buildRunPrompt, runIntent } from './prompt'
-import { StatusBadge } from './status'
+import { buildRunPrompt, buildRepairPrompt, runIntent } from './prompt'
+import { StatusBadge, caseStatus } from './status'
 
 const runMarkerKey = (id: string) => `aqa-case-run:${id}`
 
@@ -186,6 +187,12 @@ export function CaseDetail({ id }: { id: string }) {
     else navigate('/')
   }
 
+  const repairWithAgent = () => {
+    if (!scenario || !loaded) return
+    const prompt = buildRepairPrompt(loaded, scenario, window.location.origin)
+    navigate(`/chat?ask=${encodeURIComponent(prompt)}`)
+  }
+
   // Link-back poller: after a "Run with agent", watch for the recorded scenario
   // (intent carries the case id) and adopt its sid. Belt-and-suspenders with
   // the agent's own curl link-back in the seed prompt.
@@ -263,6 +270,11 @@ export function CaseDetail({ id }: { id: string }) {
               <Button size="sm" variant="outline" onClick={() => void replay()}>
                 <RotateCwIcon /> Replay
               </Button>
+              {caseStatus(scenario).tone === 'fail' && (
+                <Button size="sm" variant="outline" onClick={repairWithAgent}>
+                  <WrenchIcon /> Repair with agent
+                </Button>
+              )}
             </>
           )}
           <Button size="sm" variant="outline" onClick={() => void save()} disabled={!dirty || saving}>

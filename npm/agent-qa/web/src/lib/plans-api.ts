@@ -59,6 +59,8 @@ export function runPlan(
     // persona's credentials (auth-walled scenarios re-authenticate on replay).
     personaId?: string
     environmentId?: string
+    // After the run settles, spawn a repair chat per failed member.
+    autoRepair?: boolean
   }
 ): Promise<PlanRunResult> {
   return postJson(`/api/plans/${encodeURIComponent(id)}/run`, opts ?? {})

@@ -484,7 +484,13 @@ export function resolvePiSdkUrl({ sdkPath, env = process.env, moduleUrl = import
   const candidates = [];
 
   const explicit = sdkPath || env.AGENT_QA_PI_SDK;
-  if (explicit) candidates.push(explicit);
+  if (explicit) {
+    // Explicit config is authoritative — a bad path errors loudly instead
+    // of silently falling through to ambient installs.
+    const entry = toExistingEntry(explicit);
+    if (!entry) throw new Error(`AGENT_QA_PI_SDK does not resolve: ${explicit}`);
+    return pathToFileURL(entry).href;
+  }
 
   candidates.push(findNodeModulesPackageEntry(moduleUrl, PI_PKG));
 
