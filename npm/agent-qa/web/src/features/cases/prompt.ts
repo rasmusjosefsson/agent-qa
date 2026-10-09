@@ -12,8 +12,12 @@ export function runIntent(c: Pick<CaseRecord, 'title' | 'id'>): string {
   return _runIntent(c)
 }
 
-export function buildRunPrompt(c: CaseRecord, apiBase: string): string {
-  return buildRunPromptText(c, apiBase)
+export function buildRunPrompt(
+  c: CaseRecord,
+  apiBase: string,
+  pin?: { personaId?: string; environmentId?: string }
+): string {
+  return buildRunPromptText(c, { apiBase, personaId: pin?.personaId, environmentId: pin?.environmentId })
 }
 
 export function buildRepairPrompt(

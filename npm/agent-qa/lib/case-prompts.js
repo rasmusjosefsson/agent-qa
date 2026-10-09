@@ -8,7 +8,7 @@ function runIntent(c) {
   return `${c.title} [${c.id}]`;
 }
 
-function buildRunPromptText(c, apiBase) {
+function buildRunPromptText(c, { apiBase, personaId, environmentId } = {}) {
   // Verbatim — imported steps may already carry their own numbering.
   const steps = (c.steps || [])
     .map((s) => s.trim())
@@ -44,7 +44,9 @@ function buildRunPromptText(c, apiBase) {
     'If `state` is "disconnected" and the target needs auth: list personas/environments via /api/personas + /api/environments, pick the matching environment, and connect BEFORE `agent-qa start` —',
     '  curl -s -X POST "$AGENT_QA_BASE/api/chat/c/$AGENT_QA_CHAT_ID/connect" -H \'content-type: application/json\' -d \'{"personaId":"<id>","environmentId":"<env>"}\'',
     'Connecting first stamps a useProfile baseline into the scenario so replays re-authenticate.',
-    'Persona selection: use the persona marked `default: true`. If none is marked, use a persona already connected on this chat. NEVER pick a different persona on your own — different personas can sign into different organizations/tenants. If no default exists and the chat is anonymous, ask instead of guessing.',
+    personaId
+      ? `PERSONA PIN: connect with exactly personaId "${personaId}"${environmentId ? ` and environmentId "${environmentId}"` : ''}. Do NOT use any other persona — different personas can sign into different organizations/tenants, and this run is scoped to "${personaId}".`
+      : 'Persona selection: use the persona marked `default: true`. If none is marked, use a persona already connected on this chat. NEVER pick a different persona on your own — different personas can sign into different organizations/tenants. If no default exists and the chat is anonymous, ask instead of guessing.',
     '',
     `Test case: "${c.title}"  (case id: ${c.id})`,
   ];
@@ -82,8 +84,11 @@ function buildRunPromptText(c, apiBase) {
 // `run` is the failing run summary ({runId, summary, state}); `apiBase` is
 // only needed to fill the personas lookup curl — server-side callers may pass
 // any base since $AGENT_QA_BASE is set for chat agents anyway.
-function buildRepairPromptText(c, scenario, run, apiBase) {
+function buildRepairPromptText(c, scenario, run, apiBase, pin) {
   const sid = scenario.sid;
+  const personaRule = pin && pin.personaId
+    ? `Persona: use exactly "${pin.personaId}"${pin.environmentId ? ` on environment "${pin.environmentId}"` : ''} — this run is scoped to it. Do NOT use any other persona (different personas can sign into different organizations/tenants).`
+    : 'Persona: reuse the persona this chat is connected as, the persona marked `default: true`, or the one the scenario\'s env.open useProfile names. NEVER pick a different persona on your own — different personas can sign into different organizations/tenants.';
   return [
     `The recorded scenario for this QA test case is failing. Use the agent-qa skill's repair loop to diagnose it, apply the right repair, and re-run until it passes — or prove a real product regression and keep it red.`,
     '',
@@ -102,7 +107,7 @@ function buildRepairPromptText(c, scenario, run, apiBase) {
     '   - ambient uncaught-error noise only → demote that check via `buffer edit` with `context.onFailure: "ignore"` — it still reports but stops gating. Never delete assertions that verify the case.',
     '   - auth/environment failure → fix the connection and retry; do not patch the scenario around it.',
     '   - product regression → STOP, keep the run red, report the evidence.',
-    `3. Replay again: \`agent-qa replay ${sid} --profile <persona>\` (personas: \`curl -s "${apiBase}/api/personas"\` — reuse the persona this chat is connected as, or the one the scenario's env.open useProfile names).`,
+    `3. Replay again: \`agent-qa replay ${sid} --profile <persona>\`. ${personaRule}`,
     '4. Report one line: SCENARIO_VERDICT=<pass|blocked|regression> plus the reason.',
     '',
     `Sign-in check first: \`curl -s "${apiBase}/api/chat/c/$AGENT_QA_CHAT_ID/connection"\` — if disconnected, connect before replaying.`,

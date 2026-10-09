@@ -1383,7 +1383,8 @@ async function handlePlans(req, res, root, seg, deps, chat) {
             caseRec,
             { sid: m.sid },
             { runId: m.runId, state: 'failed' },
-            apiBase
+            apiBase,
+            { personaId: runOpts.personaId, environmentId: runOpts.environmentId }
           );
           await ledger({ caseId: m.caseId, sid: m.sid, status: 'repair', chatId: entry.id });
           Promise.resolve(entry.getHub())
