@@ -446,7 +446,12 @@ mod tests {
         fs::write(pkg.join(format!("{id}.json")), record.to_string()).unwrap();
         fs::write(
             home.join("agent-qa.toml"),
-            format!("[{table}]\nextra-dirs = [\"{}\"]\n", pkg.display()),
+            // Forward slashes so the path stays a valid TOML string on Windows
+            // (backslashes would read as escapes and break the parse).
+            format!(
+                "[{table}]\nextra-dirs = [\"{}\"]\n",
+                pkg.display().to_string().replace('\\', "/")
+            ),
         )
         .unwrap();
         std::env::set_var("AGENT_QA_HOME", &home);
