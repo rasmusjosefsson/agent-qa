@@ -6,6 +6,7 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-09
 ### Added
 
 - Plan auto-repair: `POST /api/plans/:id/run` accepts `autoRepair`; once
