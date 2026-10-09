@@ -31,7 +31,7 @@ hmac = "0.13"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 similar = "3"
 image = { version = "0.25", default-features = false, features = ["png"] }
-base64 = "0.22"
+base64 = "0.23"
 ureq = { version = "2", default-features = false, features = ["json", "tls"] }
 tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 tempfile = "3"
