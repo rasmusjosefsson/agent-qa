@@ -6,6 +6,24 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-12
+### Fixed
+
+- Workbench Goldens page: scenario sections show the scenario `intent`
+  and deep-link to the scenario (`/?sid=…`) instead of only the opaque
+  sid; the compare dialog names the replay its "latest run" side comes
+  from (`latestRunId` in `/api/goldens`); the enable/disable toggle no
+  longer renders its knob off the track (a missing `left-0` let the
+  button's `text-align: center` offset the absolutely-positioned thumb,
+  doubling the translate).
+- Chat lifecycle across workbenches sharing one scenarios root:
+  `GET /api/chat/list` prunes in-memory entries whose `_chats/<id>.json`
+  vanished (deleted via another workbench), and `entry.persist()` never
+  rewrites a missing record — a stale server can no longer serve phantom
+  chats or resurrect deleted ones.
+- "Close all" on the Chat tab bar: one click (with confirm) deletes every
+  chat and lands on a fresh one.
+
 ## [0.8.0] - 2026-10-09
 ### Added
 

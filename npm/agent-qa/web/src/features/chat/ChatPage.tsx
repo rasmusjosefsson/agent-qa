@@ -11,6 +11,7 @@ import {
 import {
   Loader2Icon,
   PlusIcon,
+  Trash2Icon,
   XIcon,
   InfoIcon,
   PlugZapIcon,
@@ -293,6 +294,20 @@ export function ChatPage() {
     }
   }
 
+  const onDeleteAll = async () => {
+    await Promise.all(chats.map((c) => deleteChat(c.id)))
+    // Skip the mounted chat's resource — the switch to the fresh chat drops it.
+    for (const c of chats) if (c.id !== activeId) dropChatState(c.id)
+    const fresh = await createChat()
+    if (!fresh) {
+      setChats([])
+      return
+    }
+    prefetchChatState(fresh.id)
+    setChats([fresh])
+    activateChat(fresh.id)
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* Chat switcher — tabs */}
@@ -372,6 +387,35 @@ export function ChatPage() {
             <PlusIcon className="size-4" />
             New
           </button>
+          {chats.length > 1 && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <button
+                  type="button"
+                  title="Close all chats"
+                  className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+                >
+                  <Trash2Icon className="size-3.5" />
+                  Close all
+                </button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Close all {chats.length} chats?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This permanently deletes every conversation and closes their browser
+                    sessions. A fresh chat is created in their place.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={() => void onDeleteAll()}>
+                    Delete all
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
         </div>
         {activeId ? <ConnectBar key={activeId} cid={activeId} /> : null}
       </div>

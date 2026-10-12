@@ -16,6 +16,10 @@ export interface GoldenFile {
 
 export interface GoldenScenario {
   sid: string
+  /** scenario.json "intent" — the human label behind the opaque sid. */
+  intent?: string | null
+  /** Newest replay dir — the run the 'actual'/'diff' compare images come from. */
+  latestRunId?: string | null
   files: GoldenFile[]
 }
 
