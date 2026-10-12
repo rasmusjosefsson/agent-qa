@@ -5,6 +5,8 @@ All notable changes to agent-qa are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.8.1] - 2026-10-12
 ### Fixed
 
 - Workbench Goldens page: scenario sections show the scenario `intent`
