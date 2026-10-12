@@ -8,6 +8,7 @@ import {
   RefreshCwIcon,
 } from 'lucide-react'
 import { PageHeader } from '@/components/page-header'
+import { SpaLink } from '@/components/spa-link'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -31,6 +32,14 @@ function fmtSize(bytes?: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+// Run dir names look like 2026-10-12T20-02-32-715Z__10dc5623__admin-use-only-this
+// (timestamp__hash__profile?) — render the readable bits.
+function fmtRunId(runId: string): string {
+  const [ts, , profile] = runId.split('__')
+  const when = ts.replace('T', ' ').replace(/(\d{2})-(\d{2})-(\d{2})-\d+Z?$/, '$1:$2:$3Z')
+  return profile ? `${when} · ${profile}` : when
 }
 
 type CompareMode = 'split' | 'diff'
@@ -107,10 +116,10 @@ function SplitCompare({ sid, name }: { sid: string; name: string }) {
         <Columns2Icon className="size-3.5" />
       </div>
       <span className="absolute left-2 top-2 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">
-        before
+        baseline
       </span>
       <span className="absolute right-2 top-2 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">
-        after
+        latest run
       </span>
     </div>
   )
@@ -211,7 +220,7 @@ function GoldenCard({
           >
             <span
               className={cn(
-                'absolute top-0.5 size-3 rounded-full bg-white shadow transition-transform',
+                'absolute left-0 top-0.5 size-3 rounded-full bg-white shadow transition-transform',
                 enabled ? 'translate-x-3.5' : 'translate-x-0.5'
               )}
             />
@@ -230,7 +239,11 @@ export function GoldensPage() {
   const [data, setData] = useState<GoldensResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const [compare, setCompare] = useState<{ sid: string; file: GoldenFile } | null>(null)
+  const [compare, setCompare] = useState<{
+    sid: string
+    file: GoldenFile
+    runId?: string | null
+  } | null>(null)
   const [mode, setMode] = useState<CompareMode>('split')
 
   const load = useCallback(async () => {
@@ -290,10 +303,19 @@ export function GoldensPage() {
         {scenarios.map((s) => (
           <section key={s.sid} className="aqa-table-card aqa-elevated">
             <header className="flex items-center gap-2.5 border-b border-border/60 px-4 py-2.5">
-              <span className="truncate text-sm font-semibold tracking-tight text-foreground">
-                {s.sid}
-              </span>
-              <span className="text-xs text-muted-foreground">
+              <SpaLink
+                href={`/?sid=${encodeURIComponent(s.sid)}`}
+                title={s.sid}
+                className="truncate text-sm font-semibold tracking-tight text-foreground hover:underline"
+              >
+                {s.intent || s.sid}
+              </SpaLink>
+              {s.intent && (
+                <span className="truncate font-mono text-[11px] text-muted-foreground/60">
+                  {s.sid}
+                </span>
+              )}
+              <span className="ml-auto shrink-0 text-xs text-muted-foreground">
                 {s.files.length} baseline{s.files.length === 1 ? '' : 's'}
               </span>
             </header>
@@ -306,7 +328,7 @@ export function GoldensPage() {
                   onToggle={() => void load()}
                   onCompare={() => {
                     setMode(f.hasDiff ? 'diff' : 'split')
-                    setCompare({ sid: s.sid, file: f })
+                    setCompare({ sid: s.sid, file: f, runId: s.latestRunId })
                   }}
                 />
               ))}
@@ -331,8 +353,12 @@ export function GoldensPage() {
             </DialogTitle>
             <DialogDescription>
               {mode === 'split'
-                ? 'Drag the handle to compare baseline (left) with the latest run (right).'
-                : 'Pixel diff — changed pixels in red over the faded baseline.'}
+                ? compare?.runId
+                  ? `Committed baseline vs latest replay — run ${fmtRunId(compare.runId)}. Drag the handle to compare.`
+                  : compare?.runId === null
+                    ? 'Committed baseline — no replay has run yet, so there is nothing to compare it with.'
+                    : 'Committed baseline vs latest replay. Drag the handle to compare.'
+                : `Pixel diff from the latest replay${compare?.runId ? ` (${fmtRunId(compare.runId)})` : ''} — changed pixels in red over the faded baseline.`}
             </DialogDescription>
           </DialogHeader>
           {compare && (

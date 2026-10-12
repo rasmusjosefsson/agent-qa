@@ -1939,6 +1939,51 @@ test('chats persist under <root>/_chats and restore with the same session name',
   assert.equal(fs.existsSync(recPath), false);
 });
 
+test('chat list prunes records deleted by a second workbench, persist never resurrects', async (t) => {
+  const fx = makeFixture();
+  const deps = {
+    chat: { hub: {} },
+    runCli: async () => ({ code: 0, stdout: 'ok', stderr: '' }),
+  };
+  const mk = (b) => (m, p, body) =>
+    fetch(`${b}${p}`, {
+      method: m,
+      headers: { 'content-type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+  const a = await boot(fx.root, deps);
+
+  // Chat created on A lands on disk; B (booted after) restores it into its
+  // own memory map — two workbenches, one shared _chats dir.
+  const chat = await (await mk(a.base)('POST', '/api/chat/create')).json();
+  const recPath = path.join(fx.root, '_chats', `${chat.id}.json`);
+  assert.ok(fs.existsSync(recPath));
+  const b = await boot(fx.root, deps);
+  t.after(() => {
+    a.server.close();
+    b.server.close();
+  });
+
+  // Delete through B — A's in-memory copy goes stale.
+  await mk(b.base)('POST', `/api/chat/c/${chat.id}/delete`);
+  assert.equal(fs.existsSync(recPath), false);
+
+  // A's next list reconciles: the phantom is gone.
+  const list = await (await mk(a.base)('GET', '/api/chat/list')).json();
+  assert.equal(
+    list.chats.some((c) => c.id === chat.id),
+    false,
+  );
+
+  // A persist-triggering action on A's stale copy must not rewrite the record.
+  const chat2 = await (await mk(a.base)('POST', '/api/chat/create')).json();
+  const rec2 = path.join(fx.root, '_chats', `${chat2.id}.json`);
+  fs.unlinkSync(rec2); // as if another workbench deleted it
+  await mk(a.base)('POST', `/api/chat/c/${chat2.id}/disconnect`);
+  assert.equal(fs.existsSync(rec2), false);
+});
+
 test('POST /api/chat/c/:id/disconnect drops the persona binding into guest mode', async (t) => {
   const fx = makeFixture();
   const deps = {

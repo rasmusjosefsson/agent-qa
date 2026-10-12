@@ -226,17 +226,19 @@ function writeBaselinesTable(tomlPath, fields) {
   fs.writeFileSync(tomlPath, next);
 }
 
-// stepId → false for every scenario.json check step carrying
-// `"enabled": false` — used by the Goldens page to show golden toggles.
-async function goldenClaimsEnabled(root, sid) {
-  const out = {};
+// scenario.json facts the Goldens page needs: stepId → false for check steps
+// carrying `"enabled": false` (golden toggles), plus the intent shown as the
+// section title so sids aren't the only label.
+async function goldenScenarioMeta(root, sid) {
+  const out = { enabledByStep: {}, intent: null };
   try {
     const scn = JSON.parse(await fsp.readFile(path.join(root, sid, 'scenario.json'), 'utf8'));
+    if (typeof scn.intent === 'string' && scn.intent) out.intent = scn.intent;
     for (const st of scn.steps || []) {
       if (st.kind !== 'check' || !st.claim || !st.claim.subject) continue;
       const subj = st.claim.subject;
       for (const key of ['shot', 'domshot']) {
-        if (typeof subj[key] === 'string' && st.enabled === false) out[subj[key]] = false;
+        if (typeof subj[key] === 'string' && st.enabled === false) out.enabledByStep[subj[key]] = false;
       }
     }
   } catch {
@@ -3855,6 +3857,11 @@ function createChatManager(deps, root) {
       connectedEnvironmentId: (saved && saved.connectedEnvironmentId) || null,
       autoConnect: null,
       persist() {
+        // Only the create()-time write may mint a record file. If the file
+        // vanished — deleted via another workbench sharing _chats/ — writing
+        // here would resurrect a chat that server already killed.
+        const dir = chatsDir();
+        if (!dir || !fs.existsSync(recordFile(entry.id))) return;
         persistEntry(entry);
       },
       // Per-chat record scratch dir so concurrent recordings don't collide and
@@ -3982,11 +3989,34 @@ function createChatManager(deps, root) {
   // transcripts, so /state resumes each conversation.
   restore();
 
+  // Reconcile memory with _chats/ on disk: an entry whose record file
+  // vanished was deleted by another workbench sharing this scenarios root —
+  // drop it so the list doesn't serve ghosts (and a later persist() can't
+  // rewrite the file, resurrecting the chat on the other server).
+  async function pruneGoneRecords() {
+    const dir = chatsDir();
+    if (!dir) return;
+    let names;
+    try {
+      names = new Set(await fsp.readdir(dir));
+    } catch {
+      return;
+    }
+    for (const [id, e] of chats) {
+      if (!names.has(`${id}.json`)) {
+        e.dispose();
+        closeBrowserSession(deps && deps.agentBrowserBin, e.browser.name);
+        chats.delete(id);
+      }
+    }
+  }
+
   return {
     create,
     primary,
     get: (id) => chats.get(id) || null,
     list: () => Array.from(chats.values()).map(chatMeta),
+    pruneGoneRecords,
     remove(id) {
       const e = chats.get(id);
       if (!e) return false;
@@ -4059,6 +4089,7 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
   // session + conversation; the frontend addresses a specific chat via the
   // /api/chat/c/<id>/* routes.
   if (route === 'list' && req.method === 'GET') {
+    if (typeof manager.pruneGoneRecords === 'function') await manager.pruneGoneRecords();
     return sendJson(res, 200, { chats: manager.list() });
   }
   if (route === 'create' && req.method === 'POST') {
@@ -5099,7 +5130,8 @@ function createRequestHandler(root, deps, chat) {
           }
           // Which shot claims a check step enables — scenario.json check steps
           // whose shot/domshot subject matches the baseline filename.
-          const enabledByStep = await goldenClaimsEnabled(root, sid);
+          const meta = await goldenScenarioMeta(root, sid);
+          const enabledByStep = meta.enabledByStep;
           const latestRun = await latestRunId(path.join(root, sid));
           const out = [];
           for (const name of files) {
@@ -5122,7 +5154,7 @@ function createRequestHandler(root, deps, chat) {
             }
             out.push(entry);
           }
-          scenarios.push({ sid, files: out });
+          scenarios.push({ sid, intent: meta.intent, latestRunId: latestRun || null, files: out });
         }
         return sendJson(res, 200, {
           store: (table && table.store) || 'local',
