@@ -191,7 +191,7 @@ fn main() -> ExitCode {
         "notify" => notify::run(rest),
         _ => {
             eprintln!(
-                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, config, list, compare, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, smart-fill, smart-assert, smart-hover, smart-select, resolve, triage, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, known-drift, shot-accept, domshot-accept, layout-accept, baselines, run-report, init, ingest, mcp, migrate, compile, describe, mail, discover, creds-resolve, totp, notify."
+                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, ps, cleanup, info, config, list, compare, diff, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, smart-fill, smart-assert, smart-hover, smart-select, resolve, triage, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, known-drift, shot-accept, domshot-accept, layout-accept, baselines, run-report, init, ingest, mcp, migrate, compile, describe, mail, discover, creds-resolve, totp, notify."
             );
             eprintln!("Run `agent-qa --help` for usage.");
             Ok(2)
@@ -269,6 +269,8 @@ Verbs:
   audit field <sid> <runId|latest> <field>  Print any top-level audit field
   audit count <sid>                Print the number of runs under <sid>
   audit duration <sid> <runId|latest>  Print run duration in seconds
+  run-report <sid> [--run <id>] [--out <path>]
+                                Render one replay as a self-contained HTML report
   profile-list                  List registered profiles (id, adapter, default, registeredAt)
   replay <sid | path>           Re-execute a scenario document
   doctor [--json]               Diagnose the local install (agent-browser + plugins)
@@ -432,11 +434,20 @@ mod dispatch_audit {
     ];
 
     /// Extract every quoted-string used on the LHS of `=>` in the main
-    /// verb match. Captures aliased rows like `"a" | "b" => ...` too.
+    /// verb match. Captures aliased rows (`"compare" | "diff" => ...`) too.
+    /// Only the dispatcher match is scanned — doc-comment examples are ignored.
     fn dispatched_verbs() -> HashSet<String> {
         let mut out = HashSet::new();
+        let mut in_dispatch = false;
         for line in SRC.lines() {
-            if !line.contains("=>") {
+            if line.contains("match verb.as_str()") {
+                in_dispatch = true;
+                continue;
+            }
+            if in_dispatch && line.trim_start().starts_with("_ =>") {
+                break;
+            }
+            if !in_dispatch || !line.contains("=>") {
                 continue;
             }
             // Scan every "<word>" token on the line; OR-patterns mean a
@@ -504,5 +515,48 @@ mod dispatch_audit {
                 "help table mentions top-level verb {verb:?} but no \"{verb}\" => match arm exists in main.rs's dispatcher"
             );
         }
+    }
+
+    /// Verbs named in the unknown-verb `Implemented:` message. Keep this
+    /// list in lockstep with the dispatcher so a typo still surfaces the
+    /// real surface area (including aliases like `diff`).
+    fn implemented_list_verbs() -> HashSet<String> {
+        let marker = "Implemented: ";
+        let line = SRC
+            .lines()
+            .find(|l| l.contains(marker))
+            .expect("unknown-verb arm must print an Implemented: list");
+        let start = line.find(marker).unwrap() + marker.len();
+        let rest = line[start..].trim_end_matches(|c| c == '"' || c == '.' || c == ',');
+        rest.split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
+
+    #[test]
+    fn every_dispatched_verb_is_listed_in_unknown_verb_message() {
+        let dispatched = dispatched_verbs();
+        let listed = implemented_list_verbs();
+        let mut missing: Vec<_> = dispatched
+            .iter()
+            .filter(|v| !listed.contains(v.as_str()))
+            .cloned()
+            .collect();
+        missing.sort();
+        assert!(
+            missing.is_empty(),
+            "dispatcher arms missing from unknown-verb Implemented: list: {missing:?}"
+        );
+        let mut extra: Vec<_> = listed
+            .iter()
+            .filter(|v| !dispatched.contains(v.as_str()))
+            .cloned()
+            .collect();
+        extra.sort();
+        assert!(
+            extra.is_empty(),
+            "Implemented: list names verbs with no dispatcher arm: {extra:?}"
+        );
     }
 }
