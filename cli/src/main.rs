@@ -527,7 +527,7 @@ mod dispatch_audit {
             .find(|l| l.contains(marker))
             .expect("unknown-verb arm must print an Implemented: list");
         let start = line.find(marker).unwrap() + marker.len();
-        let rest = line[start..].trim_end_matches(|c| c == '"' || c == '.' || c == ',');
+        let rest = line[start..].trim_end_matches(['"', '.', ',']);
         rest.split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
