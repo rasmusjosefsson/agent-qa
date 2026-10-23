@@ -404,7 +404,9 @@ fn regex_escape(s: &str) -> String {
 fn escape_claim_path(path: &str) -> String {
     const DIGITS: &str = "\u{E000}";
     const HEX: &str = "\u{E001}";
-    let masked = path.replace("\\d+", DIGITS).replace("[0-9a-fA-F-]{8,}", HEX);
+    let masked = path
+        .replace("\\d+", DIGITS)
+        .replace("[0-9a-fA-F-]{8,}", HEX);
     regex_escape(&masked)
         .replace(DIGITS, "\\d+")
         .replace(HEX, "[0-9a-fA-F-]{8,}")
