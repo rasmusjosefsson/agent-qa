@@ -428,37 +428,6 @@ fn insert_auto_shot_claims(steps: &mut Vec<crate::scenario::Step>) {
     crate::buffer::normalize_ids(steps);
 }
 
-/// Strip `;k=v` matrix params (e.g. `;jsessionid=…`) from each path segment —
-/// they are almost always session-scoped, so a claim matcher carrying one can
-/// never match a fresh session at replay.
-fn strip_matrix_params(url_path: &str) -> String {
-    url_path
-        .split('/')
-        .map(|seg| seg.split(';').next().unwrap_or(seg))
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-/// Rewrite entity ids in URL path segments into regexes — an auto claim
-/// recorded as `…/customers/63827` can never match the fresh id a replay
-/// mints, so all-numeric segments become `\d+` and long hex/uuid segments
-/// become `[0-9a-fA-F-]{8,}`.
-fn normalize_volatile_path_segments(url_path: &str) -> String {
-    url_path
-        .split('/')
-        .map(|seg| {
-            if !seg.is_empty() && seg.chars().all(|c| c.is_ascii_digit()) {
-                "\\d+".to_string()
-            } else if seg.len() >= 8 && seg.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
-                "[0-9a-fA-F-]{8,}".to_string()
-            } else {
-                seg.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
 /// Append a `networkFired` check per distinct (method, path) the session
 /// captured — XHR/Fetch/EventSource/WebSocket plus any non-GET (POSTs are
 /// API calls whatever the resource type reports). Document/script/css
@@ -495,12 +464,9 @@ fn insert_auto_network_claims(
         if !is_api || crate::telemetry::is_telemetry_url(&r.url) {
             continue;
         }
-        // `;` cuts matrix params — Java containers append a volatile
-        // `;jsessionid=<id>` path segment whose record-time value can never
-        // match a fresh replay session.
-        let path = normalize_volatile_path_segments(&strip_matrix_params(
-            r.url.split(['?', '#']).next().unwrap_or(&r.url),
-        ));
+        // Shared with crawl: matrix strip + volatile id rewrite so flush
+        // and crawl drafts cannot drift on the same hygiene rules.
+        let path = crate::telemetry::claimable_network_path(&r.url);
         if !seen.insert((r.method.clone(), path.clone())) {
             continue;
         }

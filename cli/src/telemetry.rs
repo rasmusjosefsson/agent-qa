@@ -93,9 +93,77 @@ pub(crate) fn is_telemetry_url(url: &str) -> bool {
     TELEMETRY_PATHS.iter().any(|p| path.starts_with(p))
 }
 
+/// Strip `;k=v` matrix params (e.g. `;jsessionid=…`) from each path segment —
+/// they are almost always session-scoped, so a claim matcher carrying one can
+/// never match a fresh session at replay.
+fn strip_matrix_params(url_path: &str) -> String {
+    url_path
+        .split('/')
+        .map(|seg| seg.split(';').next().unwrap_or(seg))
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Rewrite entity ids in URL path segments into regexes — an auto claim
+/// recorded as `…/customers/63827` can never match the fresh id a replay
+/// mints, so all-numeric segments become `\d+` and long hex/uuid segments
+/// become `[0-9a-fA-F-]{8,}`.
+fn normalize_volatile_path_segments(url_path: &str) -> String {
+    url_path
+        .split('/')
+        .map(|seg| {
+            if !seg.is_empty() && seg.chars().all(|c| c.is_ascii_digit()) {
+                "\\d+".to_string()
+            } else if seg.len() >= 8 && seg.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+                "[0-9a-fA-F-]{8,}".to_string()
+            } else {
+                seg.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Origin+path for an auto-minted network claim: drop query/fragment, strip
+/// matrix params, rewrite volatile id segments. Shared by crawl drafts and
+/// flush `--auto-network` so the two cannot drift.
+pub(crate) fn claimable_network_path(url: &str) -> String {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    normalize_volatile_path_segments(&strip_matrix_params(path))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::is_telemetry_url;
+    use super::{claimable_network_path, is_telemetry_url};
+
+    #[test]
+    fn claimable_network_path_strips_matrix_and_rewrites_ids() {
+        assert_eq!(
+            claimable_network_path("https://x/app/login.htm;jsessionid=ABC123?x=1"),
+            "https://x/app/login.htm"
+        );
+        assert_eq!(
+            claimable_network_path("https://x/api/contacts/6abbfc58b45a2a0015047afa"),
+            "https://x/api/contacts/[0-9a-fA-F-]{8,}"
+        );
+        assert_eq!(
+            claimable_network_path("https://x/api/items/1234567"),
+            "https://x/api/items/\\d+"
+        );
+        assert_eq!(
+            claimable_network_path("https://x/api/v2/users"),
+            "https://x/api/v2/users"
+        );
+    }
+
+    #[test]
+    fn crawl_source_has_no_private_telemetry_host_list() {
+        const SRC: &str = include_str!("crawl.rs");
+        assert!(
+            !SRC.contains("const TELEMETRY_HOSTS"),
+            "crawl must call crate::telemetry::is_telemetry_url — do not reintroduce a private host list"
+        );
+    }
 
     #[test]
     fn telemetry_hosts_and_paths() {
