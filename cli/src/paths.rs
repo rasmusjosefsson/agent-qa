@@ -16,9 +16,10 @@
 //! between calls see the change. The cost is irrelevant next to the disk
 //! I/O every caller is about to do.
 //!
-//! The path API lands alongside the typed scenario contract; later
-//! slices consume each function as the matching verb is ported.
-#![allow(dead_code)]
+//! Prefer these helpers over `scenario_dir.join(...)`. Several callers
+//! still join inline, so the bin target allows dead_code. The unit test
+//! `canonical_subpaths_match_the_on_disk_layout` locks the segments.
+#![cfg_attr(not(test), allow(dead_code))]
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -202,14 +203,6 @@ pub fn replay_snapshots_dir(sid: &str, replay_id: &str) -> Result<PathBuf> {
     Ok(replay_dir(sid, replay_id)?.join("snapshots"))
 }
 
-pub fn replay_evidence_dir(sid: &str, replay_id: &str) -> Result<PathBuf> {
-    Ok(replay_dir(sid, replay_id)?.join("evidence"))
-}
-
-pub fn replay_evidence_channel_dir(sid: &str, replay_id: &str, channel: &str) -> Result<PathBuf> {
-    Ok(replay_evidence_dir(sid, replay_id)?.join(safe_segment(channel, "channel")?))
-}
-
 /// Directories under `<sid>/replays/` that are actual replay runs —
 /// i.e. they carry `audit.json` (finished) or `events.jsonl`
 /// (in-flight / crashed before the audit write). Anything else —
@@ -278,21 +271,6 @@ pub fn compare_dir(sid: &str) -> Result<PathBuf> {
 
 pub fn compare_run_dir(sid: &str, folder_name: &str) -> Result<PathBuf> {
     Ok(compare_dir(sid)?.join(safe_segment(folder_name, "compare folder")?))
-}
-
-pub fn compare_pair_dir(
-    sid: &str,
-    folder_name: &str,
-    base_label: &str,
-    cand_label: &str,
-) -> Result<PathBuf> {
-    Ok(compare_run_dir(sid, folder_name)?
-        .join("pairs")
-        .join(format!(
-            "{}-vs-{}",
-            safe_segment(base_label, "base label")?,
-            safe_segment(cand_label, "candidate label")?,
-        )))
 }
 
 // ---------- perf ----------
@@ -365,7 +343,7 @@ pub fn profile_file(profile: &str) -> Result<PathBuf> {
 // ---------- safety ----------
 
 /// Permitted characters for path segments that originate from user input
-/// (sid, replayId, compare folder, etc.). Mirrors the TS regex.
+/// (sid, replayId, compare folder, etc.): ASCII alphanumeric, `.`, `_`, `-`.
 fn safe_segment<'a>(value: &'a str, label: &str) -> Result<&'a str> {
     if value.is_empty() || value == "." || value == ".." || !is_safe(value) {
         bail!("{label} must be a non-empty safe path segment, got {value:?}");
@@ -376,46 +354,6 @@ fn safe_segment<'a>(value: &'a str, label: &str) -> Result<&'a str> {
 pub(crate) fn is_safe(s: &str) -> bool {
     s.chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
-}
-
-/// Display-friendly relative path string for log messages — relative to cwd
-/// when the scenarios root is inside cwd, absolute otherwise.
-pub fn scenarios_rel() -> String {
-    let abs = scenarios_root();
-    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    match pathdiff(&abs, &cwd) {
-        Some(rel) if !rel.starts_with("..") => rel.to_string_lossy().into_owned(),
-        _ => abs.to_string_lossy().into_owned(),
-    }
-}
-
-fn pathdiff(target: &Path, base: &Path) -> Option<PathBuf> {
-    use std::path::Component;
-    let target = target
-        .canonicalize()
-        .unwrap_or_else(|_| target.to_path_buf());
-    let base = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
-    let mut t_iter = target.components();
-    let mut b_iter = base.components();
-    loop {
-        match (t_iter.clone().next(), b_iter.clone().next()) {
-            (Some(t), Some(b)) if t == b => {
-                t_iter.next();
-                b_iter.next();
-            }
-            _ => break,
-        }
-    }
-    let mut out = PathBuf::new();
-    for c in b_iter {
-        if let Component::Normal(_) | Component::ParentDir | Component::CurDir = c {
-            out.push("..");
-        }
-    }
-    for c in t_iter {
-        out.push(c);
-    }
-    Some(out)
 }
 
 #[cfg(all(test, unix))]
@@ -472,6 +410,60 @@ mod tests {
         env::set_var(SCENARIOS_DIR_ENV, "/tmp/jx");
         let p = replay_dir("sid", "rid").unwrap();
         assert_eq!(p, PathBuf::from("/tmp/jx/sid/replays/rid"));
+        env::remove_var(SCENARIOS_DIR_ENV);
+    }
+
+    #[test]
+    fn canonical_subpaths_match_the_on_disk_layout() {
+        let _g = lock_env();
+        env::set_var(SCENARIOS_DIR_ENV, "/tmp/jx");
+        let root = PathBuf::from("/tmp/jx/sid");
+        assert_eq!(
+            replay_screenshots_dir("sid", "rid").unwrap(),
+            root.join("replays/rid/screenshots")
+        );
+        assert_eq!(
+            replay_snapshots_dir("sid", "rid").unwrap(),
+            root.join("replays/rid/snapshots")
+        );
+        assert_eq!(recording_dir("sid").unwrap(), root.join("recording"));
+        assert_eq!(
+            recording_snapshots_dir("sid").unwrap(),
+            root.join("recording/snapshots")
+        );
+        assert_eq!(
+            recording_screenshots_dir("sid").unwrap(),
+            root.join("recording/screenshots")
+        );
+        assert_eq!(
+            recording_network_dir("sid").unwrap(),
+            root.join("recording/network")
+        );
+        assert_eq!(
+            recording_probes_dir("sid").unwrap(),
+            root.join("recording/probes")
+        );
+        assert_eq!(
+            recording_perf_dir("sid").unwrap(),
+            root.join("recording/perf")
+        );
+        assert_eq!(
+            recording_failed_dir("sid").unwrap(),
+            root.join("recording/failed")
+        );
+        assert_eq!(
+            recording_audit_file("sid").unwrap(),
+            root.join("recording/audit.json")
+        );
+        assert_eq!(
+            recording_heal_jsonl("sid").unwrap(),
+            root.join("recording/heal.jsonl")
+        );
+        assert_eq!(
+            compare_run_dir("sid", "folder").unwrap(),
+            root.join("compare/folder")
+        );
+        assert_eq!(perf_dir("sid").unwrap(), root.join("perf"));
         env::remove_var(SCENARIOS_DIR_ENV);
     }
 

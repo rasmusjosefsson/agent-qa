@@ -143,8 +143,8 @@ pub fn build_arm(files_json: &str) -> String {
     )
 }
 
-/// Read chooser state for tests/diagnostics.
-#[allow(dead_code)]
+/// Read chooser state. Only the unit test calls this today.
+#[cfg(test)]
 pub fn build_state_probe() -> String {
     r#"(() => {
   const C = window.__aqFileChooser;
@@ -189,6 +189,15 @@ mod tests {
         assert!(js.contains("C.armed = true"));
         assert!(js.contains("a.png"));
         assert!(js.contains("C.resolve()"));
+    }
+
+    #[test]
+    fn state_probe_reads_hook_fields() {
+        let js = build_state_probe();
+        assert!(js.contains("__aqFileChooser"));
+        assert!(js.contains("armed"));
+        assert!(js.contains("pending"));
+        assert!(js.contains("files"));
     }
 
     #[test]

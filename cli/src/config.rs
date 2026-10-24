@@ -119,11 +119,6 @@ fn render_text(r: &Report) {
     }
 }
 
-// Used by tests + the env var helper to ensure the JSON shape stays
-// stable.
-#[allow(dead_code)]
-const _: fn(&Report) -> Result<String, serde_json::Error> = |r| serde_json::to_string(r);
-
 #[cfg(test)]
 mod tests {
     use super::*;

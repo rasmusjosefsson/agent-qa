@@ -1,10 +1,9 @@
 //! `scenario/2` schema validator.
 //!
 //! `schema/scenario-schema.json` is the authoritative shape; this module is
-//! the runtime gate. Pattern is the same as `cli/src/validate-scenario.ts`:
-//! load the schema once at process start, return errors verbatim from the
-//! validator. No friendly formatter yet — the raw output is returned as-is;
-//! a smart formatter can land later if a downstream consumer needs one.
+//! the runtime gate. The schema is compiled once per process. Failures are
+//! one line per error (`at <path>: <message>`). Malformed `env.open` ops
+//! also get [`env_op_hint`], which names the kind and its required fields.
 
 use std::sync::OnceLock;
 

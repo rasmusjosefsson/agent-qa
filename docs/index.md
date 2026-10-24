@@ -59,10 +59,10 @@ Default root: `tmp/agent-qa-scenarios/<sid>/`. Override with `AGENT_QA_SCENARIOS
 | `probes/`      | DOM failure signals — alerts, dialogs, toasts, `aria-invalid`, URL state.           |
 | `network/`     | GraphQL and REST request/response bodies around each step.                          |
 | `replays/`     | Replay manifests + replay-side evidence, one folder per replay run.                 |
-| `compare/`     | `compare.md` plus JSON / JSONL deltas, one folder per compare run.                  |
-| `failed/`      | Heal stores, assert refusals, quarantine evidence.                                |
+| `compare/`     | `compare.md`, per-step snapshot diffs, and screenshot diffs for one pair of runs.   |
+| `recording/failed/` | Truncate archives (`truncate-<timestamp>/`).                                   |
 | `perf/`        | Optional `perf-snapshot` output.                                                    |
-| `templates/`   | Reusable sub-scenarios loaded by `runTemplate` — see [`templates.md`](templates.md). |
+| `templates`    | Named step lists on `scenario.json`, inlined by `useTemplate` — see [`templates.md`](templates.md). |
 
 Every path is computed by `cli/src/paths.rs`. Don't recompute them elsewhere.
 

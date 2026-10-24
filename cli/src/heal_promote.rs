@@ -1,9 +1,8 @@
 //! `heal-promote` verb — apply replay-side suggested locator patches back
 //! into `scenario.json`.
 //!
-//! Reads externally supplied
-//! `<sid>/replays/<runId>/diffs/<stepId>.patch.json` files and rewrites the
-//! matching step's `on` field. Core replay does not yet produce these files.
+//! Reads `<sid>/replays/<runId>/diffs/<stepId>.patch.json` files written by
+//! inline auto-heal and rewrites the matching step's `on` field.
 //! Default mode is dry-run; `--apply` atomically rewrites the contract.
 //!
 //! Drift guard: each patch file may carry a `scenarioContentHash` field
@@ -11,7 +10,7 @@
 //! hash doesn't match the live scenario's current hash, the verb refuses
 //! to apply (exit 3) so a hand-edited contract isn't overwritten.
 //!
-//! Patch file shape (the producer side lands later; this verb is the
+//! Patch file shape (`auto_heal` is the producer; this verb is the
 //! consumer):
 //!
 //! ```json

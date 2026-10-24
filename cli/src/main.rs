@@ -1,10 +1,11 @@
 //! agent-qa — verb dispatcher.
 //!
-//! Currently shipped verbs:
-//!   - `skills` — serve embedded agent runbooks
-//!   - `plugins` — plugin discovery + ping
-//!   - `scenario validate <file>` — validate a scenario.json against the schema
-//!   - `replay <sid|path>` — runner shell (placeholder step dispatch)
+//! `print_help` is the verb catalog; the match in `main` is the
+//! dispatcher. `dispatch_audit` keeps those two lists aligned, including
+//! the unknown-verb `Implemented:` line.
+//!
+//! Each verb returns `anyhow::Result<u8>` (the process exit code). `Err`
+//! is printed here and exits 1.
 
 use std::process::ExitCode;
 
@@ -95,7 +96,6 @@ mod totp;
 mod triage;
 mod truncate;
 mod value;
-mod verb;
 mod verb_shape;
 mod verbs;
 mod verify;

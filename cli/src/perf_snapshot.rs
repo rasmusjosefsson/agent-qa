@@ -11,7 +11,6 @@
 //! later when agent-browser's react-renders subverb is wired in.
 
 use std::fs;
-use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value as Json;
@@ -134,9 +133,6 @@ fn decode_eval(raw: &str) -> Result<Json> {
     };
     serde_json::from_str(&inner_str).or_else(|_| Ok(Json::String(inner_str)))
 }
-
-#[allow(dead_code)]
-const _PERF_DIR_OK: fn(&str) -> anyhow::Result<PathBuf> = paths::perf_dir;
 
 #[cfg(all(test, unix))]
 mod tests {

@@ -18,12 +18,10 @@ use anyhow::{bail, Result};
 use crate::scenario::{Step, Value, Verb};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum DoField {
     On,
     Value,
     Params,
-    SaveAs,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -237,13 +235,12 @@ fn rule_for(verb: &Verb) -> VerbRule {
 /// the first violation; the runner surfaces the message as the step's
 /// failure reason.
 pub fn assert_verb_shape(step: &Step) -> Result<()> {
-    let (id, verb, on_present, value, save_as_present, params_present, params_keys) = match step {
+    let (id, verb, on_present, value, params_present, params_keys) = match step {
         Step::Do {
             id,
             verb,
             on,
             value,
-            save_as,
             params,
             ..
         } => (
@@ -251,7 +248,6 @@ pub fn assert_verb_shape(step: &Step) -> Result<()> {
             verb,
             on.is_some(),
             value.as_ref(),
-            save_as.is_some(),
             params.is_some(),
             params
                 .as_ref()
@@ -268,7 +264,6 @@ pub fn assert_verb_shape(step: &Step) -> Result<()> {
             DoField::On => on_present,
             DoField::Value => value.is_some(),
             DoField::Params => params_present,
-            DoField::SaveAs => save_as_present,
         };
         if !present {
             bail!(
@@ -282,7 +277,6 @@ pub fn assert_verb_shape(step: &Step) -> Result<()> {
             DoField::On => on_present,
             DoField::Value => value.is_some(),
             DoField::Params => params_present,
-            DoField::SaveAs => save_as_present,
         };
         if present {
             bail!(
@@ -317,7 +311,6 @@ fn field_name(f: DoField) -> &'static str {
         DoField::On => "on",
         DoField::Value => "value",
         DoField::Params => "params",
-        DoField::SaveAs => "saveAs",
     }
 }
 
