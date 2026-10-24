@@ -117,8 +117,8 @@
   action changes the page, so an earlier claim — a dialog that was open,
   a row that was then deleted — stays in the scenario for replay and is
   not re-run at seal time. When the buffer has no `do`, every enabled
-  page check is current. Shot, domshot, and layout claims compare replay
-  artifacts and are not dispatched. `OK  recorder state is clean` means
+  page check is current. Shot, domshot, layout, and download-file claims
+  compare replay artifacts and are not dispatched. `OK  recorder state is clean` means
   those ids, sidecars, and current live claims passed. A current claim
   that is already false fails verify with the reason replay would report.
   When no current page check remains, verify succeeds on ids and sidecars

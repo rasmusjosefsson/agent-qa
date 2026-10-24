@@ -11,9 +11,9 @@
 //! does not drive the browser. `verify` is the gate that runs the current
 //! claims through [`dispatch_check`](crate::claims::dispatch_check) before
 //! `flush`. A claim that is already false fails here with the same error
-//! replay would report. Shot, domshot, and layout claims compare replay
-//! artifacts, so they are not dispatched. With no current page check, no
-//! browser is required.
+//! replay would report. Shot, domshot, layout, and download-file claims
+//! compare replay artifacts, so they are not dispatched. With no current
+//! page check, no browser is required.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -154,13 +154,18 @@ fn enabled_check(step: &Step) -> bool {
     }
 }
 
-/// Shot, domshot, and layout claims compare files from a replay run. They
-/// have no live page result, so they are not part of the seal-time gate.
+/// Shot, domshot, layout, and download-file claims compare artifacts a
+/// replay writes. They have no live page result, so they are not part of
+/// the seal-time gate. A download file lands when replay runs the download
+/// verb, not while the recording buffer is still open.
 fn dispatches_on_page(step: &Step) -> bool {
     match step {
         Step::Check { claim, .. } => !matches!(
             claim.subject,
-            ClaimSubject::Shot { .. } | ClaimSubject::Domshot { .. } | ClaimSubject::Layout { .. }
+            ClaimSubject::Shot { .. }
+                | ClaimSubject::Domshot { .. }
+                | ClaimSubject::Layout { .. }
+                | ClaimSubject::File { .. }
         ),
         Step::Do { .. } => false,
     }
@@ -467,6 +472,31 @@ mod tests {
         state.save().unwrap();
         assert!(verify().unwrap().is_empty());
         assert!(!log.exists(), "shot claims are not a live page probe");
+        clear_recording_env();
+    }
+
+    #[test]
+    fn verify_skips_download_file_claims() {
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        recording_env(&tmp);
+        let log = tmp.path().join("browser.log");
+        install_browser(
+            tmp.path(),
+            &format!("#!/bin/sh\necho called >> '{}'\nexit 1\n", log.display()),
+        );
+        let mut state = fresh_state("sid-file");
+        state.steps = serde_json::from_value(serde_json::json!([
+            {"id":"s0","intent":"download","kind":"do","verb":"download","on":{"raw":{"kind":"css","value":"#save"},"reason":"save control"},"value":{"from":"literal","literal":"downloads/qa-note.txt"}},
+            {"id":"s1","intent":"file landed","kind":"check","claim":{"subject":{"file":"downloads/qa-note.txt"},"predicate":"exists"}}
+        ]))
+        .unwrap();
+        state.save().unwrap();
+        assert!(
+            verify().unwrap().is_empty(),
+            "a download file is produced when replay runs the download verb"
+        );
+        assert!(!log.exists(), "file claims are not a live page probe");
         clear_recording_env();
     }
 
