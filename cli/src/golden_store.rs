@@ -808,7 +808,6 @@ mod tests {
     /// Covers github contents + turso pipeline shapes without real network.
     struct Stub {
         url: String,
-        #[allow(dead_code)]
         requests: std::sync::Arc<std::sync::Mutex<Vec<(String, String, String)>>>,
     }
 
@@ -939,6 +938,16 @@ mod tests {
         std::env::set_current_dir(root.path()).unwrap();
         let push = sync_out(&sdir).unwrap().unwrap();
         assert_eq!(push.moved, vec!["s1.png"]);
+        {
+            let reqs = stub.requests.lock().unwrap();
+            assert!(
+                reqs.iter().any(|(method, path, _)| {
+                    method == "PUT"
+                        && path.contains("/repos/o/goldens/contents/baselines/s-gold/s1.png")
+                }),
+                "github push should PUT the baseline, saw {reqs:?}"
+            );
+        }
         // second push: listing returns remote sha → manifest matches → skipped
         bodies
             .lock()

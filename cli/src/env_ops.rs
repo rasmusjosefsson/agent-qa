@@ -1,13 +1,14 @@
 //! scenario/2 `env.open[*]` / `env.close[*]` op dispatcher.
 //!
-//! Five kinds today (matching the schema and the typed [`EnvOp`]):
+//! Kinds match the schema and the typed [`EnvOp`]:
 //!
+//!   - `fresh`        — clear cookies, localStorage, and sessionStorage
+//!   - `useProfile`   — re-bootstrap a named profile
 //!   - `nav`          — `browser::open(url)`
 //!   - `localStorage` — eval `localStorage.setItem(key, value)`
 //!   - `flag`         — merge into `localStorage["devtools-flag-overrides"]` JSON map
 //!   - `cookie`       — eval `document.cookie = "name=value[; domain=…; path=…]"`
-//!                      (best-effort; HttpOnly cookies cannot be set this way —
-//!                      plugins land later for richer cookie management)
+//!                      (best-effort; HttpOnly cookies cannot be set this way)
 //!   - `gql`          — fetch the live tab's `<url>` with the query/variables
 //!                      via in-page eval so the request carries the session
 //!                      cookies the rest of the scenario is operating against.
@@ -536,20 +537,6 @@ mod tests {
         let body = format!(
             "#!/bin/sh\necho \"$@\" >> '{}'\nif [ \"$3\" = 'eval' ]; then echo '\"https://example.com/\"'; fi\nexit 0\n",
             log.display()
-        );
-        let bin = write_exec(dir, "agent-browser", &body);
-        std::env::set_var(ab::BIN_ENV, &bin);
-        ab::_reset_bin_cache_for_tests();
-        bin
-    }
-
-    #[allow(dead_code)]
-    fn install_fake_gql(dir: &Path, response_body: &str) -> PathBuf {
-        // For 'eval --stdin' / 'eval <expr>' shape, output a JSON-wrapped
-        // string envelope.
-        let body = format!(
-            "#!/bin/sh\nif [ \"$3\" = 'eval' ] || [ \"$2\" = 'eval' ]; then\n  cat <<'EOF'\n\"{{\\\"status\\\":200,\\\"body\\\":\\\"{}\\\"}}\"\nEOF\n  exit 0\nfi\nexit 0\n",
-            response_body.replace('"', "\\\\\\\"")
         );
         let bin = write_exec(dir, "agent-browser", &body);
         std::env::set_var(ab::BIN_ENV, &bin);

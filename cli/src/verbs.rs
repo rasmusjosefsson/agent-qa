@@ -1,23 +1,19 @@
 //! `do`-verb dispatcher for scenario/2 replay.
 //!
-//! Mirrors `replay/verbs.ts`. Each variant of [`crate::scenario::Verb`]
-//! maps to a sequence of agent-browser CLI calls, with the verb-shape
-//! rules in [`crate::verb_shape`] enforcing the do-step shape first.
+//! Each variant of [`crate::scenario::Verb`] maps to a sequence of
+//! agent-browser calls. [`crate::verb_shape::assert_verb_shape`] runs
+//! first.
 //!
-//! Locator resolution: for `Locator::Role { role, name, … }` we use
-//! agent-browser's one-shot `find role <r> <act> --name <n>` form. For
-//! `Locator::Raw { raw: { kind, value }, … }` we use native selector verbs
-//! for css/testId and `find xpath` for XPath.
-//! Tolerance / nested scope / heal land later.
+//! Locator resolution: for `Locator::Role` we use agent-browser's
+//! one-shot `find role <r> <act> --name <n>` form. For `Locator::Raw`
+//! we use native selector verbs for css/testId and `find xpath` for
+//! XPath. Nested scope is applied via [`scope_steps`]. Locator-drift
+//! retry lives in the runner (`auto_heal`), not here.
 //!
-//! Implemented verbs:
-//!   - implemented: goto, reload, back, forward, click, type, clear,
-//!     press, hover, focus, blur, check, uncheck, wait
-//!   - not yet implemented: (none of the scenario/2 do verbs)
-//!     loop, group, useTemplate
-//!
-//! The runner consumes [`dispatch_do`] from this module — verb-shape
-//! assertion happens inside.
+//! Structural verbs (`group`, `useTemplate`, `loop`, `when`, `include`)
+//! are flattened by the runner before [`dispatch_do`]. Reaching this
+//! dispatcher with one of them is a bug and returns an error. Every
+//! other scenario/2 `do` verb is implemented in the match below.
 
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value as Json;

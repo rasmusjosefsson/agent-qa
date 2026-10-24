@@ -1,6 +1,6 @@
 //! `scenario/2` Value channel resolver + template substitution.
 //!
-//! Mirrors `replay/value.ts`. Three public entrypoints:
+//! Public entrypoints:
 //!
 //!   - [`resolve_value`] — turn a typed [`crate::scenario::Value`] into a
 //!     concrete [`serde_json::Value`] using the per-run [`ValueScope`].
@@ -8,18 +8,17 @@
 //!     tokens in a string. Powers the recorder's `fill-unique` literal
 //!     templates and any other scenario/2 fill that embeds variable
 //!     references.
+//!   - [`render_mint_template`] — expand a mint template into a concrete
+//!     string.
+//!   - [`value_to_string`] — render a resolved JSON value as text for
+//!     fill / select.
 //!   - [`select_json_path`] — minimal JSONPath subset (dotted, integer
 //!     index incl. negative, wildcard, slice, `<json>` segment).
 //!
-//! This module is consumed by replay; the recorder side
-//! ([`renderMintTemplate`] equivalent) re-uses the same primitives.
+//! `{{vars.*}}` is the scenario/2 binding form.
 //!
-//! Generic — no vendor vocabulary, no per-template anchors. `{{vars.*}}`
-//! is the scenario/2 binding form, NOT a vendor convention.
-//!
-//! Types are present but `valueToString` and a couple of helpers
-//! aren't called by any verb yet; suppress the dead-code warning at
-//! module scope until the runner lands.
+//! A few helpers are part of the value surface but not referenced from
+//! every verb. The module allow covers those until each one has a caller.
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};

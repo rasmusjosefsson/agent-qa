@@ -32,11 +32,11 @@ pub fn run(args: &[String]) -> Result<u8> {
     // login. Pin the launch mode before invoking the plugin so an ambient
     // AGENT_BROWSER_HEADED value cannot override the headless default.
     browser::set_headed_mode(opts.headed);
-    let profile = ps::_load_profile(&opts.profile)?;
+    let profile = ps::load_profile(&opts.profile)?;
     let session = opts
         .session
         .unwrap_or_else(|| format!("{}-session", profile.id));
-    let binary = ps::_resolve_auth_plugin(&profile)?;
+    let binary = ps::resolve_auth_plugin(&profile)?;
 
     let credentials = build_credentials(&profile);
     let request = json!({

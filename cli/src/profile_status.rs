@@ -19,7 +19,7 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::json;
 
 use crate::paths;
-use crate::plugin::{self, discovery, host};
+use crate::plugin::{discovery, host};
 use crate::profile_add::Profile;
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -96,7 +96,7 @@ fn parse_args(args: &[String]) -> Result<Opts> {
     })
 }
 
-fn load_profile(id: &str) -> Result<Profile> {
+pub(crate) fn load_profile(id: &str) -> Result<Profile> {
     let path = paths::profile_file(id)?;
     let body = fs::read(&path).map_err(|_| {
         anyhow!(
@@ -109,7 +109,7 @@ fn load_profile(id: &str) -> Result<Profile> {
     Ok(p)
 }
 
-fn resolve_auth_plugin(profile: &Profile) -> Result<std::path::PathBuf> {
+pub(crate) fn resolve_auth_plugin(profile: &Profile) -> Result<std::path::PathBuf> {
     let plugins = discovery::discover(&discovery::DiscoveryOpts::default())?;
     if plugins.is_empty() {
         bail!("no plugins discovered; install an auth plugin or pass --plugin <path>");
@@ -147,25 +147,6 @@ fn resolve_auth_plugin(profile: &Profile) -> Result<std::path::PathBuf> {
         plugins.len()
     )
 }
-
-// Re-export for the parallel `profile-bootstrap` verb (later PR).
-#[allow(dead_code)]
-pub(crate) fn _resolve_auth_plugin(profile: &Profile) -> Result<std::path::PathBuf> {
-    resolve_auth_plugin(profile)
-}
-
-#[allow(dead_code)]
-pub(crate) fn _load_profile(id: &str) -> Result<Profile> {
-    load_profile(id)
-}
-
-#[allow(dead_code)]
-pub(crate) const _PROBE_TIMEOUT: Duration = PROBE_TIMEOUT;
-
-// Force the `plugin::PROTOCOL_VERSION` constant alive (slot for future
-// version-negotiation logic; lints would otherwise flag it).
-#[allow(dead_code)]
-const _PROTOCOL_VERSION: u32 = plugin::protocol::PROTOCOL_VERSION;
 
 #[cfg(all(test, unix))]
 mod tests {
