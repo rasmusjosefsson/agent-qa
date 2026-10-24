@@ -11,6 +11,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { EventEmitter } = require('node:events');
 const { pathToFileURL } = require('node:url');
 
 const srv = require('../lib/report-server.js');
@@ -1409,6 +1410,137 @@ test('cursor backend falls back to the auto model when --list-models fails', asy
   } finally {
     hub.dispose();
   }
+});
+
+test('cursor reloadModels replaces the fallback row after login', async () => {
+  const { createChatBackend } = await chatAgent();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-cursor-reload-'));
+  const exe = writeCursorFake(dir);
+  const env = {
+    PATH: dir,
+    AGENT_QA_CURSOR_BIN: exe,
+    CURSOR_FAKE_LIST_FAIL: '1',
+  };
+  const hub = await createChatBackend({ backend: 'cursor', cwd: dir, env });
+  try {
+    assert.deepEqual((await hub.getState()).models, [{ provider: 'cursor', id: 'auto', label: 'Cursor' }]);
+    delete env.CURSOR_FAKE_LIST_FAIL;
+    await hub.reloadModels();
+    const models = (await hub.getState()).models;
+    assert.ok(models.some((m) => m.id === 'composer-1' && m.provider === 'cursor'));
+  } finally {
+    hub.dispose();
+  }
+});
+
+test('cursor connect returns one login link and reports the logged-in transition', async () => {
+  const { createCursorConnect, parseCursorLoginUrl, parseCursorAuthStatus } = await chatAgent();
+  const link = 'https://cursor.com/loginDeepControl?challenge=example';
+  assert.equal(
+    parseCursorLoginUrl(`Open a browser and navigate to this link: ${link}\n`),
+    link,
+  );
+  assert.equal(parseCursorLoginUrl('go to https://evil.example/login'), null);
+  assert.equal(parseCursorAuthStatus('{"isAuthenticated":false,"message":"Not logged in"}', '', 0).state, 'logged-out');
+  assert.equal(parseCursorAuthStatus('{"isAuthenticated":true}', '', 0).state, 'logged-in');
+
+  let signedIn = false;
+  let spawns = 0;
+  let opened = null;
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.pid = 4242;
+  child.kill = () => {
+    child.killed = true;
+    child.emit('close', 0);
+  };
+  const connect = createCursorConnect({
+    env: {},
+    resolveBin: () => '/opt/fake-agent',
+    runStatus: async () =>
+      signedIn
+        ? { state: 'logged-in', message: null }
+        : { state: 'logged-out', message: 'Not logged in' },
+    spawnImpl: (bin, args, opts) => {
+      spawns += 1;
+      opened = { bin, args, noBrowser: opts.env.NO_OPEN_BROWSER };
+      setImmediate(() => {
+        child.stdout.emit('data', `Open a browser and navigate to this link: ${link}\n`);
+      });
+      return child;
+    },
+  });
+
+  const started = await connect.start();
+  assert.equal(started.state, 'logged-out');
+  assert.equal(started.pending, true);
+  assert.equal(started.url, link);
+  assert.equal(spawns, 1);
+  assert.deepEqual(opened.args, ['login']);
+  assert.equal(opened.noBrowser, '1');
+
+  const again = await connect.start();
+  assert.equal(spawns, 1);
+  assert.equal(again.url, link);
+
+  signedIn = true;
+  const done = await connect.status();
+  assert.equal(done.state, 'logged-in');
+  assert.equal(done.reload, true);
+  assert.equal(done.url, null);
+  assert.equal(child.killed, true);
+
+  const still = await connect.status();
+  assert.equal(still.state, 'logged-in');
+  assert.equal(still.reload, undefined);
+});
+
+test('cursor-login route hands the browser link to the chat tab and reloads models once', async (t) => {
+  const hub = makeStubHub();
+  let reloaded = 0;
+  hub.reloadModels = async () => {
+    reloaded += 1;
+  };
+  let polls = 0;
+  const link = 'https://cursor.com/loginDeepControl?challenge=example';
+  const cursorConnect = {
+    async status() {
+      polls += 1;
+      if (polls < 2) return { state: 'logged-out', pending: false, url: null, message: 'Not logged in' };
+      return { state: 'logged-in', pending: false, url: null, message: null, reload: true };
+    },
+    async start() {
+      return { state: 'logged-out', pending: true, url: link, message: 'Not logged in' };
+    },
+    cancel() {
+      return { state: 'logged-out', pending: false, url: null, message: null };
+    },
+  };
+  const { server, base } = await boot(fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-cursor-login-')), {
+    chat: { hub },
+    cursorConnect,
+  });
+  t.after(() => server.close());
+
+  const state = await fetch(`${base}/api/chat/state`);
+  assert.equal(state.status, 200);
+
+  const login = await fetch(`${base}/api/chat/cursor-login`, { method: 'POST' });
+  assert.equal(login.status, 200);
+  const started = await login.json();
+  assert.equal(started.pending, true);
+  assert.equal(started.url, link);
+  assert.equal(started.reload, undefined);
+
+  const first = await (await fetch(`${base}/api/chat/cursor-auth`)).json();
+  assert.equal(first.state, 'logged-out');
+  assert.equal(reloaded, 0);
+
+  const second = await (await fetch(`${base}/api/chat/cursor-auth`)).json();
+  assert.equal(second.state, 'logged-in');
+  assert.equal(second.url, null);
+  assert.equal(reloaded, 1);
 });
 
 test('cursor auto-selects when its CLI is the first available backend', async () => {
