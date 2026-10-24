@@ -559,4 +559,138 @@ mod dispatch_audit {
             "Implemented: list names verbs with no dispatcher arm: {extra:?}"
         );
     }
+
+    /// `docs/setup-prompt.md` is the prompt the docs page copies. Every
+    /// `agent-qa <verb>` in its bash fences must be a verb `agent-qa --help`
+    /// actually advertises, and the flags those commands pass must show up
+    /// in that verb's help. `browser install` is the passthrough documented
+    /// as `browser <args...>`.
+    #[test]
+    fn setup_prompt_commands_are_advertised_in_help() {
+        const PROMPT: &str = include_str!("../../docs/setup-prompt.md");
+        const DOCTOR: &str = include_str!("doctor.rs");
+        let help_verbs = help_topverbs();
+        let mut saw = 0usize;
+        let mut verbs = HashSet::new();
+        let mut saw_deep = false;
+        let mut saw_browser_install = false;
+        for block in bash_fences(PROMPT) {
+            for args in agent_qa_args(&block) {
+                saw += 1;
+                let verb = args[0].as_str();
+                verbs.insert(verb.to_string());
+                assert!(
+                    help_verbs.contains(verb),
+                    "setup prompt runs `agent-qa {verb}` but {verb:?} is not in `agent-qa --help`"
+                );
+                if verb == "doctor"
+                    && args
+                        .iter()
+                        .any(|a| a == "--deep" || a.starts_with("--deep="))
+                {
+                    saw_deep = true;
+                    assert!(
+                        DOCTOR.contains("--deep"),
+                        "setup prompt uses `doctor --deep` but `agent-qa doctor --help` does not"
+                    );
+                }
+                if verb == "skills" || verb == "plugins" {
+                    let sub = args.get(1).map(String::as_str).unwrap_or("");
+                    assert!(
+                        !sub.is_empty() && !sub.starts_with('-'),
+                        "setup prompt `agent-qa {verb}` is missing a subcommand"
+                    );
+                    assert!(
+                        SRC.contains(&format!("{verb} {sub}"))
+                            || SRC.contains(&format!("{verb} [{sub}]")),
+                        "setup prompt runs `agent-qa {verb} {sub}` but help does not mention it"
+                    );
+                }
+                if verb == "browser" {
+                    assert!(
+                        SRC.contains("browser <args"),
+                        "setup prompt forwards browser args but help does not document the passthrough"
+                    );
+                    if args.get(1).map(String::as_str) == Some("install") {
+                        saw_browser_install = true;
+                    }
+                }
+            }
+        }
+        assert!(
+            saw >= 8,
+            "expected the setup prompt to name several agent-qa commands, found {saw}"
+        );
+        for required in [
+            "info", "browser", "doctor", "init", "replay", "skills", "plugins",
+        ] {
+            assert!(
+                verbs.contains(required),
+                "setup prompt no longer runs `agent-qa {required}`"
+            );
+        }
+        assert!(
+            saw_deep,
+            "setup prompt must smoke the install with `agent-qa doctor --deep`"
+        );
+        assert!(
+            saw_browser_install,
+            "setup prompt must install Chrome with `agent-qa browser install`"
+        );
+        // A CRLF checkout (Windows CI) must see the same commands.
+        let crlf = PROMPT.replace('\n', "\r\n");
+        let crlf_verbs: usize = bash_fences(&crlf)
+            .iter()
+            .map(|block| agent_qa_args(block).len())
+            .sum();
+        assert_eq!(crlf_verbs, saw, "CRLF prompt dropped agent-qa commands");
+    }
+
+    fn bash_fences(src: &str) -> Vec<String> {
+        let normalized = src.replace("\r\n", "\n");
+        let mut blocks = Vec::new();
+        let mut rest = normalized.as_str();
+        const OPEN: &str = "```bash\n";
+        while let Some(start) = rest.find(OPEN) {
+            let after = &rest[start + OPEN.len()..];
+            let Some(end) = after.find("\n```") else {
+                break;
+            };
+            blocks.push(after[..end].to_string());
+            rest = &after[end + 4..];
+        }
+        blocks
+    }
+
+    /// Arguments after each `agent-qa` command on a line.
+    ///
+    /// A bare `agent-qa` later in the line is an argument (`--skill agent-qa`),
+    /// and `owner/agent-qa` is the package name. Only a leading command,
+    /// `npx agent-qa`, or a `…/bin/agent-qa` path counts as an invocation.
+    fn agent_qa_args(block: &str) -> Vec<Vec<String>> {
+        let mut out = Vec::new();
+        for line in block.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let line = line.split(" #").next().unwrap_or(line);
+            let tokens: Vec<&str> = line.split_whitespace().collect();
+            let idx = tokens.iter().enumerate().find_map(|(i, token)| {
+                let path = token.ends_with("/bin/agent-qa");
+                let bare = *token == "agent-qa";
+                if !path && !bare {
+                    return None;
+                }
+                let invoked = path || i == 0 || tokens.get(i - 1) == Some(&"npx");
+                invoked.then_some(i)
+            });
+            let Some(idx) = idx else { continue };
+            let args: Vec<String> = tokens[idx + 1..].iter().map(|s| (*s).to_string()).collect();
+            if !args.is_empty() {
+                out.push(args);
+            }
+        }
+        out
+    }
 }

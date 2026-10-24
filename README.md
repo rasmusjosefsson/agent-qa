@@ -19,10 +19,15 @@ add for your target app.
 
 ## Install
 
+Node.js 24 or newer. The bundled `agent-browser` package sets `engines.node` to `>=24`.
+
 ```bash
 npm i -g @rasmusjosefsson/agent-qa
-agent-qa --help
+agent-qa browser install
+agent-qa doctor
 ```
+
+On Linux, if a browser command fails with a missing shared library, run `agent-qa browser install --with-deps`.
 
 You will need at least one plugin for auth (e.g. `agent-qa-plugin-<vendor>`)
 unless your target app needs no authentication. See
@@ -33,7 +38,7 @@ unless your target app needs no authentication. See
 Install the discovery stub so your agent knows about agent-qa:
 
 ```bash
-npx skills add rasmusjosefsson/agent-qa
+npx skills add rasmusjosefsson/agent-qa --skill agent-qa -y
 ```
 
 This works with Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot,
