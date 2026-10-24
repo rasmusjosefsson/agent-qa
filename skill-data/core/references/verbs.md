@@ -29,7 +29,7 @@
 | `smart-assert "<description>"` | Verifies an element claim live and records a `check` draft; fuzzy descriptions resolve via the `resolve` plugin. |
 | `smart-hover "<description>"` | Hovers an element by description and records a `do/hover` draft. |
 | `smart-select "<description>" --value "<option>"` | Picks an option in a combobox by description and records a `do/select` draft. |
-| `verify [--fix]` | Checks the active recording buffer (dense ids + sidecar pairing); `--fix` renumbers ids and moves sidecars in place. |
+| `verify [--fix]` | Checks the active recording buffer: dense ids, sidecar pairing, and each enabled `kind:check` step against the live browser session. `--fix` renumbers ids and moves sidecars in place. |
 
 Only `do` and `check` drafts are accepted.
 

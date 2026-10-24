@@ -101,13 +101,20 @@
   recovery still fails, use `agent-qa browser close --session <name>`, then
   `agent-qa browser close --all`, then `agent-qa browser doctor --fix`.
 
-- **`verify` only inspects the active (unsealed) recording buffer — run it
-  BEFORE `flush`, not after.** `flush` seals the buffer into `scenario.json`
-  and clears the active recorder state, so `agent-qa verify` run afterward
-  always fails with `no active recording` — that error means you flushed
-  already, not that verify or the recording is broken. Sequence: record every
-  step, `agent-qa verify`, then `agent-qa flush`, then `agent-qa scenario
-  check <path>` to validate the sealed file.
+- **`verify` runs live checks on the active (unsealed) recording buffer — run it
+  BEFORE `flush`, not after.** It checks dense step ids, paired snapshot and
+  screenshot sidecars, and evaluates every enabled `kind:check` step against
+  the live browser session named in the recorder state (the same
+  `dispatch_check` path replay uses). `OK  recorder state is clean` means
+  those ids, sidecars, and live claims passed. A claim that is already false
+  fails verify with the reason replay would report. When the buffer has no
+  check steps, verify succeeds on ids and sidecars with no browser. When it
+  has check steps and that session is not running, verify fails with a clear
+  error. `flush` seals the buffer into `scenario.json` and clears the active
+  recorder state, so `agent-qa verify` run afterward always fails with
+  `no active recording` — that error means you flushed already. Sequence:
+  record every step, `agent-qa verify`, then `agent-qa flush`, then
+  `agent-qa scenario check <path>` to validate the sealed file.
 
 - **Session id ≠ scenario sid, and neither flag you'd guess exists.**
   `start` names the *browser session* with `--session <name>` (there is no
