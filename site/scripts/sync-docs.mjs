@@ -101,9 +101,16 @@ for (const [slug, { file }] of Object.entries(DOCS)) {
   await writeFile(join(mirrorOut, `${slug}.md`), header + src.replace(/\r\n/g, "\n"))
 }
 // quickstart is hand-written mdx — mirror its content too (mdx is readable markdown).
-const qs = await readFile(join(out, "quickstart.mdx"), "utf8")
+// The setup prompt has one source, docs/setup-prompt.md. Inline it so the
+// agent-facing .md mirror shows the same text the Copy button copies.
+const qs = (await readFile(join(out, "quickstart.mdx"), "utf8")).replace(/\r\n/g, "\n")
+const setupPrompt = (await readFile(join(repo, "docs", "setup-prompt.md"), "utf8")).replace(/\r\n/g, "\n").trim()
+const qsMirror = qs
+  .replace(/^import SetupPrompt from .+\n/m, "")
+  .replace(/<SetupPrompt \/>/g, setupPrompt)
 await writeFile(
   join(mirrorOut, "quickstart.md"),
-  `<!-- markdown mirror of ${SITE_ORIGIN}${SITE_BASE}/docs/quickstart/ — source: site quickstart.mdx -->\n\n` + qs.replace(/\r\n/g, "\n"),
+  `<!-- markdown mirror of ${SITE_ORIGIN}${SITE_BASE}/docs/quickstart/ — source: site quickstart.mdx; setup prompt inlined from docs/setup-prompt.md -->\n\n` +
+    qsMirror,
 )
 console.log(`sync-docs: ${Object.keys(DOCS).length + 1} mirrors → public/docs/`)
