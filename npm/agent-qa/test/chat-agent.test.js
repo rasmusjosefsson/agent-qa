@@ -1084,6 +1084,8 @@ test('detectChatBackends reports pi + opencode availability separately', async (
   assert.equal(det.opencode.binary, bin);
   assert.equal(det.opencode.available, false); // sdk missing → not usable
   assert.match(det.opencode.install, /opencode-ai/);
+  assert.equal(det.cursor.available, false);
+  assert.match(det.cursor.install, /cursor\.com\/install/);
 });
 
 test('createChatBackend rejects an unknown backend', async () => {
@@ -1149,6 +1151,347 @@ test('chat state reports the backend + install hint when unavailable', async (t)
   const body = await (await fetch(`${base}/api/chat/state`)).json();
   assert.equal(body.available, false);
   assert.match(body.reason, /SDK not found/);
-  assert.ok(['pi', 'opencode'].includes(body.backend));
-  assert.ok(body.install && body.install.startsWith('npm'));
+  assert.ok(['cursor', 'pi', 'opencode'].includes(body.backend));
+  if (body.backend === 'cursor') assert.match(body.install, /cursor\.com\/install/);
+  else assert.ok(body.install && body.install.startsWith('npm'));
+});
+
+// ---- cursor backend (Agent CLI, one headless turn per prompt) ----
+
+function writeCursorFake(dir) {
+  const exe = path.join(dir, 'agent');
+  const script = `#!${process.execPath}
+const fs = require('fs');
+const args = process.argv.slice(2);
+const log = process.env.CURSOR_FAKE_LOG;
+if (log) {
+  fs.appendFileSync(log, JSON.stringify({
+    argv: args,
+    pid: process.pid,
+    hasKey: typeof process.env.CURSOR_API_KEY === 'string' && process.env.CURSOR_API_KEY.length > 0,
+    session: process.env.AGENT_BROWSER_SESSION || null,
+  }) + '\\n');
+}
+if (args.includes('--list-models')) {
+  if (process.env.CURSOR_FAKE_LIST_FAIL === '1') {
+    process.stderr.write('network unreachable\\n');
+    process.exit(1);
+  }
+  process.stdout.write('Available models\\n\\nauto - Auto\\ncomposer-1 - Composer 1\\n');
+  process.exit(0);
+}
+const prompt = args[args.length - 1];
+if (prompt === '__SLEEP__') {
+  setInterval(() => {}, 1000);
+  return;
+}
+if (process.env.CURSOR_FAKE_EXIT === '1') {
+  process.stderr.write('boom-cursor\\n');
+  process.exit(2);
+}
+const sid = 'sess-cursor-1';
+const events = [
+  { type: 'system', subtype: 'init', session_id: sid, model: 'Composer 1' },
+  { type: 'assistant', timestamp_ms: 10, message: { role: 'assistant', content: [{ type: 'text', text: 'Hel' }] } },
+  { type: 'assistant', timestamp_ms: 11, message: { role: 'assistant', content: [{ type: 'text', text: 'Hello' }] } },
+  { type: 'assistant', timestamp_ms: 12, model_call_id: 'mc-1', message: { role: 'assistant', content: [{ type: 'text', text: 'Hello' }] } },
+  { type: 'tool_call', subtype: 'started', call_id: 'call-1', tool_call: { readToolCall: { args: { path: 'README.md' } } }, session_id: sid },
+  { type: 'tool_call', subtype: 'completed', call_id: 'call-1', tool_call: { readToolCall: { args: { path: 'README.md' }, result: { success: { content: 'file body' } } } }, session_id: sid },
+  { type: 'tool_call', subtype: 'started', call_id: 'call-fn', tool_call: { function: { name: 'Shell', arguments: JSON.stringify({ command: 'echo hi' }) } }, session_id: sid },
+  { type: 'tool_call', subtype: 'completed', call_id: 'call-fn', tool_call: { function: { name: 'Shell', result: { error: 'nope' } } }, session_id: sid },
+  { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Hello' }] } },
+  { type: 'result', subtype: 'success', is_error: false, result: 'Hello', session_id: sid },
+];
+for (const ev of events) process.stdout.write(JSON.stringify(ev) + '\\n');
+`;
+  fs.writeFileSync(exe, script);
+  fs.chmodSync(exe, 0o755);
+  return exe;
+}
+
+function readCursorLog(file) {
+  if (!fs.existsSync(file)) return [];
+  return fs
+    .readFileSync(file, 'utf8')
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+function agentEventsFromFrames(frames) {
+  const events = [];
+  for (const block of String(frames || '').split('\n\n')) {
+    if (!/^event: agent\b/m.test(block)) continue;
+    const data = block
+      .split('\n')
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trim())
+      .join('');
+    if (!data) continue;
+    events.push(JSON.parse(data));
+  }
+  return events;
+}
+
+function promptArgv(log) {
+  return readCursorLog(log)
+    .map((row) => row.argv)
+    .filter((argv) => !argv.includes('--list-models'));
+}
+
+test('mergeAssistantText keeps chunks and drops duplicate flushes', async () => {
+  const { mergeAssistantText } = await chatAgent();
+  let have = '';
+  for (const chunk of ['I will', ' read the file now.']) {
+    const step = mergeAssistantText(have, chunk, 'delta');
+    have = step.next;
+  }
+  assert.equal(have, 'I will read the file now.');
+  let cumulative = '';
+  for (const chunk of ['Hel', 'Hello']) {
+    const step = mergeAssistantText(cumulative, chunk, 'delta');
+    cumulative = step.next;
+  }
+  assert.equal(cumulative, 'Hello');
+  assert.equal(mergeAssistantText('Hello', 'Hello', 'delta').delta, '');
+  assert.equal(mergeAssistantText('', 'Hello', 'flush').delta, 'Hello');
+  assert.equal(mergeAssistantText('Hello', 'Hello', 'flush').delta, '');
+  assert.equal(mergeAssistantText('I will read the file now.Hello world!', 'Hello world!', 'flush').delta, '');
+});
+
+test('parseCursorModelList reads id - label lines and JSON', async () => {
+  const { parseCursorModelList } = await chatAgent();
+  assert.deepEqual(parseCursorModelList('Available models\n\nauto - Auto (current)\ncomposer-1 - Composer 1\n'), [
+    { provider: 'cursor', id: 'auto', label: 'Auto' },
+    { provider: 'cursor', id: 'composer-1', label: 'Composer 1' },
+  ]);
+  assert.deepEqual(parseCursorModelList(JSON.stringify([{ id: 'gpt', name: 'GPT' }])), [
+    { provider: 'cursor', id: 'gpt', label: 'GPT' },
+  ]);
+  assert.deepEqual(parseCursorModelList(''), []);
+});
+
+test('detectChatBackends prefers AGENT_QA_CURSOR_BIN, then cursor-agent, then agent', async () => {
+  const { detectChatBackends } = await chatAgent();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-cursor-bin-'));
+  const agent = path.join(dir, 'agent');
+  const cursorAgent = path.join(dir, 'cursor-agent');
+  fs.writeFileSync(agent, '');
+  fs.writeFileSync(cursorAgent, '');
+  const both = detectChatBackends({ env: { PATH: dir } });
+  assert.equal(both.cursor.available, true);
+  assert.equal(both.cursor.binary, cursorAgent);
+  const override = detectChatBackends({ env: { PATH: dir, AGENT_QA_CURSOR_BIN: agent } });
+  assert.equal(override.cursor.binary, agent);
+  const missing = detectChatBackends({
+    env: { PATH: dir, AGENT_QA_CURSOR_BIN: path.join(dir, 'missing-bin') },
+  });
+  assert.equal(missing.cursor.available, false);
+  assert.equal(missing.cursor.binary, null);
+});
+
+test('cursor backend streams text, resumes the session, and keeps the transcript', async () => {
+  const { createChatBackend } = await chatAgent();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-cursor-chat-'));
+  const exe = writeCursorFake(dir);
+  const log = path.join(dir, 'argv.log');
+  const secret = 'cursor-test-key-should-not-leak';
+  const hub = await createChatBackend({
+    backend: 'cursor',
+    cwd: dir,
+    bashEnv: () => ({ AGENT_BROWSER_SESSION: 'chat-sess-1' }),
+    env: {
+      PATH: dir,
+      AGENT_QA_CURSOR_BIN: exe,
+      CURSOR_FAKE_LOG: log,
+      CURSOR_API_KEY: secret,
+    },
+  });
+  try {
+    const before = await hub.getState();
+    assert.equal(before.backend, 'cursor');
+    assert.ok(before.models.some((m) => m.id === 'composer-1' && m.provider === 'cursor'));
+
+    await hub.setModel({ provider: 'cursor', id: 'composer-1' });
+    await hub.setThinkingLevel('high');
+
+    const res = makeFakeRes();
+    hub.subscribe(res);
+    await hub.prompt('hello');
+    const events = agentEventsFromFrames(res.frames);
+    const deltas = events
+      .filter((ev) => ev.type === 'message_update' && ev.assistantMessageEvent?.type === 'text_delta')
+      .map((ev) => ev.assistantMessageEvent.delta);
+    assert.deepEqual(deltas, ['Hel', 'lo']);
+    assert.ok(events.some((ev) => ev.type === 'message_update' && ev.assistantMessageEvent?.type === 'text_start'));
+    const toolStart = events.find((ev) => ev.type === 'tool_execution_start' && ev.toolName === 'read');
+    assert.ok(toolStart);
+    assert.equal(toolStart.toolCallId, 'call-1');
+    assert.deepEqual(toolStart.args, { path: 'README.md' });
+    const toolEnd = events.find((ev) => ev.type === 'tool_execution_end' && ev.toolCallId === 'call-1');
+    assert.equal(toolEnd.isError, false);
+    const fnStart = events.find((ev) => ev.type === 'tool_execution_start' && ev.toolCallId === 'call-fn');
+    assert.equal(fnStart.toolName, 'shell');
+    const fnEnd = events.find((ev) => ev.type === 'tool_execution_end' && ev.toolCallId === 'call-fn');
+    assert.equal(fnEnd.isError, true);
+    assert.ok(events.some((ev) => ev.type === 'agent_end'));
+
+    const state = await hub.getState();
+    const assistant = state.messages.find(
+      (m) => m.role === 'assistant' && (m.content || []).some((part) => part.type === 'text' && part.text === 'Hello'),
+    );
+    assert.ok(assistant);
+    assert.ok(state.messages.some((m) => m.role === 'user'));
+    assert.equal(state.sessionId, 'sess-cursor-1');
+    assert.equal(state.model.id, 'composer-1');
+
+    const first = promptArgv(log);
+    assert.equal(first.length, 1);
+    assert.ok(first[0].includes('--print'));
+    assert.ok(first[0].includes('--stream-partial-output'));
+    assert.ok(first[0].includes('--force'));
+    assert.ok(first[0].includes('--trust'));
+    assert.equal(first[0][first[0].indexOf('--output-format') + 1], 'stream-json');
+    assert.equal(first[0][first[0].indexOf('--workspace') + 1], dir);
+    assert.equal(first[0][first[0].indexOf('--model') + 1], 'composer-1');
+    assert.equal(first[0].includes('--resume'), false);
+    assert.equal(first[0][first[0].length - 1], 'hello');
+    assert.equal(first[0].includes(secret), false);
+    const logged = readCursorLog(log);
+    assert.equal(logged[0].hasKey, true);
+    assert.equal(logged.every((row) => row.session === 'chat-sess-1' || row.argv.includes('--list-models')), true);
+    assert.equal(fs.readFileSync(log, 'utf8').includes(secret), false);
+
+    await hub.prompt('again');
+    const second = promptArgv(log);
+    assert.equal(second.length, 2);
+    assert.equal(second[1][second[1].indexOf('--resume') + 1], 'sess-cursor-1');
+    assert.equal(second[1][second[1].length - 1], 'again');
+
+    await hub.newSession();
+    await hub.prompt('fresh');
+    const third = promptArgv(log);
+    assert.equal(third.length, 3);
+    assert.equal(third[2].includes('--resume'), false);
+    assert.equal(third[2].includes('sess-cursor-1'), false);
+    assert.equal(third[2][third[2].length - 1], 'fresh');
+  } finally {
+    hub.dispose();
+  }
+});
+
+test('cursor backend falls back to the auto model when --list-models fails', async () => {
+  const { createChatBackend } = await chatAgent();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-cursor-models-'));
+  const exe = writeCursorFake(dir);
+  const log = path.join(dir, 'argv.log');
+  const hub = await createChatBackend({
+    backend: 'cursor',
+    cwd: dir,
+    env: {
+      PATH: dir,
+      AGENT_QA_CURSOR_BIN: exe,
+      CURSOR_FAKE_LOG: log,
+      CURSOR_FAKE_LIST_FAIL: '1',
+    },
+  });
+  try {
+    const before = await hub.getState();
+    assert.deepEqual(before.models, [{ provider: 'cursor', id: 'auto', label: 'Cursor' }]);
+    await hub.prompt('hello');
+    const after = await hub.getState();
+    assert.equal(after.models[0].id, 'auto');
+    assert.equal(after.models[0].label, 'Composer 1');
+    assert.equal(after.model.label, 'Composer 1');
+    const prompts = promptArgv(log);
+    assert.equal(prompts[0].includes('--model'), false);
+  } finally {
+    hub.dispose();
+  }
+});
+
+test('cursor auto-selects when its CLI is the first available backend', async () => {
+  const { createChatBackend } = await chatAgent();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-cursor-auto-'));
+  const exe = writeCursorFake(dir);
+  const hub = await createChatBackend({
+    cwd: dir,
+    env: { PATH: dir, AGENT_QA_CURSOR_BIN: exe },
+  });
+  try {
+    const state = await hub.getState();
+    assert.equal(state.backend, 'cursor');
+  } finally {
+    hub.dispose();
+  }
+});
+
+test('cursor abort kills the active child pid', async () => {
+  const { createChatBackend } = await chatAgent();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-cursor-abort-'));
+  const exe = writeCursorFake(dir);
+  const log = path.join(dir, 'argv.log');
+  const hub = await createChatBackend({
+    backend: 'cursor',
+    cwd: dir,
+    env: { PATH: dir, AGENT_QA_CURSOR_BIN: exe, CURSOR_FAKE_LOG: log },
+  });
+  let pid = null;
+  const pending = hub.prompt('__SLEEP__');
+  try {
+    const started = Date.now();
+    while (!pid && Date.now() - started < 3000) {
+      const rows = readCursorLog(log).filter((row) => row.argv[row.argv.length - 1] === '__SLEEP__');
+      if (rows.length) pid = rows[0].pid;
+      else await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.ok(pid, 'sleeper pid was recorded');
+    process.kill(pid, 0);
+    await hub.abort();
+    await pending;
+    let alive = true;
+    for (let i = 0; i < 20; i++) {
+      try {
+        process.kill(pid, 0);
+        await new Promise((r) => setTimeout(r, 25));
+      } catch {
+        alive = false;
+        break;
+      }
+    }
+    assert.equal(alive, false);
+  } finally {
+    hub.dispose();
+    if (pid) {
+      try {
+        process.kill(pid, 'SIGTERM');
+      } catch {
+        /* already dead */
+      }
+    }
+  }
+});
+
+test('cursor non-zero exit emits an error and agent_end', async () => {
+  const { createChatBackend } = await chatAgent();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-cursor-exit-'));
+  const exe = writeCursorFake(dir);
+  const hub = await createChatBackend({
+    backend: 'cursor',
+    cwd: dir,
+    env: { PATH: dir, AGENT_QA_CURSOR_BIN: exe, CURSOR_FAKE_EXIT: '1' },
+  });
+  try {
+    const res = makeFakeRes();
+    hub.subscribe(res);
+    await hub.prompt('hello');
+    const events = agentEventsFromFrames(res.frames);
+    const err = events.find((ev) => ev.type === 'error');
+    assert.ok(err);
+    assert.match(err.message, /boom-cursor/);
+    assert.equal(events[events.length - 1].type, 'agent_end');
+  } finally {
+    hub.dispose();
+  }
 });

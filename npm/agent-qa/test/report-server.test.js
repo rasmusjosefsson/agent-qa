@@ -2837,9 +2837,20 @@ test('GET/POST /api/config/settings round-trips and validates', async (t) => {
   assert.equal(d2.effective.chatBackend, 'auto');
   assert.equal(d2.settings.chatBackend, undefined);
 
+  // cursor round-trips; unknown enum still 400
+  const cursorRes = await j('POST', '/api/config/settings', { chatBackend: 'cursor' });
+  assert.equal(cursorRes.status, 200);
+  const dCursor = await cursorRes.json();
+  assert.equal(dCursor.effective.chatBackend, 'cursor');
+  assert.equal(dCursor.settings.chatBackend, 'cursor');
+  const onDiskCursor = JSON.parse(fs.readFileSync(path.join(fx.root, '_config', 'settings.json'), 'utf8'));
+  assert.equal(onDiskCursor.chatBackend, 'cursor');
+
   // validation: unknown key / bad enum / bad type → 400
   assert.equal((await j('POST', '/api/config/settings', { nope: 1 })).status, 400);
-  assert.equal((await j('POST', '/api/config/settings', { chatBackend: 'wat' })).status, 400);
+  const wat = await j('POST', '/api/config/settings', { chatBackend: 'wat' });
+  assert.equal(wat.status, 400);
+  assert.match((await wat.json()).error, /cursor/);
   assert.equal((await j('POST', '/api/config/settings', { headedDefault: 'yes' })).status, 400);
 });
 

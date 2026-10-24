@@ -15,7 +15,7 @@ for the live table (this doc may lag the binary).
 | `missing-locator` | error | A do step that needs a locator (`click`, `type`, `clear`, `hover`, `focus`, `blur`, `check`, `uncheck`) has no `params.locator`. |
 | `params-on-noop` | warning | A do step whose verb ignores params (`reload`, `back`, `forward`) has a non-empty params object. |
 | `no-env-open` | warning | The scenario has no `env.open[]` entries; replay will start on a blank tab. |
-| `no-navigation` | warning | The scenario never navigates — no `env.open` nav op and no `do`/`goto` step — so replay runs against whatever page the session is already on. Usually means the recording used `start --open <url>`, which drives the browser without recording anything. |
+| `no-navigation` | warning | The scenario never navigates — no `env.open` nav op and no `do`/`goto` step — so replay runs against whatever page the session is already on. `start --open <url>` seals that URL as a nav op; this warning means the recording has neither that sealed nav, a `record-setup` nav, nor a `do`/`goto` step. |
 | `no-checks` | warning | The scenario has steps but zero check claims; replay can only fail on browser errors, not assertions. |
 | `empty-steps` | warning | The scenario has zero steps; replay will only open env then close it. |
 | `wait-without-condition` | warning | A do/wait step has none of `params.ms`/`until`/`url`/`timeoutMs`/`locator`; it falls back to a `networkidle` wait that may not reflect the condition the author intended. |

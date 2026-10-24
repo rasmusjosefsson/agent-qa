@@ -4,25 +4,40 @@ description: Install agent-qa, record a scenario, replay it, and diff two runs.
 ---
 
 import { Steps, Aside } from "@astrojs/starlight/components"
+import SetupPrompt from "../../../components/SetupPrompt.astro"
+
+## Setup prompt for your agent
+
+Copy this into Cursor, Claude Code, Codex, Pi, or any other coding agent. It installs the CLI, the browser, and the skill, bootstraps the repo, and runs a smoke replay. The text lives in [`docs/setup-prompt.md`](https://github.com/rasmusjosefsson/agent-qa/blob/main/docs/setup-prompt.md) — edit that file and this page picks it up.
+
+<SetupPrompt />
 
 <Steps>
 
-1. **Install the CLI.** It ships as one npm package with a prebuilt binary
-   per platform; `agent-browser` comes along as a dependency.
+1. **Install the CLI.** You need Node.js 24 or newer. The bundled
+   `agent-browser` package sets `engines.node` to `>=24`. The npm package
+   ships a prebuilt `agent-qa` binary per platform and that pinned browser.
 
    ```bash
    npm i -g @rasmusjosefsson/agent-qa
-   agent-qa --help
+   agent-qa info
+   agent-qa browser install
    agent-qa doctor
    ```
+
+   On Linux, if a browser command fails with a missing shared library, run
+   `agent-qa browser install --with-deps` (it uses the system package manager
+   and may need sudo). In a project repo, `agent-qa init` writes
+   `agent-qa.toml`, `scenarios/hello/scenario.json`, and a `.gitignore` block.
 
 2. **Tell your coding agent about it** (optional). The discovery stub works with
    Claude Code, Codex, Cursor, Gemini CLI, GitHub Copilot, Goose, OpenCode,
    Windsurf, and Pi. It points the agent at `agent-qa skills get core`, so the
-   instructions always match the CLI version you installed.
+   instructions always match the CLI version you installed. `--skill agent-qa`
+   installs that stub only.
 
    ```bash
-   npx skills add rasmusjosefsson/agent-qa
+   npx skills add rasmusjosefsson/agent-qa --skill agent-qa -y
    ```
 
 3. **Record a scenario.** Recording is serial: take an action, then let

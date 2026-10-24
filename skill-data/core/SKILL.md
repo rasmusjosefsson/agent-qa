@@ -55,27 +55,43 @@ is useful to a future reader.
 agent-qa start "verify the users page" --session qa-run --source-ref "change:123"
 ```
 
-`start` also takes `--open <url>`, which navigates the session so you have a
-page to work against. It drives the browser only — it records nothing. Neither
-an `env.open` nav nor a `do`/`goto` step appears in `scenario.json` because you
-passed it, so a scenario started that way and flushed without an explicit first
-step replays against whatever page the session happens to be on. Record the
-navigation yourself, the same way you would without `--open`: `record-setup`
-with a `nav` op for setup, or a `do`/`goto` step when the navigation is part of
-the flow under test.
+`start` seeds `env.open` from the baseline before any `record-setup`. The
+default baseline is one `{ "kind": "fresh" }` op. `--profile <name>` seeds
+`useProfile` for that name (for example `default-user`). `--keep-session`
+seeds no baseline op.
 
-Record setup before actions. `record-setup` accepts existing generic `EnvOp`
-shapes. Use it for repeatable `fresh`, `useProfile`, `nav`, `cookie`,
-`localStorage`, `gql`, and `flag` operations.
+`start --open <url>` navigates the browser and seals that URL as an `env.open`
+`nav` op after the baseline. The sealed op carries `intent` `open <url>` and
+the URL. Pass it as:
 
 ```bash
-agent-qa record-setup '{"kind":"fresh"}'
+agent-qa start "verify the users page" --session qa-run --open https://example.com/users
+```
+
+That nav is already in the buffer. Do not `record-setup` the same URL again —
+a second `nav` replays the open twice. Use `--open` when the entry page is
+setup. Record a `do`/`goto` step when the navigation is part of the flow under
+test and that URL was not passed to `--open`.
+
+Record any further setup before actions. `record-setup` appends one generic
+`EnvOp`. The default baseline already wrote `fresh`, so leave it out of this
+list. A `--profile` start already wrote `useProfile`. Use `record-setup` for a
+`nav` when you did not pass `--open`, and for `cookie`, `localStorage`, `gql`,
+and `flag`.
+
+```bash
 agent-qa record-setup '{"kind":"nav","url":"https://example.com/users"}'
+agent-qa record-setup '{"kind":"cookie","name":"session","value":"example"}'
+agent-qa record-setup '{"kind":"localStorage","key":"view","value":"compact"}'
+agent-qa record-setup '{"kind":"gql","url":"https://api.example.com/graphql","query":"query { viewer { id } }"}'
 agent-qa record-setup '{"kind":"flag","name":"example-flag","enabled":true}'
 ```
 
-Drive one action. Then append one direct scenario draft. The recorder assigns
-sequential ids and injects `kind`. Do not provide either field.
+Drive one action, then append one direct scenario draft. The recorder assigns
+sequential ids and injects `kind`. Do not provide either field. The `goto`
+below is for a journey that did not pass `--open` for that URL. When `--open`
+already sealed the entry page, record the gesture on that page and leave the
+URL in `env.open`.
 
 ```bash
 agent-qa browser --session qa-run open https://example.com/users

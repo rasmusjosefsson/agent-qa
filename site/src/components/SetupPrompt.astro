@@ -1,0 +1,146 @@
+---
+// Renders docs/setup-prompt.md. That file is the only copy of the prompt;
+// the quickstart page and its markdown mirror both take their text from it.
+// `?raw` inlines the file at build time — a runtime path breaks once Astro
+// prerenders the page from dist/.
+import promptSource from "../../../docs/setup-prompt.md?raw"
+
+const prompt = promptSource.replace(/\r\n/g, "\n").trim() + "\n"
+---
+
+<div class="setup-prompt" data-setup-prompt>
+  <div class="setup-prompt-bar">
+    <p class="setup-prompt-kicker">Agent prompt</p>
+    <button type="button" class="setup-prompt-copy" aria-label="Copy setup prompt">
+      <span data-label aria-hidden="true">Copy</span>
+    </button>
+  </div>
+  <pre class="setup-prompt-body" tabindex="0" aria-label="Setup prompt">{prompt}</pre>
+  <span class="setup-prompt-live" data-live aria-live="polite"></span>
+</div>
+
+<script is:inline>
+  for (const root of document.querySelectorAll("[data-setup-prompt]")) {
+    const button = root.querySelector("button")
+    const pre = root.querySelector("pre")
+    const label = root.querySelector("[data-label]")
+    const live = root.querySelector("[data-live]")
+    if (!button || !pre || !label) continue
+    let timer = 0
+    const show = (message, copied) => {
+      label.textContent = copied ? "Copied!" : "Copy"
+      button.dataset.state = copied ? "copied" : "failed"
+      if (live) live.textContent = message
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        label.textContent = "Copy"
+        delete button.dataset.state
+        if (live) live.textContent = ""
+      }, 2000)
+    }
+    button.addEventListener("click", async () => {
+      const text = pre.textContent ?? ""
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(text)
+          show("Copied!", true)
+          return
+        }
+      } catch {
+        // Fall through to the selection copy below.
+      }
+      try {
+        const selection = window.getSelection()
+        const range = document.createRange()
+        range.selectNodeContents(pre)
+        selection?.removeAllRanges()
+        selection?.addRange(range)
+        const ok = document.execCommand("copy")
+        selection?.removeAllRanges()
+        show(ok ? "Copied!" : "Could not copy. Select the prompt and copy it.", ok)
+      } catch {
+        show("Could not copy. Select the prompt and copy it.", false)
+      }
+    })
+  }
+</script>
+
+<style>
+  .setup-prompt {
+    position: relative;
+    margin: 0.25rem 0 1.75rem;
+    border: 1px solid var(--aqa-border-strong);
+    border-radius: 16px;
+    background:
+      radial-gradient(80% 140% at 100% 0%, color-mix(in oklab, var(--aqa-brand) 10%, transparent), transparent 62%),
+      color-mix(in oklab, var(--aqa-card) 88%, transparent);
+    box-shadow: 0 1px 0 0 rgb(255 255 255 / 5%) inset;
+    overflow: hidden;
+  }
+  .setup-prompt-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.7rem 0.85rem;
+    border-bottom: 1px solid var(--aqa-border);
+  }
+  .setup-prompt-kicker {
+    margin: 0;
+    font-size: 0.72rem;
+    font-weight: 650;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--aqa-muted-fg);
+  }
+  .setup-prompt-copy {
+    flex: none;
+    appearance: none;
+    border: 1px solid color-mix(in oklab, var(--aqa-brand) 48%, var(--aqa-border-strong));
+    background: color-mix(in oklab, var(--aqa-brand) 18%, transparent);
+    color: var(--aqa-fg);
+    font: 600 0.85rem/1 var(--aqa-font-sans);
+    border-radius: 8px;
+    padding: 0.5rem 0.85rem;
+    cursor: pointer;
+  }
+  .setup-prompt-copy:hover {
+    background: color-mix(in oklab, var(--aqa-brand) 28%, transparent);
+  }
+  .setup-prompt-copy:focus-visible {
+    outline: 2px solid var(--aqa-brand);
+    outline-offset: 2px;
+  }
+  .setup-prompt-copy[data-state="copied"] {
+    background: color-mix(in oklab, var(--aqa-success) 24%, transparent);
+    border-color: color-mix(in oklab, var(--aqa-success) 55%, transparent);
+  }
+  .setup-prompt-body {
+    margin: 0;
+    max-height: 22rem;
+    overflow: auto;
+    padding: 0.95rem 1rem 1.1rem;
+    background: color-mix(in oklab, var(--aqa-bg) 42%, transparent);
+    color: var(--aqa-fg);
+    font-family: var(--aqa-font-mono);
+    font-size: 0.8rem;
+    line-height: 1.55;
+    white-space: pre;
+    tab-size: 2;
+  }
+  .setup-prompt-body:focus-visible {
+    outline: 2px solid var(--aqa-brand);
+    outline-offset: -2px;
+  }
+  .setup-prompt-live {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+</style>
