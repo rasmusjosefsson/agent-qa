@@ -2,7 +2,7 @@
 
 **Spec version:** `scenario-sidecar-tree/v1`
 **Status:** convention spec for the scenario artifact contract (`scenario/2`).
-**Companion schema:** [`../../cli/src/scenario-schema.json`](../../cli/src/scenario-schema.json) — the schema's top-level `description` defers to this document.
+**Companion schema:** [`../../schema/scenario-schema.json`](../../schema/scenario-schema.json) — the schema's top-level `description` defers to this document.
 
 ## Purpose
 
@@ -32,22 +32,15 @@ The on-disk tree for one scenario:
 │   ├── network/<stepId>.json                 #   network sidecar (GraphQL/REST calls; see § network/ for shape)
 │   ├── probes/<stepId>.json                  #   DOM probe (outerHTML, computed style, ARIA attrs)
 │   ├── perf/<stepId>.json                    #   perf sidecar (vitals, suspense, optional renders/cpu/trace pointers)
-│   └── failed/                               #   assert-quality refusals + their evidence (see § failed/ below)
-│       └── assert-refused-<stepId>-<isoTs>/
-│           ├── payload.json                  #     structured diagnostic the gate emitted
-│           ├── snapshot.txt                  #     ARIA snapshot at refusal time
-│           ├── screenshot.png                #     full-page screenshot at refusal time
-│           ├── probe.json                    #     DOM probe at refusal time
-│           └── network.json                  #     recent network calls at refusal time
+│   └── failed/                               #   truncate archives (see § failed/truncate- below)
+│       └── truncate-<isoTs>[-<archive-tag>]/ #     one directory per `truncate` call
+│           ├── snapshots/
+│           ├── screenshots/
+│           ├── network/
+│           ├── probes/
+│           ├── perf/
+│           └── manifest.json                 #     truncate-store/v1
 ├── baselines/<stepId>.png                    # known-good screenshots minted by `shot-accept` ({"shot"} claims)
-├── failed/                                   # store of truncate operations (see § failed/truncate-/ below)
-│   └── truncate-<isoTs>[-<archive-tag>]/     #   one directory per `truncate` call
-│       ├── snapshots/
-│       ├── screenshots/
-│       ├── network/
-│       ├── probes/
-│       ├── perf/
-│       └── manifest.json                      #     truncate-store/v1 — correlates store ↔ source stepIds
 └── replays/
     ├── latest.txt                             # pointer file: one line, the `<runId>` of the most recent replay
     └── <runId>/                               # one directory per replay run
@@ -70,7 +63,7 @@ The two trees (`recording/` and `replays/<runId>/`) deliberately share the same 
 
 ### `scenario.json`
 
-The single contract file. Validates against [`../../cli/src/scenario-schema.json`](../../cli/src/scenario-schema.json). MUST NOT contain `evidence`, `effect`, `healHistory`, `candidates`, or any other observation-shaped field. The contract is the _only_ thing PR review is asked to read line-by-line; sidecar trees are referenced as wholes ("this run passed N/N") or via tooling (diff viewers), not diffed by reviewers.
+The single contract file. Validates against [`../../schema/scenario-schema.json`](../../schema/scenario-schema.json). MUST NOT contain `evidence`, `effect`, `healHistory`, `candidates`, or any other observation-shaped field. The contract is the _only_ thing PR review is asked to read line-by-line; sidecar trees are referenced as wholes ("this run passed N/N") or via tooling (diff viewers), not diffed by reviewers.
 
 ### `recording/`
 
@@ -131,7 +124,9 @@ These files are part of the stable replay tree (`.jsonl` for the stream, `.json`
 
 ### `recording/failed/`
 
-One directory per refused step, named `assert-refused-<stepId>-<isoTs>/`. Created by the assert-quality gate when it refuses a `check` step at record time — for example, when the author tries to assert a URL match that no signal on the page can support, or when the recorded claim would be false on replay.
+What the CLI writes here today is a truncate archive: `truncate-<isoTs>[-<archive-tag>]/`, described in the next section. The `assert-refused-*` bundle below is not produced by any module under `cli/src`.
+
+One directory per refused step, named `assert-refused-<stepId>-<isoTs>/`, was specified for an assert-quality gate that refuses a `check` step at record time — for example, when the author tries to assert a URL match that no signal on the page can support, or when the recorded claim would be false on replay.
 
 Each refusal directory holds a complete evidence bundle — everything a triager (human or LLM) needs to understand what was refused and why, without having to re-run the recording:
 
@@ -145,7 +140,7 @@ The complete bundle means a triager can decide "is this a recording bug or an ap
 
 On retry of the same step, the producer moves any pre-existing keyframe matching the refused step into a fresh `assert-refused-<stepId>-<retryTs>/` so the new attempt's capture lands cleanly. The original refusal directory stays put as the audit trail. If no retry happens, the refusal directory is the scenario's record of "we tried and refused, here is why."
 
-`recording/failed/` MAY be absent for scenarios that never hit a refusal (the common case).
+`recording/failed/` MAY be absent when a scenario was never truncated.
 
 ### `heal-requests/` + `heal-responses/`
 
@@ -163,12 +158,12 @@ Both directories MAY be absent (and usually are — most recordings never trigge
 
 ### `failed/truncate-<isoTs>[-<archive-tag>]/`
 
-Top-level `<SID>/failed/` (sibling of `recording/` and `replays/`, not under `recording/`) holds one directory per `agent-qa truncate <N>` call. The directory name is `truncate-<isoTs>[-<archive-tag>]/` where `<archive-tag>` is the optional `--archive-tag <slug>` argument (slug must match `[A-Za-z0-9._-]+`); without a tag, sub-second `isoTs` ties can collide on back-to-back truncations in one heal session.
+`recording/failed/` holds one directory per `agent-qa truncate <N>` call. The directory name is `truncate-<isoTs>[-<archive-tag>]/` where `<archive-tag>` is the optional `--archive-tag <slug>` argument (slug must match `[A-Za-z0-9._-]+`); without a tag, sub-second `isoTs` ties can collide on back-to-back truncations in one heal session.
 
 Each store holds the per-step sidecar files for the dropped step ids, moved (not copied) from their `recording/<kind>/` source paths:
 
 ```
-<SID>/failed/truncate-<isoTs>[-<tag>]/
+<SID>/recording/failed/truncate-<isoTs>[-<tag>]/
 ├── snapshots/<stepId>.txt
 ├── screenshots/<stepId>.png
 ├── network/<stepId>.json
@@ -177,11 +172,11 @@ Each store holds the per-step sidecar files for the dropped step ids, moved (not
 └── manifest.json             # schema: "truncate-store/v1" — see below
 ```
 
-The `manifest.json` carries: the SID, the timestamp, the `toStepIndex` truncated to, the count and stepIds of dropped rows, the count of moved sidecar files, and the optional `archiveTag`. Triagers grepping `<SID>/failed/` for a stepId pinpoint when and why the truncate fired without rerunning the recording.
+The `manifest.json` carries: the SID, the timestamp, the `toStepIndex` truncated to, the count and stepIds of dropped rows, the count of moved sidecar files, and the optional `archiveTag`. Triagers grepping `<SID>/recording/failed/` for a stepId pinpoint when and why the truncate fired without rerunning the recording.
 
 The verb itself is pure on-disk bookkeeping — it never drives the live tab. The agent owns the tab gesture via `agent-browser` primitives before truncating.
 
-`<SID>/failed/` MAY be absent for scenarios that never hit a truncate (the common case).
+`recording/failed/` MAY be absent for scenarios that never hit a truncate (the common case).
 
 ### `network/`
 
@@ -259,7 +254,7 @@ If a producer finds itself wanting to add any of these to `scenario.json`, the a
 
 ## Relation to JSON Schema
 
-The sidecar layout is not encoded in [`scenario-schema.json`](../../cli/src/scenario-schema.json). This is deliberate.
+The sidecar layout is not encoded in [`scenario-schema.json`](../../schema/scenario-schema.json). This is deliberate.
 
 JSON Schema describes the _data contract_ — the shape of the bytes inside `scenario.json`. The sidecar tree is _convention_ — the shape of the directory next to it. Encoding the convention in the schema would require introducing JSON fields whose only purpose is to repeat what the directory layout already says (e.g. a `sidecars: { snapshots: "snapshots/<stepId>.txt" }` block). Those fields would be redundant, would invite drift between the declared and actual layout, and would re-introduce exactly the contract-and-audit coupling that P1 forbids.
 
@@ -269,4 +264,4 @@ Validating that a scenario directory follows this convention is a separate conce
 
 ## Cross-references
 
-- [`../../cli/src/scenario-schema.json`](../../cli/src/scenario-schema.json) — the data contract whose `description` defers here.
+- [`../../schema/scenario-schema.json`](../../schema/scenario-schema.json) — the data contract whose `description` defers here.

@@ -1,22 +1,21 @@
-//! `scenario/2` contract types — Rust port of `cli/src/scenario.ts`.
+//! `scenario/2` contract types.
 //!
-//! These structs round-trip through `serde_json` byte-for-byte against any
-//! valid `scenario.json`. They are the *typed* view; the *authoritative*
+//! These structs round-trip through `serde_json` against any valid
+//! `scenario.json`. They are the *typed* view; the *authoritative*
 //! shape lives in `schema/scenario-schema.json`, validated at load time
 //! (see [`crate::schema`]).
 //!
-//! Conventions (mirrors the TS source):
+//! Conventions:
 //!   - tagged unions on `kind` for [`Step`], [`EnvOp`]
 //!   - tagged union on `from` for [`Value`]
-//!   - untagged union for [`Locator`] / [`ClaimSubject`] (TS used
-//!     "shape-distinguished" unions there)
+//!   - untagged union for [`Locator`] / [`ClaimSubject`]
 //!   - every field is optional unless the schema marks it required
 //!   - extra fields are rejected at the schema layer; serde ignores them
 //!     here so we don't double-reject
 //!
-//! Types are present but not yet consumed by a runner. Allowing
-//! dead_code at module scope keeps the warning surface clean while later
-//! slices wire each variant into replay / record / heal.
+//! Some variants and fields exist so deserialization accepts the schema.
+//! They are not all constructed in this module, so dead_code stays
+//! allowed at module scope.
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};

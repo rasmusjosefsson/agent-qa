@@ -1,23 +1,19 @@
 //! `do`-verb dispatcher for scenario/2 replay.
 //!
-//! Mirrors `replay/verbs.ts`. Each variant of [`crate::scenario::Verb`]
-//! maps to a sequence of agent-browser CLI calls, with the verb-shape
-//! rules in [`crate::verb_shape`] enforcing the do-step shape first.
+//! Each variant of [`crate::scenario::Verb`] maps to a sequence of
+//! agent-browser calls. [`crate::verb_shape::assert_verb_shape`] runs
+//! first.
 //!
-//! Locator resolution: for `Locator::Role { role, name, … }` we use
-//! agent-browser's one-shot `find role <r> <act> --name <n>` form. For
-//! `Locator::Raw { raw: { kind, value }, … }` we use native selector verbs
-//! for css/testId and `find xpath` for XPath.
-//! Tolerance / nested scope / heal land later.
+//! Locator resolution: for `Locator::Role` we use agent-browser's
+//! one-shot `find role <r> <act> --name <n>` form. For `Locator::Raw`
+//! we use native selector verbs for css/testId and `find xpath` for
+//! XPath. Nested scope is applied via [`scope_steps`]. Locator-drift
+//! retry lives in the runner (`auto_heal`), not here.
 //!
-//! Implemented verbs:
-//!   - implemented: goto, reload, back, forward, click, type, clear,
-//!     press, hover, focus, blur, check, uncheck, wait
-//!   - not yet implemented: (none of the scenario/2 do verbs)
-//!     loop, group, useTemplate
-//!
-//! The runner consumes [`dispatch_do`] from this module — verb-shape
-//! assertion happens inside.
+//! Structural verbs (`group`, `useTemplate`, `loop`, `when`, `include`)
+//! are flattened by the runner before [`dispatch_do`]. Reaching this
+//! dispatcher with one of them is a bug and returns an error. Every
+//! other scenario/2 `do` verb is implemented in the match below.
 
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value as Json;
@@ -881,8 +877,11 @@ fn select_option(
 ) -> anyhow::Result<()> {
     // Role+name combobox: open the opener, confirm a popup appeared (escalate
     // to the W3C keyboard opener contract if the click was swallowed), then
-    // pick the option by name via native DOM activation. Native `<select>` and
-    // raw-locator flows fall through to the DOM-mutation path below.
+    // pick the option by accessible name. A native `<option>` is committed
+    // inside that activation (`option.selected` + input/change — a synthetic
+    // click does not change the `<select>`). Raw locators use the
+    // DOM-mutation path below, which matches `option.value` or `option.text`
+    // against the same literal.
     if let Locator::Role(role) = loc {
         let opener_name =
             resolve_name_match(role.name.as_ref(), scope, scenario_dir)?.unwrap_or_default();

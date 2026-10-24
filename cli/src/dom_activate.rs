@@ -150,6 +150,18 @@ fn activation_prelude() -> &'static str {
     try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
     // A real mouse click focuses the element; synthetic events don't.
     try { el.focus(); } catch (e) {}
+    // Native <option> ignores a synthetic click, so the parent <select>
+    // stays on whatever the keyboard opener fallback moved to. Commit the
+    // named option the same way the raw-locator select path does
+    // (option.selected + input/change), synchronously, before the caller
+    // snapshots the control.
+    const nativeSelect = el.tagName === 'OPTION' && el.closest ? el.closest('select') : null;
+    if (nativeSelect) {
+      el.selected = true;
+      nativeSelect.dispatchEvent(new Event('input', { bubbles: true }));
+      nativeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }
     const type = (el.getAttribute && (el.getAttribute('type') || '') || '').toLowerCase();
     const isSubmit = (el.tagName === 'BUTTON' && type !== 'button' && type !== 'reset')
       || (el.tagName === 'INPUT' && type === 'submit');
@@ -385,11 +397,29 @@ pub fn build_scope_chain(scope: &[ScopeStep]) -> String {
 /// role+name matcher (an explicit scope means "only here": no document-wide
 /// fallback, no popup-surface preference). Empty `nameLit` resolves to the
 /// first visible candidate of the role.
+///
+/// Container roles the accessibility tree reports (`region`, `heading`, …)
+/// often have no `role` attribute: a named `<section>` is a region, `<h1>`–
+/// `<h6>` are headings. The implicit map lets a scope chain recorded from
+/// the snapshot resolve to those elements. Interactive roles stay on `map`.
 fn scoped_find_helper_js() -> String {
     r#"const __aqScopedFind = (roleLit, nameLit, root) => {
   const want = __aqText(nameLit);
   const map = %MAP%;
+  const implicit = {
+    region: ['section[aria-label]','section[aria-labelledby]','section[title]','[role=region]'],
+    heading: ['h1','h2','h3','h4','h5','h6','[role=heading]'],
+    navigation: ['nav','[role=navigation]'],
+    main: ['main','[role=main]'],
+    article: ['article','[role=article]'],
+    list: ['ul','ol','[role=list]'],
+    listitem: ['li','[role=listitem]'],
+    group: ['fieldset','[role=group]'],
+    form: ['form','[role=form]'],
+    dialog: ['dialog','[role=dialog]','[role=alertdialog]'],
+  };
   const sels = (roleLit && map[roleLit]) ? map[roleLit]
+    : (roleLit && implicit[roleLit]) ? implicit[roleLit]
     : (roleLit ? ['[role="' + roleLit + '"]'] : Object.keys(map).reduce((a, k) => a.concat(map[k]), []));
   const cands = Array.from(root.querySelectorAll(sels.join(',')));
   if (!want) return cands.filter(__aqVisible)[0] || cands[0] || null;
@@ -1256,6 +1286,16 @@ mod tests {
     }
 
     #[test]
+    fn native_option_pick_commits_selected_on_the_parent_select() {
+        let js = build_role_name_click("option", "Admin");
+        assert!(js.contains("el.tagName === 'OPTION'"), "{js}");
+        assert!(js.contains("el.closest('select')"), "{js}");
+        assert!(js.contains("el.selected = true"), "{js}");
+        assert!(js.contains("new Event('input'"), "{js}");
+        assert!(js.contains("new Event('change'"), "{js}");
+    }
+
+    #[test]
     fn role_name_click_embeds_name_role_and_chain() {
         let js = build_role_name_click("combobox", "Select a license");
         assert!(js.contains("Select a license"));
@@ -1344,6 +1384,30 @@ mod tests {
             "{js}"
         );
         assert!(js.contains("document.evaluate"), "{js}");
+    }
+
+    #[test]
+    fn scoped_find_resolves_implicit_region_and_heading() {
+        let js = build_scoped_role_act(
+            "button",
+            "Edit",
+            &[ScopeStep::Role {
+                role: "region".into(),
+                name: "Bea".into(),
+            }],
+            browser::RoleAct::Click,
+            None,
+        );
+        assert!(
+            js.contains("section[aria-label]"),
+            "named section is a region in the accessibility tree: {js}"
+        );
+        assert!(js.contains("[role=region]"), "{js}");
+        assert!(js.contains("'h1'"), "{js}");
+        assert!(
+            js.contains("__aqScopedFind(\"region\", \"Bea\", r)"),
+            "{js}"
+        );
     }
 
     #[test]

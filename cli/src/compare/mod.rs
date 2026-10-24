@@ -1,6 +1,4 @@
-//! `compare` verb — diff per-step ARIA snapshots between two replay runs.
-//!
-//! Scope (the N-way star pattern lands later):
+//! `compare` verb — diff two replay runs.
 //!
 //!   agent-qa compare <sid> [<runA>] [<runB>]
 //!
@@ -8,16 +6,10 @@
 //!   - One run id  → compare that run against the previous one
 //!   - Two run ids → compare them directly
 //!
-//! For each step that has a snapshot file in BOTH runs, generate a
-//! unified diff and write it to:
-//!
-//!   <sid>/compare/<TS>__<runA>-vs-<runB>/snapshots/<stepId>.diff
-//!
-//! Plus a top-level compare.md with a one-line summary per step
-//! (CHANGED / SAME / MISSING).
-//!
-//! Exit code: 0 always (compare reports; the caller decides what to do
-//! with the results). `--strict` flips that to non-zero on any change.
+//! Writes `<sid>/compare/<TS>__<runA>-vs-<runB>/` with per-step ARIA
+//! snapshot diffs, screenshot diffs, and a `compare.md` that also
+//! summarizes network logs. Exit code is 0 unless `--strict` is set
+//! and a snapshot, screenshot, or network entry changed.
 
 use std::fs;
 use std::io::Write;

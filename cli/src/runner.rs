@@ -1,28 +1,14 @@
 //! scenario/2 replay runner.
 //!
-//! Lifecycle (mirrors the TS runner header):
+//! `run` loads and validates the scenario, mints `replays/<runId>/`,
+//! resolves inputs (declared defaults plus `--param` overrides), runs
+//! `env.open`, then dispatches each step (`verbs::dispatch_do` for `do`,
+//! `claims::dispatch_check` for `check`, after flattening `group` /
+//! `useTemplate` / `loop` / `when` / `include`). `env.close` still runs
+//! when a step fails. `scenario.json` is never mutated.
 //!
-//!   1. Load + validate the artifact against `scenario-schema.json`.
-//!   2. Mint `<runId>` and create `<scenarioDir>/replays/<runId>/`.
-//!   3. Write initial `audit.json` (`startedAt` + `scenarioContentHash`).
-//!   4. Resolve `inputs` (declared defaults; CLI overrides land later).
-//!   5. Run `env.open[*]` as setup. `nav` is wired end-to-end. Every
-//!      other kind raises a structured `not-implemented` boundary so
-//!      consumers don't silently no-op.
-//!   6. Iterate `steps[]`. Each step:
-//!        a. render a live progress line to stderr (N/M counter +
-//!           pass/fail glyph in a TTY; a durable plain line when piped;
-//!           nothing under `--quiet`)
-//!        b. dispatch on `kind` — this path ships a placeholder that
-//!           always reports success and writes no sidecars. The real
-//!           `do` dispatcher and `check` handling live in the runner.
-//!   7. Run `env.close[*]` as teardown — best-effort, even on step
-//!      failure (matches spec).
-//!   8. Print the literal `SUMMARY: N/M (PASS|FAIL)` line to stderr +
-//!      write final `audit.json`.
-//!   9. Update `replays/latest.txt`.
-//!
-//! `scenario.json` is NEVER mutated. Sidecars are written atomically.
+//! Numbered comments inside `run` are the source of truth for the
+//! optional tails (notify, video, junit, baselines, auto-promote).
 #![allow(dead_code)]
 
 use std::collections::{BTreeMap, VecDeque};

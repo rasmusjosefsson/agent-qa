@@ -17,10 +17,9 @@
 //!   - Socket-stall detection: surfaced with an actionable hint, NOT
 //!     retried (the wedge persists across requests).
 //!
-//! This module ships only the cross-cutting infrastructure plus the most
-//! foundational helper (`open`). Each later verb adds the helpers it needs
-//! (click, fill, snapshot, screenshot, eval, …) — no megablob of unused
-//! API surface lands ahead of demand.
+//! Verb modules call the helpers below (`open`, `eval`, `click`, `fill`,
+//! and the rest). A module-level dead_code allow remains because a few
+//! helpers are kept for callers that have not switched over yet.
 #![allow(dead_code)]
 
 use std::collections::HashMap;

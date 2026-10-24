@@ -7,10 +7,11 @@
 //!   - `<runId>` = `<isoTimestamp>__<shortHash>[__<profile>]`
 //!     (8 random hex chars; profile only when it matches the safe
 //!     filename regex)
-//!   - per-kind subdirs (`snapshots/`, `screenshots/`, `screenshots/`,
-//!     `network/`, `probes/`, `perf/`) with `<stepId>.<ext>` keying
-//!     (LITERAL stepId — no zero-padded positional index)
+//!   - per-kind subdirs from [`SidecarKind`] (`snapshots/`, `screenshots/`,
+//!     `network/`, `probes/`, `perf/`, `layouts/`) with `<stepId>.<ext>`
+//!     keying (LITERAL stepId — no zero-padded positional index)
 //!   - `heal.jsonl` — one run-scoped JSONL of heal events
+//!   - `events.jsonl` / `status.json` — step stream and live cursor
 //!   - `audit.json` — run-level metadata
 //!   - `replays/latest.txt` — one-line pointer to latest `<runId>`
 //!   - atomic writes via `<path>.tmp` → rename
