@@ -75,6 +75,14 @@ mod tests {
     }
 
     #[test]
+    fn empty_translation_is_an_error() {
+        let dir = tempfile::TempDir::new().unwrap();
+        fs::write(dir.path().join("i18n.json"), r#"{"k": ""}"#).unwrap();
+        let e = resolve(dir.path(), "k").unwrap_err().to_string();
+        assert!(e.contains("no entry"), "{e}");
+    }
+
+    #[test]
     fn non_object_file_errors() {
         let dir = tempfile::TempDir::new().unwrap();
         fs::write(dir.path().join("i18n.json"), r#"["not", "an", "object"]"#).unwrap();

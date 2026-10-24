@@ -46,7 +46,7 @@ pub fn run(args: &[String]) -> Result<u8> {
 
 fn print_help() {
     println!(
-        "agent-qa heal-respond \u{2014} record a caller-driven heal response\n\nUsage:\n  agent-qa heal-respond <sid> --step <stepId>\n                                (--value <correctedValue> [--rationale <text>]\n                                 | --reject)\n                                [--run <runId>]\n\n--run defaults to <sid>/replays/latest.txt. The response file feeds into\n`replay --heal-from-run <runId>` (lands later) which overrides the step's\nvalue at dispatch time.\n\nDoes NOT touch the live tab \u{2014} re-running replay is the caller's job."
+        "agent-qa heal-respond \u{2014} record a caller-driven heal response\n\nUsage:\n  agent-qa heal-respond <sid> --step <stepId>\n                                (--value <correctedValue> [--rationale <text>]\n                                 | --reject)\n                                [--run <runId>]\n\n--run defaults to <sid>/replays/latest.txt. The response file feeds into\n`replay --heal-from-run <runId>`, which overrides the step's\nvalue at dispatch time.\n\nDoes NOT touch the live tab \u{2014} re-running replay is the caller's job."
     );
 }
 

@@ -83,9 +83,12 @@ flowchart LR
     Verbs --> Infrastructure
 ```
 
-Every verb is a module exporting a `pub fn run(args: &[String]) -> Result<u8>`.
 `main.rs` is the dispatcher; adding a verb is one mod entry plus one
-match arm.
+match arm. Most verbs export `pub fn run(args: &[String]) -> Result<u8>`.
+A few (`replay`, `baselines`, `init`, `migrate`, `compile` / `describe`,
+`ps`, `cleanup`) export a different entry with the same return type.
+The diagram above is the core record/replay path. The full verb list
+is `print_help` in `main.rs`.
 
 ## Recording flow
 
@@ -197,7 +200,7 @@ Default root: `<cwd>/tmp/agent-qa-scenarios/`. Override with
 | Recording verbs      | `start.rs`, `record_step.rs`, `fill_unique.rs`, `smart_click.rs`, `truncate.rs`, `flush.rs`, `verify.rs` |
 | Replay               | `runner.rs`, `verbs.rs`, `verb_shape.rs`, `claims.rs`, `env_ops.rs`, `value.rs`, `sidecar.rs` |
 | Compare              | `compare/mod.rs`, `compare/screenshots.rs`             |
-| Heal                 | `heal_respond.rs`, `heal_promote.rs`, `heal_apply.rs`, `runner.rs` (`--heal-from-run`) |
+| Heal                 | `heal_respond.rs`, `heal_promote.rs`, `heal_apply.rs`, `heal_list.rs`, `heal_chronic.rs`, `auto_heal.rs`, `runner.rs` (`--heal-from-run`) |
 | Profiles             | `profile_add.rs`, `profile_status.rs`, `profile_bootstrap.rs` |
 | Diagnostics          | `doctor.rs`, `byo_doctor.rs`, `perf_snapshot.rs`       |
 | Browser client       | `browser.rs`                                           |

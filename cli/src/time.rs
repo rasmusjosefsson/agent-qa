@@ -83,4 +83,17 @@ mod tests {
         let b = parse_iso_ms("2026-01-01T00:00:00").unwrap();
         assert_eq!(a, b);
     }
+
+    #[test]
+    fn parse_iso_ms_epoch_leap_day_and_millis_truncation() {
+        assert_eq!(parse_iso_ms("1970-01-01T00:00:00Z").unwrap(), 0);
+        // 2024-02-29 00:00:00Z. Extra fractional digits keep the first three.
+        assert_eq!(
+            parse_iso_ms("2024-02-29T00:00:00.000Z").unwrap(),
+            1_709_164_800_000
+        );
+        assert_eq!(parse_iso_ms("1970-01-01T00:00:00.1239Z").unwrap(), 123);
+        assert!(parse_iso_ms("1970-01-01").is_err());
+        assert!(parse_iso_ms("1970-01-01T00:00").is_err());
+    }
 }

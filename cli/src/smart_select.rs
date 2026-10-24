@@ -2,9 +2,12 @@
 //! description and auto-record the do/select step.
 //!
 //! `<desc>` describes the *control* ("the country picker"); `--value` is
-//! the option to choose. Fuzzy descriptions resolve through the
-//! configured `resolve` plugin; the recorded step keeps the concrete
-//! role+name so replay never needs it.
+//! the option to choose. The recorded `value` is a scenario/2 literal
+//! (`{"from":"literal","literal":…}`), the same shape `smart-fill` writes.
+//! That draft is validated before the browser is touched, then dispatched
+//! through the same `select` path replay uses. Fuzzy descriptions resolve
+//! through the configured `resolve` plugin; the recorded step keeps the
+//! concrete role+name so replay never needs it.
 //!
 //! CLI shape:
 //!
@@ -54,7 +57,10 @@ pub fn run(args: &[String]) -> Result<u8> {
         "intent": format!("smart-select {}", opts.description),
         "verb": "select",
         "on": { "role": role, "name": name },
-        "value": opts.value,
+        // A bare string is not a scenario/2 Value (schema `oneOf` of
+        // `{from, literal|input|…}` objects). Validate this object before
+        // dispatch so a rejection cannot follow a select that already ran.
+        "value": { "from": "literal", "literal": opts.value },
     });
     let step = parse_draft(StepKind::Do, &payload, "s0")?;
     let mut scope = ValueScope::new(HashMap::new());
@@ -171,4 +177,106 @@ fn parse_args(args: &[String]) -> Result<Opts> {
         record,
         session,
     })
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::browser::{self, BrowserConnection};
+    use crate::paths;
+    use crate::recorder_state::RecorderBaseline;
+    use crate::schema;
+    use crate::test_util::lock_env;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use tempfile::TempDir;
+
+    #[test]
+    fn select_records_a_literal_value_object_not_a_string() {
+        let _guard = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("browser.log");
+        let binary = tmp.path().join("agent-browser");
+        // Snapshot must name the control so resolution succeeds without a
+        // resolve plugin. Evals answer `true` so the combobox select path
+        // (open, then activate the option) returns without a live browser.
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$3\" >> '{log}'\nif [ \"$3\" = snapshot ]; then printf '%s\\n' '- combobox \"Role\" [ref=e1]'; exit 0; fi\nif [ \"$3\" = eval ]; then printf '%s\\n' \"$4\" >> '{log}'; printf '%s\\n' true; exit 0; fi\nexit 0\n",
+            log = log.display(),
+        );
+        fs::write(&binary, script).unwrap();
+        let mut permissions = fs::metadata(&binary).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&binary, permissions).unwrap();
+        std::env::set_var(browser::BIN_ENV, &binary);
+        std::env::set_var(paths::SCENARIOS_DIR_ENV, tmp.path());
+        std::env::set_var(paths::RECORD_DIR_ENV, tmp.path().join("record"));
+        std::env::set_var("AGENT_QA_RECORD_SKIP_SIDECARS", "1");
+        browser::_reset_bin_cache_for_tests();
+        RecorderState::new(
+            "s1".into(),
+            "record".into(),
+            "default".into(),
+            RecorderBaseline::Fresh,
+            None,
+            BrowserConnection::default(),
+        )
+        .save()
+        .unwrap();
+
+        // The string form is not a Value. Rejecting it is a schema failure
+        // and does not reach the browser — dispatch only runs after the
+        // object form validates.
+        let string_value = json!({
+            "intent": "smart-select Role",
+            "verb": "select",
+            "on": { "role": "combobox", "name": "Role" },
+            "value": "Viewer",
+        });
+        let rejected = parse_draft(StepKind::Do, &string_value, "s0").unwrap_err();
+        let rejected = format!("{rejected:#}");
+        assert!(
+            rejected.contains("schema"),
+            "string value should fail schema validation, got {rejected}"
+        );
+        assert!(!log.exists(), "rejecting a string value must not dispatch");
+
+        run(&["Role".into(), "--value".into(), "Viewer".into()]).unwrap();
+
+        let state = RecorderState::load_active().unwrap();
+        let step = serde_json::to_value(&state.steps[0]).unwrap();
+        assert_eq!(step["kind"], "do");
+        assert_eq!(step["verb"], "select");
+        assert_eq!(step["on"]["role"], "combobox");
+        assert_eq!(step["on"]["name"], "Role");
+        assert!(step["value"].is_object());
+        assert!(step["value"].as_str().is_none());
+        assert_eq!(
+            step["value"],
+            json!({ "from": "literal", "literal": "Viewer" })
+        );
+        schema::validate_value(&json!({
+            "schema": "scenario/2",
+            "id": "recording-validation",
+            "intent": "validate recorded step",
+            "steps": [step],
+        }))
+        .unwrap();
+
+        let browser_log = fs::read_to_string(&log).unwrap();
+        assert!(
+            browser_log.contains("eval"),
+            "validated select must dispatch, log:\n{browser_log}"
+        );
+        assert!(
+            browser_log.contains("\"Viewer\""),
+            "dispatch must receive the literal option, log:\n{browser_log}"
+        );
+
+        std::env::remove_var(paths::SCENARIOS_DIR_ENV);
+        std::env::remove_var(paths::RECORD_DIR_ENV);
+        std::env::remove_var(browser::BIN_ENV);
+        std::env::remove_var("AGENT_QA_RECORD_SKIP_SIDECARS");
+        browser::_reset_bin_cache_for_tests();
+    }
 }
