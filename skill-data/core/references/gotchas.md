@@ -35,10 +35,18 @@
   `agent-qa aria-snapshot` when name-based matching itself is ambiguous.
 
 - **`smart-click` takes an accessible name, not a snapshot ref.** Supported
-  flags are `--role`, `--session`, and `--no-record`. It first tries native DOM
-  activation by role/name, then agent-browser role/name, text/chunk fallbacks,
-  and finally an internally resolved ref from a fresh ARIA snapshot. There is no
-  public `--ref` flag, stale-ref cross-check, or ambiguity error contract.
+  flags are `--role` (default `button`), repeatable `--scope <role> <name>`
+  (outermost container first), `--session`, and `--no-record`. It reads the
+  accessibility tree before clicking. When the requested role and name match
+  more than one node, the command fails without clicking or recording — a
+  scope is required. Example: `smart-click "Edit" --scope region Bea` records
+  `on.scope` as role locators and activates the control inside that ancestor.
+  If the requested role misses and exactly one interactive control has that
+  accessible name under another role (`link`, `checkbox`, `menuitem`, `tab`,
+  …), that role is clicked and recorded. Several interactive roles for the
+  same name fail as ambiguous. Raw text is only the fallback when no
+  interactive role+name matches. There is no public `--ref` flag and no `nth`
+  disambiguator.
 
 - **Resolve-plugin picks are gated by a confidence floor.** A configured
   `resolve` plugin's pick must report `confidence >= 0.85` (override via

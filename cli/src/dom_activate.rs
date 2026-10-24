@@ -397,11 +397,29 @@ pub fn build_scope_chain(scope: &[ScopeStep]) -> String {
 /// role+name matcher (an explicit scope means "only here": no document-wide
 /// fallback, no popup-surface preference). Empty `nameLit` resolves to the
 /// first visible candidate of the role.
+///
+/// Container roles the accessibility tree reports (`region`, `heading`, …)
+/// often have no `role` attribute: a named `<section>` is a region, `<h1>`–
+/// `<h6>` are headings. The implicit map lets a scope chain recorded from
+/// the snapshot resolve to those elements. Interactive roles stay on `map`.
 fn scoped_find_helper_js() -> String {
     r#"const __aqScopedFind = (roleLit, nameLit, root) => {
   const want = __aqText(nameLit);
   const map = %MAP%;
+  const implicit = {
+    region: ['section[aria-label]','section[aria-labelledby]','section[title]','[role=region]'],
+    heading: ['h1','h2','h3','h4','h5','h6','[role=heading]'],
+    navigation: ['nav','[role=navigation]'],
+    main: ['main','[role=main]'],
+    article: ['article','[role=article]'],
+    list: ['ul','ol','[role=list]'],
+    listitem: ['li','[role=listitem]'],
+    group: ['fieldset','[role=group]'],
+    form: ['form','[role=form]'],
+    dialog: ['dialog','[role=dialog]','[role=alertdialog]'],
+  };
   const sels = (roleLit && map[roleLit]) ? map[roleLit]
+    : (roleLit && implicit[roleLit]) ? implicit[roleLit]
     : (roleLit ? ['[role="' + roleLit + '"]'] : Object.keys(map).reduce((a, k) => a.concat(map[k]), []));
   const cands = Array.from(root.querySelectorAll(sels.join(',')));
   if (!want) return cands.filter(__aqVisible)[0] || cands[0] || null;
@@ -1366,6 +1384,30 @@ mod tests {
             "{js}"
         );
         assert!(js.contains("document.evaluate"), "{js}");
+    }
+
+    #[test]
+    fn scoped_find_resolves_implicit_region_and_heading() {
+        let js = build_scoped_role_act(
+            "button",
+            "Edit",
+            &[ScopeStep::Role {
+                role: "region".into(),
+                name: "Bea".into(),
+            }],
+            browser::RoleAct::Click,
+            None,
+        );
+        assert!(
+            js.contains("section[aria-label]"),
+            "named section is a region in the accessibility tree: {js}"
+        );
+        assert!(js.contains("[role=region]"), "{js}");
+        assert!(js.contains("'h1'"), "{js}");
+        assert!(
+            js.contains("__aqScopedFind(\"region\", \"Bea\", r)"),
+            "{js}"
+        );
     }
 
     #[test]
