@@ -346,7 +346,7 @@ Verbs:
   byo-doctor [--json]           Read-only enumeration of attachable CDP browsers
   perf-snapshot [--sid <sid>]   Capture navigation + paint timings
   fill-unique <Label> --template <…>   Fill a unique-token field + record
-  smart-click \"<name>\" [--role <r>]   Click by accessible name + auto-record
+  smart-click \"<name>\" [--role <r>] [--scope <role> <name>]   Click by accessible name + auto-record
   smart-fill \"<name>\" <value> [--role <r>]  Fill a field by accessible name + auto-record
   smart-assert \"<desc>\" [--role <r>]   Verify + record an element check by description
   smart-hover \"<desc>\" [--role <r>]    Hover an element by description + auto-record
