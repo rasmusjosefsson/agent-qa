@@ -150,6 +150,18 @@ fn activation_prelude() -> &'static str {
     try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) {}
     // A real mouse click focuses the element; synthetic events don't.
     try { el.focus(); } catch (e) {}
+    // Native <option> ignores a synthetic click, so the parent <select>
+    // stays on whatever the keyboard opener fallback moved to. Commit the
+    // named option the same way the raw-locator select path does
+    // (option.selected + input/change), synchronously, before the caller
+    // snapshots the control.
+    const nativeSelect = el.tagName === 'OPTION' && el.closest ? el.closest('select') : null;
+    if (nativeSelect) {
+      el.selected = true;
+      nativeSelect.dispatchEvent(new Event('input', { bubbles: true }));
+      nativeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }
     const type = (el.getAttribute && (el.getAttribute('type') || '') || '').toLowerCase();
     const isSubmit = (el.tagName === 'BUTTON' && type !== 'button' && type !== 'reset')
       || (el.tagName === 'INPUT' && type === 'submit');
@@ -1253,6 +1265,16 @@ mod tests {
         assert!(js.contains("button: 2"), "secondary button");
         assert!(js.contains("contextmenu"), "contextmenu event");
         assert!(js.contains("setTimeout"), "deferred past eval window");
+    }
+
+    #[test]
+    fn native_option_pick_commits_selected_on_the_parent_select() {
+        let js = build_role_name_click("option", "Admin");
+        assert!(js.contains("el.tagName === 'OPTION'"), "{js}");
+        assert!(js.contains("el.closest('select')"), "{js}");
+        assert!(js.contains("el.selected = true"), "{js}");
+        assert!(js.contains("new Event('input'"), "{js}");
+        assert!(js.contains("new Event('change'"), "{js}");
     }
 
     #[test]
