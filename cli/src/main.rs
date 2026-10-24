@@ -637,11 +637,19 @@ mod dispatch_audit {
             saw_browser_install,
             "setup prompt must install Chrome with `agent-qa browser install`"
         );
+        // A CRLF checkout (Windows CI) must see the same commands.
+        let crlf = PROMPT.replace('\n', "\r\n");
+        let crlf_verbs: usize = bash_fences(&crlf)
+            .iter()
+            .map(|block| agent_qa_args(block).len())
+            .sum();
+        assert_eq!(crlf_verbs, saw, "CRLF prompt dropped agent-qa commands");
     }
 
     fn bash_fences(src: &str) -> Vec<String> {
+        let normalized = src.replace("\r\n", "\n");
         let mut blocks = Vec::new();
-        let mut rest = src;
+        let mut rest = normalized.as_str();
         const OPEN: &str = "```bash\n";
         while let Some(start) = rest.find(OPEN) {
             let after = &rest[start + OPEN.len()..];
