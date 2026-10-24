@@ -638,7 +638,10 @@ mod dispatch_audit {
             "setup prompt must install Chrome with `agent-qa browser install`"
         );
         // A CRLF checkout (Windows CI) must see the same commands.
-        let crlf = PROMPT.replace('\n', "\r\n");
+        // `include_str!` already contains `\r\n` on that checkout, so
+        // normalize to LF before forcing CRLF. Replacing `\n` in a CRLF
+        // file would produce `\r\r\n` and hide every bash fence.
+        let crlf = PROMPT.replace("\r\n", "\n").replace('\n', "\r\n");
         let crlf_verbs: usize = bash_fences(&crlf)
             .iter()
             .map(|block| agent_qa_args(block).len())
