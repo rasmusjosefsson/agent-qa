@@ -145,8 +145,9 @@ Usage:
 Writes one local recorder-state.json file. The sealed scenario never includes browser connection settings.
 
 Only one recording can be active: `start` refuses while one is in flight —
-finish it with `agent-qa flush <sid>` first, or pass --force to abandon it
-(a stale recorder-state.json left by a killed process clears the same way).
+run `agent-qa flush` to finish the active recording, or `agent-qa start --force`
+to abandon it (a stale recorder-state.json left by a killed process clears
+the same way). `flush` takes flags only; it seals whichever recording is active.
 
 --browser-profile launches Chrome under a persistent profile (a profile
 name like \"Default\", or a directory path): cookies and history survive
@@ -171,9 +172,8 @@ fn start(opts: &Opts) -> Result<StartSummary> {
         Ok(Some(active)) => {
             if !opts.force {
                 bail!(
-                    "recording '{}' (sid {}) is already active — run `agent-qa flush {}` to finish it, or `start --force` to abandon it",
+                    "recording '{}' (sid {}) is already active — run `agent-qa flush` to finish it, or `agent-qa start --force` to abandon it",
                     active.intent,
-                    active.sid,
                     active.sid,
                 );
             }
@@ -516,6 +516,22 @@ mod tests {
         let err = start(&base(false)).unwrap_err().to_string();
         assert!(err.contains("already active"), "got: {err}");
         assert!(err.contains(&first.sid), "names the live sid: {err}");
+        assert!(
+            err.contains("recording 'p'"),
+            "names the live intent: {err}"
+        );
+        assert!(
+            err.contains("`agent-qa flush`"),
+            "tells the user to run agent-qa flush with no sid: {err}"
+        );
+        assert!(
+            err.contains("`agent-qa start --force`"),
+            "tells the user to run agent-qa start --force: {err}"
+        );
+        assert!(
+            !err.contains(&format!("flush {}", first.sid)) && !err.contains("flush <sid>"),
+            "must not tell the user to run flush <sid>: {err}"
+        );
         let second = start(&base(true)).unwrap();
         assert_ne!(first.sid, second.sid, "force mints a fresh sid");
         std::env::remove_var(paths::SCENARIOS_DIR_ENV);
