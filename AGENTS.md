@@ -38,3 +38,10 @@ CDP. Generic, plugin-based, vendor-neutral.
 2. Land code under the matching subdirectory of `cli/src/` (see
    `docs/architecture.md` for the layout).
 3. Add focused unit tests + add/update the parity gate.
+
+## Cursor Cloud specific instructions
+
+- `node` on `PATH` is Node 24 (`agent-browser` requires `>=24`; CI uses Node 24). `/usr/local/cargo/bin` is ahead of `/exec-daemon/node`, which is still Node 22. Rust is the stable toolchain via `rustup` (edition 2024). Bun is `/usr/local/bin/bun`.
+- Checks match `.github/workflows/ci.yml`. In `cli/`: `cargo test --locked`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo fmt --check`. In `npm/agent-qa`: `node --test test/*.test.js`. In `npm/agent-qa/web`: `npm run typecheck` and `npx vitest run` (run them from that directory). In `evals/`: `bun test golden/`.
+- `cargo test` does not launch Chrome. Record/replay proof is `scripts/ci-browser-contract.sh` with `AQ` set to a launcher whose sibling is `agent-browser`. `agent-browser install` caches Chrome for Testing under `~/.agent-browser`.
+- The workbench is `agent-qa web` at `http://127.0.0.1:7878`. Cloud Agent boot already starts it (`--no-open`). `npm --prefix npm/agent-qa run dev` rebuilds the debug CLI and binds the same port, so stop the boot server first if 7878 is taken. The UI bundle is gitignored; `npm --prefix npm/agent-qa run build:web` writes `npm/agent-qa/lib/public/`. Default scenarios root is `tmp/agent-qa-scenarios`.
