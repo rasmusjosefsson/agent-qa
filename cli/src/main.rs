@@ -338,7 +338,7 @@ Verbs:
   buffer list|delete|move|edit|clear|discard
                                 Inspect, edit, or discard the active recording
   flush                         Assemble scenario.json from the buffer
-  verify                        Check buffer ids, sidecars, and live claims
+  verify                        Check buffer ids, sidecars, and current claims
   truncate <N> [--archive-tag <slug>]   Drop steps ≥ N + archive sidecars
   profile-add <id> [flags]      Register a per-identity profile
   profile-status <id> [flags]   Probe profile auth via plugin
