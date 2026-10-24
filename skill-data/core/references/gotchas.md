@@ -29,7 +29,7 @@
   `Element not found`, even when that's the exact visible link text. For a
   name-based click, either use `agent-qa smart-click "<name>"` (does the
   fallback ladder AND auto-records — prefer this), or
-  `agent-qa browser find role <role> click --name "<name>"` /
+  `agent-qa browser --session <s> find role <role> click --name "<name>"` /
   `agent-qa browser find text "<text>" click` if you need the raw gesture
   without recording. Only fall back to an `@ref` from a fresh
   `agent-qa aria-snapshot` when name-based matching itself is ambiguous.
@@ -124,12 +124,15 @@
   verbs; a `type` step's `value` takes `{"from":"literal","literal":"…"}`
   or `{"from":"input","input":"<name>"}`.
 
-- **`agent-browser find role <role>` cannot filter by name.** `--name`
-  is rejected. To drive a named element by ref: take
-  `agent-qa browser --session <s> --json snapshot -i`, read `data.refs`
-  (a `ref → {role, name}` map), pick the matching `@eN`, then
-  `click @eN`/`fill @eN` — refs are driveable, and they pierce open
-  shadow roots where no css selector reaches.
+- **`find role` accepts `--name`.** This clicks the named control and exits 0
+  when that role and name are on the page:
+
+  ```bash
+  agent-qa browser --session <s> find role <role> click --name "<name>"
+  ```
+
+  `agent-qa browser --session qa-run find role button click --name "Save"`
+  is that command against a Save button.
 
 - **Role locators reach into open shadow DOM.** For pages whose inputs
   sit inside shadow roots (e.g. selectorshub's practice page), prefer
