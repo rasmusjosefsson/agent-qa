@@ -234,7 +234,8 @@ agent-browser and pings each plugin.
 | `AGENT_QA_NO_AUTO_RECOVER` | `1` disables agent-browser orphan-daemon auto-retry (debug only)    |
 | `AGENT_QA_NO_HEAL`         | Set disables the replay auto-heal loop entirely (CI fail-hard)      |
 | `AGENT_QA_HEAL_STRICT`     | Set fails a run that needed any heal, even though every step passed |
-| `AGENT_QA_CHAT_BACKEND`    | Workbench chat agent runtime: `pi` (default) or `opencode`          |
+| `AGENT_QA_CHAT_BACKEND`    | Workbench chat runtime: `auto` (default), `cursor`, `pi`, or `opencode`. `auto` uses the first available of cursor, pi, opencode. |
+| `AGENT_QA_CURSOR_BIN`      | Explicit path to the Cursor Agent CLI (`agent` or `cursor-agent`)   |
 | `AGENT_QA_PI_SDK`          | Explicit path to the pi SDK (`@earendil-works/pi-coding-agent`)     |
 | `AGENT_QA_OPENCODE_SDK`    | Explicit path to the opencode SDK (`@opencode-ai/sdk`, v2 surface)  |
 | `AGENT_QA_NO_CHAT`         | `1` disables the in-app Chat tab entirely                           |
@@ -242,6 +243,12 @@ agent-browser and pings each plugin.
 Credential provider variables (`VAULT_ADDR`, `OP_…`, `AWS_…`) belong to
 the `credentials` plugin you install, not to agent-qa — see its README.
 
-The `opencode` backend needs the `opencode` CLI on `PATH` (`npm i -g
-opencode-ai`) — each chat spawns its own `opencode serve` process with that
-chat's per-session env, while `pi` runs in-process via its SDK.
+The `cursor` backend shells the Cursor Agent CLI once per turn
+(`agent --print --output-format stream-json`). Resolution order is
+`AGENT_QA_CURSOR_BIN`, then `cursor-agent` on `PATH`, then `agent` on `PATH`.
+Install with `curl https://cursor.com/install -fsS | bash`. Auth is
+`CURSOR_API_KEY` in the environment, or an existing `agent login` — the key
+is not passed on the command line. The `opencode` backend needs the
+`opencode` CLI on `PATH` (`npm i -g opencode-ai`) — each chat spawns its own
+`opencode serve` process with that chat's per-session env, while `pi` runs
+in-process via its SDK.

@@ -27,6 +27,8 @@ import { createServer as createNetServer } from 'node:net';
 const PI_PKG = '@earendil-works/pi-coding-agent';
 const OPENCODE_PKG = '@opencode-ai/sdk';
 const OPENCODE_BIN = 'opencode';
+// Official Cursor install puts `agent` on PATH; `cursor-agent` is the older name.
+const CURSOR_INSTALL = 'curl https://cursor.com/install -fsS | bash';
 
 // 15 minutes of no chat activity tears the session down. A chat must survive
 // SSE reconnects (the session holds conversation state), so this is the one
@@ -969,7 +971,14 @@ export function detectChatBackends({ env = process.env, moduleUrl = import.meta.
     opencodeSdk = false;
   }
   const opencodeBin = whichOnPath(OPENCODE_BIN, env);
+  const cursorBin = cursorBinary(env);
   return {
+    cursor: {
+      id: 'cursor',
+      available: !!cursorBin,
+      binary: cursorBin,
+      install: CURSOR_INSTALL,
+    },
     pi: { id: 'pi', available: pi, install: 'npm i -g @earendil-works/pi-coding-agent' },
     opencode: {
       id: 'opencode',
@@ -1435,30 +1444,697 @@ export async function createOpencodeBackend(config = {}) {
   return hub;
 }
 
+// -------- cursor backend (Cursor Agent CLI, one headless turn per prompt) --------
+//
+// Unlike pi (in-process) and opencode (long-lived `opencode serve`), Cursor's
+// headless CLI is one process per turn:
+//   agent --print --output-format stream-json --stream-partial-output
+//         --force --trust --workspace <cwd> [--resume <id>] [--model <id>] <prompt>
+// stdout is NDJSON. We map it onto the same agent events the Chat reducer
+// already consumes. Auth is CURSOR_API_KEY in the environment or an existing
+// `agent login` — the key is never placed on argv and never logged.
+
+const CURSOR_TOOL_NAMES = {
+  readToolCall: 'read',
+  writeToolCall: 'write',
+  shellToolCall: 'shell',
+  bashToolCall: 'shell',
+  grepToolCall: 'grep',
+  editToolCall: 'edit',
+  globToolCall: 'glob',
+  deleteToolCall: 'delete',
+  lsToolCall: 'ls',
+};
+
+const CURSOR_SHORT_NAMES = new Set(['read', 'write', 'shell', 'grep', 'edit', 'glob', 'delete', 'ls']);
+
+/**
+ * AGENT_QA_CURSOR_BIN, else `cursor-agent` on PATH, else `agent` on PATH.
+ * An explicit path that does not exist does not fall through.
+ * @returns {string|null}
+ */
+function cursorBinary(env) {
+  const source = env || process.env;
+  const explicit = source.AGENT_QA_CURSOR_BIN;
+  if (explicit) return existsSync(explicit) ? explicit : null;
+  return whichOnPath('cursor-agent', source) || whichOnPath('agent', source);
+}
+
+function requireCursorBinary(env) {
+  const source = env || process.env;
+  if (source.AGENT_QA_CURSOR_BIN && !existsSync(source.AGENT_QA_CURSOR_BIN)) {
+    throw new Error(`AGENT_QA_CURSOR_BIN does not resolve: ${source.AGENT_QA_CURSOR_BIN}`);
+  }
+  const bin = cursorBinary(source);
+  if (!bin) throw new Error(`cursor CLI not found on PATH — install with ${CURSOR_INSTALL}`);
+  return bin;
+}
+
+function redactSecret(text, env) {
+  let out = String(text || '');
+  const key = env && env.CURSOR_API_KEY;
+  if (key && out.includes(key)) out = out.split(key).join('[redacted]');
+  return out;
+}
+
+function fieldPresent(ev, key) {
+  return !!ev && Object.prototype.hasOwnProperty.call(ev, key) && ev[key] != null;
+}
+
+function assistantEventText(ev) {
+  const content = ev && ev.message && ev.message.content;
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  let out = '';
+  for (const part of content) {
+    if (!part) continue;
+    if (typeof part === 'string') out += part;
+    else if (part.type === 'thinking') continue;
+    else if (typeof part.text === 'string') out += part.text;
+  }
+  return out;
+}
+
+/**
+ * Merge one assistant payload into text already shown this turn.
+ * Streaming deltas are chunks. A payload that repeats the shown prefix
+ * contributes only the unseen suffix; an exact repeat contributes nothing.
+ * Flush events (no partial-output fields, or the pre-tool duplicate) use
+ * the same suffix rule and do not re-append a segment already shown.
+ * @param {string} have
+ * @param {string} incoming
+ * @param {'delta'|'flush'} mode
+ */
+export function mergeAssistantText(have, incoming, mode) {
+  const shown = have || '';
+  const text = typeof incoming === 'string' ? incoming : '';
+  if (!text) return { next: shown, delta: '' };
+  if (!shown) return { next: text, delta: text };
+  if (text.startsWith(shown)) return { next: text, delta: text.slice(shown.length) };
+  if (mode === 'flush' && shown.endsWith(text)) return { next: shown, delta: '' };
+  if (mode === 'flush') return { next: shown + text, delta: text };
+  return { next: shown + text, delta: text };
+}
+
+function cursorToolName(key, fnName) {
+  if (key && CURSOR_TOOL_NAMES[key]) return CURSOR_TOOL_NAMES[key];
+  if (key && key.endsWith('ToolCall')) {
+    const lower = key.slice(0, -'ToolCall'.length).toLowerCase();
+    if (lower === 'bash') return 'shell';
+    return lower || 'tool';
+  }
+  if (fnName) {
+    const n = String(fnName).trim().toLowerCase();
+    if (n === 'bash') return 'shell';
+    if (CURSOR_SHORT_NAMES.has(n)) return n;
+    return n || 'tool';
+  }
+  return 'tool';
+}
+
+function parseToolArgs(value) {
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function describeCursorTool(toolCall) {
+  if (!toolCall || typeof toolCall !== 'object') {
+    return { name: 'tool', args: undefined, result: undefined };
+  }
+  if (toolCall.function && typeof toolCall.function === 'object') {
+    const fn = toolCall.function;
+    return {
+      name: cursorToolName(null, fn.name),
+      args: parseToolArgs(fn.arguments ?? fn.args),
+      result: fn.result,
+    };
+  }
+  const key = Object.keys(toolCall).find((k) => toolCall[k] && typeof toolCall[k] === 'object');
+  const body = (key && toolCall[key]) || {};
+  return { name: cursorToolName(key, null), args: body.args, result: body.result };
+}
+
+function cursorToolOutcome(result) {
+  if (result == null) return { isError: true, payload: result };
+  if (typeof result === 'object') {
+    if (Object.prototype.hasOwnProperty.call(result, 'success')) {
+      return { isError: false, payload: result.success };
+    }
+    return { isError: true, payload: result.error ?? result.failure ?? result };
+  }
+  return { isError: false, payload: result };
+}
+
+/**
+ * Parse `agent --list-models` stdout into picker rows.
+ * Accepts a JSON array (or `{models:[]}`) and the CLI's `id - label` lines.
+ * @returns {{provider:string,id:string,label:string}[]}
+ */
+export function parseCursorModelList(stdout) {
+  const text = String(stdout || '').trim();
+  if (!text) return [];
+  const models = [];
+  const push = (id, label) => {
+    const cleanId = String(id || '').trim();
+    if (!cleanId || !/^[A-Za-z0-9]/.test(cleanId)) return;
+    if (models.some((m) => m.id === cleanId)) return;
+    const cleanLabel = String(label || cleanId)
+      .trim()
+      .replace(/\s*\((?:current|default)\)\s*$/i, '');
+    models.push({ provider: 'cursor', id: cleanId, label: cleanLabel || cleanId });
+  };
+  if (text.startsWith('{') || text.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(text);
+      const rows = Array.isArray(parsed) ? parsed : parsed.models || parsed.data || [];
+      if (Array.isArray(rows)) {
+        for (const row of rows) {
+          if (typeof row === 'string') push(row, row);
+          else if (row && typeof row === 'object') {
+            push(row.id || row.model || row.name, row.label || row.displayName || row.name || row.id);
+          }
+        }
+        if (models.length) return models;
+      }
+    } catch {
+      /* fall through to line parsing */
+    }
+  }
+  for (const line of text.split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t) continue;
+    if (/^(available models|models)\b/i.test(t) && !/[-–—:]/.test(t)) continue;
+    let m = /^([A-Za-z0-9][\w.:/+-]{0,80})\s+[-–—:]\s+(.+)$/.exec(t);
+    if (m) {
+      push(m[1], m[2]);
+      continue;
+    }
+    m = /^[-*]\s+([A-Za-z0-9][\w.:/+-]{0,80})(?:\s+[-–—:]\s+(.+))?$/.exec(t);
+    if (m) {
+      push(m[1], m[2] || m[1]);
+      continue;
+    }
+    m = /^([A-Za-z0-9][\w.:/+-]{0,80})$/.exec(t);
+    if (m) push(m[1], m[1]);
+  }
+  return models;
+}
+
+function runCaptured(bin, args, { cwd, env, timeoutMs }) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let stdout = '';
+    let stderr = '';
+    let timer = null;
+    const finish = (row) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(row);
+    };
+    let child;
+    try {
+      child = spawn(bin, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (err) {
+      finish({ code: 1, stdout: '', stderr: String((err && err.message) || err), timedOut: false });
+      return;
+    }
+    timer = setTimeout(() => {
+      if (child.pid) {
+        try {
+          child.kill('SIGTERM');
+        } catch {
+          /* already gone */
+        }
+      }
+      finish({ code: null, stdout, stderr, timedOut: true });
+    }, timeoutMs);
+    if (typeof timer.unref === 'function') timer.unref();
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.once('error', (err) => {
+      finish({ code: 1, stdout, stderr: stderr || String((err && err.message) || err), timedOut: false });
+    });
+    child.once('close', (code) => {
+      finish({ code, stdout, stderr, timedOut: false });
+    });
+  });
+}
+
+function killProcessGroup(pid) {
+  if (!pid) return;
+  if (process.platform !== 'win32') {
+    try {
+      process.kill(-pid, 'SIGTERM');
+      return;
+    } catch {
+      /* not a group leader — fall through to the pid itself */
+    }
+  }
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch {
+    /* already gone */
+  }
+}
+
+async function listCursorModels(bin, env, cwd) {
+  const captured = await runCaptured(bin, ['--list-models', '--trust', '--workspace', cwd], {
+    cwd,
+    env,
+    timeoutMs: 8000,
+  });
+  if (captured.timedOut || captured.code !== 0) return [];
+  return parseCursorModelList(captured.stdout);
+}
+
+function cursorChildEnv(base, bashEnv) {
+  const extra = typeof bashEnv === 'function' ? bashEnv() || {} : bashEnv || {};
+  return { ...base, ...extra };
+}
+
+function makeCursorSessionAdapter({
+  bin,
+  env,
+  cwd,
+  bashEnv,
+  initialSessionId = null,
+  initialModelId = null,
+  onSessionId = () => {},
+  onModelId = () => {},
+  models,
+  listed,
+}) {
+  const subscribers = new Set();
+  let disposed = false;
+  let streaming = false;
+  let chain = Promise.resolve();
+  let activePid = null;
+  let aborted = false;
+  let sessionId = initialSessionId || null;
+  let selectedModelId = initialModelId || null;
+  let model = null;
+  if (selectedModelId) {
+    const found = (models() || []).find((m) => m.id === selectedModelId);
+    model = found || { provider: 'cursor', id: selectedModelId, label: selectedModelId };
+  }
+  const messages = [];
+
+  function emit(ev) {
+    if (!ev) return;
+    for (const cb of subscribers) {
+      try {
+        cb(ev);
+      } catch {
+        /* subscriber threw */
+      }
+    }
+  }
+
+  function rememberSession(id) {
+    if (!id) return;
+    sessionId = id;
+    onSessionId(id);
+  }
+
+  function noteInitModel(name) {
+    if (!name) return;
+    const available = models() || [];
+    const match = available.find((m) => m.id === name || m.label === name);
+    if (match) {
+      model = match;
+      return;
+    }
+    if (!listed()) {
+      const fallback = { provider: 'cursor', id: 'auto', label: name };
+      const list = models();
+      if (Array.isArray(list) && list.length) list[0] = fallback;
+      else if (Array.isArray(list)) list.push(fallback);
+      model = fallback;
+      return;
+    }
+    model = { provider: 'cursor', id: selectedModelId || 'auto', label: name };
+  }
+
+  const adapter = {
+    agent: { state: {} },
+    modelRegistry: {
+      find: (provider, id) =>
+        (models() || []).find((m) => m.id === id && (!provider || m.provider === provider)) || null,
+      getAvailable: () => models() || [],
+    },
+    subscribe(cb) {
+      subscribers.add(cb);
+      return () => subscribers.delete(cb);
+    },
+    prompt(text) {
+      const run = chain.then(() => runTurn(text));
+      chain = run.then(
+        () => {},
+        () => {},
+      );
+      return run;
+    },
+    async abort() {
+      aborted = true;
+      killProcessGroup(activePid);
+    },
+    setModel(m) {
+      if (!m || !m.id) throw new Error('model id is required');
+      selectedModelId = m.id;
+      onModelId(m.id);
+      model = {
+        provider: m.provider || 'cursor',
+        id: m.id,
+        label: m.label || m.id,
+        reasoning: !!m.reasoning,
+      };
+    },
+    setThinkingLevel() {
+      /* cursor print mode has no thinking-level control */
+    },
+    getAvailableThinkingLevels: () => [],
+    dispose() {
+      disposed = true;
+      aborted = true;
+      subscribers.clear();
+      killProcessGroup(activePid);
+    },
+  };
+
+  Object.defineProperty(adapter, 'isStreaming', { get: () => streaming });
+  Object.defineProperty(adapter, 'messages', { get: () => messages });
+  Object.defineProperty(adapter, 'model', { get: () => model });
+  Object.defineProperty(adapter, 'sessionId', { get: () => sessionId });
+
+  async function runTurn(text) {
+    if (disposed) return;
+    streaming = true;
+    aborted = false;
+    messages.push({ role: 'user', content: [{ type: 'text', text: String(text ?? '') }] });
+    try {
+      await spawnTurn(String(text ?? ''));
+    } finally {
+      streaming = false;
+      activePid = null;
+    }
+  }
+
+  function spawnTurn(text) {
+    return new Promise((resolve) => {
+      let streamed = '';
+      let textOpen = false;
+      let assistantMsg = null;
+      let turnFinished = false;
+      let stdoutBuf = '';
+      let stderr = '';
+      let settled = false;
+      const childEnv = cursorChildEnv(env, bashEnv);
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      const args = [
+        '--print',
+        '--output-format',
+        'stream-json',
+        '--stream-partial-output',
+        '--force',
+        '--trust',
+        '--workspace',
+        cwd,
+      ];
+      if (sessionId) args.push('--resume', sessionId);
+      if (selectedModelId) args.push('--model', selectedModelId);
+      args.push(text);
+
+      function endTurnOk() {
+        if (turnFinished) return;
+        turnFinished = true;
+        emit({ type: 'message_end' });
+        emit({ type: 'turn_end' });
+        emit({ type: 'agent_end' });
+      }
+      function endTurnError(message) {
+        if (turnFinished) return;
+        turnFinished = true;
+        emit({ type: 'error', message: redactSecret(message, childEnv) || 'cursor agent failed' });
+        emit({ type: 'agent_end' });
+      }
+      function endTurnAbort() {
+        if (turnFinished) return;
+        turnFinished = true;
+        emit({ type: 'agent_end' });
+      }
+      function emitText(delta) {
+        if (!delta) return;
+        if (!textOpen) {
+          emit({ type: 'message_update', assistantMessageEvent: { type: 'text_start' } });
+          textOpen = true;
+          assistantMsg = { role: 'assistant', content: [{ type: 'text', text: '' }] };
+          messages.push(assistantMsg);
+        }
+        emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta } });
+        const parts = assistantMsg.content;
+        const last = parts[parts.length - 1];
+        if (last && last.type === 'text') last.text += delta;
+        else parts.push({ type: 'text', text: delta });
+      }
+      function takeText(incoming, mode) {
+        const merged = mergeAssistantText(streamed, incoming, mode);
+        streamed = merged.next;
+        if (merged.delta) emitText(merged.delta);
+      }
+      function handleEvent(ev) {
+        if (!ev || typeof ev !== 'object') return;
+        if (ev.session_id) rememberSession(ev.session_id);
+        if (ev.type === 'system' && ev.subtype === 'init') {
+          noteInitModel(ev.model);
+          emit({ type: 'agent_start' });
+          return;
+        }
+        if (ev.type === 'thinking' && ev.subtype === 'delta' && ev.text) {
+          emit({
+            type: 'message_update',
+            assistantMessageEvent: { type: 'thinking_delta', delta: String(ev.text) },
+          });
+          return;
+        }
+        if (ev.type === 'assistant') {
+          // model_call_id marks the buffered pre-tool flush — always a duplicate.
+          if (fieldPresent(ev, 'model_call_id')) return;
+          const mode = fieldPresent(ev, 'timestamp_ms') ? 'delta' : 'flush';
+          takeText(assistantEventText(ev), mode);
+          return;
+        }
+        if (ev.type === 'tool_call') {
+          const info = describeCursorTool(ev.tool_call || ev.toolCall);
+          const toolCallId = ev.call_id || ev.callId || undefined;
+          if (ev.subtype === 'started') {
+            textOpen = false;
+            assistantMsg = null;
+            if (!messages.length || messages[messages.length - 1].role !== 'assistant') {
+              messages.push({ role: 'assistant', content: [] });
+            }
+            const host = messages[messages.length - 1];
+            if (host.role === 'assistant') {
+              host.content.push({
+                type: 'toolCall',
+                id: toolCallId,
+                name: info.name,
+                arguments: info.args,
+              });
+            }
+            emit({
+              type: 'tool_execution_start',
+              toolCallId,
+              toolName: info.name,
+              args: info.args,
+            });
+            return;
+          }
+          if (ev.subtype === 'completed') {
+            const outcome = cursorToolOutcome(info.result);
+            messages.push({
+              role: 'toolResult',
+              toolCallId,
+              toolName: info.name,
+              isError: outcome.isError,
+              content: outcome.payload,
+            });
+            emit({
+              type: 'tool_execution_end',
+              toolCallId,
+              toolName: info.name,
+              isError: outcome.isError,
+              result: outcome.payload,
+            });
+          }
+          return;
+        }
+        if (ev.type === 'result') {
+          if (ev.is_error || ev.subtype !== 'success') {
+            const message =
+              (typeof ev.result === 'string' && ev.result) ||
+              redactSecret(stderr.trim(), childEnv) ||
+              'cursor agent failed';
+            endTurnError(message);
+          } else {
+            endTurnOk();
+          }
+        }
+      }
+
+      let proc;
+      try {
+        proc = spawn(bin, args, {
+          cwd,
+          env: childEnv,
+          detached: true,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+      } catch (err) {
+        endTurnError((err && err.message) || String(err));
+        finish();
+        return;
+      }
+      activePid = proc.pid || null;
+      if (disposed || aborted) killProcessGroup(activePid);
+
+      const onLine = (line) => {
+        let parsed;
+        try {
+          parsed = JSON.parse(line);
+        } catch {
+          return;
+        }
+        handleEvent(parsed);
+      };
+      proc.stdout.on('data', (chunk) => {
+        stdoutBuf += chunk.toString();
+        let nl;
+        while ((nl = stdoutBuf.indexOf('\n')) >= 0) {
+          const line = stdoutBuf.slice(0, nl).replace(/\r$/, '').trim();
+          stdoutBuf = stdoutBuf.slice(nl + 1);
+          if (line) onLine(line);
+        }
+      });
+      proc.stderr.on('data', (chunk) => {
+        stderr += chunk.toString();
+        if (stderr.length > 16000) stderr = stderr.slice(-8000);
+      });
+      proc.once('error', (err) => {
+        if (!turnFinished) endTurnError((err && err.message) || String(err));
+        finish();
+      });
+      proc.once('close', (code, signal) => {
+        if (stdoutBuf.trim()) onLine(stdoutBuf.trim());
+        if (!turnFinished) {
+          if (disposed || aborted || signal) endTurnAbort();
+          else if (code !== 0) {
+            endTurnError(redactSecret(stderr.trim(), childEnv) || `cursor agent exited ${code}`);
+          } else endTurnOk();
+        }
+        finish();
+      });
+    });
+  }
+
+  return adapter;
+}
+
+/**
+ * Chat hub backed by the Cursor Agent CLI. Each prompt is one headless
+ * print run; session_id from the stream is reused via `--resume` until
+ * newSession() / a fresh create.
+ */
+export async function createCursorBackend(config = {}) {
+  const env = config.env || process.env;
+  const cwd = config.cwd || process.cwd();
+  const bin = requireCursorBinary(env);
+  let modelList = await listCursorModels(bin, env, cwd);
+  let modelsFromCli = modelList.length > 0;
+  if (!modelsFromCli) modelList = [{ provider: 'cursor', id: 'auto', label: 'Cursor' }];
+  let rememberedSessionId = null;
+  let selectedModelId = null;
+  const models = () => modelList;
+  const listed = () => modelsFromCli;
+
+  const createSession = ({ fresh } = {}) => {
+    if (fresh) rememberedSessionId = null;
+    return makeCursorSessionAdapter({
+      bin,
+      env,
+      cwd,
+      bashEnv: config.bashEnv,
+      initialSessionId: fresh ? null : rememberedSessionId,
+      initialModelId: selectedModelId,
+      onSessionId: (id) => {
+        rememberedSessionId = id;
+      },
+      onModelId: (id) => {
+        selectedModelId = id;
+      },
+      models,
+      listed,
+    });
+  };
+
+  return createChatHub({
+    createSession,
+    listModels: () => modelList,
+    idleMs: config.idleMs,
+    logger: config.logger,
+  });
+}
+
+function pickAutoChatBackend(det) {
+  if (det.cursor && det.cursor.available) return 'cursor';
+  if (det.pi && det.pi.available) return 'pi';
+  if (det.opencode && det.opencode.available) return 'opencode';
+  return 'cursor';
+}
+
 /**
  * Resolve the configured chat backend and return a ready chat hub.
  * @param {object} config
- * @param {string} [config.backend]    'pi' | 'opencode' — defaults to
- *   $AGENT_QA_CHAT_BACKEND, then 'pi' when its SDK resolves, else 'opencode'
- *   when usable. An explicit value is honored strictly (errors surface).
- * @param {string} [config.cwd]        cwd for skill/extension discovery (repo root).
+ * @param {string} [config.backend]    'cursor' | 'pi' | 'opencode' — defaults to
+ *   $AGENT_QA_CHAT_BACKEND, then the first available of cursor, pi, opencode.
+ *   An explicit value is honored strictly (errors surface).
+ * @param {string} [config.cwd]        cwd for skill discovery and `--workspace`.
  * @param {string} [config.agentDir]   global config dir (~/.pi/agent by default).
  * @param {string} [config.sdkPath]    explicit SDK path override.
  * @param {string[]} [config.tools]    tool allowlist (omit for full parity).
  * @param {number} [config.idleMs]
  * @param {(msg:string)=>void} [config.logger]
+ * @param {object|Function} [config.bashEnv]  env merged into the cursor/opencode child
+ *   so a turn sees this chat's AGENT_BROWSER_SESSION.
  */
 export async function createChatBackend(config = {}) {
   const env = config.env || process.env;
   let backend = config.backend || env.AGENT_QA_CHAT_BACKEND || null;
-  if (!backend) {
-    const det = detectChatBackends({ env });
-    backend = det.pi.available ? 'pi' : det.opencode.available ? 'opencode' : 'pi';
+  if (!backend || backend === 'auto') {
+    const det = detectChatBackends({ env, moduleUrl: config.moduleUrl });
+    backend = pickAutoChatBackend(det);
   }
-  if (backend !== 'opencode' && backend !== 'pi') {
-    throw new Error(`unknown chat backend "${backend}" — expected pi or opencode`);
+  if (backend !== 'opencode' && backend !== 'pi' && backend !== 'cursor') {
+    throw new Error(`unknown chat backend "${backend}" — expected cursor, pi, or opencode`);
   }
-  const hub = backend === 'opencode' ? await createOpencodeBackend(config) : await createPiBackend(config);
+  const hub =
+    backend === 'opencode'
+      ? await createOpencodeBackend(config)
+      : backend === 'cursor'
+        ? await createCursorBackend(config)
+        : await createPiBackend(config);
   // Stamp the backend id into /api/chat/state so the UI can label it.
   const getState = hub.getState;
   if (typeof getState === 'function') {
@@ -1511,4 +2187,9 @@ export const __internal = {
   spawnOpencodeServer,
   makeOpencodeSessionAdapter,
   freePort,
+  cursorBinary,
+  mergeAssistantText,
+  parseCursorModelList,
+  describeCursorTool,
+  cursorToolOutcome,
 };

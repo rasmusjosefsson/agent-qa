@@ -647,8 +647,8 @@ function ChatConversation({
             <ChatSetupNotice reason={state.reason} install={state.install} backend={state.backend} />
           )}
           <div className="flex items-center justify-between gap-2 border-b border-border px-2 py-1">
-            {/* Which backend is actually under the hood (pi vs opencode), the
-                active model, and cumulative usage — answers "am I on the
+            {/* Which backend is actually under the hood (cursor, pi, opencode),
+                the active model, and cumulative usage — answers "am I on the
                 cheap model?" at a glance. */}
             <span
               className="min-w-0 truncate px-1 text-[11px] text-muted-foreground"
@@ -1107,7 +1107,11 @@ function ConnectBar({ cid }: { cid: string }) {
 // CTA, not an error. The server names the backend + install command; the
 // pi command stays as fallback for older servers.
 const PI_INSTALL_CMD = 'npm i -g @earendil-works/pi-coding-agent'
-const BACKEND_LABELS: Record<string, string> = { pi: 'pi', opencode: 'opencode' }
+const BACKEND_LABELS: Record<string, string> = {
+  cursor: 'cursor',
+  pi: 'pi',
+  opencode: 'opencode',
+}
 
 function fmtTokens(n?: number | null): string {
   if (n == null || !Number.isFinite(n)) return ''
