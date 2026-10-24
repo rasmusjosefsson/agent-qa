@@ -881,8 +881,11 @@ fn select_option(
 ) -> anyhow::Result<()> {
     // Role+name combobox: open the opener, confirm a popup appeared (escalate
     // to the W3C keyboard opener contract if the click was swallowed), then
-    // pick the option by name via native DOM activation. Native `<select>` and
-    // raw-locator flows fall through to the DOM-mutation path below.
+    // pick the option by accessible name. A native `<option>` is committed
+    // inside that activation (`option.selected` + input/change — a synthetic
+    // click does not change the `<select>`). Raw locators use the
+    // DOM-mutation path below, which matches `option.value` or `option.text`
+    // against the same literal.
     if let Locator::Role(role) = loc {
         let opener_name =
             resolve_name_match(role.name.as_ref(), scope, scenario_dir)?.unwrap_or_default();
