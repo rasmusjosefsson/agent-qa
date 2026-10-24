@@ -1543,6 +1543,145 @@ test('cursor-login route hands the browser link to the chat tab and reloads mode
   assert.equal(reloaded, 1);
 });
 
+test('provider connect covers OpenAI and the other providers without echoing a key', async () => {
+  const { createProviderConnect } = await chatAgent();
+  const signed = new Set();
+  let lastSecret = null;
+  const openai = {
+    id: 'openai',
+    name: 'OpenAI',
+    auth: { oauth: { login() {} }, apiKey: { login() {} } },
+  };
+  const anthropic = {
+    id: 'anthropic',
+    name: 'Anthropic',
+    auth: { apiKey: { login() {} } },
+  };
+  const runtime = {
+    getProviders: () => [openai, anthropic],
+    getProvider: (id) => [openai, anthropic].find((provider) => provider.id === id),
+    checkAuth: async (id) => (signed.has(id) ? { type: 'api_key' } : undefined),
+    login: async (id, method, interaction) => {
+      if (method === 'oauth') {
+        interaction.notify({ type: 'auth_url', url: 'https://auth.openai.com/authorize?example=1' });
+        interaction.notify({ type: 'auth_url', url: 'http://evil.example/insecure' });
+        interaction.notify({
+          type: 'device_code',
+          userCode: 'ABCD-EFGH',
+          verificationUri: 'https://auth.openai.com/device',
+        });
+        return new Promise(() => {});
+      }
+      lastSecret = await interaction.prompt({ type: 'secret', message: 'API key', placeholder: 'sk-...' });
+      signed.add(id);
+      return { type: 'api_key' };
+    },
+  };
+  const connect = createProviderConnect({
+    cursorConnect: {
+      async status() {
+        return { state: 'logged-out', pending: false, url: null, message: 'Not logged in' };
+      },
+      async start() {
+        return {
+          state: 'logged-out',
+          pending: true,
+          url: 'https://cursor.com/loginDeepControl?challenge=example',
+          message: null,
+        };
+      },
+      cancel() {
+        return { state: 'logged-out', pending: false, url: null };
+      },
+    },
+    loadRuntime: async () => runtime,
+  });
+
+  const listed = await connect.list();
+  assert.deepEqual(
+    listed.providers.map((provider) => provider.id),
+    ['cursor', 'openai', 'anthropic'],
+  );
+  const started = await connect.start('openai', { method: 'oauth' });
+  assert.equal(started.pending, true);
+  assert.equal(started.url, 'https://auth.openai.com/authorize?example=1');
+  assert.equal(started.userCode, 'ABCD-EFGH');
+  assert.equal(started.verificationUri, 'https://auth.openai.com/device');
+  assert.equal(JSON.stringify(started).includes('evil.example'), false);
+
+  const saved = await connect.start('anthropic', { method: 'api_key', secret: 'sk-test-secret' });
+  assert.equal(saved.state, 'logged-in');
+  assert.equal(lastSecret, 'sk-test-secret');
+  assert.equal(JSON.stringify(saved).includes('sk-test-secret'), false);
+
+  const again = await connect.list();
+  assert.equal(again.providers.find((provider) => provider.id === 'anthropic').state, 'logged-in');
+  assert.equal(again.reload, true);
+  await assert.rejects(() => connect.start('nope'), /unknown provider/);
+});
+
+test('provider login route lists OpenAI and does not echo an API key', async (t) => {
+  const hub = makeStubHub();
+  const secret = 'sk-route-secret';
+  let seen = null;
+  const providerConnect = {
+    async list() {
+      return {
+        providers: [
+          { id: 'cursor', label: 'Cursor', state: 'logged-in', methods: ['oauth'], pending: false },
+          { id: 'openai', label: 'OpenAI', state: 'logged-out', methods: ['oauth', 'api_key'], pending: false },
+        ],
+      };
+    },
+    async start(_id, body) {
+      if (_id === 'nope') {
+        const error = new Error('unknown provider: nope');
+        error.code = 'unknown_provider';
+        throw error;
+      }
+      seen = body.secret || null;
+      return { id: 'openai', label: 'OpenAI', state: 'logged-in', methods: ['api_key'], pending: false };
+    },
+    cancel() {
+      return null;
+    },
+    cancelAll() {},
+  };
+  const { server, base } = await boot(fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-provider-login-')), {
+    chat: { hub },
+    providerConnect,
+  });
+  t.after(() => server.close());
+
+  const listed = await (await fetch(`${base}/api/chat/providers`)).json();
+  assert.ok(listed.providers.some((provider) => provider.id === 'openai' && provider.label === 'OpenAI'));
+
+  const bad = await fetch(`${base}/api/chat/providers/openai/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ method: 'wat' }),
+  });
+  assert.equal(bad.status, 400);
+
+  const login = await fetch(`${base}/api/chat/providers/openai/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ method: 'api_key', secret }),
+  });
+  assert.equal(login.status, 200);
+  const saved = await login.json();
+  assert.equal(saved.state, 'logged-in');
+  assert.equal(seen, secret);
+  assert.equal(JSON.stringify(saved).includes(secret), false);
+
+  const missing = await fetch(`${base}/api/chat/providers/nope/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ method: 'oauth' }),
+  });
+  assert.equal(missing.status, 404);
+});
+
 test('cursor auto-selects when its CLI is the first available backend', async () => {
   const { createChatBackend } = await chatAgent();
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-cursor-auto-'));

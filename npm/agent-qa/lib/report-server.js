@@ -3998,7 +3998,13 @@ function createChatManager(deps, root) {
   }
 
   function dispose() {
-    if (deps && deps.cursorConnect && typeof deps.cursorConnect.cancel === 'function') {
+    if (deps && deps.providerConnect && typeof deps.providerConnect.cancelAll === 'function') {
+      try {
+        deps.providerConnect.cancelAll();
+      } catch {
+        /* login already finished */
+      }
+    } else if (deps && deps.cursorConnect && typeof deps.cursorConnect.cancel === 'function') {
       try {
         deps.cursorConnect.cancel();
       } catch {
@@ -4116,6 +4122,36 @@ async function ensureCursorConnect(deps) {
   bag.cursorConnect = mod.createCursorConnect({ env: process.env, cwd: process.cwd() });
   if (deps) deps.cursorConnect = bag.cursorConnect;
   return bag.cursorConnect;
+}
+
+async function ensureProviderConnect(deps) {
+  if (deps && deps.providerConnect) return deps.providerConnect;
+  const bag = deps || {};
+  const url = pathToFileURL(path.join(__dirname, 'chat-agent.mjs')).href;
+  const mod = await import(url);
+  const cursor = await ensureCursorConnect(bag);
+  bag.providerConnect = mod.createProviderConnect({
+    cursorConnect: cursor,
+    env: process.env,
+    cwd: process.cwd(),
+  });
+  if (deps) deps.providerConnect = bag.providerConnect;
+  return bag.providerConnect;
+}
+
+function publicProvider(row) {
+  return {
+    id: row.id,
+    label: row.label,
+    state: row.state,
+    methods: row.methods || [],
+    pending: !!row.pending,
+    url: row.url || null,
+    userCode: row.userCode || null,
+    verificationUri: row.verificationUri || null,
+    message: row.message || null,
+    prompt: row.prompt || null,
+  };
 }
 
 function publicCursorAuth(snap) {
@@ -4252,6 +4288,54 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
   if (route === 'cursor-login/cancel' && req.method === 'POST') {
     const connect = await ensureCursorConnect(deps);
     return sendJson(res, 200, publicCursorAuth(connect.cancel()));
+  }
+
+  // Every provider the chat can sign in: Cursor, OpenAI, and the rest of the
+  // pi catalog. OAuth returns a browser link. An API key is accepted once
+  // and handed to that provider's login; it is not echoed back.
+  if (route === 'providers' && req.method === 'GET') {
+    const connect = await ensureProviderConnect(deps);
+    const snap = await connect.list();
+    if (snap.reload && manager && typeof manager.reloadCursorModels === 'function') {
+      await manager.reloadCursorModels();
+    }
+    return sendJson(res, 200, { providers: (snap.providers || []).map(publicProvider) });
+  }
+  {
+    const providerRoute = /^providers\/([^/]+)\/(login|cancel)$/.exec(route);
+    if (providerRoute && req.method === 'POST') {
+      const providerId = providerRoute[1];
+      if (!isSafeSegment(providerId)) return badRequest(res, 'bad provider id');
+      const connect = await ensureProviderConnect(deps);
+      if (providerRoute[2] === 'cancel') {
+        const row = connect.cancel(providerId);
+        return sendJson(res, 200, row ? publicProvider(row) : { ok: true });
+      }
+      let body = {};
+      try {
+        body = await readJsonBody(req);
+      } catch {
+        body = {};
+      }
+      if (body.secret != null && typeof body.secret !== 'string') return badRequest(res, 'secret must be a string');
+      if (typeof body.secret === 'string' && body.secret.length > 2000) return badRequest(res, 'secret is too long');
+      if (body.method != null && body.method !== 'oauth' && body.method !== 'api_key') {
+        return badRequest(res, 'method must be oauth or api_key');
+      }
+      try {
+        const row = await connect.start(providerId, {
+          method: body.method,
+          secret: body.secret,
+          answer: typeof body.answer === 'string' ? body.answer : undefined,
+        });
+        return sendJson(res, 200, publicProvider(row));
+      } catch (err) {
+        const code = err && err.code;
+        const message = String((err && err.message) || err);
+        if (code === 'unknown_provider') return sendJson(res, 404, { error: message });
+        return badRequest(res, message);
+      }
+    }
   }
 
   // ----- resolve the target chat -----
