@@ -114,6 +114,32 @@ export async function postPrompt(
   }
 }
 
+// Cursor CLI sign-in for the Chat tab. `url` is the one-time browser link
+// `agent login` prints; it stays null until that line arrives.
+export interface CursorAuth {
+  state: 'logged-in' | 'logged-out' | 'missing' | 'unknown'
+  pending?: boolean
+  url?: string | null
+  message?: string | null
+  install?: string
+}
+
+export async function getCursorAuth(): Promise<CursorAuth> {
+  try {
+    const r = await fetch('/api/chat/cursor-auth', { headers: { accept: 'application/json' } })
+    const body = await r.json().catch(() => ({}))
+    return body as CursorAuth
+  } catch {
+    return { state: 'unknown', message: 'unreachable' }
+  }
+}
+
+export async function startCursorLogin(): Promise<CursorAuth> {
+  const r = await fetch('/api/chat/cursor-login', { method: 'POST' })
+  const body = await r.json().catch(() => ({}))
+  return body as CursorAuth
+}
+
 export async function postAbort(cid: string): Promise<Response> {
   return fetch(`${chatBase(cid)}/abort`, { method: 'POST' }).catch(() => offline('report server'));
 }

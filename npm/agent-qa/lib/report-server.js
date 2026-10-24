@@ -3911,6 +3911,13 @@ function createChatManager(deps, root) {
       recordDir: () => (recordRoot ? path.join(recordRoot, browser.name) : null),
       isLive: () => resolvedHub != null,
       isBusy: () => !!(resolvedHub && resolvedHub.isStreaming),
+      // Cursor model catalog is read once, at hub start. After Chat-tab
+      // login the same hub re-reads it so the picker leaves the fallback row.
+      reloadModels() {
+        const hub = resolvedHub;
+        if (!hub || typeof hub.reloadModels !== 'function') return Promise.resolve(null);
+        return Promise.resolve(hub.reloadModels()).catch(() => null);
+      },
       getHub() {
         if (!chat) return Promise.resolve(null);
         if (chat.hub) {
@@ -4013,7 +4020,20 @@ function createChatManager(deps, root) {
     return first || create();
   }
 
+  async function reloadCursorModels() {
+    await Promise.all(
+      [...chats.values()].map((e) => (typeof e.reloadModels === 'function' ? e.reloadModels() : null)),
+    );
+  }
+
   function dispose() {
+    if (deps && deps.cursorConnect && typeof deps.cursorConnect.cancel === 'function') {
+      try {
+        deps.cursorConnect.cancel();
+      } catch {
+        /* login child already gone */
+      }
+    }
     // Close each chat's agent-browser daemon too (mirrors remove()). Without
     // this, quitting the server (SIGINT/SIGTERM) disposed the agents but left
     // every chat-<id> browser daemon running — they survived and piled up in
@@ -4059,6 +4079,7 @@ function createChatManager(deps, root) {
     get: (id) => chats.get(id) || null,
     list: () => Array.from(chats.values()).map(chatMeta),
     pruneGoneRecords,
+    reloadCursorModels,
     remove(id) {
       const e = chats.get(id);
       if (!e) return false;
@@ -4111,6 +4132,30 @@ function annotatePromptWithContext(deps, entry, text) {
   } catch {
     return text;
   }
+}
+
+// One login child per workbench. Tests inject `deps.cursorConnect`; the
+// real server builds it on first use from the Cursor CLI on PATH.
+async function ensureCursorConnect(deps) {
+  if (deps && deps.cursorConnect) return deps.cursorConnect;
+  const bag = deps || {};
+  if (bag.cursorConnect) return bag.cursorConnect;
+  const url = pathToFileURL(path.join(__dirname, 'chat-agent.mjs')).href;
+  const mod = await import(url);
+  bag.cursorConnect = mod.createCursorConnect({ env: process.env, cwd: process.cwd() });
+  if (deps) deps.cursorConnect = bag.cursorConnect;
+  return bag.cursorConnect;
+}
+
+function publicCursorAuth(snap) {
+  const body = {
+    state: snap.state,
+    pending: !!snap.pending,
+    url: snap.url || null,
+    message: snap.message || null,
+  };
+  if (snap.install) body.install = snap.install;
+  return body;
 }
 
 async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
@@ -4211,6 +4256,31 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
       });
     }
     return sendJson(res, 200, { ok: true });
+  }
+
+  // Cursor CLI login for the Chat tab. The CLI stays logged out until the
+  // user finishes the browser flow; the tab polls cursor-auth and opens the
+  // link `agent login` prints. The one-time URL is returned to this localhost
+  // caller and is not written to disk.
+  if (route === 'cursor-auth' && req.method === 'GET') {
+    const connect = await ensureCursorConnect(deps);
+    const snap = await connect.status();
+    if (snap.reload && manager && typeof manager.reloadCursorModels === 'function') {
+      await manager.reloadCursorModels();
+    }
+    return sendJson(res, 200, publicCursorAuth(snap));
+  }
+  if (route === 'cursor-login' && req.method === 'POST') {
+    const connect = await ensureCursorConnect(deps);
+    const snap = await connect.start();
+    if (snap.reload && manager && typeof manager.reloadCursorModels === 'function') {
+      await manager.reloadCursorModels();
+    }
+    return sendJson(res, snap.state === 'missing' ? 409 : 200, publicCursorAuth(snap));
+  }
+  if (route === 'cursor-login/cancel' && req.method === 'POST') {
+    const connect = await ensureCursorConnect(deps);
+    return sendJson(res, 200, publicCursorAuth(connect.cancel()));
   }
 
   // ----- resolve the target chat -----

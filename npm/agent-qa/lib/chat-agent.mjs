@@ -1706,6 +1706,214 @@ function killProcessGroup(pid) {
   }
 }
 
+/**
+ * Pull the one-time Cursor login URL out of `agent login` output.
+ * Only `https://cursor.com/login…` is accepted, so a noisy CLI cannot
+ * hand the workbench an off-site link to open.
+ * @param {string} text
+ * @returns {string|null}
+ */
+export function parseCursorLoginUrl(text) {
+  const m = /https:\/\/cursor\.com\/login[^\s)]+/.exec(String(text || ''));
+  if (!m) return null;
+  return m[0].replace(/[.,]+$/, '');
+}
+
+/**
+ * Read `agent status --format json`. `isAuthenticated` is the signal the
+ * CLI prints today; a text "Not logged in" is the fallback.
+ * @returns {{ state: 'logged-in'|'logged-out'|'unknown', message: string|null }}
+ */
+export function parseCursorAuthStatus(stdout, stderr, code) {
+  const text = String(stdout || '').trim();
+  let data = null;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = null;
+  }
+  if (data && typeof data === 'object') {
+    if (data.isAuthenticated === true) {
+      return { state: 'logged-in', message: data.message ? String(data.message) : null };
+    }
+    if (data.isAuthenticated === false) {
+      return { state: 'logged-out', message: data.message ? String(data.message) : 'Not logged in' };
+    }
+  }
+  const blob = `${stdout || ''}\n${stderr || ''}`;
+  if (/not logged in|unauthenticated|authentication required/i.test(blob)) {
+    return { state: 'logged-out', message: 'Not logged in' };
+  }
+  if (/\blogged in\b/i.test(blob)) return { state: 'logged-in', message: null };
+  if (code && code !== 0) {
+    return { state: 'unknown', message: stripLoginUrls(stderr) || `status exited ${code}` };
+  }
+  return { state: 'unknown', message: null };
+}
+
+function stripLoginUrls(text) {
+  return String(text || '')
+    .replace(/https?:\/\/\S+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * One Cursor login at a time for this workbench process. `agent login`
+ * stays up until the browser flow finishes; the Chat tab polls `status()`
+ * and opens the link the CLI prints. The login URL is never written to disk.
+ * @param {object} [config]
+ * @param {object} [config.env]
+ * @param {string} [config.cwd]
+ * @param {() => string|null} [config.resolveBin]
+ * @param {(bin: string) => Promise<{state: string, message: string|null}>} [config.runStatus]
+ * @param {typeof spawn} [config.spawnImpl]
+ */
+export function createCursorConnect(config = {}) {
+  const env = { ...(config.env || process.env) };
+  const cwd = config.cwd || process.cwd();
+  const resolveBin =
+    config.resolveBin ||
+    (() => {
+      try {
+        return requireCursorBinary(env);
+      } catch {
+        return null;
+      }
+    });
+  const runStatus =
+    config.runStatus ||
+    (async (bin) => {
+      const captured = await runCaptured(bin, ['status', '--format', 'json'], {
+        cwd,
+        env,
+        timeoutMs: 8000,
+      });
+      return parseCursorAuthStatus(captured.stdout, captured.stderr, captured.timedOut ? 1 : captured.code);
+    });
+  const spawnFn = config.spawnImpl || spawn;
+
+  let child = null;
+  let url = null;
+  let buffer = '';
+  let note = null;
+  // 'unknown' until the first status read, so an already-logged-in CLI
+  // does not look like a fresh sign-in (and does not reload models).
+  let lastState = 'unknown';
+
+  function view(state, message, reload) {
+    const missing = state === 'missing';
+    return {
+      state,
+      pending: child != null,
+      url: state === 'logged-in' ? null : url,
+      message: message || note || null,
+      ...(missing ? { install: CURSOR_INSTALL } : {}),
+      ...(reload ? { reload: true } : {}),
+    };
+  }
+
+  function absorb(chunk) {
+    buffer = (buffer + chunk).slice(-8192);
+    const found = parseCursorLoginUrl(buffer);
+    if (found) url = found;
+  }
+
+  function stopChild() {
+    const current = child;
+    if (!current) return;
+    child = null;
+    try {
+      current.kill('SIGTERM');
+    } catch {
+      /* already gone */
+    }
+  }
+
+  async function status() {
+    const bin = resolveBin();
+    if (!bin) return view('missing', 'cursor CLI not found');
+    let parsed;
+    try {
+      parsed = await runStatus(bin);
+    } catch (err) {
+      return view('unknown', stripLoginUrls((err && err.message) || err) || 'status failed');
+    }
+    const became = parsed.state === 'logged-in' && lastState === 'logged-out';
+    lastState = parsed.state;
+    if (parsed.state === 'logged-in') {
+      stopChild();
+      url = null;
+      note = null;
+    }
+    return view(parsed.state, parsed.message, became);
+  }
+
+  function waitForUrl(ms) {
+    const started = Date.now();
+    return new Promise((resolve) => {
+      const tick = () => {
+        if (url || !child || Date.now() - started >= ms) {
+          resolve();
+          return;
+        }
+        setTimeout(tick, 40);
+      };
+      tick();
+    });
+  }
+
+  async function start() {
+    const current = await status();
+    if (current.state === 'logged-in' || current.state === 'missing') return current;
+    if (child) return view(current.state === 'unknown' ? 'logged-out' : current.state, current.message);
+    const bin = resolveBin();
+    if (!bin) return view('missing', 'cursor CLI not found');
+    buffer = '';
+    url = null;
+    note = null;
+    const childEnv = { ...env, NO_OPEN_BROWSER: '1' };
+    let spawned;
+    try {
+      spawned = spawnFn(bin, ['login'], {
+        cwd,
+        env: childEnv,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (err) {
+      note = stripLoginUrls((err && err.message) || err) || 'login failed to start';
+      return view('logged-out', note);
+    }
+    child = spawned;
+    if (spawned.stdout && typeof spawned.stdout.on === 'function') {
+      spawned.stdout.on('data', (chunk) => absorb(chunk.toString()));
+    }
+    if (spawned.stderr && typeof spawned.stderr.on === 'function') {
+      spawned.stderr.on('data', (chunk) => absorb(chunk.toString()));
+    }
+    if (typeof spawned.once === 'function') {
+      spawned.once('error', (err) => {
+        note = stripLoginUrls((err && err.message) || err) || 'login failed';
+        if (child === spawned) child = null;
+      });
+      spawned.once('close', () => {
+        if (child === spawned) child = null;
+      });
+    }
+    await waitForUrl(3000);
+    return view(lastState === 'logged-in' ? 'logged-in' : 'logged-out', current.message);
+  }
+
+  function cancel() {
+    stopChild();
+    url = null;
+    buffer = '';
+    return view(lastState === 'logged-in' ? 'logged-in' : 'logged-out');
+  }
+
+  return { status, start, cancel };
+}
+
 async function listCursorModels(bin, env, cwd) {
   const captured = await runCaptured(bin, ['--list-models', '--trust', '--workspace', cwd], {
     cwd,
@@ -2089,12 +2297,23 @@ export async function createCursorBackend(config = {}) {
     });
   };
 
-  return createChatHub({
+  const hub = createChatHub({
     createSession,
     listModels: () => modelList,
     idleMs: config.idleMs,
     logger: config.logger,
   });
+  // Login happens after the hub is built, while the picker still holds the
+  // fallback "Cursor" row. Re-read the catalog once status flips to logged-in.
+  hub.reloadModels = async () => {
+    const fresh = await listCursorModels(bin, env, cwd);
+    if (fresh.length > 0) {
+      modelList = fresh;
+      modelsFromCli = true;
+    }
+    return modelList;
+  };
+  return hub;
 }
 
 function pickAutoChatBackend(det) {

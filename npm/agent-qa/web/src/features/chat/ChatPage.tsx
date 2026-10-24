@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -57,7 +58,10 @@ import {
   deleteChat,
   getRecording,
   getChatInfo,
+  getCursorAuth,
+  startCursorLogin,
   type ChatMeta,
+  type CursorAuth,
   type RecordingState,
 } from '@/lib/api'
 import {
@@ -490,8 +494,11 @@ function ChatConversation({
   leftPct: number
   setLeftPct: (value: number) => void
 }) {
-  const { state, root, sendPrompt, abort, setModel, setThinking, navigateBrowser } =
+  const { state, root, sendPrompt, abort, setModel, setThinking, navigateBrowser, refreshState } =
     useChat(cid)
+  const refreshAfterLogin = useCallback(() => {
+    refreshState()
+  }, [refreshState])
   const [text, setText] = useState('')
   const [copied, setCopied] = useState(false)
   const [infoOpen, setInfoOpen] = useState(false)
@@ -650,6 +657,9 @@ function ChatConversation({
     >
           {state.hydrated && !state.available && (
             <ChatSetupNotice reason={state.reason} install={state.install} backend={state.backend} />
+          )}
+          {state.available && state.backend === 'cursor' && (
+            <CursorConnectNotice onConnected={refreshAfterLogin} />
           )}
           <div className="flex items-center justify-between gap-2 border-b border-border px-2 py-1">
             {/* Which backend is actually under the hood (cursor, pi, opencode),
@@ -1116,6 +1126,96 @@ function ConnectBar({ cid }: { cid: string }) {
           {msg.text}
         </span>
       )}
+    </div>
+  )
+}
+
+// Cursor CLI is installed but logged out. Connect starts `agent login` and
+// opens the browser link it prints — the same "finish in the browser" step
+// a Connect button uses. The banner hides once status flips to logged-in.
+function CursorConnectNotice({ onConnected }: { onConnected: () => void }) {
+  const [auth, setAuth] = useState<CursorAuth | null>(null)
+  const [busy, setBusy] = useState(false)
+  const sawLoggedOut = useRef(false)
+  const told = useRef(false)
+
+  useEffect(() => {
+    let alive = true
+    let timer = 0
+    const tick = async () => {
+      const next = await getCursorAuth()
+      if (!alive) return
+      setAuth(next)
+      if (next.state === 'logged-in') {
+        if (sawLoggedOut.current && !told.current) {
+          told.current = true
+          onConnected()
+        }
+        return
+      }
+      if (next.state === 'logged-out' || next.state === 'unknown' || next.pending) {
+        sawLoggedOut.current = true
+      }
+      timer = window.setTimeout(() => void tick(), next.pending ? 1000 : 5000)
+    }
+    void tick()
+    return () => {
+      alive = false
+      window.clearTimeout(timer)
+    }
+  }, [onConnected])
+
+  if (!auth || auth.state === 'logged-in' || auth.state === 'missing') return null
+
+  const connect = async () => {
+    if (busy) return
+    setBusy(true)
+    try {
+      const next = await startCursorLogin()
+      setAuth(next)
+      if (next.url) window.open(next.url, '_blank', 'noopener,noreferrer')
+    } catch {
+      setAuth((prev) => ({
+        state: prev?.state || 'logged-out',
+        pending: prev?.pending,
+        url: prev?.url,
+        message: 'Could not start Cursor login.',
+      }))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const detail =
+    auth.message && !/not logged in/i.test(auth.message) ? auth.message : null
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-border bg-muted/30 px-4 py-2.5">
+      <LogInIcon className="size-4 shrink-0 text-muted-foreground" />
+      <div className="min-w-0 flex-1 basis-56">
+        <div className="text-[13px] font-semibold tracking-tight">Connect Cursor</div>
+        <div className="truncate text-xs text-muted-foreground" title={detail || undefined}>
+          {detail || 'Sign in once in the browser. This chat uses that login, then loads the model list.'}
+        </div>
+      </div>
+      {auth.url ? (
+        <a
+          href={auth.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-[12px] text-foreground shadow-sm transition-colors hover:bg-muted"
+        >
+          Open the login page
+        </a>
+      ) : null}
+      <button
+        type="button"
+        onClick={() => void connect()}
+        disabled={busy}
+        className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:opacity-60"
+      >
+        {busy ? 'Starting login…' : auth.pending ? 'Waiting for the browser…' : 'Connect'}
+      </button>
     </div>
   )
 }
