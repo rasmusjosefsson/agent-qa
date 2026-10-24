@@ -140,6 +140,59 @@ export async function startCursorLogin(): Promise<CursorAuth> {
   return body as CursorAuth
 }
 
+// One row per provider the chat can sign in (Cursor, OpenAI, and the rest).
+export interface ProviderLoginPrompt {
+  type: string
+  message: string
+  placeholder?: string
+  options?: { id: string; label: string }[]
+}
+
+export interface ProviderAuth {
+  id: string
+  label: string
+  state: 'logged-in' | 'logged-out' | 'missing' | 'unknown'
+  methods?: Array<'oauth' | 'api_key'>
+  pending?: boolean
+  url?: string | null
+  userCode?: string | null
+  verificationUri?: string | null
+  message?: string | null
+  prompt?: ProviderLoginPrompt | null
+}
+
+export async function getProviderAuth(): Promise<ProviderAuth[]> {
+  try {
+    const r = await fetch('/api/chat/providers', { headers: { accept: 'application/json' } })
+    const body = await r.json().catch(() => ({}))
+    const rows = (body as { providers?: ProviderAuth[] }).providers
+    return Array.isArray(rows) ? rows : []
+  } catch {
+    return []
+  }
+}
+
+export async function startProviderLogin(
+  id: string,
+  body: { method?: 'oauth' | 'api_key'; secret?: string; answer?: string } = {}
+): Promise<ProviderAuth> {
+  const r = await fetch(`/api/chat/providers/${encodeURIComponent(id)}/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const parsed = await r.json().catch(() => ({}))
+  if (!r.ok) {
+    return {
+      id,
+      label: id,
+      state: 'unknown',
+      message: (parsed as { error?: string }).error || `login failed (${r.status})`,
+    }
+  }
+  return parsed as ProviderAuth
+}
+
 export async function postAbort(cid: string): Promise<Response> {
   return fetch(`${chatBase(cid)}/abort`, { method: 'POST' }).catch(() => offline('report server'));
 }

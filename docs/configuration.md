@@ -247,11 +247,15 @@ The `cursor` backend shells the Cursor Agent CLI once per turn
 (`agent --print --output-format stream-json`). Resolution order is
 `AGENT_QA_CURSOR_BIN`, then `cursor-agent` on `PATH`, then `agent` on `PATH`.
 Install with `curl https://cursor.com/install -fsS | bash`. The Chat tab
-shows **Connect** when that CLI is installed and logged out. Connect runs
-`agent login` on this machine and opens the browser link it prints. After
-the browser flow finishes, the model list reloads. `CURSOR_API_KEY` in the
-workbench environment is the other way in. The key is not passed on the
-command line. The `opencode` backend needs the
+shows **Connect** for every provider that is still signed out: Cursor,
+OpenAI, Anthropic, and the rest of the built-in catalog. Cursor runs
+`agent login` and opens the browser link it prints. Another provider uses
+the same banner: OAuth opens that provider's login page, and an API-key
+provider takes the key there. The key is handed to that provider's login
+once and is not written into the repo or placed on a command line. After a
+login finishes, the model list reloads. `CURSOR_API_KEY` and a provider
+environment variable such as `OPENAI_API_KEY` in the workbench process are
+the other way in. The `opencode` backend needs the
 `opencode` CLI on `PATH` (`npm i -g opencode-ai`) — each chat spawns its own
 `opencode serve` process with that chat's per-session env, while `pi` runs
 in-process via its SDK.
