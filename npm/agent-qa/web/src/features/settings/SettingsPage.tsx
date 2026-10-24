@@ -136,7 +136,7 @@ export function SettingsPage() {
                     <Label htmlFor="chat-backend">Agent backend</Label>
                     <p className="text-xs text-muted-foreground">
                       Which agent the Chat tab talks to. <span className="font-mono">auto</span>{' '}
-                      picks whichever backend is installed.
+                      picks the first installed backend (cursor, then pi, then opencode).
                     </p>
                   </div>
                   <Select
@@ -149,6 +149,7 @@ export function SettingsPage() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="auto">auto</SelectItem>
+                      <SelectItem value="cursor">cursor</SelectItem>
                       <SelectItem value="pi">pi</SelectItem>
                       <SelectItem value="opencode">opencode</SelectItem>
                     </SelectContent>

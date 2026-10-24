@@ -21,10 +21,10 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   return (await res.json()) as T
 }
 
-export type ChatBackend = 'auto' | 'pi' | 'opencode'
+export type ChatBackend = 'auto' | 'cursor' | 'pi' | 'opencode'
 
 export interface WorkbenchSettings {
-  chatBackend?: 'pi' | 'opencode'
+  chatBackend?: 'cursor' | 'pi' | 'opencode'
   headedDefault?: boolean
 }
 

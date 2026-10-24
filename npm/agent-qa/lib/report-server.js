@@ -2115,13 +2115,18 @@ function jevKeyEnv(jev) {
 // the UI can show which fields are env-forced.
 const settingsFile = (root) => path.join(root, '_config', 'settings.json');
 const SETTINGS_KEYS = ['chatBackend', 'headedDefault'];
+const CHAT_BACKENDS = ['pi', 'opencode', 'cursor'];
+
+function storedChatBackend(v) {
+  return CHAT_BACKENDS.includes(v) ? v : null;
+}
 
 async function readSettings(root) {
   const rec = await readJson(settingsFile(root));
   const out = {};
   if (rec) {
-    if (rec.chatBackend === 'pi' || rec.chatBackend === 'opencode')
-      out.chatBackend = rec.chatBackend;
+    const backend = storedChatBackend(rec.chatBackend);
+    if (backend) out.chatBackend = backend;
     if (typeof rec.headedDefault === 'boolean') out.headedDefault = rec.headedDefault;
   }
   return out;
@@ -2135,8 +2140,8 @@ async function writeSettings(root, patch) {
   if ('chatBackend' in patch) {
     const v = patch.chatBackend;
     if (v === null || v === '' || v === 'auto') delete next.chatBackend;
-    else if (v === 'pi' || v === 'opencode') next.chatBackend = v;
-    else throw new Error('chatBackend must be auto | pi | opencode');
+    else if (storedChatBackend(v)) next.chatBackend = v;
+    else throw new Error('chatBackend must be auto | pi | opencode | cursor');
   }
   if ('headedDefault' in patch) {
     if (typeof patch.headedDefault !== 'boolean')
@@ -2156,8 +2161,8 @@ function readSettingsSync(root) {
   try {
     const rec = JSON.parse(fs.readFileSync(settingsFile(root), 'utf8'));
     const out = {};
-    if (rec.chatBackend === 'pi' || rec.chatBackend === 'opencode')
-      out.chatBackend = rec.chatBackend;
+    const backend = storedChatBackend(rec.chatBackend);
+    if (backend) out.chatBackend = backend;
     if (typeof rec.headedDefault === 'boolean') out.headedDefault = rec.headedDefault;
     return out;
   } catch {
@@ -3570,15 +3575,23 @@ async function chatUnavailableFields(reason, root) {
     const url = pathToFileURL(path.join(__dirname, 'chat-agent.mjs')).href;
     const mod = await import(url);
     const det = mod.detectChatBackends();
-    const explicit =
+    let explicit =
       process.env.AGENT_QA_CHAT_BACKEND ||
-      (root ? (await readSettings(root)).chatBackend : null);
+      (root ? (await readSettings(root)).chatBackend : null) ||
+      null;
+    if (explicit === 'auto') explicit = null;
     const backend =
       explicit ||
-      (det.pi.available ? 'pi' : det.opencode.available ? 'opencode' : null) ||
-      // Nothing runnable: nudge toward whichever is closest to working —
-      // opencode SDK present but no CLI → install the CLI; else pi.
-      (det.opencode.sdkAvailable ? 'opencode' : 'pi');
+      (det.cursor && det.cursor.available
+        ? 'cursor'
+        : det.pi.available
+          ? 'pi'
+          : det.opencode.available
+            ? 'opencode'
+            : null) ||
+      // Nothing runnable: nudge toward the preferred backend, else whichever
+      // is closest (opencode SDK present but no CLI → install the CLI).
+      (det.cursor ? 'cursor' : det.opencode.sdkAvailable ? 'opencode' : 'pi');
     fields.backend = backend;
     fields.install = (det[backend] && det[backend].install) || null;
   } catch {

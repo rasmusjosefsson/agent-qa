@@ -23,7 +23,7 @@ export interface ChatUIState {
   // so it never flashes while a freshly-mounted chat is still hydrating.
   hydrated: boolean;
   reason?: string;
-  // Chat backend id ('pi' | 'opencode') + the install command the setup
+  // Chat backend id ('cursor' | 'pi' | 'opencode') + the install command the setup
   // nudge copies when the backend can't run.
   backend?: string;
   install?: string;
