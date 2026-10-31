@@ -2172,7 +2172,16 @@ function readSettingsSync(root) {
 
 // The payload both GET and POST return: stored values, env overrides, and the
 // resolved value each consumer actually uses.
-async function settingsPayload(root) {
+// The backend the running chat hub was configured with. A Settings change
+// is stored immediately but the hub is built once at boot, so the UI can
+// warn only when the stored choice differs from this.
+function bootedChatBackend(deps) {
+  const raw = deps && deps.chat && deps.chat.config && deps.chat.config.backend;
+  if (!raw || raw === 'auto') return 'auto';
+  return storedChatBackend(raw) || 'auto';
+}
+
+async function settingsPayload(root, deps) {
   const settings = await readSettings(root);
   const envBackend = process.env.AGENT_QA_CHAT_BACKEND || null;
   return {
@@ -2182,6 +2191,8 @@ async function settingsPayload(root) {
       chatBackend: envBackend || settings.chatBackend || 'auto',
       headedDefault: settings.headedDefault === true,
     },
+    // 'auto' when this process has no chat hub (tests, AGENT_QA_NO_CHAT).
+    booted: { chatBackend: bootedChatBackend(deps) },
     root,
   };
 }
@@ -4987,7 +4998,7 @@ function createRequestHandler(root, deps, chat) {
       // <root>/_config/settings.json. Response reports env-forced values too.
       if (segAll[0] === 'api' && segAll[1] === 'config' && segAll[2] === 'settings' && segAll.length === 3) {
         if (req.method === 'GET') {
-          return sendJson(res, 200, await settingsPayload(root));
+          return sendJson(res, 200, await settingsPayload(root, deps));
         }
         if (req.method === 'POST') {
           let body;
@@ -4997,7 +5008,7 @@ function createRequestHandler(root, deps, chat) {
           } catch (e) {
             return badRequest(res, String((e && e.message) || e));
           }
-          return sendJson(res, 200, await settingsPayload(root));
+          return sendJson(res, 200, await settingsPayload(root, deps));
         }
         return sendJson(res, 405, { error: 'method not allowed' });
       }

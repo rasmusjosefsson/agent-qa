@@ -36,7 +36,6 @@
       - listitem [level=1]
         - link "Goldens" [ref=e37]
           - StaticText "Goldens"
-        - StaticText "5"
   - generic
     - StaticText "SETUP"
     - list

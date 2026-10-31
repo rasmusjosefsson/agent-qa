@@ -4,6 +4,8 @@ import { BrowserModeToggle } from '@/components/browser-mode-toggle'
 import { TrendChip } from './TrendChip'
 import { cn } from '@/lib/utils'
 import { CameraIcon, GitCompareIcon, Loader2Icon, PlayIcon, PlusIcon, WrenchIcon } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { SpaLink } from '@/components/spa-link'
 import { acceptAllDomshots, acceptAllShots, runFileUrl } from '@/lib/runs-api'
 import { CompareView } from './CompareView'
 import { InsertCheckDialog } from './InsertCheckDialog' 
@@ -534,8 +536,13 @@ export function CenterPane({
         <div className="max-w-sm text-[13px] leading-relaxed text-muted-foreground">
           {hasAnyScenario
             ? 'Pick a scenario on the left to preview its steps, then press Replay.'
-            : 'Head to Chat and ask it to record a flow — it will show up here ready to replay.'}
+            : 'Describe a flow in Chat. The agent records it, and the scenario shows up here ready to replay.'}
         </div>
+        {!hasAnyScenario && (
+          <Button asChild size="sm">
+            <SpaLink href="/chat">Open Chat</SpaLink>
+          </Button>
+        )}
       </div>
     </Pane>
   )

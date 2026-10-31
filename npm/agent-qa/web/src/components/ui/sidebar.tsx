@@ -3,6 +3,7 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { Slot } from "radix-ui"
 
 import { useIsMobile } from "@/hooks/use-mobile"
+import { NAV_EVENT } from "@/router"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -65,6 +66,14 @@ function SidebarProvider({
 }) {
   const isMobile = useIsMobile()
   const [openMobile, setOpenMobile] = React.useState(false)
+
+  // In-app links don't reload the document, so the mobile sheet would stay
+  // open over the page you just picked. Close it on every committed navigation.
+  React.useEffect(() => {
+    const close = () => setOpenMobile(false)
+    window.addEventListener(NAV_EVENT, close)
+    return () => window.removeEventListener(NAV_EVENT, close)
+  }, [])
 
   // This is the internal state of the sidebar.
   // We use openProp and setOpenProp for control from outside the component.

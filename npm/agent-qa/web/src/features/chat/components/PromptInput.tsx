@@ -22,6 +22,7 @@ export interface PromptInputProps {
   onAbort: () => void
   available: boolean
   streaming: boolean
+  placeholder?: string
   models: ModelInfo[]
   model?: ModelInfo
   onModel: (provider?: string, id?: string) => void
@@ -38,6 +39,7 @@ export function PromptInput(props: PromptInputProps) {
     onAbort,
     available,
     streaming,
+    placeholder,
     models,
     model,
     onModel,
@@ -72,7 +74,10 @@ export function PromptInput(props: PromptInputProps) {
         onKeyDown={onKeyDown}
         rows={1}
         disabled={!available}
-        placeholder={available ? 'Message the agent…  (Enter to send, Shift+Enter for newline)' : 'Agent unavailable'}
+        placeholder={
+          placeholder ??
+          (available ? 'Message the agent…  (Enter to send, Shift+Enter for newline)' : 'Agent unavailable')
+        }
         className="w-full resize-none bg-transparent px-3.5 py-3 text-[13px] leading-relaxed outline-none placeholder:text-muted-foreground/70 disabled:opacity-60"
       />
       <div className="flex items-center justify-between gap-2 border-t border-border/60 px-2.5 py-2">

@@ -29,6 +29,23 @@ const runConfig: RunConfig = {
 }
 
 describe('CenterPane scenario controls', () => {
+  it('links an empty workbench to Chat', () => {
+    const runs = {
+      detail: null,
+      scenarioDef: null,
+      sel: { sid: null, runId: null, stepIdx: null },
+      runDefSteps: { sid: null, steps: null },
+      runsBySid: {},
+      scenarios: [],
+    } as unknown as RunsApi
+    const html = renderToStaticMarkup(
+      <CenterPane runs={runs} onReplay={() => {}} runConfig={runConfig} />
+    )
+    expect(html).toContain('Record your first scenario')
+    expect(html).toContain('href="/chat"')
+    expect(html).toContain('Open Chat')
+  })
+
   it('puts replay settings in their own wrapping row under the title', () => {
     const html = renderToStaticMarkup(
       <CenterPane runs={scenarioRuns()} onReplay={() => {}} runConfig={runConfig} />

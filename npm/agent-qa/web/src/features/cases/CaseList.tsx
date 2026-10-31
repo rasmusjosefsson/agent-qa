@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { getCases, upsertCase } from '@/lib/cases-api'
+import { SpaLink } from '@/components/spa-link'
 import { navigate } from '@/router'
 import type { CaseWithScenario } from './types'
 import { StatusBadge } from './status'
@@ -107,8 +108,11 @@ export function CaseList() {
             title="No test cases yet"
             description={
               <>
-                Create one from a plain-text test plan (numbered steps + an expected result), or
-                import from a source.
+                Write the steps and the expected result, or{' '}
+                <SpaLink href="/knowledge" className="font-medium text-foreground underline-offset-2 hover:underline">
+                  import from Knowledge
+                </SpaLink>
+                .
               </>
             }
             action={

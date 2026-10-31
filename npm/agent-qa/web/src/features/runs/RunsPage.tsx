@@ -7,6 +7,7 @@ import { StepDetail } from './components/StepDetail'
 import { ReplayLive } from './components/ReplayLive'
 import { Lightbox } from './components/Lightbox'
 import { isRunLive } from './rows'
+import { useMediaQuery } from '@/lib/useMediaQuery'
 import { effectiveSettings } from '@/lib/settings-api'
 import { Group, Panel, useDefaultLayout } from 'react-resizable-panels'
 import { ResizeHandle } from '@/components/ResizeHandle'
@@ -16,7 +17,13 @@ import type { EnvironmentRecord } from '@/features/environments/types'
 
 export function RunsPage() {
   const runs = useRuns()
-  const cols = useDefaultLayout({ id: 'aqa-runs-cols' })
+  // Phone widths can't hold the scenario list beside the run. Stack them;
+  // keep a separate layout id so a narrow session doesn't overwrite the
+  // desktop column widths.
+  const wide = useMediaQuery('(min-width: 768px)')
+  const wideLayout = useDefaultLayout({ id: 'aqa-runs-cols' })
+  const narrowLayout = useDefaultLayout({ id: 'aqa-runs-rows' })
+  const cols = wide ? wideLayout : narrowLayout
   const [lightbox, setLightbox] = useState<{ url: string; caption: string } | null>(null)
   const [replayErr, setReplayErr] = useState('')
 
@@ -134,7 +141,13 @@ export function RunsPage() {
       {/* Resizable full-bleed columns — drag the dividers to resize. The right
           column only exists once a run is open; otherwise the center empty
           state gets the room. */}
-      <Group orientation="horizontal" defaultLayout={cols.defaultLayout} onLayoutChanged={cols.onLayoutChanged} className="min-h-0 flex-1">
+      <Group
+        key={wide ? 'h' : 'v'}
+        orientation={wide ? 'horizontal' : 'vertical'}
+        defaultLayout={cols.defaultLayout}
+        onLayoutChanged={cols.onLayoutChanged}
+        className="min-h-0 flex-1"
+      >
         <Panel defaultSize={showRight ? "22" : "26"} minSize="14%" className="min-h-0">
           <ScenarioSidebar runs={runs} />
         </Panel>

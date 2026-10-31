@@ -2860,12 +2860,15 @@ test('GET/POST /api/config/settings round-trips and validates', async (t) => {
   const d0 = await (await j('GET', '/api/config/settings')).json();
   assert.equal(d0.effective.chatBackend, 'auto');
   assert.equal(d0.effective.headedDefault, false);
+  assert.equal(d0.booted.chatBackend, 'auto');
   assert.equal(d0.root, fx.root);
 
   // write both fields → persisted file + effective flip
   const d1 = await (await j('POST', '/api/config/settings', { chatBackend: 'opencode', headedDefault: true })).json();
   assert.equal(d1.effective.chatBackend, 'opencode');
   assert.equal(d1.effective.headedDefault, true);
+  // Stored choice does not retarget the hub this process already booted.
+  assert.equal(d1.booted.chatBackend, 'auto');
   const onDisk = JSON.parse(fs.readFileSync(path.join(fx.root, '_config', 'settings.json'), 'utf8'));
   assert.equal(onDisk.schema, 'settings/1');
   assert.equal(onDisk.chatBackend, 'opencode');
@@ -2890,6 +2893,13 @@ test('GET/POST /api/config/settings round-trips and validates', async (t) => {
   assert.equal(wat.status, 400);
   assert.match((await wat.json()).error, /cursor/);
   assert.equal((await j('POST', '/api/config/settings', { headedDefault: 'yes' })).status, 400);
+
+  // A hub configured at boot reports that backend, separate from the stored one.
+  const booted = await boot(fx.root, { chat: { config: { backend: 'pi' } } });
+  t.after(() => booted.server.close());
+  const dBoot = await (await fetch(`${booted.base}/api/config/settings`)).json();
+  assert.equal(dBoot.booted.chatBackend, 'pi');
+  assert.equal(dBoot.effective.chatBackend, 'cursor');
 });
 
 test('GET/POST /api/jev enables the bundled plugin and stores the key write-only', async (t) => {
