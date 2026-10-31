@@ -20,6 +20,9 @@ await runEdgeGolden(
     await b.assertElementText("#message", "It's gone!", "removal banner shown");
     await b.clickSelector("#checkbox-example button", "add the checkbox back");
     await b.waitSelector("#checkbox", "checkbox re-added");
-    await b.assertElementText("#message", "It's back!", "re-add banner shown");
+    // Banner text updates after the ajax round-trip that re-inserts the
+    // checkbox — wait on the message itself so we don't assert the stale
+    // "It's gone!" copy.
+    await b.waitSelectorText("#message", "It's back!", "re-add banner shown");
   },
 );

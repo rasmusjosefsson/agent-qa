@@ -1,5 +1,11 @@
 import { toRecordDraft } from "./record-translate";
-import { checkVisibleEval, clickTrustedOrVisible, selectVisibleEval, trustedOrVisible } from "./visible";
+import {
+  checkVisibleEval,
+  clickTrustedOrVisible,
+  fillSticky,
+  selectVisibleEval,
+  trustedOrVisible,
+} from "./visible";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -145,6 +151,11 @@ export async function runPracticeGolden(
     // Runs after flush with the produced scenario dir — write sidecar
     // files the scenario depends on (e.g. i18n.json for i18nKey names).
     beforeReplay?: (scenarioDir: string) => Promise<void> | void;
+    // Skip the default flush `pageError` notExists gate. Use when the
+    // live page itself throws a known hydration/framework error that is
+    // unrelated to the scenario under test (e.g. QA Playground date-picker
+    // React #418 on fill).
+    noAutoErrors?: boolean;
   },
 ): Promise<void> {
   const ctx = createContext(suite, tc, intent);
@@ -162,11 +173,11 @@ export async function runPracticeGolden(
       await record(ctx, "wait", { condition: { kind: "selector", selector: readySelector }, intent: `${suite} page rendered` });
     },
     async fill(selector, value, stepIntent) {
-      await run(ctx, `fill ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, value]);
+      await fillSticky(ctx, (n, c) => run(ctx, n, c), selector, value);
       await record(ctx, "action", { method: "fillBySelector", args: [selector, value], intent: stepIntent });
     },
     async typeText(selector, text, stepIntent) {
-      await run(ctx, `type ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "type", selector, text]);
+      await fillSticky(ctx, (n, c) => run(ctx, n, c), selector, text);
       await record(ctx, "action", { method: "fillBySelector", args: [selector, text], intent: stepIntent });
     },
     async clickSelector(selector, stepIntent) {
@@ -183,7 +194,12 @@ export async function runPracticeGolden(
       await record(ctx, "action", { method: "selectBySelector", args: [selector, value], intent: stepIntent });
     },
     async clearSelector(selector, stepIntent) {
-      await run(ctx, `clear ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, ""]);
+      // Keystroke clear matches replay's Verb::Clear — empty `fill` leaves
+      // React-controlled inputs visually blank but state-stale (and can
+      // trip hydration errors on some practice pages).
+      await run(ctx, `focus ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "focus", selector]);
+      await run(ctx, `press ctrl+a`, [ctx.agentBrowser, "--session", ctx.session, "press", "Control+a"]);
+      await run(ctx, `press backspace`, [ctx.agentBrowser, "--session", ctx.session, "press", "Backspace"]);
       await record(ctx, "action", { method: "clearBySelector", args: [selector], intent: stepIntent });
     },
     async focusSelector(selector, stepIntent) {
@@ -268,7 +284,9 @@ export async function runPracticeGolden(
     sid = start.match(/started sid=(\S+)/)?.[1] || "";
     await steps(golden);
     await run(ctx, "verify", [ctx.agentQa, "verify"]);
-    await run(ctx, "flush", [ctx.agentQa, "flush"]);
+    const flushCmd = [ctx.agentQa, "flush"];
+    if (opts?.noAutoErrors || suite === "date-picker") flushCmd.push("--no-auto-errors");
+    await run(ctx, "flush", flushCmd);
     if (opts?.beforeReplay && sid) {
       await opts.beforeReplay(resolve(ctx.scenariosRoot, sid));
     }

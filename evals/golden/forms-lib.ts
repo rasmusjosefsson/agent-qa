@@ -1,5 +1,11 @@
 import { toRecordDraft } from "./record-translate";
-import { checkVisibleEval, clickTrustedOrVisible, selectVisibleEval, trustedOrVisible } from "./visible";
+import {
+  checkVisibleEval,
+  clickTrustedOrVisible,
+  fillSticky,
+  selectVisibleEval,
+  trustedOrVisible,
+} from "./visible";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -124,7 +130,7 @@ export async function runFormsGolden(
       await record(ctx, "wait", { condition: { kind: "selector", selector: '[data-testid="form-login-inner"]' }, intent: "forms page rendered" });
     },
     async fill(selector, value, stepIntent) {
-      await run(ctx, `fill ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, value]);
+      await fillSticky(ctx, (n, c) => run(ctx, n, c), selector, value);
       await record(ctx, "action", { method: "fillBySelector", args: [selector, value], intent: stepIntent });
     },
     async clickSelector(selector, stepIntent) {

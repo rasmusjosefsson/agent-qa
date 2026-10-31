@@ -20,9 +20,44 @@ export function clickVisibleEval(selector: string): string {
   return `(() => { const el = ${pickVisible(selector)} ?? document.querySelector(${JSON.stringify(selector)}); if (!el) throw new Error("selector not found: " + ${JSON.stringify(selector)}); el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window })); el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window })); el.click(); return true; })()`;
 }
 
-/** eval: set a text field's value on the first visible match. */
+/**
+ * Sticky fill via the native value setter + input/change events.
+ *
+ * `agent-browser fill` reports success on React-controlled and constrained
+ * inputs (`type=date`, `type=number`, …) while leaving `el.value` empty —
+ * same gap replay already repairs in `verbs.rs::fill_or_act_via_selector`.
+ * Assigning `el.value = …` directly is also a no-op for controlled React
+ * inputs; the prototype setter + InputEvent is what sticks.
+ */
+export function stickyFillEval(selector: string, value: string): string {
+  return `(() => new Promise((resolve, reject) => {
+  const els = Array.from(document.querySelectorAll(${JSON.stringify(selector)}));
+  const el = els.find((n) => n.getClientRects().length > 0) || els[0];
+  if (!el) return reject(new Error("selector not found: " + ${JSON.stringify(selector)}));
+  const want = ${JSON.stringify(value)};
+  const apply = () => {
+    el.focus();
+    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+    if (setter) setter.call(el, want); else el.value = want;
+    el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: want }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  apply();
+  let n = 0;
+  const tick = () => {
+    if (el.value === want) return resolve(true);
+    if (++n > 20) return reject(new Error("fill did not stick on " + ${JSON.stringify(selector)} + ": got " + JSON.stringify(el.value)));
+    apply();
+    setTimeout(tick, 100);
+  };
+  setTimeout(tick, 50);
+}))()`;
+}
+
+/** @deprecated alias — prefer stickyFillEval (native setter). */
 export function fillVisibleEval(selector: string, value: string): string {
-  return `(() => { const el = ${pickVisible(selector)} ?? document.querySelector(${JSON.stringify(selector)}); if (!el) throw new Error("selector not found: " + ${JSON.stringify(selector)}); el.focus(); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); return true; })()`;
+  return stickyFillEval(selector, value);
 }
 
 /** eval: select option(s) on the first visible match (value or label). */
@@ -74,6 +109,26 @@ export async function trustedOrVisible(
       fallbackEval,
     ]);
   }
+}
+
+/**
+ * Live-drive a fill that actually sticks on React / constrained inputs.
+ * Prefer the sticky native-setter eval; `agent-browser fill` alone is a
+ * silent no-op on `type=date` and many controlled fields.
+ */
+export async function fillSticky(
+  ctx: { agentBrowser: string; session: string },
+  run: (name: string, command: string[]) => Promise<string>,
+  selector: string,
+  value: string,
+): Promise<void> {
+  await run(`fill ${selector}`, [
+    ctx.agentBrowser,
+    "--session",
+    ctx.session,
+    "eval",
+    stickyFillEval(selector, value),
+  ]);
 }
 
 /**

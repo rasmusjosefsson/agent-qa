@@ -1,5 +1,5 @@
 import { toRecordDraft } from "./record-translate";
-import { clickVisibleEval, pickVisible } from "./visible";
+import { clickVisibleEval, pickVisible, stickyFillEval } from "./visible";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -159,7 +159,7 @@ export async function runAutomationExerciseGolden(
         "--session",
         ctx.session,
         "eval",
-        `(() => new Promise((resolve, reject) => { const started = Date.now(); const tick = () => { const el = document.querySelector(${JSON.stringify(selector)}); if (el) { el.focus(); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); resolve(true); } else if (Date.now() - started > 5000) reject(new Error("selector not found")); else setTimeout(tick, 100); }; tick(); }))()`,
+        stickyFillEval(selector, value),
       ]);
       await record(ctx, "action", { method: "fillBySelector", args: [selector, value], intent: stepIntent });
     },
@@ -169,7 +169,7 @@ export async function runAutomationExerciseGolden(
         "--session",
         ctx.session,
         "eval",
-        `(() => new Promise((resolve, reject) => { const started = Date.now(); const tick = () => { const el = document.querySelector(${JSON.stringify(selector)}); if (el) { el.focus(); el.value = ${JSON.stringify(liveValue)}; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); resolve(true); } else if (Date.now() - started > 5000) reject(new Error("selector not found")); else setTimeout(tick, 100); }; tick(); }))()`,
+        stickyFillEval(selector, liveValue),
       ]);
       await record(ctx, "action", { method: "fillBySelector", args: [selector, replayValue], intent: stepIntent });
     },
