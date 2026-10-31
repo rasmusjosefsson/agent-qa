@@ -543,14 +543,56 @@ pub fn ensure_clipboard_access(session: &str, write: bool) -> Result<()> {
     } else {
         &["clipboard-read"]
     };
-    let origin = active_page_origin(session)?;
-    let _ = grant_permissions(session, perms, origin.as_deref())?;
-    let _ = emulate_override(
-        session,
-        "Emulation.setFocusEmulationEnabled",
-        json!({ "enabled": true }),
-    )?;
-    Ok(())
+    // Grant + focus on one pooled connection. Separate with_connection
+    // hops race the dedicated cdp_net reader and can reset mid-grant.
+    // Retry on transport blips — Chrome discards grants when the granting
+    // socket dies, so a soft-skip would leave writeText NotAllowedError.
+    let mut last = None;
+    for attempt in 1..=3 {
+        match ensure_clipboard_access_in(session, perms) {
+            Ok(()) => return Ok(()),
+            Err(e) if is_unavailable(&e) => return Ok(()),
+            Err(e) if e.to_string().contains("[transport]") => {
+                eprintln!("[v2-replay] clipboard cdp grant attempt {attempt}/3 reset: {e:#}");
+                last = Some(e);
+                std::thread::sleep(std::time::Duration::from_millis(50 * attempt as u64));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| anyhow!("clipboard cdp grant failed")))
+}
+
+fn ensure_clipboard_access_in(session: &str, perms: &[&str]) -> Result<()> {
+    with_connection(session, |conn| {
+        let page = active_page(conn)?;
+        let Some((target_id, url)) = page else {
+            return Ok(());
+        };
+        let origin = {
+            let o = url.split('/').take(3).collect::<Vec<_>>().join("/");
+            (o.starts_with("http://") || o.starts_with("https://")).then_some(o)
+        };
+        if let Some(origin) = origin.as_deref() {
+            for name in perms {
+                conn.call(
+                    "Browser.setPermission",
+                    json!({
+                        "permission": { "name": name },
+                        "setting": "granted",
+                        "origin": origin,
+                    }),
+                )?;
+            }
+        }
+        let sid = attach_flat(conn, &target_id)?;
+        conn.call_on(
+            "Emulation.setFocusEmulationEnabled",
+            json!({ "enabled": true }),
+            &sid,
+        )?;
+        Ok(())
+    })
 }
 /// Attach to the active page via flat session and switch on
 /// `Network.enable` there, so `webSocketCreated`/`webSocketFrame*`

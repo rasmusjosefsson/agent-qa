@@ -30,9 +30,11 @@ await runAutomationExerciseGolden("tc01", "Automation Exercise TC01 register use
   await golden.fillSelector('input[data-qa="mobile_number"]', "555010001", "enter mobile number");
   await golden.domClickSelector('button[data-qa="create-account"]', "create account");
   await golden.waitSelectorText('h2[data-qa="account-created"]', "Account Created!", "account created is visible");
-  // Continue often opens an ad interstitial; force-click and then wait for
-  // the logged-in chrome (live poll) before cleanup.
-  await golden.liveDomClickSelector('a[data-qa="continue-button"]', "continue after account creation");
+  // Skip the Continue CTA — it often opens an ad interstitial that blocks
+  // the recorded click on CI egress. Session cookie is already set, so a
+  // recorded home navigation lands on the logged-in chrome instead.
+  await golden.openUrl("https://www.automationexercise.com/", "open home after account creation");
   await golden.waitText(`Logged in as ${name}`, "logged-in username is visible");
-  await golden.liveDomClickSelector('a[href="/delete_account"]', "delete account cleanup");
+  await golden.domClickSelector('a[href="/delete_account"]', "delete account cleanup");
+  await golden.waitSelectorText('h2[data-qa="account-deleted"]', "Account Deleted!", "account deleted is visible");
 });

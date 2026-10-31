@@ -775,8 +775,32 @@ export async function runEdgeGolden(
     await run(ctx, "close record browser", [ctx.agentBrowser, "--session", ctx.session, "close"]).catch(() => "");
     // Cool-down before the replay session: sites like HN soft-gate when a
     // fresh browser hits them seconds after the recording session.
-    await new Promise((r) => setTimeout(r, Number(process.env.AGENT_QA_GOLDEN_REPLAY_COOLDOWN_MS || "5000")));
-    await run(ctx, "replay", [ctx.agentQa, "replay", sid, "--session", `${ctx.session}-replay`]);
+    const hnish = (opts.label || "").startsWith("hn");
+    const cooldownDefault = hnish ? "15000" : "5000";
+    const cooldownMs = Number(process.env.AGENT_QA_GOLDEN_REPLAY_COOLDOWN_MS || cooldownDefault);
+    const replayAttempts = hnish ? 3 : 1;
+    let replayErr: unknown;
+    for (let attempt = 1; attempt <= replayAttempts; attempt++) {
+      await new Promise((r) => setTimeout(r, attempt === 1 ? cooldownMs : cooldownMs + 5000 * (attempt - 1)));
+      try {
+        await run(ctx, `replay${attempt > 1 ? ` retry ${attempt}` : ""}`, [
+          ctx.agentQa,
+          "replay",
+          sid,
+          "--session",
+          `${ctx.session}-replay${attempt > 1 ? `-${attempt}` : ""}`,
+        ]);
+        replayErr = undefined;
+        break;
+      } catch (err) {
+        replayErr = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        // Soft-gate pages lack the ready selector; worth another cool-down.
+        if (!hnish || attempt === replayAttempts) throw err;
+        if (!/selector not found|soft-gate|not able to serve/i.test(msg)) throw err;
+      }
+    }
+    if (replayErr) throw replayErr;
     pass = true;
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);

@@ -1,10 +1,10 @@
 - generic [ref=e1] clickable [onclick]
   - list
     - listitem [level=1]
-      - link "agent-qa QA workbench · v0.1.2" [ref=e29]
+      - link "agent-qa QA workbench · v0.8.1" [ref=e29]
         - StaticText "agent-qa"
         - StaticText "QA workbench"
-        - StaticText " · v0.1.2"
+        - StaticText " · v0.8.1"
   - generic
     - StaticText "CREATE"
     - list
@@ -79,7 +79,7 @@
       - LabelText
         - StaticText "Agent backend"
       - paragraph
-        - StaticText "Which agent the Chat tab talks to. auto picks whichever backend is installed."
+        - StaticText "Which agent the Chat tab talks to. auto picks the first installed backend (cursor, then pi, then opencode)."
       - combobox "Agent backend" [expanded=false, ref=e7]: auto
         - generic [ref=e14] clickable [onclick]
           - StaticText "auto"
@@ -107,7 +107,7 @@
       - DescriptionList
         - term "Scenario root"
         - definition
-          - StaticText "/home/ubuntu/repos/agent-qa/evals/selftest/scenarios"
+          - StaticText "/workspace/evals/selftest/scenarios"
         - term "Settings file"
         - definition
-          - StaticText "/home/ubuntu/repos/agent-qa/evals/selftest/scenarios/_config/settings.json"
+          - StaticText "/workspace/evals/selftest/scenarios/_config/settings.json"
