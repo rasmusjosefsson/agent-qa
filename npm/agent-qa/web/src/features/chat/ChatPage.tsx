@@ -602,6 +602,11 @@ function ChatConversation({
   }, [seedPrompt, state.available, sendPrompt])
 
   const empty = state.items.length === 0
+  // pi reports an empty model list until someone logs a provider in. The
+  // composer looks ready either way — say so before a person writes a test
+  // the agent cannot run.
+  const needsModelLogin =
+    state.hydrated && state.available && state.backend === 'pi' && state.models.length === 0
 
   const activeThinkingId =
     state.curThinking != null && state.items[state.curThinking]?.kind === 'thinking'
@@ -615,14 +620,14 @@ function ChatConversation({
 
   const submit = () => {
     const t = text.trim()
-    if (!t || !state.available) return
+    if (!t || !state.available || needsModelLogin) return
     setText('')
     atBottomRef.current = true
     void sendPrompt(t)
   }
 
   const sendSuggestion = (prompt: string) => {
-    if (!state.available) return
+    if (!state.available || needsModelLogin) return
     atBottomRef.current = true
     void sendPrompt(prompt)
   }
@@ -702,6 +707,17 @@ function ChatConversation({
                     watch it live on the right.
                   </p>
                 </div>
+                {needsModelLogin && (
+                  <div className="w-full max-w-md rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-left text-[13px] leading-relaxed text-foreground">
+                    <div className="font-semibold">Sign in a model first</div>
+                    <p className="mt-1 text-muted-foreground">
+                      The agent can&apos;t record a test until a model is logged in. In a terminal, run{' '}
+                      <span className="font-mono text-foreground">pi</span>, then{' '}
+                      <span className="font-mono text-foreground">/login</span>
+                      . Restart the workbench and start a new chat.
+                    </p>
+                  </div>
+                )}
                 <ol className="flex flex-wrap items-center justify-center gap-x-2 gap-y-2 text-xs text-muted-foreground">
                   {HOW_IT_WORKS.map((h, i) => (
                     <li key={h.label} className="flex items-center gap-2">
@@ -722,7 +738,7 @@ function ChatConversation({
                       key={s.title}
                       type="button"
                       title={s.prompt}
-                      disabled={!state.available}
+                      disabled={!state.available || needsModelLogin}
                       onClick={() => sendSuggestion(s.prompt)}
                       className="group flex items-start gap-3 rounded-xl border text-left border-border bg-card p-3 shadow-xs transition-all hover:border-primary/35 disabled:pointer-events-none disabled:opacity-50"
                     >
@@ -762,7 +778,8 @@ function ChatConversation({
               onChange={setText}
               onSubmit={submit}
               onAbort={() => void abort()}
-              available={state.available}
+              available={state.available && !needsModelLogin}
+              placeholder={needsModelLogin ? 'Sign in a model to message the agent' : undefined}
               streaming={state.streaming}
               models={state.models}
               model={state.model}
@@ -1129,7 +1146,7 @@ function fmtCost(c?: number | null): string {
 function backendUsageLabel(backend?: string, model?: ModelInfo, usage?: ChatUsage | null): string {
   const parts: string[] = []
   if (backend) parts.push(BACKEND_LABELS[backend] || backend)
-  if (model) parts.push(model.label || model.id)
+  if (model && model.id && model.id !== 'unknown') parts.push(model.label || model.id)
   const cost = fmtCost(usage?.cost)
   const total = usage?.tokens?.total ?? ((usage?.tokens?.input || 0) + (usage?.tokens?.output || 0))
   if (cost) parts.push(cost)

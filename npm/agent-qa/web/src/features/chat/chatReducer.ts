@@ -16,6 +16,7 @@ import type {
   ModelInfo,
   SessionEvent,
 } from '@/lib/types';
+import { humanizeAgentError } from './humanizeAgentError';
 
 export interface ChatUIState {
   available: boolean;
@@ -329,7 +330,7 @@ function addError(state: ChatUIState, message: string): ChatUIState {
   const s = closeBubbles(state);
   return {
     ...s,
-    items: [...s.items, { kind: 'error', id, text: String(message) } as ChatItem],
+    items: [...s.items, { kind: 'error', id, text: humanizeAgentError(message) } as ChatItem],
     nextId: id + 1,
   };
 }

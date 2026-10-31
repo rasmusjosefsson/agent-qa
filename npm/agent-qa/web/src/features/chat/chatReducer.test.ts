@@ -83,6 +83,21 @@ describe('chatReducer — live streaming fold', () => {
     expect(s.items[0]).toMatchObject({ kind: 'error', text: 'kaboom' })
     expect(s.streaming).toBe(false)
   })
+
+  it('rewrites a missing model login into a human next step', () => {
+    const s = run([
+      ev({
+        type: 'error',
+        message:
+          'No API key found for the selected model.\n\nUse /login to log into a provider via OAuth or API key. See:\n  /workspace/node_modules/pi/docs/providers.md',
+      }),
+    ])
+    expect(s.items[0]).toMatchObject({ kind: 'error' })
+    const text = (s.items[0] as { text: string }).text
+    expect(text).toContain('no model login')
+    expect(text).toContain('pi')
+    expect(text).not.toContain('node_modules')
+  })
 })
 
 describe('chatReducer — rehydration (init_state)', () => {
