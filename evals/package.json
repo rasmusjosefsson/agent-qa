@@ -338,7 +338,7 @@
     "golden:expand-pages:tc01": "bun golden/expand-pages-tc01.ts",
     "golden:demoqa:tc01": "bun golden/demoqa-tc01.ts",
     "golden:demoqa-widgets:tc01": "bun golden/demoqa-widgets-tc01.ts",
-    "golden:demoqa-widgets:tc02": "bun golden/demoqa-widgets-tc02.ts",
+    "eval:demoqa-widgets:tc02": "bun golden/demoqa-widgets-tc02.ts",
     "golden:xyz:tc01": "bun golden/xyz-tc01.ts",
     "golden:xyz:tc02": "bun golden/xyz-tc02.ts",
     "golden:xyz:tc03": "bun golden/xyz-tc03.ts",

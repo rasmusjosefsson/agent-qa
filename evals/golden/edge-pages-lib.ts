@@ -508,6 +508,24 @@ export async function runEdgeGolden(
       await record(ctx, "wait", { condition: { kind: "selectorAbsent", selector }, intent: stepIntent });
     },
     async waitSelectorText(selector, text, stepIntent) {
+      // Live-poll: ephemeral UI (onblur validators that clear after 2s)
+      // would otherwise only be recorded and then miss at replay/verify.
+      const deadline = Date.now() + 10_000;
+      const needle = text;
+      for (;;) {
+        const probe = await run(ctx, `poll text ${selector}`, [
+          ctx.agentBrowser,
+          "--session",
+          ctx.session,
+          "eval",
+          `(() => { const el = document.querySelector(${JSON.stringify(selector)}); return el ? (el.textContent || "") : ""; })()`,
+        ]).catch(() => "");
+        if (probe.includes(needle)) break;
+        if (Date.now() > deadline) {
+          throw new Error(`${stepIntent}: ${selector} never contained ${JSON.stringify(needle)}`);
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
       await record(ctx, "wait", { condition: { kind: "selectorText", selector, text }, intent: stepIntent });
     },
     async waitLoad(state, stepIntent) {

@@ -192,12 +192,49 @@ export async function runAutomationExerciseGolden(
       await record(ctx, "assert", { kind: "url", args: [path], intent: stepIntent });
     },
     async waitSelector(selector, stepIntent) {
+      await run(ctx, `wait ${selector}`, [
+        ctx.agentBrowser,
+        "--session",
+        ctx.session,
+        "wait",
+        selector,
+      ]);
       await record(ctx, "wait", { condition: { kind: "selector", selector }, intent: stepIntent });
     },
     async waitSelectorText(selector, text, stepIntent) {
+      const deadline = Date.now() + 15_000;
+      for (;;) {
+        const probe = await run(ctx, `poll text ${selector}`, [
+          ctx.agentBrowser,
+          "--session",
+          ctx.session,
+          "eval",
+          `(() => { const el = document.querySelector(${JSON.stringify(selector)}); return el ? (el.textContent || "") : ""; })()`,
+        ]).catch(() => "");
+        if (probe.includes(text)) break;
+        if (Date.now() > deadline) {
+          throw new Error(`${stepIntent}: ${selector} never contained ${JSON.stringify(text)}`);
+        }
+        await new Promise((r) => setTimeout(r, 150));
+      }
       await record(ctx, "wait", { condition: { kind: "selectorText", selector, text }, intent: stepIntent });
     },
     async waitText(text, stepIntent) {
+      const deadline = Date.now() + 15_000;
+      for (;;) {
+        const probe = await run(ctx, `poll body text`, [
+          ctx.agentBrowser,
+          "--session",
+          ctx.session,
+          "eval",
+          `document.body ? (document.body.innerText || "") : ""`,
+        ]).catch(() => "");
+        if (probe.includes(text)) break;
+        if (Date.now() > deadline) {
+          throw new Error(`${stepIntent}: body never contained ${JSON.stringify(text)}`);
+        }
+        await new Promise((r) => setTimeout(r, 150));
+      }
       await record(ctx, "wait", { condition: { kind: "text", text }, intent: stepIntent });
     },
     async assertLiveCondition(expression, stepIntent) {

@@ -30,7 +30,9 @@ await runAutomationExerciseGolden("tc01", "Automation Exercise TC01 register use
   await golden.fillSelector('input[data-qa="mobile_number"]', "555010001", "enter mobile number");
   await golden.domClickSelector('button[data-qa="create-account"]', "create account");
   await golden.waitSelectorText('h2[data-qa="account-created"]', "Account Created!", "account created is visible");
-  await golden.domClickSelector('a[data-qa="continue-button"]', "continue after account creation");
+  // Continue often opens an ad interstitial; force-click and then wait for
+  // the logged-in chrome (live poll) before cleanup.
+  await golden.liveDomClickSelector('a[data-qa="continue-button"]', "continue after account creation");
   await golden.waitText(`Logged in as ${name}`, "logged-in username is visible");
   await golden.liveDomClickSelector('a[href="/delete_account"]', "delete account cleanup");
 });
