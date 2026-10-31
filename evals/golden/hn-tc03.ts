@@ -10,6 +10,7 @@ await runEdgeGolden(
   ".athing.submission",
   async (b) => {
     await b.openPage();
+    await b.waitMs(3000, "cool down before the item fetch (HN soft-gates rapid hops)");
     await b.clickSelector(
       ".athing.submission + tr td.subtext a[href^='item?id=']:last-of-type",
       "open the first story's comment thread",

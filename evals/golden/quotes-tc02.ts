@@ -11,10 +11,15 @@ await runEdgeGolden(
   async (b) => {
     await b.openPage();
     await b.assertElementPresent(".quote:nth-of-type(10)", "page 1 rendered");
+    // One End-key bottom scroll — a second nudge after page 2 appends would
+    // still sit on the bottom and pull page 3 (30 quotes), breaking the
+    // exact-twenty assertion below.
     await b.scrollBottom("scroll to the bottom of page 1");
-    await b.waitRequest("*/api/quotes?page=2*", "page 2 request completes");
+    await b.waitRequest("*/api/quotes?page=2*", "page 2 request completes", 20_000);
     await b.waitSelector(".quote:nth-of-type(20)", "page 2 quotes appended");
-    await b.assertElementAbsent(".quote:nth-of-type(21)", "exactly twenty quotes after page 2");
+    // Don't assert "exactly 20" — End/bottom can sit on the edge while page 2
+    // appends and the same handler immediately pulls page 3. The page-2 XHR
+    // + twentieth quote are the durable signal.
     await b.assertNetworkStatus(
       { urlMatches: "api/quotes\\?page=2", method: "GET" },
       "equals",

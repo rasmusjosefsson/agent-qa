@@ -13,7 +13,9 @@ await runEdgeGolden(
     await b.fillSelector("#password", "secret_sauce", "password");
     await b.clickSelector("#login-button", "log in");
     await b.waitSelector(".inventory_list", "inventory rendered");
-    await b.clickSelector("#react-burger-menu-btn", "open the menu");
+    // Force-click the burger: trusted click can miss the absolute-positioned
+    // react-burger overlay and leave the drawer closed.
+    await b.clickSelectorForce("#react-burger-menu-btn", "open the menu");
     await b.waitSelector("#logout_sidebar_link", "drawer rendered");
     await b.waitMs(800, "drawer animation settles — link click point clears the header");
     await b.clickSelectorForce("#logout_sidebar_link", "log out");

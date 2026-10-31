@@ -96,7 +96,7 @@ pub(crate) fn is_telemetry_url(url: &str) -> bool {
 /// Strip `;k=v` matrix params (e.g. `;jsessionid=…`) from each path segment —
 /// they are almost always session-scoped, so a claim matcher carrying one can
 /// never match a fresh session at replay.
-fn strip_matrix_params(url_path: &str) -> String {
+pub(crate) fn strip_matrix_params(url_path: &str) -> String {
     url_path
         .split('/')
         .map(|seg| seg.split(';').next().unwrap_or(seg))

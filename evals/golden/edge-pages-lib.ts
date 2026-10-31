@@ -253,18 +253,30 @@ export async function runEdgeGolden(
     ...ctx,
     async openPage() {
       // Live practice sites flake on first open/wait — retry a couple of
-      // times before failing the case (transient DNS/TLS/CDN blips).
+      // times before failing the case (DNS/TLS blips, HN "serve your
+      // requests this quickly" rate pages, Google sorry interstitials).
       const openAttempts = 3;
       let lastErr: unknown;
       for (let i = 1; i <= openAttempts; i++) {
         try {
           await run(ctx, `open ${pagePath}`, [ctx.agentBrowser, "--session", ctx.session, "open", pageUrl]);
+          const gate = await run(ctx, "probe soft-gate", [
+            ctx.agentBrowser,
+            "--session",
+            ctx.session,
+            "eval",
+            `(() => { const t = (document.body && document.body.innerText) || ""; if (/not able to serve your requests this quickly/i.test(t) || /unusual traffic from your computer network/i.test(t) || /www\\.google\\.com\\/sorry/i.test(location.href)) return "gated"; return "ok"; })()`,
+          ]).catch(() => "ok");
+          if (String(gate).includes("gated")) {
+            throw new Error(`open soft-gated (${pageUrl}); retrying`);
+          }
           await run(ctx, "wait page content", [ctx.agentBrowser, "--session", ctx.session, "wait", readySelector]);
           lastErr = undefined;
           break;
         } catch (err) {
           lastErr = err;
           if (i === openAttempts) throw err;
+          await new Promise((r) => setTimeout(r, 4000 * i));
         }
       }
       if (lastErr) throw lastErr;
@@ -359,7 +371,35 @@ export async function runEdgeGolden(
       await record(ctx, "action", { method: "dismissBySelector", args: [selector], intent: stepIntent });
     },
     async scrollBottom(stepIntent) {
-      await run(ctx, "scroll to bottom", [ctx.agentBrowser, "--session", ctx.session, "eval", "(() => { window.scrollTo(0, document.body.scrollHeight); })()"]);
+      // Prefer a real keyboard End — sites like quotes.toscrape bind
+      // jQuery $(window).on('scroll') and ignore synthetic scrollTo+Event
+      // dispatches (document.height vs body.scrollHeight also diverge).
+      // Fall back to an exact jQuery-height scrollTo if End is a no-op.
+      await run(ctx, "scroll End", [ctx.agentBrowser, "--session", ctx.session, "press", "End"]);
+      const atBottom = await run(
+        ctx,
+        "probe scroll bottom",
+        [
+          ctx.agentBrowser,
+          "--session",
+          ctx.session,
+          "eval",
+          "(() => { const docH = document.documentElement.scrollHeight || document.body.scrollHeight; const max = Math.max(0, docH - window.innerHeight); return Math.abs(window.scrollY - max) <= 2 ? 'bottom' : 'short'; })()",
+        ],
+      ).catch(() => "short");
+      if (!String(atBottom).includes("bottom")) {
+        await run(
+          ctx,
+          "scroll to bottom fallback",
+          [
+            ctx.agentBrowser,
+            "--session",
+            ctx.session,
+            "eval",
+            "(() => { const docH = document.documentElement.scrollHeight || document.body.scrollHeight; const max = Math.max(0, docH - window.innerHeight); window.scrollTo(0, max); })()",
+          ],
+        );
+      }
       await record(ctx, "action", { method: "scrollTop", args: [999999], intent: stepIntent });
     },
     async upload(selector, repoRelFixture, stepIntent) {
@@ -478,7 +518,10 @@ export async function runEdgeGolden(
       // completes, so steps that depend on the request's side effects (e.g.
       // an alert fired on ajax success) can observe them live.
       const deadline = Date.now() + timeoutMs;
-      const glob = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replaceAll("*", ".*");
+      // Escape regex metacharacters before turning * → .* — especially `?`
+      // (query strings like api/quotes?page=2), or the `?` becomes a quantifier
+      // and the match silently never fires.
+      const glob = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replaceAll("*", ".*");
       const re = new RegExp(glob);
       for (;;) {
         const probe = await run(ctx, `poll ${pattern}`, [
@@ -486,8 +529,18 @@ export async function runEdgeGolden(
           `JSON.stringify(performance.getEntriesByType('resource').map(e=>e.name))`,
         ]);
         try {
-          const names = JSON.parse(JSON.parse(probe).data ?? "[]") as string[];
-          if (names.some((n) => re.test(n))) break;
+          // agent-browser --json wraps eval as { data: { result: "<json>" } }
+          // (older builds used data: "<json>" directly).
+          const envelope = JSON.parse(probe) as { data?: unknown };
+          const raw = envelope.data;
+          const payload =
+            raw && typeof raw === "object" && raw !== null && "result" in raw
+              ? (raw as { result: unknown }).result
+              : raw;
+          const names = (
+            typeof payload === "string" ? JSON.parse(payload) : payload
+          ) as string[];
+          if (Array.isArray(names) && names.some((n) => re.test(n))) break;
         } catch { /* fall through to deadline check */ }
         if (Date.now() > deadline) {
           throw new Error(`${stepIntent}: no request matched ${pattern} within ${timeoutMs}ms`);
@@ -699,6 +752,12 @@ export async function runEdgeGolden(
     await run(ctx, "verify", [ctx.agentQa, "verify"]);
     await run(ctx, "flush", [ctx.agentQa, "flush", ...(opts.flushArgs ?? [])]);
     await run(ctx, "check", [ctx.agentQa, "scenario", "check", resolve(ctx.scenariosRoot, sid, "scenario.json")]);
+    // Drop the recording browser before replay so rate-limited hosts (HN)
+    // don't see two sessions from the same egress IP overlapping.
+    await run(ctx, "close record browser", [ctx.agentBrowser, "--session", ctx.session, "close"]).catch(() => "");
+    // Cool-down before the replay session: sites like HN soft-gate when a
+    // fresh browser hits them seconds after the recording session.
+    await new Promise((r) => setTimeout(r, Number(process.env.AGENT_QA_GOLDEN_REPLAY_COOLDOWN_MS || "5000")));
     await run(ctx, "replay", [ctx.agentQa, "replay", sid, "--session", `${ctx.session}-replay`]);
     pass = true;
   } catch (err) {

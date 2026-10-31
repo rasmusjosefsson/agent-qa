@@ -84,7 +84,10 @@ for (const name of names) {
   let pass = false;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (attempt > 1) {
-      console.log(`RETRY ${name} attempt=${attempt}/${maxAttempts}`);
+      // Give rate-limited live sites (HN, blogspot, CF) a beat to cool down.
+      const retryDelayMs = Number(process.env.AGENT_QA_GOLDEN_RETRY_DELAY_MS || "8000");
+      console.log(`RETRY ${name} attempt=${attempt}/${maxAttempts} (sleep ${retryDelayMs}ms)`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, retryDelayMs);
     }
     const proc = Bun.spawnSync(["bun", "run", name], {
       cwd: __dirname,

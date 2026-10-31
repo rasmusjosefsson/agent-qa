@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+// Quarantined from nightly golden-all: testautomationpractice.blogspot.com is Google bot-gated (sorry/index) from CI/cloud egress. Renamed script eval:tap:*
 import { runEdgeGolden } from "./edge-pages-lib";
 
 // testautomationpractice.blogspot.com — native dialogs: alert, confirm, prompt.
