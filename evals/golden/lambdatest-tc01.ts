@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
 import { runEdgeGolden } from "./edge-pages-lib";
 
+// Quarantined from nightly golden-all: ecommerce-playground.lambdatest.io
+// times out from CI/cloud egress (open hangs). Renamed script eval:lambdatest:tc01.
 // ecommerce-playground.lambdatest.io (OpenCart, server-rendered) — full
 // journey: search -> results -> product page -> POST checkout/cart/add.
 // Covers: GET-form submit via a real submit button (press Enter does NOT

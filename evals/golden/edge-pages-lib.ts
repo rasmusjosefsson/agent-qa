@@ -1,5 +1,5 @@
 import { toRecordDraft } from "./record-translate";
-import { checkVisibleEval, clickTrustedOrVisible, clickVisibleEval, fillVisibleEval, hoverVisibleEval, selectVisibleEval, trustedOrVisible, uncheckVisibleEval } from "./visible";
+import { checkVisibleEval, clickTrustedOrVisible, clickVisibleEval, fillSticky, hoverVisibleEval, selectVisibleEval, trustedOrVisible, uncheckVisibleEval } from "./visible";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -252,8 +252,22 @@ export async function runEdgeGolden(
   const golden: EdgeGolden = {
     ...ctx,
     async openPage() {
-      await run(ctx, `open ${pagePath}`, [ctx.agentBrowser, "--session", ctx.session, "open", pageUrl]);
-      await run(ctx, "wait page content", [ctx.agentBrowser, "--session", ctx.session, "wait", readySelector]);
+      // Live practice sites flake on first open/wait — retry a couple of
+      // times before failing the case (transient DNS/TLS/CDN blips).
+      const openAttempts = 3;
+      let lastErr: unknown;
+      for (let i = 1; i <= openAttempts; i++) {
+        try {
+          await run(ctx, `open ${pagePath}`, [ctx.agentBrowser, "--session", ctx.session, "open", pageUrl]);
+          await run(ctx, "wait page content", [ctx.agentBrowser, "--session", ctx.session, "wait", readySelector]);
+          lastErr = undefined;
+          break;
+        } catch (err) {
+          lastErr = err;
+          if (i === openAttempts) throw err;
+        }
+      }
+      if (lastErr) throw lastErr;
       await record(ctx, "navigation", { route: pageUrl });
       await record(ctx, "wait", { condition: { kind: "selector", selector: readySelector }, intent: "page rendered" });
     },
@@ -275,14 +289,17 @@ export async function runEdgeGolden(
       await record(ctx, "action", { method: "clickRole", args: [role, name], intent: stepIntent });
     },
     async fillSelector(selector, value, stepIntent) {
-      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `fill ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, value], fillVisibleEval(selector, value));
+      // Always sticky-fill: agent-browser fill can "succeed" while leaving
+      // React/date/number inputs empty, so a trusted-then-fallback path
+      // never reaches the repair.
+      await fillSticky(ctx, (n, c) => run(ctx, n, c), selector, value);
       await record(ctx, "action", { method: "fillBySelector", args: [selector, value], intent: stepIntent });
     },
     async fillSelectorReplayValue(selector, liveValue, replayValue, stepIntent) {
       // Fill the live field with the literal but record a template (e.g.
       // {{vars._unique}}) — signups and other unique-value flows replay
       // with a fresh value instead of the recorded literal.
-      await run(ctx, `fill ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, liveValue]);
+      await fillSticky(ctx, (n, c) => run(ctx, n, c), selector, liveValue);
       await record(ctx, "action", { method: "fillBySelector", args: [selector, replayValue], intent: stepIntent });
     },
     async fillUnique(selector, template, stepIntent) {
@@ -290,7 +307,7 @@ export async function runEdgeGolden(
         b.toString(16).padStart(2, "0"),
       ).join("");
       const resolved = template.replaceAll("{{vars._unique}}", ctx.uniqueMint);
-      await run(ctx, `fill ${selector} (unique)`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, resolved]);
+      await fillSticky(ctx, (n, c) => run(ctx, n, c), selector, resolved);
       await record(ctx, "action", { method: "fillBySelector", args: [selector, template], intent: stepIntent });
     },
     async clearSelector(selector, stepIntent) {

@@ -1,5 +1,7 @@
 import { runEdgeGolden } from "./edge-pages-lib";
 
+// Quarantined from nightly golden-all: practicesoftwaretesting.com returns
+// Cloudflare 403 (bot challenge) from CI/cloud egress. Renamed script eval:pst:tc01.
 // practicesoftwaretesting.com — a real Laravel-API store (search → product
 // detail → cart → login). Exercises cross-origin network claims against
 // api.practicesoftwaretesting.com plus the SPA's data-test selectors.

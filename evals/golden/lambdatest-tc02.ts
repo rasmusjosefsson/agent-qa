@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
 import { runEdgeGolden } from "./edge-pages-lib";
 
+// Quarantined from nightly golden-all: ecommerce-playground.lambdatest.io
+// times out from CI/cloud egress (open hangs). Renamed script eval:lambdatest:tc02.
 // ecommerce-playground.lambdatest.io — direct product page -> add -> cart
 // page. Covers: deep-link nav into product_id=32 (iPod Touch), the POST
 // assertion, the cart badge drawer, and the cart page's quantity input
