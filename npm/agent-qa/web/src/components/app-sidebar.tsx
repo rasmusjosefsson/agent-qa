@@ -167,7 +167,7 @@ export function AppSidebar({ tab, ...props }: { tab: Tab } & ComponentProps<type
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton asChild size="lg" tooltip={version ? `agent-qa v${version}` : 'agent-qa'}>
-              <SpaAnchor href="/cases">
+              <SpaAnchor href="/">
                 <AgentSparkMark className="size-11 shrink-0 rounded-lg" />
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-semibold tracking-tight text-foreground">agent-qa</span>
@@ -195,7 +195,8 @@ export function AppSidebar({ tab, ...props }: { tab: Tab } & ComponentProps<type
           <SidebarGroupLabel>Test pipeline</SidebarGroupLabel>
           <SidebarMenu>
             {TESTS.map((item, i) => (
-              <NavRow key={item.label} item={item} tab={tab} step={i + 1} />
+              // Goldens sits with the pipeline but isn't a step after Runs.
+              <NavRow key={item.label} item={item} tab={tab} step={i < 4 ? i + 1 : undefined} />
             ))}
           </SidebarMenu>
         </SidebarGroup>

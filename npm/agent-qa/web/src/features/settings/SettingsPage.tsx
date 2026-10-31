@@ -85,12 +85,10 @@ export function SettingsPage() {
   }
 
   const envForced = !!data?.env.chatBackend
-  const backendDiffers =
-    !!data &&
-    data.effective.chatBackend !== 'auto' &&
-    // A stored backend only takes effect on the next workbench start — the
-    // chat hub is resolved once at boot.
-    true
+  // The hub is resolved once at boot. Warn only when the value on screen
+  // is not the one this process started with — not on every non-auto choice.
+  const backendPendingRestart =
+    !!data?.booted && !envForced && data.booted.chatBackend !== data.effective.chatBackend
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -161,7 +159,7 @@ export function SettingsPage() {
                     {data.env.chatBackend} — unset it to change this here.
                   </p>
                 )}
-                {backendDiffers && !envForced && (
+                {backendPendingRestart && (
                   <p className="mt-2 text-xs text-muted-foreground">
                     Applies to the next workbench start — the chat backend is resolved once at boot.
                   </p>

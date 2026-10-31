@@ -113,6 +113,9 @@ function CrawlDialog({ runs }: { runs: RunsApi }) {
             if (e.key === 'Enter' && url.trim() && !busy) void submit()
           }}
         />
+        {url.trim() && !/^https?:\/\//.test(url.trim()) && (
+          <p className="text-xs text-muted-foreground">Include http:// or https://.</p>
+        )}
         {note && <div className="text-xs text-destructive">{note}</div>}
         <DialogFooter>
           <Button variant="secondary" onClick={() => setOpen(false)} disabled={busy}>

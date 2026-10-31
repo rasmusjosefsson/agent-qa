@@ -32,6 +32,9 @@ export interface SettingsResponse {
   settings: WorkbenchSettings
   env: { chatBackend: string | null }
   effective: { chatBackend: ChatBackend; headedDefault: boolean }
+  // Backend this workbench process started with. A stored change does not
+  // retarget the running hub until the next start.
+  booted?: { chatBackend: ChatBackend }
   root: string
 }
 

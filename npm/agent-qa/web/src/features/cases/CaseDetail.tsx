@@ -26,6 +26,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { getCase, upsertCase, deleteCase, linkCase } from '@/lib/cases-api'
 import { getScenarios, startReplay } from '@/lib/runs-api'
+import { useUnsavedChanges } from '@/lib/useUnsavedChanges'
 import { navigate, useSpaLink } from '@/router'
 import type { ScenarioSummary } from '@/features/runs/types'
 import type { CaseRecord, InputDecl } from './types'
@@ -151,6 +152,11 @@ export function CaseDetail({ id }: { id: string }) {
       JSON.stringify(current.inputs) !== JSON.stringify(loaded.inputs) ||
       notFound)
 
+  const markClean = useUnsavedChanges(
+    dirty,
+    'This case has unsaved changes. Leave without saving?'
+  )
+
   const save = async (): Promise<CaseRecord | null> => {
     if (!current) return null
     setSaving(true)
@@ -159,6 +165,7 @@ export function CaseDetail({ id }: { id: string }) {
       const r = await upsertCase(id, current)
       setLoaded(r.case)
       setNotFound(false)
+      markClean()
       setFlash('Saved')
       setTimeout(() => setFlash(''), 1500)
       return r.case
@@ -184,7 +191,7 @@ export function CaseDetail({ id }: { id: string }) {
     setErr('')
     const r = await startReplay(loaded.scenarioSid)
     if (!r.ok) setErr(`Replay did not start: ${r.error}`)
-    else navigate('/')
+    else navigate(`/?sid=${encodeURIComponent(loaded.scenarioSid)}`)
   }
 
   const repairWithAgent = () => {
@@ -252,19 +259,26 @@ export function CaseDetail({ id }: { id: string }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* header */}
-      <div className="flex items-center gap-3 border-b border-border px-5 py-3">
-        <BackToCases />
-        <Input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="Untitled case"
-          className="h-8 max-w-xl border-transparent bg-transparent px-1.5 text-base font-semibold shadow-none transition-colors hover:bg-muted/50 focus-visible:border-primary/40 focus-visible:bg-card dark:bg-transparent dark:hover:bg-muted/50 dark:focus-visible:bg-card"
-        />
-        <div className="ml-auto flex items-center gap-2">
+      <div className="flex flex-col gap-2 border-b border-border px-3 py-2 sm:flex-row sm:items-center sm:gap-3 sm:px-5 sm:py-3">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <BackToCases />
+          <Input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Untitled case"
+            aria-label="Case title"
+            className="h-8 min-w-0 flex-1 border-transparent bg-transparent px-1.5 text-base font-semibold shadow-none transition-colors hover:bg-muted/50 focus-visible:border-primary/40 focus-visible:bg-card dark:bg-transparent dark:hover:bg-muted/50 dark:focus-visible:bg-card"
+          />
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2 sm:ml-auto">
           {flash && <span className="text-xs text-success">{flash}</span>}
           {loaded.scenarioSid && (
             <>
-              <Button size="sm" variant="ghost" onClick={() => navigate('/')}>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => navigate(`/?sid=${encodeURIComponent(loaded.scenarioSid!)}`)}
+              >
                 <ExternalLinkIcon /> Open in Runs
               </Button>
               <Button size="sm" variant="outline" onClick={() => void replay()}>
@@ -431,7 +445,10 @@ export function CaseDetail({ id }: { id: string }) {
                   <AlertDialogCancel>Cancel</AlertDialogCancel>
                   <AlertDialogAction
                     onClick={() => {
-                      void deleteCase(id).then(() => navigate('/cases'))
+                      void deleteCase(id).then(() => {
+                        markClean()
+                        navigate('/cases')
+                      })
                     }}
                   >
                     Delete

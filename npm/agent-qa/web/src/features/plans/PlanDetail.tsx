@@ -39,6 +39,7 @@ import { StatusBadge, caseStatus } from '@/features/cases/status'
 import { ReplayLive } from '@/features/runs/components/ReplayLive'
 import { Lightbox } from '@/features/runs/components/Lightbox'
 import { buildXrayExportPrompt, type XrayExportItem } from '@/features/knowledge/exportPrompt'
+import { useUnsavedChanges } from '@/lib/useUnsavedChanges'
 import { navigate } from '@/router'
 
 const back = () => {
@@ -105,11 +106,18 @@ export function PlanDetail({ id }: { id: string }) {
   const [confirmDel, setConfirmDel] = useState(false)
   const [lightbox, setLightbox] = useState<{ url: string; caption: string } | null>(null)
 
-  // Editable fields.
+  // Editable fields. `saved` is the last persisted copy, so leaving the page
+  // can warn when the form has drifted.
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [setIds, setSetIds] = useState<string[]>([])
   const [caseIds, setCaseIds] = useState<string[]>([])
+  const [saved, setSaved] = useState<{
+    name: string
+    description: string
+    setIds: string[]
+    caseIds: string[]
+  } | null>(null)
 
   const refreshCases = useCallback(() => {
     return getCases()
@@ -124,6 +132,12 @@ export function PlanDetail({ id }: { id: string }) {
         setDescription(p.plan.description)
         setSetIds(p.plan.scope.setIds)
         setCaseIds(p.plan.scope.caseIds)
+        setSaved({
+          name: p.plan.name,
+          description: p.plan.description,
+          setIds: p.plan.scope.setIds,
+          caseIds: p.plan.scope.caseIds,
+        })
         setAllSets(s.sets)
         setAllCases(c.cases)
         setPersonas(pe.personas)
@@ -226,11 +240,26 @@ export function PlanDetail({ id }: { id: string }) {
   const toggleCase = (cid: string) =>
     setCaseIds((p) => (p.includes(cid) ? p.filter((x) => x !== cid) : [...p, cid]))
 
+  const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i])
+  const dirty =
+    !!saved &&
+    (name !== saved.name ||
+      description !== saved.description ||
+      !sameList(setIds, saved.setIds) ||
+      !sameList(caseIds, saved.caseIds))
+  const markClean = useUnsavedChanges(dirty, 'This plan has unsaved changes. Leave without saving?')
+
+  const noteSaved = () => {
+    setSaved({ name, description, setIds, caseIds })
+    markClean()
+  }
+
   const save = async () => {
     setBusy(true)
     setErr('')
     try {
       await upsertPlan(id, { name: name.trim() || id, description, scope: { setIds, caseIds } })
+      noteSaved()
       back()
     } catch (e) {
       setErr(String((e as Error).message || e))
@@ -245,6 +274,7 @@ export function PlanDetail({ id }: { id: string }) {
     try {
       // Persist scope first so the server runs exactly what's shown.
       await upsertPlan(id, { name: name.trim() || id, description, scope: { setIds, caseIds } })
+      noteSaved()
       const r = await runPlan(id, buildRunOpts())
       // Refused up front (e.g. the persona's credential refs couldn't resolve) —
       // nothing was replayed, so surface the reason instead of "Started 0".
@@ -317,6 +347,7 @@ export function PlanDetail({ id }: { id: string }) {
     setBusy(true)
     try {
       await deletePlan(id)
+      markClean()
       back()
     } catch (e) {
       setErr(String((e as Error).message || e))

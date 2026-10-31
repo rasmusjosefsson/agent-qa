@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/dialog'
 import { getCases } from '@/lib/cases-api'
 import { deleteSet, getSet, upsertSet } from '@/lib/sets-api'
+import { useUnsavedChanges } from '@/lib/useUnsavedChanges'
 import { navigate } from '@/router'
 import type { CaseWithScenario } from '@/features/cases/types'
 import type { SetMode, SetRecord } from './types'
@@ -86,11 +87,22 @@ export function SetDetail({ id }: { id: string }) {
   }
   const removeTag = (t: string) => setTagQuery((prev) => prev.filter((x) => x !== t))
 
+  const sameList = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i])
+  const dirty =
+    !!set &&
+    (name !== set.name ||
+      description !== set.description ||
+      mode !== set.mode ||
+      !sameList(caseIds, set.caseIds) ||
+      !sameList(tagQuery, set.tagQuery))
+  const markClean = useUnsavedChanges(dirty, 'This set has unsaved changes. Leave without saving?')
+
   const save = async () => {
     setBusy(true)
     setErr('')
     try {
       await upsertSet(id, { name: name.trim() || id, description, mode, caseIds, tagQuery })
+      markClean()
       back()
     } catch (e) {
       setErr(String((e as Error).message || e))
@@ -102,6 +114,7 @@ export function SetDetail({ id }: { id: string }) {
     setBusy(true)
     try {
       await deleteSet(id)
+      markClean()
       back()
     } catch (e) {
       setErr(String((e as Error).message || e))
