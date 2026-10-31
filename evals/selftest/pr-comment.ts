@@ -19,7 +19,8 @@ function arg(name: string): string | null {
   return i >= 0 ? process.argv[i + 1] || null : null;
 }
 
-const latestPath = resolve(__dirname, "results", "latest.json");
+const rootDir = arg("root") ? resolve(arg("root") as string) : __dirname;
+const latestPath = resolve(rootDir, "results", "latest.json");
 const runUrl = arg("run-url") || "";
 const artifactName = arg("artifact") || "ui-goldens";
 const diffBase = (arg("diff-base") || "").replace(/\/+$/, "");
@@ -31,7 +32,7 @@ const viewerBase = gh ? `https://${gh[1]}.github.io/${gh[2]}` : "";
 
 /** Failed shot diffs for one scenario's latest run: `shots-diff/<step>.diff.png`. */
 function failedShots(sid: string): string[] {
-  const dir = resolve(__dirname, "scenarios", sid);
+  const dir = resolve(rootDir, "scenarios", sid);
   let runId = "";
   try {
     runId = readFileSync(resolve(dir, "replays", "latest.txt"), "utf8").trim();
@@ -48,6 +49,38 @@ function failedShots(sid: string): string[] {
 
 function img(url: string, alt: string): string {
   return `![${alt}](${url})`;
+}
+
+/** Failed structural diffs: `domshots-diff/<step>.diff.txt`. */
+function failedDomshots(sid: string): string[] {
+  const dir = resolve(rootDir, "scenarios", sid);
+  let runId = "";
+  try {
+    runId = readFileSync(resolve(dir, "replays", "latest.txt"), "utf8").trim();
+  } catch {
+    return [];
+  }
+  const diffDir = resolve(dir, "replays", runId, "domshots-diff");
+  if (!existsSync(diffDir)) return [];
+  return readdirSync(diffDir)
+    .filter((f) => f.endsWith(".diff.txt"))
+    .map((f) => basename(f, ".diff.txt"))
+    .sort();
+}
+
+function readDomshotDiff(sid: string, step: string): string {
+  try {
+    const dir = resolve(rootDir, "scenarios", sid);
+    const runId = readFileSync(resolve(dir, "replays", "latest.txt"), "utf8").trim();
+    const text = readFileSync(resolve(dir, "replays", runId, "domshots-diff", `${step}.diff.txt`), "utf8");
+    const body = text.replaceAll("```", "'''");
+    const parts = body.split("\n");
+    const cap = 80;
+    if (parts.length <= cap) return body.trimEnd();
+    return parts.slice(0, cap).join("\n") + `\n… ${parts.length - cap} more lines in the artifact`;
+  } catch {
+    return "";
+  }
 }
 
 let lines: string[];
@@ -96,17 +129,46 @@ if (!existsSync(latestPath)) {
           lines.push("</details>");
           lines.push("");
         }
+        for (const step of failedDomshots(r.sid)) {
+          lines.push(
+            `<details><summary><code>${r.sid}</code> — <code>${step}</code> structural diff</summary>`,
+          );
+          lines.push("");
+          const hunk = readDomshotDiff(r.sid, step);
+          if (hunk) {
+            lines.push("```diff");
+            lines.push(hunk);
+            lines.push("```");
+            lines.push("");
+          }
+          const base = `${diffBase}/${r.sid}/${step}`;
+          const viewer = viewerBase
+            ? `${viewerBase}/diff-viewer.html?${new URLSearchParams({
+                dom: "1",
+                b: `${base}.baseline.snap.txt`,
+                c: `${base}.current.snap.txt`,
+                d: `${base}.diff.txt`,
+                sid: r.sid,
+                step,
+              })}`
+            : "";
+          if (viewer) lines.push(`[open diff viewer](${viewer}) — side-by-side line diff`);
+          lines.push("");
+          lines.push("</details>");
+          lines.push("");
+        }
       }
-      if (failed.every((r) => failedShots(r.sid).length === 0)) {
+      if (failed.every((r) => failedShots(r.sid).length === 0 && failedDomshots(r.sid).length === 0)) {
         lines.push(
-          "No shot diffs were captured — the failures are step errors, not pixel drift. " +
+          "No shot or domshot diffs were captured — the failures are step errors, not golden drift. " +
             `Full run evidence is in the [\`${artifactName}\` artifact](${runUrl}).`,
         );
         lines.push("");
       }
     } else {
       lines.push(
-        "Diff maps (`shots-diff/*.diff.png`, red = changed pixels) and the new screenshots are in the " +
+        "Diff maps (`shots-diff/*.diff.png`, red = changed pixels) and structural diffs " +
+          "(`domshots-diff/*.diff.txt`) are in the " +
           `[\`${artifactName}\` artifact](${runUrl}) of this run.`,
       );
       lines.push("");

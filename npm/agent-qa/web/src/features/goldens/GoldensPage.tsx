@@ -18,6 +18,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
+import { TextLineDiff } from '@/components/text-line-diff'
 import {
   fetchGoldens,
   goldenAssetUrl,
@@ -125,6 +126,48 @@ function SplitCompare({ sid, name }: { sid: string; name: string }) {
   )
 }
 
+// ARIA baseline vs the latest run's snapshot. The goldens `actual` route
+// serves snapshots/<step>.txt when the baseline name ends in .snap.txt.
+function SnapCompare({ sid, name }: { sid: string; name: string }) {
+  const [before, setBefore] = useState<string | null>(null)
+  const [after, setAfter] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    let alive = true
+    setBefore(null)
+    setAfter(null)
+    setError(null)
+    Promise.all([
+      fetch(goldenFileUrl(sid, name)).then((r) => (r.ok ? r.text() : Promise.reject(new Error('no baseline')))),
+      fetch(goldenAssetUrl(sid, name, 'actual')).then((r) =>
+        r.ok ? r.text() : Promise.reject(new Error('no snapshot in the latest run'))
+      ),
+    ])
+      .then(([b, a]) => {
+        if (!alive) return
+        setBefore(b)
+        setAfter(a)
+      })
+      .catch((e: unknown) => {
+        if (alive) setError(e instanceof Error ? e.message : String(e))
+      })
+    return () => {
+      alive = false
+    }
+  }, [sid, name])
+  if (error) {
+    return (
+      <div className="rounded-lg border border-border bg-muted/30 px-4 py-6 text-center text-xs text-muted-foreground">
+        {error}
+      </div>
+    )
+  }
+  if (before == null || after == null) {
+    return <p className="px-2 py-6 text-center text-xs text-muted-foreground">Loading snapshots…</p>
+  }
+  return <TextLineDiff before={before} after={after} beforeLabel="baseline" afterLabel="latest run" />
+}
+
 function DiffView({ sid, name, hasDiff }: { sid: string; name: string; hasDiff?: boolean }) {
   const [missing, setMissing] = useState(false)
   if (!hasDiff || missing) {
@@ -185,13 +228,17 @@ function GoldenCard({
             className="aspect-video w-full object-cover object-top"
           />
         </button>
+      ) : file.name.endsWith('.txt') ? (
+        <button
+          type="button"
+          className="grid aspect-video w-full cursor-zoom-in place-items-center text-muted-foreground/60 hover:bg-muted/60"
+          onClick={onCompare}
+        >
+          <FileTextIcon className="size-8" />
+        </button>
       ) : (
         <div className="grid aspect-video w-full place-items-center text-muted-foreground/60">
-          {file.name.endsWith('.txt') ? (
-            <FileTextIcon className="size-8" />
-          ) : (
-            <ImageIcon className="size-8" />
-          )}
+          <ImageIcon className="size-8" />
         </div>
       )}
       <figcaption className="flex items-center justify-between gap-2 px-2.5 py-1.5">
@@ -346,42 +393,49 @@ export function GoldensPage() {
       </div>
 
       <Dialog open={!!compare} onOpenChange={(o) => !o && setCompare(null)}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent className={compare?.file.name.endsWith('.snap.txt') ? 'sm:max-w-5xl' : 'sm:max-w-3xl'}>
           <DialogHeader>
             <DialogTitle className="font-mono text-sm">
               {compare?.sid}/{compare?.file.name}
             </DialogTitle>
             <DialogDescription>
-              {mode === 'split'
-                ? compare?.runId
-                  ? `Committed baseline vs latest replay — run ${fmtRunId(compare.runId)}. Drag the handle to compare.`
-                  : compare?.runId === null
-                    ? 'Committed baseline — no replay has run yet, so there is nothing to compare it with.'
-                    : 'Committed baseline vs latest replay. Drag the handle to compare.'
-                : `Pixel diff from the latest replay${compare?.runId ? ` (${fmtRunId(compare.runId)})` : ''} — changed pixels in red over the faded baseline.`}
+              {compare?.file.name.endsWith('.snap.txt')
+                ? compare.runId
+                  ? `Committed ARIA baseline vs the latest run's snapshot — ${fmtRunId(compare.runId)}.`
+                  : 'Committed ARIA baseline. A latest run is required to compare it.'
+                : mode === 'split'
+                  ? compare?.runId
+                    ? `Committed baseline vs latest replay — run ${fmtRunId(compare.runId)}. Drag the handle to compare.`
+                    : compare?.runId === null
+                      ? 'Committed baseline — no replay has run yet, so there is nothing to compare it with.'
+                      : 'Committed baseline vs latest replay. Drag the handle to compare.'
+                  : `Pixel diff from the latest replay${compare?.runId ? ` (${fmtRunId(compare.runId)})` : ''} — changed pixels in red over the faded baseline.`}
             </DialogDescription>
           </DialogHeader>
-          {compare && (
-            <div className="space-y-3">
-              <div className="flex gap-1.5">
-                {(['split', 'diff'] as const).map((m) => (
-                  <Button
-                    key={m}
-                    size="sm"
-                    variant={mode === m ? 'default' : 'outline'}
-                    onClick={() => setMode(m)}
-                  >
-                    {m === 'split' ? 'Before / After' : 'Diff'}
-                  </Button>
-                ))}
+          {compare &&
+            (compare.file.name.endsWith('.snap.txt') ? (
+              <SnapCompare sid={compare.sid} name={compare.file.name} />
+            ) : (
+              <div className="space-y-3">
+                <div className="flex gap-1.5">
+                  {(['split', 'diff'] as const).map((m) => (
+                    <Button
+                      key={m}
+                      size="sm"
+                      variant={mode === m ? 'default' : 'outline'}
+                      onClick={() => setMode(m)}
+                    >
+                      {m === 'split' ? 'Before / After' : 'Diff'}
+                    </Button>
+                  ))}
+                </div>
+                {mode === 'split' ? (
+                  <SplitCompare sid={compare.sid} name={compare.file.name} />
+                ) : (
+                  <DiffView sid={compare.sid} name={compare.file.name} hasDiff={compare.file.hasDiff} />
+                )}
               </div>
-              {mode === 'split' ? (
-                <SplitCompare sid={compare.sid} name={compare.file.name} />
-              ) : (
-                <DiffView sid={compare.sid} name={compare.file.name} hasDiff={compare.file.hasDiff} />
-              )}
-            </div>
-          )}
+            ))}
         </DialogContent>
       </Dialog>
     </div>

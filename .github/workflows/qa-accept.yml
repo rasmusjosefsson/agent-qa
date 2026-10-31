@@ -169,6 +169,8 @@ jobs:
             evals/selftest/results/
             evals/selftest/scenarios/*/replays/*/screenshots/
             evals/selftest/scenarios/*/replays/*/shots-diff/
+            evals/selftest/scenarios/*/replays/*/domshots-diff/
+            evals/selftest/scenarios/*/replays/*/snapshots/
           retention-days: 30
       - name: comment the goldens verdict
         if: always()

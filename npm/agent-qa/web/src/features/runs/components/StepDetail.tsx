@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { BugIcon, WrenchIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { TextLineDiff } from '@/components/text-line-diff'
 import { acceptDomshot, acceptShot, artifactUrl, baselineShotUrl, fetchArtifactText, getScenarioDef, promoteHeal } from '@/lib/runs-api'
 import { BeforeAfterSlider } from './BeforeAfterSlider'
 import { collapseEvents, fmtMs, icon } from '../rows'
@@ -531,10 +532,9 @@ export function ShotDiffCard({
   )
 }
 
-// The unified text diff a {"domshot"} claim wrote when the step's ARIA
-// snapshot drifted from baselines/<stepId>.snap.txt. Rendered as text —
-// red deletions, green additions — with a re-mint affordance for the
-// legitimate-change path.
+// Side-by-side line diff of a {"domshot"} miss: the checked-in
+// baselines/<stepId>.snap.txt against this run's snapshots/<stepId>.txt.
+// Falls back to the stored unified diff when one of those texts is missing.
 export function DomshotDiffCard({
   sid,
   runId,
@@ -544,13 +544,32 @@ export function DomshotDiffCard({
   runId: string
   domshotStep: string
 }) {
+  const [before, setBefore] = useState<string | null>(null)
+  const [after, setAfter] = useState<string | null>(null)
   const [diffText, setDiffText] = useState<string | null>(null)
   const [accept, setAccept] = useState<'idle' | 'busy' | 'done' | 'error'>('idle')
   useEffect(() => {
     let alive = true
-    fetchArtifactText(sid, runId, 'domshots-diff', domshotStep, false)
-      .then((t) => alive && setDiffText(t))
-      .catch(() => alive && setDiffText(null))
+    const baseline = fetch(baselineShotUrl(sid, `${domshotStep}.snap.txt`)).then((r) =>
+      r.ok ? r.text() : null
+    )
+    Promise.all([
+      baseline,
+      fetchArtifactText(sid, runId, 'snapshots', domshotStep, false),
+      fetchArtifactText(sid, runId, 'domshots-diff', domshotStep, false),
+    ])
+      .then(([b, a, d]) => {
+        if (!alive) return
+        setBefore(b)
+        setAfter(a)
+        setDiffText(d)
+      })
+      .catch(() => {
+        if (!alive) return
+        setBefore(null)
+        setAfter(null)
+        setDiffText(null)
+      })
     return () => {
       alive = false
     }
@@ -560,29 +579,34 @@ export function DomshotDiffCard({
     const r = await acceptDomshot(sid, runId, domshotStep)
     setAccept(r.ok ? 'done' : 'error')
   }
+  const aligned = before != null && after != null
   return (
     <div className="mb-3 rounded-md border border-violet-500/30 bg-violet-500/10 p-2.5 text-xs">
       <div className="mb-1.5 flex items-center gap-1.5 font-medium text-violet-600 dark:text-violet-300">
         <WrenchIcon className="size-3.5 shrink-0" />
         Structural diff — domshot “{domshotStep}” changed vs baseline
       </div>
-      {diffText != null && (
-        <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded border border-border bg-muted/20 p-2 font-mono leading-relaxed">
-          {diffText.split('\n').map((line, i) => (
-            <span
-              key={i}
-              className={cn(
-                'block',
-                line.startsWith('+') && !line.startsWith('+++') && 'text-success',
-                line.startsWith('-') && !line.startsWith('---') && 'text-destructive',
-                (line.startsWith('@@') || line.startsWith('---') || line.startsWith('+++')) &&
-                  'text-muted-foreground'
-              )}
-            >
-              {line}
-            </span>
-          ))}
-        </pre>
+      {aligned ? (
+        <TextLineDiff before={before} after={after} beforeLabel="baseline" afterLabel="this run" />
+      ) : (
+        diffText != null && (
+          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded border border-border bg-muted/20 p-2 font-mono leading-relaxed">
+            {diffText.split('\n').map((line, i) => (
+              <span
+                key={i}
+                className={cn(
+                  'block',
+                  line.startsWith('+') && !line.startsWith('+++') && 'text-success',
+                  line.startsWith('-') && !line.startsWith('---') && 'text-destructive',
+                  (line.startsWith('@@') || line.startsWith('---') || line.startsWith('+++')) &&
+                    'text-muted-foreground'
+                )}
+              >
+                {line}
+              </span>
+            ))}
+          </pre>
+        )
       )}
       <div className="mt-1.5 flex items-center gap-2 text-muted-foreground">
         {accept === 'done' ? (
