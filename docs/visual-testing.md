@@ -181,5 +181,9 @@ cursor-anchored zoom (wheel, `+`/`−`/`0`/`1`; `[`/`]` cycle modes).
   diff images.
 - **In the workbench**: the shot-diff card toggles
   `before/after | blink | diff map` with a 50–250% zoom slider.
-- **Standalone**: `viewer.html?b=<baseline.png>&c=<current.png>&d=<diff.png>`
+- **Standalone**: `diff-viewer.html?b=<baseline.png>&c=<current.png>&d=<diff.png>`
   — no build, works from any static host or `file://`.
+- **Structural goldens**: the same page with `?dom=1&b=<baseline.snap.txt>&c=<current.snap.txt>`
+  renders a side-by-side line diff (unified and changed-only toggles). The
+  workbench run card and the Goldens page open the same comparison for a
+  `{"domshot"}` miss; golden PR comments link the published snapshots.

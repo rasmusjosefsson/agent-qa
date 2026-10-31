@@ -5,9 +5,11 @@
   PR goldens comments link here with the diff image URLs as params.
 
   Query params:
-    b   baseline image URL (required)
-    c   current image URL  (required)
+    b   baseline image URL (required) — or baseline text URL when dom=1
+    c   current image URL  (required) — or current text URL when dom=1
     d   diff-map image URL (optional — enables "diff" + "blend" modes)
+        or, with dom=1, a unified-diff text URL used when b/c are absent
+    dom 1  ARIA snapshot mode: side-by-side / unified line diff of b vs c
     sid scenario id (label only)
     step step id (label only)
 -->
@@ -99,6 +101,37 @@
     position: absolute; inset: 0; display: none; place-items: center;
     color: var(--muted); text-align: center; padding: 20px;
   }
+  #domview { display: none; flex: 1; min-height: 0; flex-direction: column; }
+  #domview.on { display: flex; }
+  .dombar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    padding: 8px 12px; border-bottom: 1px solid var(--border);
+  }
+  #domstat { margin-left: auto; color: var(--muted); }
+  #changedOnly.on { background: var(--accent-soft); color: var(--accent); }
+  #dombody { flex: 1; overflow: auto; font-size: 12px; }
+  .dhead, .drow {
+    display: grid; grid-template-columns: 3rem 1fr 3rem 1fr;
+  }
+  .dhead {
+    position: sticky; top: 0; background: var(--panel); color: var(--muted);
+    text-transform: uppercase; letter-spacing: .04em; font-size: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .dhead span, .dcell { padding: 2px 8px; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .drow { border-bottom: 1px solid rgba(48,54,61,.6); }
+  .dcell.no { text-align: right; color: var(--muted); user-select: none; }
+  .dcell.del { background: rgba(248,81,73,.12); color: #ffa198; }
+  .dcell.add { background: rgba(63,185,80,.12); color: #7ee787; }
+  .dcell.eq { color: var(--muted); }
+  .dcell mark { background: rgba(255,255,255,.14); color: inherit; border-radius: 2px; padding: 0 2px; }
+  .gap { text-align: center; color: var(--muted); padding: 2px; }
+  #dombody.unified .dhead { display: none; }
+  #dombody.unified .drow { display: block; }
+  #dombody.unified .dcell.no, #dombody.unified .dcell.empty, #dombody.unified .dcell.dup { display: none; }
+  #dombody.unified .dcell.del::before { content: "-"; }
+  #dombody.unified .dcell.add::before { content: "+"; }
+  #dombody.unified .dcell.eq::before { content: " "; }
   footer { padding: 4px 12px; color: var(--muted); background: var(--panel); border-top: 1px solid var(--border); font-size: 11px; }
   kbd { background: var(--bg); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; }
 </style>
@@ -139,6 +172,17 @@
     </div>
   </div>
   <div id="err"></div>
+  <div id="domview" hidden>
+    <div class="dombar">
+      <div class="seg" id="dommodes" role="tablist" aria-label="text diff layout">
+        <button data-m="side" class="on" type="button">side-by-side</button>
+        <button data-m="unified" type="button">unified</button>
+      </div>
+      <button id="changedOnly" type="button">changed only</button>
+      <span id="domstat"></span>
+    </div>
+    <div id="dombody"></div>
+  </div>
 </main>
 <footer>
   drag: move wipe / pan when zoomed · wheel: zoom · <kbd>+</kbd>/<kbd>−</kbd>/<kbd>0</kbd>/<kbd>1</kbd> zoom · <kbd>←</kbd>/<kbd>→</kbd> wipe · <kbd>[</kbd>/<kbd>]</kbd> modes
@@ -149,7 +193,213 @@
 const raw = location.search;
 const inner = raw.indexOf('?', 1);
 const q = new URLSearchParams(inner > 0 ? raw.slice(inner) : raw);
+const DOM_MODE = q.get('dom') === '1';
 const B = q.get('b'), C = q.get('c'), D = q.get('d');
+// Structural (domshot) mode — same line pairing as web/src/lib/line-diff.ts.
+function bootDom(baseUrl, curUrl, diffUrl) {
+  document.getElementById('modes').style.display = 'none';
+  document.querySelector('.zoom').style.display = 'none';
+  document.getElementById('stage').style.display = 'none';
+  const view = document.getElementById('domview');
+  view.hidden = false;
+  view.classList.add('on');
+  document.querySelector('footer').textContent = '[ / ] layout · changed only hides equal lines';
+  const body = document.getElementById('dombody');
+  const stat = document.getElementById('domstat');
+  const showErr = (msg) => {
+    document.getElementById('err').style.display = 'grid';
+    document.getElementById('err').textContent = msg;
+    view.style.display = 'none';
+  };
+  const splitLines = (text) => {
+    const stripped = text.endsWith('\n') ? text.slice(0, -1) : text;
+    return stripped === '' ? [] : stripped.split('\n');
+  };
+  const lcsOps = (a, b) => {
+    const n = a.length, m = b.length;
+    const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+    for (let i = n - 1; i >= 0; i--) {
+      for (let j = m - 1; j >= 0; j--) {
+        dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+      }
+    }
+    const ops = [];
+    let i = 0, j = 0;
+    while (i < n && j < m) {
+      if (a[i] === b[j]) { ops.push({ t: 'eq', text: a[i] }); i++; j++; }
+      else if (dp[i + 1][j] >= dp[i][j + 1]) { ops.push({ t: 'del', text: a[i] }); i++; }
+      else { ops.push({ t: 'add', text: b[j] }); j++; }
+    }
+    while (i < n) ops.push({ t: 'del', text: a[i++] });
+    while (j < m) ops.push({ t: 'add', text: b[j++] });
+    return ops;
+  };
+  const tokenize = (s) => s.split(/(\s+)/).filter((t) => t.length > 0);
+  const tokenSpans = (a, b) => {
+    const ta = tokenize(a), tb = tokenize(b);
+    if (ta.length * tb.length > 20000) {
+      return { before: [{ text: a, changed: a !== b }], after: [{ text: b, changed: a !== b }] };
+    }
+    const ops = lcsOps(ta, tb);
+    const before = [], after = [];
+    const push = (spans, text, changed) => {
+      const prev = spans[spans.length - 1];
+      if (prev && prev.changed === changed) prev.text += text;
+      else spans.push({ text, changed });
+    };
+    let i = 0;
+    while (i < ops.length) {
+      if (ops[i].t === 'eq') { push(before, ops[i].text, false); push(after, ops[i].text, false); i++; continue; }
+      while (i < ops.length && ops[i].t === 'del') { push(before, ops[i].text, true); i++; }
+      while (i < ops.length && ops[i].t === 'add') { push(after, ops[i].text, true); i++; }
+    }
+    return { before, after };
+  };
+  const lineDiff = (beforeText, afterText) => {
+    const a = splitLines(beforeText), b = splitLines(afterText);
+    const ops = a.length * b.length > 800000
+      ? a.map((line, i) => (i < b.length ? (line === b[i] ? [{ t: 'eq', text: line }] : [{ t: 'del', text: line }, { t: 'add', text: b[i] }]) : [{ t: 'del', text: line }])).flat()
+          .concat(b.slice(a.length).map((line) => ({ t: 'add', text: line })))
+      : lcsOps(a, b);
+    const rows = [];
+    let i = 0;
+    while (i < ops.length) {
+      if (ops[i].t === 'eq') { rows.push({ kind: 'same', before: ops[i].text, after: ops[i].text }); i++; continue; }
+      const dels = [], adds = [];
+      while (i < ops.length && ops[i].t !== 'eq') {
+        if (ops[i].t === 'del') dels.push(ops[i].text); else adds.push(ops[i].text);
+        i++;
+      }
+      const n = Math.max(dels.length, adds.length);
+      for (let k = 0; k < n; k++) {
+        if (dels[k] !== undefined && adds[k] !== undefined) {
+          const spans = tokenSpans(dels[k], adds[k]);
+          rows.push({ kind: 'change', before: dels[k], after: adds[k], beforeSpans: spans.before, afterSpans: spans.after });
+        } else if (dels[k] !== undefined) rows.push({ kind: 'del', before: dels[k] });
+        else rows.push({ kind: 'add', after: adds[k] });
+      }
+    }
+    return rows;
+  };
+  const fill = (el, spans, fallback) => {
+    el.textContent = '';
+    if (!spans) { el.textContent = fallback || ''; return; }
+    for (const s of spans) {
+      if (!s.changed) el.appendChild(document.createTextNode(s.text));
+      else {
+        const m = document.createElement('mark');
+        m.textContent = s.text;
+        el.appendChild(m);
+      }
+    }
+  };
+  let rows = [];
+  let layout = 'side';
+  let changedOnly = false;
+  const render = () => {
+    body.classList.toggle('unified', layout === 'unified');
+    body.textContent = '';
+    if (rows.length === 0 || rows.every((r) => r.kind === 'same')) {
+      const p = document.createElement('p');
+      p.className = 'gap';
+      p.textContent = rows.length === 0 ? 'Both snapshots are empty.' : 'The two snapshots are identical.';
+      body.appendChild(p);
+      return;
+    }
+    const head = document.createElement('div');
+    head.className = 'dhead';
+    for (const label of ['', 'baseline', '', 'current']) {
+      const s = document.createElement('span');
+      s.textContent = label;
+      head.appendChild(s);
+    }
+    body.appendChild(head);
+    let bNo = 0, aNo = 0, skipped = false, shown = 0;
+    for (const row of rows) {
+      const bn = row.before !== undefined ? ++bNo : null;
+      const an = row.after !== undefined ? ++aNo : null;
+      if (changedOnly && row.kind === 'same') { skipped = true; continue; }
+      if (skipped) {
+        const g = document.createElement('div');
+        g.className = 'gap';
+        g.textContent = '···';
+        body.appendChild(g);
+        skipped = false;
+      }
+      shown++;
+      const line = document.createElement('div');
+      line.className = 'drow';
+      const cells = [
+        { cls: 'no', text: bn == null ? '' : String(bn) },
+        { cls: row.kind === 'add' ? 'empty' : row.kind === 'same' ? 'eq' : 'del', spans: row.beforeSpans, text: row.before },
+        { cls: 'no', text: an == null ? '' : String(an) },
+        { cls: row.kind === 'del' ? 'empty' : row.kind === 'same' ? 'eq dup' : 'add', spans: row.afterSpans, text: row.after },
+      ];
+      for (const c of cells) {
+        const el = document.createElement('div');
+        el.className = 'dcell ' + c.cls;
+        if (c.spans) fill(el, c.spans, c.text);
+        else el.textContent = c.text || '';
+        line.appendChild(el);
+      }
+      body.appendChild(line);
+    }
+    if (shown === 0) {
+      const p = document.createElement('p');
+      p.className = 'gap';
+      p.textContent = rows.length === 0 ? 'Both snapshots are empty.' : 'The two snapshots are identical.';
+      body.appendChild(p);
+    }
+  };
+  document.getElementById('dommodes').addEventListener('click', (e) => {
+    const m = e.target.dataset && e.target.dataset.m;
+    if (!m) return;
+    layout = m;
+    for (const b of document.querySelectorAll('#dommodes button')) b.classList.toggle('on', b.dataset.m === m);
+    render();
+  });
+  document.getElementById('changedOnly').addEventListener('click', (e) => {
+    changedOnly = !changedOnly;
+    e.currentTarget.classList.toggle('on', changedOnly);
+    render();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== '[' && e.key !== ']') return;
+    layout = layout === 'side' ? 'unified' : 'side';
+    for (const b of document.querySelectorAll('#dommodes button')) b.classList.toggle('on', b.dataset.m === layout);
+    render();
+  });
+  const loadPair = async () => {
+    const [rb, rc] = await Promise.all([fetch(baseUrl), fetch(curUrl)]);
+    if (!rb.ok || !rc.ok) throw new Error('could not load baseline and current snapshots');
+    rows = lineDiff(await rb.text(), await rc.text());
+    const changed = rows.filter((r) => r.kind !== 'same').length;
+    stat.textContent = changed === 0 ? 'snapshots match' : changed + ' changed line' + (changed === 1 ? '' : 's');
+    render();
+  };
+  const loadUnified = async () => {
+    const r = await fetch(diffUrl);
+    if (!r.ok) throw new Error('could not load the unified diff');
+    layout = 'unified';
+    document.querySelector('#dommodes [data-m="side"]').style.display = 'none';
+    document.querySelector('#dommodes [data-m="unified"]').classList.add('on');
+    document.getElementById('changedOnly').style.display = 'none';
+    body.classList.add('unified');
+    body.textContent = '';
+    const pre = document.createElement('pre');
+    pre.style.margin = '0';
+    pre.style.padding = '12px';
+    pre.style.whiteSpace = 'pre-wrap';
+    pre.textContent = await r.text();
+    body.appendChild(pre);
+    stat.textContent = 'unified diff';
+  };
+  const job = baseUrl && curUrl ? loadPair() : diffUrl ? loadUnified() : Promise.reject(new Error('missing ?b=<baseline>&c=<current> snapshot URLs (or ?d=<unified diff>)'));
+  job.catch((e) => showErr(e && e.message ? e.message : String(e)));
+}
+if (DOM_MODE) {
+  bootDom(B, C, D);
+} else {
 const sid = q.get('sid'), step = q.get('step');
 if (sid || step) {
   document.getElementById('title').innerHTML =
@@ -293,6 +543,7 @@ stage.addEventListener('keydown', (e) => {
 });
 setMode('wipe');
 setWipePos(0.5); // init
+}
 </script>
 </body>
 </html>

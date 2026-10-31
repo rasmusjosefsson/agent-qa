@@ -6,6 +6,14 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+
+- Structural golden diffs open as a side-by-side line comparison.
+  `diff-viewer.html?dom=1` diffs the baseline snapshot against the
+  current one (unified and changed-only views). The workbench run card
+  and the Goldens page use the same comparison, and golden PR comments
+  publish the snapshot texts and link the viewer.
+
 ## [0.8.1] - 2026-10-12
 ### Fixed
 

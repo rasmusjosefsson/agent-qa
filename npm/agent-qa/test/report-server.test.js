@@ -611,6 +611,44 @@ test('report viewer endpoints', async (t) => {
     assert.match(await res.text(), /heading "New"/);
   });
 
+  await t.test('GET baselines serves a domshot .snap.txt and rejects other extensions', async () => {
+    const bdir = path.join(fx.root, fx.sid, 'baselines');
+    fs.mkdirSync(bdir, { recursive: true });
+    fs.writeFileSync(path.join(bdir, 'navHome.snap.txt'), 'heading "Old"\n');
+    const ok = await fetch(
+      `${base}/api/scenarios/${fx.sid}/baselines/${encodeURIComponent('navHome.snap.txt')}`,
+    );
+    assert.equal(ok.status, 200);
+    assert.match(ok.headers.get('content-type') || '', /text\/plain/);
+    assert.equal(await ok.text(), 'heading "Old"\n');
+    const bad = await fetch(`${base}/api/scenarios/${fx.sid}/baselines/navHome.txt`);
+    assert.equal(bad.status, 400);
+  });
+
+  await t.test('GET /api/goldens serves a snap baseline, its run snapshot, and a diff flag', async () => {
+    const bdir = path.join(fx.root, fx.sid, 'baselines');
+    fs.mkdirSync(bdir, { recursive: true });
+    fs.writeFileSync(path.join(bdir, 'navHome.snap.txt'), 'heading "Old"\n');
+    const list = await fetch(`${base}/api/goldens`);
+    assert.equal(list.status, 200);
+    const body = await list.json();
+    const scenario = body.scenarios.find((s) => s.sid === fx.sid);
+    const file = scenario.files.find((f) => f.name === 'navHome.snap.txt');
+    assert.equal(file.stepId, 'navHome');
+    assert.equal(file.hasDiff, true);
+    const actual = await fetch(
+      `${base}/api/goldens/${fx.sid}/${encodeURIComponent('navHome.snap.txt')}/actual`,
+    );
+    assert.equal(actual.status, 200);
+    assert.match(actual.headers.get('content-type') || '', /text\/plain/);
+    assert.match(await actual.text(), /Example Domain/);
+    const diff = await fetch(
+      `${base}/api/goldens/${fx.sid}/${encodeURIComponent('navHome.snap.txt')}/diff`,
+    );
+    assert.equal(diff.status, 200);
+    assert.match(await diff.text(), /heading "New"/);
+  });
+
   await t.test('POST domshot-accept runs the CLI verb with --steps', async () => {
     const calls = [];
     const { server: dSrv, base: dBase } = await boot(fx.root, {

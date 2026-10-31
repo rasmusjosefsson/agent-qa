@@ -77,6 +77,8 @@ jobs:
             evals/selftest/results/
             evals/selftest/scenarios/*/replays/*/screenshots/
             evals/selftest/scenarios/*/replays/*/shots-diff/
+            evals/selftest/scenarios/*/replays/*/domshots-diff/
+            evals/selftest/scenarios/*/replays/*/snapshots/
           retention-days: 30
       - name: publish diff images to the scratch branch
         if: always()
@@ -105,9 +107,18 @@ jobs:
               [ -f "$run_dir/screenshots/$step.png" ] && cp "$run_dir/screenshots/$step.png" "$STAGE/$sid/$step.current.png"
               [ -f "$sid_dir/baselines/$step.png" ] && cp "$sid_dir/baselines/$step.png" "$STAGE/$sid/$step.baseline.png"
             done
+            for d in "$run_dir"/domshots-diff/*.diff.txt; do
+              [ -f "$d" ] || continue
+              found=1
+              step="$(basename "$d" .diff.txt)"
+              mkdir -p "$STAGE/$sid"
+              cp "$d" "$STAGE/$sid/$step.diff.txt"
+              [ -f "$run_dir/snapshots/$step.txt" ] && cp "$run_dir/snapshots/$step.txt" "$STAGE/$sid/$step.current.snap.txt"
+              [ -f "$sid_dir/baselines/$step.snap.txt" ] && cp "$sid_dir/baselines/$step.snap.txt" "$STAGE/$sid/$step.baseline.snap.txt"
+            done
           done
           if [ "$found" = 0 ]; then
-            echo "no shot diffs — nothing to publish"
+            echo "no golden diffs — nothing to publish"
             exit 0
           fi
           WORK="$(mktemp -d)"

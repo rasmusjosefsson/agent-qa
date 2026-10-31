@@ -412,6 +412,9 @@ signin POST 302-redirects into the account page. Two real findings:
 
 ## Recently closed (for orientation)
 
+- Domshot diffs in the interactive viewer: `diff-viewer.html?dom=1`
+  side-by-side line diff, workbench run card + Goldens page, and
+  golden PR comments publish the snapshot pair and link the viewer.
 - IndexedDB claim + `do/state` seeding (#353) — P5 #14 closed
 - JPetStore sweep incl. `;jsessionid` matcher normalization (#352)
 - bonigarcia sweep incl. recordable storage seeds + mouse-driven drag helper (#351)

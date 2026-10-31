@@ -38,7 +38,7 @@ export function goldenFileUrl(sid: string, name: string): string {
   return `/api/goldens/${encodeURIComponent(sid)}/${encodeURIComponent(name)}`
 }
 
-/** `which` is 'actual' (latest run's screenshot) or 'diff' (pixel-diff map). */
+/** `which` is 'actual' (latest screenshot, or snapshot text for a .snap.txt) or 'diff'. */
 export function goldenAssetUrl(sid: string, name: string, which: 'actual' | 'diff'): string {
   return `${goldenFileUrl(sid, name)}/${which}`
 }

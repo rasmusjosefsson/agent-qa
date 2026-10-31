@@ -77,11 +77,11 @@ half-open loops:
    flags it) once its rolling flake score crosses the threshold —
    maintenance signal becomes self-acting. Small glue.
 
-4. **Domshot diff in the interactive viewer** — diff-viewer.html
-   handles PNG triples only; domshot drift still compares raw text.
-   A `?dom=` mode rendering recorded-vs-current domshot as a
-   side-by-side line-highlighted diff reuses the whole viewer/link
-   pipeline for the second artifact type. Small UX item.
+4. ~~**Domshot diff in the interactive viewer**~~ — shipped.
+   `diff-viewer.html?dom=1` renders a side-by-side line diff of the
+   baseline and current snapshots (unified + changed-only). The
+   workbench run card and Goldens page use the same comparison, and
+   golden PR comments publish the texts and link the viewer.
 
 5. **Check-run annotations over comments** — emitted CI posts drift as
    PR comments; a `qa gate --checks` mode writing a GitHub Check Run

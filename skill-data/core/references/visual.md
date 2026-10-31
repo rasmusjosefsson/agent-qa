@@ -98,6 +98,8 @@ regression you care about is *structural* — an element appearing,
 disappearing, a role/name change — because the tree is immune to font
 rasterization and AA noise, and the failure artifact is a unified text
 diff (`<run>/domshots-diff/<stepId>.diff.txt`) an LLM can read directly.
+Open it in the workbench run card (side-by-side or unified) or, from a
+golden PR comment, in `diff-viewer.html?dom=1&b=<baseline>&c=<current>`.
 
 ```json
 { "claim": { "subject": { "domshot": "s2", "skip": ["generated \\d+:\\d+"] }, "predicate": "matches" } }

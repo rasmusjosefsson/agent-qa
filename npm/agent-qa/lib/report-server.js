@@ -5160,10 +5160,14 @@ function createRequestHandler(root, deps, chat) {
               entry.mtime = st.mtimeMs;
             } catch { /* keep name/stepId/enabled only */ }
             if (latestRun) {
+              const diffDir = name.endsWith('.snap.txt') ? 'domshots-diff' : 'shots-diff';
+              const diffName = name.endsWith('.snap.txt')
+                ? `${stepId}.diff.txt`
+                : `${stepId}.diff.png`;
               const diffs = await fsp
-                .readdir(path.join(root, sid, 'replays', latestRun, 'shots-diff'))
+                .readdir(path.join(root, sid, 'replays', latestRun, diffDir))
                 .catch(() => []);
-              entry.hasDiff = diffs.includes(`${stepId}.diff.png`);
+              entry.hasDiff = diffs.includes(diffName);
             }
             out.push(entry);
           }
@@ -5183,19 +5187,29 @@ function createRequestHandler(root, deps, chat) {
         if (!isSafeSegment(sid) || !isSafeSegment(name)) return badRequest(res, 'unsafe path');
         if (which !== 'actual' && which !== 'diff') return badRequest(res, 'unknown asset');
         const stepId = name.replace(/\.(png|snap\.txt)$/, '');
+        const isSnap = name.endsWith('.snap.txt');
         const latestRun = await latestRunId(path.join(root, sid));
         if (!latestRun) return notFound(res, 'no runs yet');
+        // Pixel goldens compare screenshots; structural goldens compare the
+        // ARIA snapshot text (and its unified diff) for the same step id.
         const rel = which === 'actual'
-          ? path.join('screenshots', `${stepId}.png`)
-          : path.join('shots-diff', `${stepId}.diff.png`);
+          ? isSnap
+            ? path.join('snapshots', `${stepId}.txt`)
+            : path.join('screenshots', `${stepId}.png`)
+          : isSnap
+            ? path.join('domshots-diff', `${stepId}.diff.txt`)
+            : path.join('shots-diff', `${stepId}.diff.png`);
         const file = path.join(root, sid, 'replays', latestRun, rel);
         try {
           const data = await fsp.readFile(file);
-          res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-cache' });
+          res.writeHead(200, {
+            'content-type': isSnap ? 'text/plain; charset=utf-8' : 'image/png',
+            'cache-control': 'no-cache',
+          });
           res.end(data);
           return undefined;
         } catch {
-          return notFound(res, `no ${which} image for ${name} in run ${latestRun}`);
+          return notFound(res, `no ${which} ${isSnap ? 'snapshot' : 'image'} for ${name} in run ${latestRun}`);
         }
       }
       // Toggle the check claim behind a golden: writes `"enabled": false` on
@@ -5655,11 +5669,14 @@ function createRequestHandler(root, deps, chat) {
             return sendJson(res, 200, { sid, trend: null });
           }
         }
-        // GET /api/scenarios/:sid/baselines/<name> → the stored baseline image
-        // behind a shot/domshot claim (screenshots/<stepId>.png's counterpart).
+        // GET /api/scenarios/:sid/baselines/<name> → the stored baseline
+        // behind a shot (.png) or domshot (.snap.txt) claim.
         if (seg[3] === 'baselines' && seg.length === 5 && req.method === 'GET') {
           const name = decodeURIComponent(seg[4]);
-          if (!isSafeSegment(name) || !name.endsWith('.png')) return badRequest(res, 'unsafe path');
+          const isSnap = name.endsWith('.snap.txt');
+          if (!isSafeSegment(name) || (!name.endsWith('.png') && !isSnap)) {
+            return badRequest(res, 'unsafe path');
+          }
           const bdir = path.resolve(root, sid, 'baselines');
           const full = path.resolve(bdir, name);
           if (full !== bdir && !full.startsWith(bdir + path.sep)) {
@@ -5673,7 +5690,7 @@ function createRequestHandler(root, deps, chat) {
           }
           if (!stat.isFile()) return notFound(res, 'no baseline');
           res.writeHead(200, {
-            'content-type': 'image/png',
+            'content-type': isSnap ? 'text/plain; charset=utf-8' : 'image/png',
             'content-length': stat.size,
             'cache-control': 'no-store',
           });
