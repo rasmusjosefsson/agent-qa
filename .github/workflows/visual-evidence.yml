@@ -11,7 +11,9 @@ on:
 jobs:
   visual-evidence:
     name: visual evidence
-    runs-on: macos-14
+    # Script-only gate (diff + PR body check) — no need for a macos runner,
+    # and macos has been cancelling while queued in this org recently.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:

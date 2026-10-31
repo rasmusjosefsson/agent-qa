@@ -1,30 +1,31 @@
 import { runEdgeGolden } from "./edge-pages-lib";
 
-// Edge case: the site's forgot-password POST is known-broken — it serves a
-// 500 inline. The golden pins reality instead of a fantasy happy path:
-// the POST request 500s in the network log and the error page renders.
+// Edge case: forgot-password used to 500 inline; the site now POSTs and
+// lands on /email_sent with "Your e-mail's been sent!" (no <h1>). Pin the
+// current path — body text + email_sent URL + 200 on the destination.
 await runEdgeGolden(
   "tc30",
-  "forgot-password POST pins the site's known 500",
+  "forgot-password POST lands on email_sent confirmation",
   "/forgot_password",
   "input#email",
   async (b) => {
     await b.openPage();
     await b.fillSelector("#email", "qa@example.com", "email");
     await b.clickSelector("#form_submit", "retrieve password");
-    await b.waitSelector("h1", "response page rendered");
+    await b.waitSelectorText("body", "e-mail's been sent", "confirmation rendered");
     await b.assertElementAttribute(
       "body",
       "text",
       "contains",
-      "Internal Server Error",
-      "the site's known 500 body",
+      "e-mail's been sent",
+      "confirmation body shown",
     );
+    await b.assertUrlContains("email_sent", "redirected to email_sent");
     await b.assertNetworkStatus(
-      { urlMatches: "forgot_password", method: "POST" },
+      { urlMatches: "the-internet\\.herokuapp\\.com/email_sent$" },
       "equals",
-      "500",
-      "the POST itself 500'd",
+      "200",
+      "email_sent answered 200",
     );
   },
 );

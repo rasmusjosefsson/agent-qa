@@ -1,5 +1,5 @@
 import { toRecordDraft } from "./record-translate";
-import { clickTrustedOrVisible } from "./visible";
+import { clickTrustedOrVisible, fillSticky } from "./visible";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -133,7 +133,7 @@ export async function runBankGolden(
       await record(ctx, "wait", { condition: { kind: "selector", selector: "#login-username" }, intent: "login form rendered" });
     },
     async fill(selector, value, stepIntent) {
-      await run(ctx, `fill ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, value]);
+      await fillSticky(ctx, (n, c) => run(ctx, n, c), selector, value);
       await record(ctx, "action", { method: "fillBySelector", args: [selector, value], intent: stepIntent });
     },
     async clickSelector(selector, stepIntent) {
@@ -225,3 +225,4 @@ export async function runBankGolden(
   console.log(JSON.stringify(report, null, 2));
   process.exit(pass ? 0 : 1);
 }
+

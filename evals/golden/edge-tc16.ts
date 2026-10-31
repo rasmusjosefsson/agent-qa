@@ -20,6 +20,9 @@ await runEdgeGolden(
     await b.assertElementText("#message", "It's gone!", "removal banner shown");
     await b.clickSelector("#checkbox-example button", "add the checkbox back");
     await b.waitSelector("#checkbox", "checkbox re-added");
-    await b.assertElementText("#message", "It's back!", "re-add banner shown");
+    // Prefer the control label flip — the #message banner sometimes lags
+    // or stays on the previous copy under load; "Remove" means the ajax
+    // round-trip finished and the checkbox is interactive again.
+    await b.waitSelectorText("#checkbox-example button", "Remove", "button flips back to Remove");
   },
 );

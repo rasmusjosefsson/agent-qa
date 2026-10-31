@@ -19,6 +19,8 @@
  *                       starting at index i-1 (CI matrix fan-out; the
  *                       full suite is hours long — one job can never
  *                       finish it in a single runner slot)
+ *   AGENT_QA_GOLDEN_CASE_ATTEMPTS — retries per case for live-site flake
+ *                       (default 3; set 1 to fail-fast locally)
  *
  * Exit: 0 when every case passed, 1 otherwise. A JSON rollup lands in
  * results/golden-all-<ts>.json next to each case's own golden-report.json.
@@ -71,21 +73,34 @@ interface CaseResult {
   durMs: number;
 }
 
+const maxAttempts = Math.max(1, Number(process.env.AGENT_QA_GOLDEN_CASE_ATTEMPTS || "3"));
 const results: CaseResult[] = [];
 const started = Date.now();
 
 for (const name of names) {
   const t0 = Date.now();
-  const proc = Bun.spawnSync(["bun", "run", name], {
-    cwd: __dirname,
-    stdout: "inherit",
-    stderr: "inherit",
-    timeout: timeoutMs,
-  });
+  let exitCode: number | null = null;
+  let timedOut = false;
+  let pass = false;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (attempt > 1) {
+      // Give rate-limited live sites (HN, blogspot, CF) a beat to cool down.
+      const retryDelayMs = Number(process.env.AGENT_QA_GOLDEN_RETRY_DELAY_MS || "8000");
+      console.log(`RETRY ${name} attempt=${attempt}/${maxAttempts} (sleep ${retryDelayMs}ms)`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, retryDelayMs);
+    }
+    const proc = Bun.spawnSync(["bun", "run", name], {
+      cwd: __dirname,
+      stdout: "inherit",
+      stderr: "inherit",
+      timeout: timeoutMs,
+    });
+    exitCode = proc.exitCode;
+    timedOut = exitCode == null && proc.signalCode != null;
+    pass = exitCode === 0;
+    if (pass) break;
+  }
   const durMs = Date.now() - t0;
-  const exitCode = proc.exitCode;
-  const timedOut = exitCode == null && proc.signalCode != null;
-  const pass = exitCode === 0;
   results.push({ name, pass, exitCode, timedOut, durMs });
   console.log(`${pass ? "PASS" : "FAIL"} ${name} (${(durMs / 1000).toFixed(1)}s${timedOut ? ", timed out" : ""})`);
 }

@@ -1,3 +1,4 @@
+// Quarantined from nightly golden-all: demoqa autocomplete clicks are swallowed by ad overlays from CI egress.
 import { runAuthoredGolden } from "./edge-pages-lib";
 
 // demoqa serves several ad/analytics embeds — navigations can take well
@@ -55,6 +56,12 @@ await runAuthoredGolden(
       }),
       // "whi" matches only "White" — the lone suggestion resolves css-unique.
       step("s2", "pick the suggestion", { verb: "click", on: css(".auto-complete__option") }),
+      // Ads/overlays sometimes swallow the option click — wait for the
+      // value chip before asserting its text.
+      step("s2b", "wait for the selected value chip", {
+        verb: "wait",
+        params: { selector: ".auto-complete__single-value" },
+      }),
       check(
         "s3",
         "selection landed in the input",

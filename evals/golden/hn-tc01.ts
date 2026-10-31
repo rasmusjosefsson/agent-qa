@@ -3,6 +3,9 @@ import { runEdgeGolden } from "./edge-pages-lib";
 
 // New site: news.ycombinator.com front page — a real live HTML app whose
 // content changes daily, so every assert is structural.
+// Soft-gated from many CI egress IPs ("not able to serve your requests
+// this quickly") — package.json keeps these as eval:hn:* so nightly does
+// not flake on HN rate limits; run manually when the IP is cool.
 await runEdgeGolden(
   "tc01",
   "hn front page — 30 submissions, ranks, subtext metadata",

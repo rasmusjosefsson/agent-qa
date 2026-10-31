@@ -1,5 +1,5 @@
 import { toRecordDraft } from "./record-translate";
-import { checkVisibleEval, clickTrustedOrVisible, clickVisibleEval, fillVisibleEval, hoverVisibleEval, selectVisibleEval, trustedOrVisible, uncheckVisibleEval } from "./visible";
+import { checkVisibleEval, clickTrustedOrVisible, clickVisibleEval, fillSticky, hoverVisibleEval, selectVisibleEval, trustedOrVisible, uncheckVisibleEval } from "./visible";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -252,8 +252,34 @@ export async function runEdgeGolden(
   const golden: EdgeGolden = {
     ...ctx,
     async openPage() {
-      await run(ctx, `open ${pagePath}`, [ctx.agentBrowser, "--session", ctx.session, "open", pageUrl]);
-      await run(ctx, "wait page content", [ctx.agentBrowser, "--session", ctx.session, "wait", readySelector]);
+      // Live practice sites flake on first open/wait — retry a couple of
+      // times before failing the case (DNS/TLS blips, HN "serve your
+      // requests this quickly" rate pages, Google sorry interstitials).
+      const openAttempts = 3;
+      let lastErr: unknown;
+      for (let i = 1; i <= openAttempts; i++) {
+        try {
+          await run(ctx, `open ${pagePath}`, [ctx.agentBrowser, "--session", ctx.session, "open", pageUrl]);
+          const gate = await run(ctx, "probe soft-gate", [
+            ctx.agentBrowser,
+            "--session",
+            ctx.session,
+            "eval",
+            `(() => { const t = (document.body && document.body.innerText) || ""; if (/not able to serve your requests this quickly/i.test(t) || /unusual traffic from your computer network/i.test(t) || /www\\.google\\.com\\/sorry/i.test(location.href)) return "gated"; return "ok"; })()`,
+          ]).catch(() => "ok");
+          if (String(gate).includes("gated")) {
+            throw new Error(`open soft-gated (${pageUrl}); retrying`);
+          }
+          await run(ctx, "wait page content", [ctx.agentBrowser, "--session", ctx.session, "wait", readySelector]);
+          lastErr = undefined;
+          break;
+        } catch (err) {
+          lastErr = err;
+          if (i === openAttempts) throw err;
+          await new Promise((r) => setTimeout(r, 4000 * i));
+        }
+      }
+      if (lastErr) throw lastErr;
       await record(ctx, "navigation", { route: pageUrl });
       await record(ctx, "wait", { condition: { kind: "selector", selector: readySelector }, intent: "page rendered" });
     },
@@ -275,14 +301,17 @@ export async function runEdgeGolden(
       await record(ctx, "action", { method: "clickRole", args: [role, name], intent: stepIntent });
     },
     async fillSelector(selector, value, stepIntent) {
-      await trustedOrVisible(ctx, (n, c) => run(ctx, n, c), `fill ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, value], fillVisibleEval(selector, value));
+      // Always sticky-fill: agent-browser fill can "succeed" while leaving
+      // React/date/number inputs empty, so a trusted-then-fallback path
+      // never reaches the repair.
+      await fillSticky(ctx, (n, c) => run(ctx, n, c), selector, value);
       await record(ctx, "action", { method: "fillBySelector", args: [selector, value], intent: stepIntent });
     },
     async fillSelectorReplayValue(selector, liveValue, replayValue, stepIntent) {
       // Fill the live field with the literal but record a template (e.g.
       // {{vars._unique}}) — signups and other unique-value flows replay
       // with a fresh value instead of the recorded literal.
-      await run(ctx, `fill ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, liveValue]);
+      await fillSticky(ctx, (n, c) => run(ctx, n, c), selector, liveValue);
       await record(ctx, "action", { method: "fillBySelector", args: [selector, replayValue], intent: stepIntent });
     },
     async fillUnique(selector, template, stepIntent) {
@@ -290,7 +319,7 @@ export async function runEdgeGolden(
         b.toString(16).padStart(2, "0"),
       ).join("");
       const resolved = template.replaceAll("{{vars._unique}}", ctx.uniqueMint);
-      await run(ctx, `fill ${selector} (unique)`, [ctx.agentBrowser, "--session", ctx.session, "fill", selector, resolved]);
+      await fillSticky(ctx, (n, c) => run(ctx, n, c), selector, resolved);
       await record(ctx, "action", { method: "fillBySelector", args: [selector, template], intent: stepIntent });
     },
     async clearSelector(selector, stepIntent) {
@@ -342,7 +371,35 @@ export async function runEdgeGolden(
       await record(ctx, "action", { method: "dismissBySelector", args: [selector], intent: stepIntent });
     },
     async scrollBottom(stepIntent) {
-      await run(ctx, "scroll to bottom", [ctx.agentBrowser, "--session", ctx.session, "eval", "(() => { window.scrollTo(0, document.body.scrollHeight); })()"]);
+      // Prefer a real keyboard End — sites like quotes.toscrape bind
+      // jQuery $(window).on('scroll') and ignore synthetic scrollTo+Event
+      // dispatches (document.height vs body.scrollHeight also diverge).
+      // Fall back to an exact jQuery-height scrollTo if End is a no-op.
+      await run(ctx, "scroll End", [ctx.agentBrowser, "--session", ctx.session, "press", "End"]);
+      const atBottom = await run(
+        ctx,
+        "probe scroll bottom",
+        [
+          ctx.agentBrowser,
+          "--session",
+          ctx.session,
+          "eval",
+          "(() => { const docH = document.documentElement.scrollHeight || document.body.scrollHeight; const max = Math.max(0, docH - window.innerHeight); return Math.abs(window.scrollY - max) <= 2 ? 'bottom' : 'short'; })()",
+        ],
+      ).catch(() => "short");
+      if (!String(atBottom).includes("bottom")) {
+        await run(
+          ctx,
+          "scroll to bottom fallback",
+          [
+            ctx.agentBrowser,
+            "--session",
+            ctx.session,
+            "eval",
+            "(() => { const docH = document.documentElement.scrollHeight || document.body.scrollHeight; const max = Math.max(0, docH - window.innerHeight); window.scrollTo(0, max); })()",
+          ],
+        );
+      }
       await record(ctx, "action", { method: "scrollTop", args: [999999], intent: stepIntent });
     },
     async upload(selector, repoRelFixture, stepIntent) {
@@ -451,6 +508,24 @@ export async function runEdgeGolden(
       await record(ctx, "wait", { condition: { kind: "selectorAbsent", selector }, intent: stepIntent });
     },
     async waitSelectorText(selector, text, stepIntent) {
+      // Live-poll: ephemeral UI (onblur validators that clear after 2s)
+      // would otherwise only be recorded and then miss at replay/verify.
+      const deadline = Date.now() + 10_000;
+      const needle = text;
+      for (;;) {
+        const probe = await run(ctx, `poll text ${selector}`, [
+          ctx.agentBrowser,
+          "--session",
+          ctx.session,
+          "eval",
+          `(() => { const el = document.querySelector(${JSON.stringify(selector)}); return el ? (el.textContent || "") : ""; })()`,
+        ]).catch(() => "");
+        if (probe.includes(needle)) break;
+        if (Date.now() > deadline) {
+          throw new Error(`${stepIntent}: ${selector} never contained ${JSON.stringify(needle)}`);
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
       await record(ctx, "wait", { condition: { kind: "selectorText", selector, text }, intent: stepIntent });
     },
     async waitLoad(state, stepIntent) {
@@ -461,7 +536,10 @@ export async function runEdgeGolden(
       // completes, so steps that depend on the request's side effects (e.g.
       // an alert fired on ajax success) can observe them live.
       const deadline = Date.now() + timeoutMs;
-      const glob = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replaceAll("*", ".*");
+      // Escape regex metacharacters before turning * → .* — especially `?`
+      // (query strings like api/quotes?page=2), or the `?` becomes a quantifier
+      // and the match silently never fires.
+      const glob = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replaceAll("*", ".*");
       const re = new RegExp(glob);
       for (;;) {
         const probe = await run(ctx, `poll ${pattern}`, [
@@ -469,8 +547,18 @@ export async function runEdgeGolden(
           `JSON.stringify(performance.getEntriesByType('resource').map(e=>e.name))`,
         ]);
         try {
-          const names = JSON.parse(JSON.parse(probe).data ?? "[]") as string[];
-          if (names.some((n) => re.test(n))) break;
+          // agent-browser --json wraps eval as { data: { result: "<json>" } }
+          // (older builds used data: "<json>" directly).
+          const envelope = JSON.parse(probe) as { data?: unknown };
+          const raw = envelope.data;
+          const payload =
+            raw && typeof raw === "object" && raw !== null && "result" in raw
+              ? (raw as { result: unknown }).result
+              : raw;
+          const names = (
+            typeof payload === "string" ? JSON.parse(payload) : payload
+          ) as string[];
+          if (Array.isArray(names) && names.some((n) => re.test(n))) break;
         } catch { /* fall through to deadline check */ }
         if (Date.now() > deadline) {
           throw new Error(`${stepIntent}: no request matched ${pattern} within ${timeoutMs}ms`);
@@ -682,7 +770,37 @@ export async function runEdgeGolden(
     await run(ctx, "verify", [ctx.agentQa, "verify"]);
     await run(ctx, "flush", [ctx.agentQa, "flush", ...(opts.flushArgs ?? [])]);
     await run(ctx, "check", [ctx.agentQa, "scenario", "check", resolve(ctx.scenariosRoot, sid, "scenario.json")]);
-    await run(ctx, "replay", [ctx.agentQa, "replay", sid, "--session", `${ctx.session}-replay`]);
+    // Drop the recording browser before replay so rate-limited hosts (HN)
+    // don't see two sessions from the same egress IP overlapping.
+    await run(ctx, "close record browser", [ctx.agentBrowser, "--session", ctx.session, "close"]).catch(() => "");
+    // Cool-down before the replay session: sites like HN soft-gate when a
+    // fresh browser hits them seconds after the recording session.
+    const hnish = (opts.label || "").startsWith("hn");
+    const cooldownDefault = hnish ? "15000" : "5000";
+    const cooldownMs = Number(process.env.AGENT_QA_GOLDEN_REPLAY_COOLDOWN_MS || cooldownDefault);
+    const replayAttempts = hnish ? 3 : 1;
+    let replayErr: unknown;
+    for (let attempt = 1; attempt <= replayAttempts; attempt++) {
+      await new Promise((r) => setTimeout(r, attempt === 1 ? cooldownMs : cooldownMs + 5000 * (attempt - 1)));
+      try {
+        await run(ctx, `replay${attempt > 1 ? ` retry ${attempt}` : ""}`, [
+          ctx.agentQa,
+          "replay",
+          sid,
+          "--session",
+          `${ctx.session}-replay${attempt > 1 ? `-${attempt}` : ""}`,
+        ]);
+        replayErr = undefined;
+        break;
+      } catch (err) {
+        replayErr = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        // Soft-gate pages lack the ready selector; worth another cool-down.
+        if (!hnish || attempt === replayAttempts) throw err;
+        if (!/selector not found|soft-gate|not able to serve/i.test(msg)) throw err;
+      }
+    }
+    if (replayErr) throw replayErr;
     pass = true;
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);

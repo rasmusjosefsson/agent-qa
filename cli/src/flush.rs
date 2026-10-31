@@ -519,7 +519,12 @@ fn append_auto_url_claim(steps: &mut Vec<crate::scenario::Step>, session: &str) 
 
 fn push_url_claim(steps: &mut Vec<crate::scenario::Step>, current: &str) {
     let bare = current.split(['?', '#']).next().unwrap_or(current);
-    let pattern = format!("^{}([?#].*)?$", regex::escape(bare));
+    // Drop `;jsessionid=…` (and any other matrix params) — they are
+    // session-scoped and poison the equals/matches claim on replay.
+    let bare = crate::telemetry::strip_matrix_params(bare);
+    // Allow optional matrix params on the live URL so a server that still
+    // embeds `;jsessionid=` in location.href/pathname still matches.
+    let pattern = format!("^{}((;[^=/?#]+=[^/?#]*)*)([?#].*)?$", regex::escape(&bare));
     // A re-flushed buffer (`buffer load` pulls sealed auto-gates in) would
     // otherwise grow a second identical landing claim every cycle.
     if steps.iter().any(|s| {
@@ -1342,9 +1347,29 @@ mod tests {
         let re = regex::Regex::new(pat).unwrap();
         // same page, fresh nonce query → pass
         assert!(re.is_match("https://app.example.com/bank/dashboard?code=zzz&state=q"));
+        // matrix-param session id on a fresh session → pass
+        assert!(re.is_match("https://app.example.com/bank/dashboard;jsessionid=DEADBEEF"));
         // different path → fail
         assert!(!re.is_match("https://app.example.com/login"));
         assert!(!re.is_match("https://app.example.com/bank/dashboardx"));
+    }
+
+    #[test]
+    fn push_url_claim_strips_jsessionid_from_recorded_url() {
+        let mut steps = vec![];
+        push_url_claim(
+            &mut steps,
+            "https://bank.example.com/register.htm;jsessionid=ABC123?x=1",
+        );
+        let json = serde_json::to_value(&steps[0]).unwrap();
+        assert_eq!(
+            json["intent"],
+            "landed on https://bank.example.com/register.htm"
+        );
+        let pat = json["claim"]["value"].as_str().unwrap();
+        let re = regex::Regex::new(pat).unwrap();
+        assert!(re.is_match("https://bank.example.com/register.htm;jsessionid=FRESHSESSION"));
+        assert!(!re.is_match("https://bank.example.com/index.htm"));
     }
 
     #[test]

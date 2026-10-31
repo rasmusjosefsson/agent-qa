@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 import { toRecordDraft } from "./record-translate";
+import { stickyFillEval } from "./visible";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const evalsRoot = resolve(__dirname, "..");
@@ -64,7 +65,7 @@ async function record(kind: string, payload: unknown): Promise<void> {
 }
 
 async function fill(selector: string, value: string, intent: string): Promise<void> {
-  await run(`fill ${selector}`, [agentBrowser, "--session", session, "fill", selector, value]);
+  await run(`fill ${selector}`, [agentBrowser, "--session", session, "eval", stickyFillEval(selector, value)]);
   await record("action", { method: "fillBySelector", args: [selector, value], intent });
 }
 

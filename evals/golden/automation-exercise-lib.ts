@@ -1,5 +1,5 @@
 import { toRecordDraft } from "./record-translate";
-import { clickVisibleEval, pickVisible } from "./visible";
+import { clickVisibleEval, pickVisible, stickyFillEval } from "./visible";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -159,7 +159,7 @@ export async function runAutomationExerciseGolden(
         "--session",
         ctx.session,
         "eval",
-        `(() => new Promise((resolve, reject) => { const started = Date.now(); const tick = () => { const el = document.querySelector(${JSON.stringify(selector)}); if (el) { el.focus(); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); resolve(true); } else if (Date.now() - started > 5000) reject(new Error("selector not found")); else setTimeout(tick, 100); }; tick(); }))()`,
+        stickyFillEval(selector, value),
       ]);
       await record(ctx, "action", { method: "fillBySelector", args: [selector, value], intent: stepIntent });
     },
@@ -169,7 +169,7 @@ export async function runAutomationExerciseGolden(
         "--session",
         ctx.session,
         "eval",
-        `(() => new Promise((resolve, reject) => { const started = Date.now(); const tick = () => { const el = document.querySelector(${JSON.stringify(selector)}); if (el) { el.focus(); el.value = ${JSON.stringify(liveValue)}; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); resolve(true); } else if (Date.now() - started > 5000) reject(new Error("selector not found")); else setTimeout(tick, 100); }; tick(); }))()`,
+        stickyFillEval(selector, liveValue),
       ]);
       await record(ctx, "action", { method: "fillBySelector", args: [selector, replayValue], intent: stepIntent });
     },
@@ -192,12 +192,49 @@ export async function runAutomationExerciseGolden(
       await record(ctx, "assert", { kind: "url", args: [path], intent: stepIntent });
     },
     async waitSelector(selector, stepIntent) {
+      await run(ctx, `wait ${selector}`, [
+        ctx.agentBrowser,
+        "--session",
+        ctx.session,
+        "wait",
+        selector,
+      ]);
       await record(ctx, "wait", { condition: { kind: "selector", selector }, intent: stepIntent });
     },
     async waitSelectorText(selector, text, stepIntent) {
+      const deadline = Date.now() + 15_000;
+      for (;;) {
+        const probe = await run(ctx, `poll text ${selector}`, [
+          ctx.agentBrowser,
+          "--session",
+          ctx.session,
+          "eval",
+          `(() => { const el = document.querySelector(${JSON.stringify(selector)}); return el ? (el.textContent || "") : ""; })()`,
+        ]).catch(() => "");
+        if (probe.includes(text)) break;
+        if (Date.now() > deadline) {
+          throw new Error(`${stepIntent}: ${selector} never contained ${JSON.stringify(text)}`);
+        }
+        await new Promise((r) => setTimeout(r, 150));
+      }
       await record(ctx, "wait", { condition: { kind: "selectorText", selector, text }, intent: stepIntent });
     },
     async waitText(text, stepIntent) {
+      const deadline = Date.now() + 15_000;
+      for (;;) {
+        const probe = await run(ctx, `poll body text`, [
+          ctx.agentBrowser,
+          "--session",
+          ctx.session,
+          "eval",
+          `document.body ? (document.body.innerText || "") : ""`,
+        ]).catch(() => "");
+        if (probe.includes(text)) break;
+        if (Date.now() > deadline) {
+          throw new Error(`${stepIntent}: body never contained ${JSON.stringify(text)}`);
+        }
+        await new Promise((r) => setTimeout(r, 150));
+      }
       await record(ctx, "wait", { condition: { kind: "text", text }, intent: stepIntent });
     },
     async assertLiveCondition(expression, stepIntent) {
