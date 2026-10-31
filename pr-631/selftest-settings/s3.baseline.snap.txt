@@ -1,0 +1,113 @@
+- generic [ref=e1] clickable [onclick]
+  - list
+    - listitem [level=1]
+      - link "agent-qa QA workbench · v0.8.1" [ref=e29]
+        - StaticText "agent-qa"
+        - StaticText "QA workbench"
+        - StaticText " · v0.8.1"
+  - generic
+    - StaticText "CREATE"
+    - list
+      - listitem [level=1]
+        - link "Chat" [ref=e31]
+          - StaticText "Chat"
+      - listitem [level=1]
+        - link "Editor" [ref=e32]
+          - StaticText "Editor"
+  - generic
+    - StaticText "TEST PIPELINE"
+    - list
+      - listitem [level=1]
+        - link "Cases" [ref=e33]
+          - StaticText "Cases"
+        - StaticText "1"
+      - listitem [level=1]
+        - link "Sets" [ref=e34]
+          - StaticText "Sets"
+        - StaticText "2"
+      - listitem [level=1]
+        - link "Plans" [ref=e35]
+          - StaticText "Plans"
+        - StaticText "3"
+      - listitem [level=1]
+        - link "Runs" [ref=e36]
+          - StaticText "Runs"
+        - StaticText "4"
+      - listitem [level=1]
+        - link "Goldens" [ref=e37]
+          - StaticText "Goldens"
+        - StaticText "5"
+  - generic
+    - StaticText "SETUP"
+    - list
+      - listitem [level=1]
+        - link "Personas" [ref=e38]
+          - StaticText "Personas"
+      - listitem [level=1]
+        - link "Environments" [ref=e39]
+          - StaticText "Environments"
+      - listitem [level=1]
+        - link "Knowledge" [ref=e40]
+          - StaticText "Knowledge"
+      - listitem [level=1]
+        - link "Extensions" [ref=e41]
+          - StaticText "Extensions"
+  - link "New here? Describe a test in Chat. The agent records it, then you replay it from Runs." [ref=e27]
+    - StaticText "New here?"
+    - paragraph
+      - StaticText "Describe a test in Chat. The agent records it, then you replay it from Runs."
+  - list
+    - listitem [level=1]
+      - link "Settings" [ref=e30]
+        - StaticText "Settings"
+  - button "Toggle Sidebar" [ref=e28]
+  - main
+    - sectionheader
+      - button "Toggle Sidebar" [ref=e4]
+        - image
+        - StaticText "Toggle Sidebar"
+      - StaticText "Workspace"
+      - StaticText "/"
+      - StaticText "Settings"
+      - button "Theme" [expanded=false, ref=e13]
+    - heading "Settings" [level=1, ref=e5]
+    - paragraph
+      - StaticText "Workbench preferences, stored in _config/settings.json next to your scenarios. Environment variables override stored values."
+    - button "Refresh" [ref=e6]
+    - generic
+      - StaticText "CHAT"
+      - LabelText
+        - StaticText "Agent backend"
+      - paragraph
+        - StaticText "Which agent the Chat tab talks to. auto picks the first installed backend (cursor, then pi, then opencode)."
+      - combobox "Agent backend" [expanded=false, ref=e7]: auto
+        - generic [ref=e14] clickable [onclick]
+          - StaticText "auto"
+    - generic
+      - StaticText "REPLAY"
+      - LabelText
+        - StaticText "Headed browser by default"
+      - paragraph
+        - StaticText "New replays and persona connects start with a visible browser window instead of headless. Per-run toggles still win."
+      - checkbox "Headed browser by default" [checked=false, ref=e8]
+    - generic
+      - StaticText "GOLDEN STORAGE"
+      - LabelText
+        - StaticText "Store backend"
+      - paragraph
+        - StaticText "Where shot/domshot goldens live. local keeps them in the scenario repo (default); github and turso sync them to a remote store."
+      - combobox "Golden store backend" [expanded=false, ref=e9]: local (repo)
+        - generic [ref=e15] clickable [onclick]
+          - StaticText "local (repo)"
+      - paragraph
+        - StaticText "Store: local"
+      - button "Save" [ref=e10]
+    - generic
+      - StaticText "PATHS"
+      - DescriptionList
+        - term "Scenario root"
+        - definition
+          - StaticText "/workspace/evals/selftest/scenarios"
+        - term "Settings file"
+        - definition
+          - StaticText "/workspace/evals/selftest/scenarios/_config/settings.json"

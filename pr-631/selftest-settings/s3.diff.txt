@@ -1,0 +1,10 @@
+--- baselines/s3.snap.txt
++++ snapshots/s3.txt
+@@ -34,7 +34,6 @@
+       - listitem [level=1]
+         - link "Goldens" [ref=e]
+           - StaticText "Goldens"
+-        - StaticText "5"
+   - generic
+     - StaticText "SETUP"
+     - list
