@@ -1,0 +1,27 @@
+name: docs-check
+# Its own workflow, not a job in ci.yml, because this gate reads the PR body
+# from the webhook payload and so must re-run on `edited`. Filling in
+# Docs-exempt, or pushing a doc update's description, is an edit, and a
+# re-run of the old run replays the stale payload. Keeping it separate means
+# a description tweak doesn't re-run the Rust matrix.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  docs-check:
+    name: docs check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+      - name: require docs for reader-visible changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          scripts/check-pr-docs.sh

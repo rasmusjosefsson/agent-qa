@@ -225,7 +225,11 @@ Default root: `<cwd>/tmp/agent-qa-scenarios/`. Override with
   If you find yourself typing flag tables there, stop and update each
   verb's `--help` output instead.
 - Skill drift — when a verb's flags or output change, update
-  `skill-data/core/SKILL.md` and the matching reference.
+  `skill-data/core/SKILL.md` and the matching reference. A pull request
+  that changes `cli/src`, the launcher, or the workbench also updates a
+  reader-facing page (`docs/*.md` other than `gap-map.md` and
+  `qa-playground.md`, `skill-data/`, or `README.md`), or carries a
+  `Docs-exempt:` line. `scripts/check-pr-docs.sh` is that check.
 - Artefact path drift — paths come from `cli/src/paths.rs`.
   Recomputing `scenario_dir.join(...)` inline is how artefacts end up
   in two places.
