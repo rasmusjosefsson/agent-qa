@@ -12,9 +12,9 @@
 //! after the shift so the ring stays on the target. Finished steps stay
 //! quiet, the running step is highlighted, and later steps stay faded.
 //! The dock is `aria-hidden` and its rows sit in an open shadow root, so
-//! a locator cannot match a step label. Screenshots hide the dock and
-//! unshift the page. Headless replays skip it; the workbench already
-//! lists the steps.
+//! a locator cannot match a step label. Screenshots are cropped to the
+//! page beside the dock after the shot, so the list is not taken down.
+//! Headless replays skip it; the workbench already lists the steps.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -24,137 +24,77 @@ use crate::browser;
 use crate::scenario::{ClaimSubject, Locator, NameMatch, RawLocatorKind, Step, Verb};
 use crate::value::{substitute_scenario_vars, ValueScope};
 
-/// Hide/show the overlay around a screenshot capture — `shot` claims
-/// pixel-compare the saved sidecar, and a painted cursor or the step
-/// dock would read as page drift. Hiding also unshifts the page; showing
-/// shifts it back when the dock is present.
+/// Hide/show the cursor, ripple, and target ring around a screenshot.
+/// The step dock stays. Pulling it down unshifts the page, and the
+/// recording holds that frame until the dock is built again.
 pub fn set_visible(session: &str, visible: bool) {
     let _ = browser::eval_expression(session, &visibility_expr(visible));
 }
 
-/// Save a screenshot with the cursor and the step dock hidden, then put
-/// them back on the same CDP turn. A separate hide command leaves the
-/// page unshifted for the whole screenshot subprocess, and the recording
-/// holds that frame until the dock returns.
-pub fn capture_clean_screenshot(session: &str, path: &std::path::Path) -> bool {
-    let captured = crate::cdp::with_connection(session, |conn| {
-        let sid = attach_app_page(conn)?;
-        let hidden = conn
-            .call_on(
-                "Runtime.evaluate",
-                json!({
-                    "expression": visibility_expr(false),
-                    "returnByValue": true,
-                }),
-                &sid,
-            )
-            .map(|v| v.get("exceptionDetails").is_none())
-            .unwrap_or(false);
-        let shot = if hidden {
-            let params = screenshot_params(conn, &sid);
-            conn.call_on("Page.captureScreenshot", params, &sid)
-        } else {
-            Err(anyhow::anyhow!("step dock did not hide for the screenshot"))
-        };
-        let _ = conn.call_on(
-            "Runtime.evaluate",
-            json!({
-                "expression": visibility_expr(true),
-                "returnByValue": true,
-            }),
-            &sid,
-        );
-        shot
-    });
-    match captured {
-        Ok(result) => write_png(
-            path,
-            result.get("data").and_then(|v| v.as_str()).unwrap_or(""),
-        ),
+/// Save a screenshot of the page beside the dock. The capture is a normal
+/// viewport shot, then the dock is cropped off the file. A CDP clip
+/// capture is itself a frame of the recording, so the panel would appear
+/// to vanish for that frame.
+pub fn capture_clean_screenshot(session: &str, path: &std::path::Path, timeout_ms: u64) -> bool {
+    let left = dock_crop_px(session);
+    let _ = browser::eval_expression(session, CURSOR_HIDE);
+    let ok = matches!(
+        browser::screenshot(session, path, true, Some(timeout_ms)),
+        Ok(true)
+    );
+    let _ = browser::eval_expression(session, CURSOR_SHOW);
+    ok && crop_dock(path, left)
+}
+
+const DOCK_WIDTH_EXPR: &str = r#"(function(){
+ var d=document.getElementById('__aq_log');
+ if(!d||!d.getBoundingClientRect)return 0;
+ var r=d.getBoundingClientRect();
+ if(!(r.width>0))return 0;
+ return Math.round(r.right*(window.devicePixelRatio||1));
+})()"#;
+
+const CURSOR_HIDE: &str = r#"(function(){
+ ['__aq_ring','__aq_cursor','__aq_pulse','__aq_rail','__aq_step'].forEach(function(id){
+  var e=document.getElementById(id);if(e)e.style.display='none';
+ });
+})()"#;
+
+const CURSOR_SHOW: &str = r#"(function(){
+ ['__aq_ring','__aq_cursor','__aq_pulse','__aq_rail','__aq_step'].forEach(function(id){
+  var e=document.getElementById(id);if(e)e.style.display='';
+ });
+})()"#;
+
+fn dock_crop_px(session: &str) -> u32 {
+    let Ok(out) = browser::eval_expression(session, DOCK_WIDTH_EXPR) else {
+        return 0;
+    };
+    let t = out.trim().trim_matches('"');
+    t.parse::<f64>()
+        .ok()
+        .map(|n| n.round().max(0.0) as u32)
+        .unwrap_or(0)
+}
+
+/// Drop the dock strip from a saved shot. The live page is unchanged.
+fn crop_dock(path: &std::path::Path, left: u32) -> bool {
+    if left == 0 {
+        return true;
+    }
+    let img = match image::open(path) {
+        Ok(img) => img,
         Err(e) => {
-            if !crate::cdp::is_unavailable(&e) {
-                eprintln!("[v2-replay] clean screenshot: {e:#}");
-            }
-            false
+            eprintln!("[v2-replay] clean screenshot read: {e}");
+            return false;
         }
-    }
-}
-
-fn attach_app_page(conn: &mut crate::cdp::CdpConnection) -> anyhow::Result<String> {
-    let targets = conn.call("Target.getTargets", json!({}))?;
-    let app_id = targets
-        .get("targetInfos")
-        .and_then(|t| t.as_array())
-        .and_then(|infos| {
-            infos.iter().rev().find_map(|t| {
-                if t.get("type").and_then(|v| v.as_str()) != Some("page") {
-                    return None;
-                }
-                let url = t.get("url").and_then(|v| v.as_str()).unwrap_or("");
-                if !crate::cdp::is_app_page(url) {
-                    return None;
-                }
-                t.get("targetId")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string)
-            })
-        })
-        .ok_or_else(|| anyhow::anyhow!("no app page for screenshot"))?;
-    let attached = conn.call(
-        "Target.attachToTarget",
-        json!({ "targetId": app_id, "flatten": true }),
-    )?;
-    attached
-        .get("sessionId")
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
-        .ok_or_else(|| anyhow::anyhow!("Target.attachToTarget: no sessionId"))
-}
-
-/// Viewport shot, or the full document when it is taller or wider than
-/// the window — the same case `screenshot --full` covers.
-fn screenshot_params(conn: &mut crate::cdp::CdpConnection, sid: &str) -> Json {
-    let metrics = conn
-        .call_on("Page.getLayoutMetrics", json!({}), sid)
-        .unwrap_or(Json::Null);
-    let content_w = css_px(&metrics, "/cssContentSize/width");
-    let content_h = css_px(&metrics, "/cssContentSize/height");
-    let view_w = css_px(&metrics, "/cssLayoutViewport/clientWidth");
-    let view_h = css_px(&metrics, "/cssLayoutViewport/clientHeight");
-    if content_w > view_w + 1.0 || content_h > view_h + 1.0 {
-        json!({
-            "format": "png",
-            "captureBeyondViewport": true,
-            "clip": {
-                "x": 0,
-                "y": 0,
-                "width": content_w,
-                "height": content_h,
-                "scale": 1,
-            },
-        })
-    } else {
-        json!({ "format": "png" })
-    }
-}
-
-fn css_px(v: &Json, path: &str) -> f64 {
-    let Some(n) = v.pointer(path) else {
-        return 0.0;
     };
-    n.as_f64()
-        .or_else(|| n.as_i64().map(|i| i as f64))
-        .unwrap_or(0.0)
-}
-
-fn write_png(path: &std::path::Path, data: &str) -> bool {
-    use base64::Engine;
-    let bytes = match base64::engine::general_purpose::STANDARD.decode(data.trim()) {
-        Ok(bytes) if !bytes.is_empty() => bytes,
-        _ => return false,
-    };
-    if let Err(e) = std::fs::write(path, bytes) {
-        eprintln!("[v2-replay] clean screenshot write: {e}");
+    if left >= img.width() {
+        return true;
+    }
+    let cropped = img.crop_imm(left, 0, img.width() - left, img.height());
+    if let Err(e) = cropped.save(path) {
+        eprintln!("[v2-replay] clean screenshot crop: {e}");
         return false;
     }
     true
@@ -162,14 +102,8 @@ fn write_png(path: &std::path::Path, data: &str) -> bool {
 
 fn visibility_expr(visible: bool) -> String {
     let vis = if visible { "" } else { "none" };
-    let show = if visible { "true" } else { "false" };
     format!(
-        "(function(show){{{shift}\n\
-         try{{document.querySelectorAll('#__aq_rail,#__aq_step,#__aq_ring,#__aq_cursor,#__aq_pulse,#__aq_log').forEach(function(e){{e.style.display='{vis}'}})}}catch(e){{}}\n\
-         aqShift(show&&!!document.getElementById('__aq_log'));}})({show})",
-        shift = SHIFT_FN,
-        vis = vis,
-        show = show,
+        "(function(){{try{{document.querySelectorAll('#__aq_rail,#__aq_step,#__aq_ring,#__aq_cursor,#__aq_pulse').forEach(function(e){{e.style.display='{vis}'}})}}catch(e){{}}}})()"
     )
 }
 
@@ -553,7 +487,10 @@ fn close_leftover_log_windows(session: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{dock_expr, row_state, visibility_expr, DOCK_BODY, POINTER_BODY};
+    use super::{
+        dock_expr, row_state, visibility_expr, CURSOR_HIDE, CURSOR_SHOW, DOCK_BODY,
+        DOCK_WIDTH_EXPR, POINTER_BODY,
+    };
 
     #[test]
     fn overlay_paints_the_action_and_not_a_step_list() {
@@ -586,11 +523,25 @@ mod tests {
         assert!(!expr.contains("createTarget"));
         assert!(!expr.contains("newWindow"));
         let hidden = visibility_expr(false);
-        assert!(hidden.contains("#__aq_log"));
-        assert!(hidden.contains("__aq_shifted"));
-        assert!(hidden.contains("})(false)"));
-        assert!(visibility_expr(true).contains("})(true)"));
+        assert!(hidden.contains("#__aq_cursor"));
+        assert!(!hidden.contains("#__aq_log"));
+        assert!(!hidden.contains("aqShift"));
+        assert!(DOCK_WIDTH_EXPR.contains("__aq_log"));
+        assert!(DOCK_WIDTH_EXPR.contains("r.right"));
+        assert!(!DOCK_WIDTH_EXPR.contains("aqShift"));
+        assert!(!CURSOR_HIDE.contains("__aq_log"));
+        assert!(!CURSOR_SHOW.contains("__aq_log"));
         assert!(crate::cdp::is_app_page("http://127.0.0.1:8765/"));
         assert!(!crate::cdp::is_app_page("data:text/html,aq-step-log"));
+        let dir = std::env::temp_dir();
+        let shot = dir.join(format!("aq-dock-crop-{}.png", std::process::id()));
+        image::RgbImage::from_pixel(10, 4, image::Rgb([10, 20, 30]))
+            .save(&shot)
+            .unwrap();
+        assert!(super::crop_dock(&shot, 4));
+        let cropped = image::open(&shot).unwrap();
+        assert_eq!(cropped.width(), 6);
+        assert_eq!(cropped.height(), 4);
+        let _ = std::fs::remove_file(&shot);
     }
 }

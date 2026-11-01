@@ -18,7 +18,8 @@ All notable changes to agent-qa are documented here. This project follows
   a step list in that same window, docked on the left. The page shifts
   right so the list does not cover the UI. Finished steps stay quiet,
   the running step is highlighted, and later steps stay faded. Step
-  screenshots hide the dock and the cursor so pixel goldens stay clean.
+  screenshots are the page beside that list, so the list stays up for
+  the whole replay. The cursor is left out of the shot.
 
 - The replay player follows the workbench theme. In light mode the
   stage, timeline, and controls are light; in dark mode they stay dark.

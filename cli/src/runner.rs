@@ -2534,12 +2534,12 @@ fn capture_step_sidecars(
     }
     if let Ok(path) = step_sidecar_path(run, SidecarKind::Screenshots, step_id) {
         let masked = !shot_masks.is_empty() && apply_shot_mask(session, shot_masks);
-        // The replay overlay (cursor, ripple, target ring, step dock) is
-        // page DOM — hide it and unshift the page for the saved capture,
-        // or `shot` claims diff our own chrome as page drift. Showing it
-        // again puts the dock back and shifts the page beside it.
-        let cleaned =
-            record_overlay && crate::video_overlay::capture_clean_screenshot(session, &path);
+        // The cursor and target ring are page DOM. Hide them for the saved
+        // capture, and when the step dock is up photograph only the page
+        // beside it. Taking the dock down shifts the page back, and the
+        // recording holds that frame until the dock returns.
+        let cleaned = record_overlay
+            && crate::video_overlay::capture_clean_screenshot(session, &path, cap_ms);
         if !cleaned {
             if record_overlay {
                 crate::video_overlay::set_visible(session, false);
