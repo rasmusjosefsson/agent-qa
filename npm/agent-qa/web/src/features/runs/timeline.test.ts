@@ -40,6 +40,37 @@ describe('buildMarkers', () => {
     expect(markers.map((m) => m.at)).toEqual([1.5, 2.5, 3.5])
   })
 
+  it('places click, fill, and press on their cue times', () => {
+    const markers = buildMarkers(
+      [
+        { idx: 1, id: 'go', intent: 'Open the homepage', kind: 'do:goto', status: 'pass', ms: 200 },
+        { idx: 2, id: 'hit', intent: 'Click Sign in', kind: 'do:click', status: 'pass', ms: 200, screenshot: 'screenshots/hit.png' },
+        { idx: 3, id: 'mail', intent: 'Fill the email field', kind: 'do:fill', status: 'pass', ms: 200 },
+        { idx: 4, id: 'key', intent: 'Press Enter', kind: 'do:press', status: 'pass', ms: 200 },
+        { idx: 5, id: 'see', intent: 'Verify the inbox', kind: 'check', status: 'fail', ms: 200 },
+      ],
+      [
+        { idx: 1, tMs: 400 },
+        { idx: 2, tMs: 1600 },
+        { idx: 3, tMs: 2800 },
+        { idx: 4, tMs: 4000 },
+        { idx: 5, tMs: 5200 },
+      ],
+      7
+    )
+    expect(markers.map((m) => m.cat)).toEqual(['nav', 'click', 'fill', 'press', 'assert'])
+    expect(markers.map((m) => m.at)).toEqual([0.4, 1.6, 2.8, 4, 5.2])
+    expect(markers.map((m) => m.label)).toEqual([
+      'Open the homepage',
+      'Click Sign in',
+      'Fill the email field',
+      'Press Enter',
+      'Verify the inbox',
+    ])
+    expect(markers[1].shot).toBe(true)
+    expect(markers[4].status).toBe('fail')
+  })
+
   it('scales markers down when the steps outlast the recording', () => {
     const long: TimelineStep[] = [
       { idx: 1, id: 'a', intent: 'a', ms: 3000, status: 'pass' },
