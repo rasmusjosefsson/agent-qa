@@ -7,15 +7,15 @@ description: Drive the agent-qa workbench (localhost UI) and its CLI to prove ru
 
 The primary surface is the workbench: `agent-qa web`, a localhost UI for runs, cases, and settings. The CLI is the other user surface (record, flush, replay). Both must talk to the same disposable scenarios root. Do not drive the default workbench on port 7878, and do not write `tmp/agent-qa-scenarios` in the repo.
 
-Scripts live next to this file. Run them from anywhere; they locate the repo.
+Scripts live next to this file, under `.agents/skills/verify-agent-qa/`. That directory is the skill. `.cursor/skills/verify-agent-qa` is a symlink to it for Cursor. Run the scripts from anywhere; they locate the repo.
 
 ```bash
-.cursor/skills/verify-agent-qa/scripts/launch.sh
-.cursor/skills/verify-agent-qa/scripts/doctor.sh
-.cursor/skills/verify-agent-qa/scripts/browser.sh <agent-browser args>
-.cursor/skills/verify-agent-qa/scripts/aq.sh <agent-qa args>
-.cursor/skills/verify-agent-qa/scripts/fixture.sh start|url|stop   # tmux session aqa-fixture-<run-id>
-.cursor/skills/verify-agent-qa/scripts/cleanup.sh
+.agents/skills/verify-agent-qa/scripts/launch.sh
+.agents/skills/verify-agent-qa/scripts/doctor.sh
+.agents/skills/verify-agent-qa/scripts/browser.sh <agent-browser args>
+.agents/skills/verify-agent-qa/scripts/aq.sh <agent-qa args>
+.agents/skills/verify-agent-qa/scripts/fixture.sh start|url|stop   # tmux session aqa-fixture-<run-id>
+.agents/skills/verify-agent-qa/scripts/cleanup.sh
 ```
 
 `launch.sh` prints the workbench origin on stdout (`http://127.0.0.1:<port>`, no trailing slash) and writes `/tmp/agent-qa-verify/current`. Append paths as `$VERIFY_URL/cases`. A trailing slash on `VERIFY_URL` makes `$VERIFY_URL/cases` request `//cases`, which the server does not route to Cases. The other scripts load the current run. Evidence goes to `/tmp/agent-qa-verify-evidence/<run-id>/` and survives cleanup.
@@ -72,14 +72,14 @@ Load the feature map in `features/README.md` and follow one feature file. Browse
 First browser command for a UI proof, after `open`:
 
 ```bash
-.cursor/skills/verify-agent-qa/scripts/browser.sh set viewport 1280 800
+.agents/skills/verify-agent-qa/scripts/browser.sh set viewport 1280 800
 ```
 
 Snapshot and screenshot:
 
 ```bash
-.cursor/skills/verify-agent-qa/scripts/browser.sh snapshot
-.cursor/skills/verify-agent-qa/scripts/browser.sh screenshot /tmp/agent-qa-verify-evidence/<run-id>/<feature>/page.png
+.agents/skills/verify-agent-qa/scripts/browser.sh snapshot
+.agents/skills/verify-agent-qa/scripts/browser.sh screenshot /tmp/agent-qa-verify-evidence/<run-id>/<feature>/page.png
 ```
 
 `snapshot` prints the accessibility tree on stdout. `snapshot -i` drops non-interactive text such as `No test cases yet`; use a full snapshot when the proof is that text. `screenshot` takes a `.png` path as its only argument. Wait for a CSS or ARIA selector with `browser.sh wait "<selector>"` rather than sleeping.
@@ -102,9 +102,9 @@ Record the feature id in a one-line `note.txt` beside the artifacts. An entry po
 ## Cleanup
 
 ```bash
-.cursor/skills/verify-agent-qa/scripts/cleanup.sh
-.cursor/skills/verify-agent-qa/scripts/cleanup.sh <run-id>
-.cursor/skills/verify-agent-qa/scripts/cleanup.sh --all
+.agents/skills/verify-agent-qa/scripts/cleanup.sh
+.agents/skills/verify-agent-qa/scripts/cleanup.sh <run-id>
+.agents/skills/verify-agent-qa/scripts/cleanup.sh --all
 ```
 
 With no arguments it stops the run id in `/tmp/agent-qa-verify/current`. It closes only `VERIFY_BROWSER_SESSION` and `VERIFY_RECORD_SESSION`, kills the fixture pid in `<state>/fixture.pid` if `fixture.sh start` was used, kills the server pid from `<state>/server.pid`, kills that run's tmux session, and deletes `<state>`. It does not kill by process name and it does not delete `/tmp/agent-qa-verify-evidence`.

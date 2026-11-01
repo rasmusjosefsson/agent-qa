@@ -4,9 +4,9 @@ This directory is the maintained source for verifying the user-facing behavior o
 
 ## Baseline preconditions
 
-- Launch an isolated workbench with `.cursor/skills/verify-agent-qa/scripts/launch.sh`. It prints `VERIFY_URL` (port 7879 or the next free port up to 7900, never 7878).
+- Launch an isolated workbench with `.agents/skills/verify-agent-qa/scripts/launch.sh`. It prints `VERIFY_URL` (port 7879 or the next free port up to 7900, never 7878).
 - The scenarios root is `$VERIFY_ROOT` under `/tmp/agent-qa-verify/<run-id>/scenarios`, started empty. The record dir is `$VERIFY_RECORD`.
-- Run `.cursor/skills/verify-agent-qa/scripts/doctor.sh` and require `ok <url>` plus the scenarios root from this run.
+- Run `.agents/skills/verify-agent-qa/scripts/doctor.sh` and require `ok <url>` plus the scenarios root from this run.
 - Drive the workbench only through `scripts/browser.sh` (session `aqa-workbench-<run-id>`). Drive the CLI only through `scripts/aq.sh`.
 - Never drive port 7878, the repo `tmp/agent-qa-scenarios` directory, or a workbench this run did not start.
 
