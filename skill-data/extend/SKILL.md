@@ -1,12 +1,14 @@
 ---
 name: extend
-description: How to extend agent-qa from a downstream repo — add vendor-specific runtime behavior via plugins (auth, session policy, setup hooks, healing strategies) and add per-repo skill content via `[skills] extra-dirs`. Read this when the user asks "how do I add my own plugin", "how do I register auth for my product", "how do I ship a skill from my repo", "how do I extend agent-qa", or before authoring an `agent-qa-plugin-*` binary or new SKILL.md.
+description: How to extend agent-qa from a downstream repo — add vendor-specific runtime behavior via plugins (auth, session policy, setup hooks, healing strategies), point a desktop, iOS, or Android scenario at a surface provider, and add per-repo skill content via `[skills] extra-dirs`. Read this when the user asks "how do I add my own plugin", "how do I register auth for my product", "how do I replay a desktop app", "how do I ship a skill from my repo", "how do I extend agent-qa", or before authoring an `agent-qa-plugin-*` binary, a surface provider, or a new SKILL.md.
 ---
 
 # Extending agent-qa from a downstream repo
 
-Every app-specific concern lands via one of two extension points, registered in
-`agent-qa.toml` files that the CLI auto-discovers in two layers:
+App-specific concerns land via a plugin or extra skill content. A non-web
+surface is a third process, a surface provider, and it is not a plugin.
+All three are registered in `agent-qa.toml` files that the CLI
+auto-discovers in two layers:
 
 - **Global** (~/.agent-qa/agent-qa.toml) — defaults for every cwd.
 - **Per-repo** (nearest `agent-qa.toml` walked up from cwd) — overlay.
@@ -14,6 +16,7 @@ Every app-specific concern lands via one of two extension points, registered in
 | Need | Extension point | Lives where |
 |---|---|---|
 | Runtime behavior (auth, session policy, setup hook, healing) | **Plugin** (JSON-over-stdio binary) | `[plugins]` table |
+| Desktop, iOS, or Android replay | **Surface provider** (JSON-over-stdio binary) | `[surfaces]` table |
 | Extra skill markdown the agent should read (runbooks, page maps, glossaries) | **Extra skill-data dir** | `[skills] extra-dirs` |
 
 No fork of agent-qa is ever needed. The CLI stays version-locked to npm
@@ -79,6 +82,24 @@ agent-qa plugins list      # what plugins were discovered + from where
 agent-qa plugins doctor    # ping each, report kinds served
 agent-qa skills list       # merged catalogue: embedded + external
 ```
+
+## Surface providers
+
+Register a provider when a scenario sets `surface` to `desktop`, `ios`, or
+`android`. The provider launches the app and returns its accessibility
+tree. It is not a plugin: `plugins doctor` does not ping it, and
+`[plugins]` does not resolve it.
+
+```toml
+[surfaces]
+desktop = "./providers/desktop"   # relative to this file, or a $PATH name
+```
+
+`AGENT_QA_SURFACE_DESKTOP` overrides the table. The same form works for
+`ios` and `android`. The environment variable wins over the nearest
+`agent-qa.toml`, which wins over the global file. The web surface is
+built in and ignores the table. The wire contract is `docs/surfaces.md`
+in the agent-qa repo.
 
 ---
 
