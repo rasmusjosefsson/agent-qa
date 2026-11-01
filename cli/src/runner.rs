@@ -1278,6 +1278,24 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                             }
                         }
                     }
+                    // Option-label drift is healed inside select, while the
+                    // list is still open. Record it on the same audit trail
+                    // as a locator heal so the run can pass and a person can
+                    // see which label was rewritten.
+                    if let Some(heal) = crate::auto_heal::take_option_heal() {
+                        if outcome.is_ok() {
+                            healed_steps.push(id.to_string());
+                            eprintln!(
+                                "[v2-replay] auto-heal: step '{id}' option {:?} → {:?} ({})",
+                                heal.from, heal.to, heal.strategy
+                            );
+                            if let Err(e) = crate::auto_heal::persist_option(&run, id, &heal) {
+                                eprintln!(
+                                    "[v2-replay] option-heal audit write failed (continuing): {e}"
+                                );
+                            }
+                        }
+                    }
                     match outcome {
                         Ok(saved) => {
                             if let (Some(name), Some(value)) = (save_as.as_deref(), saved) {

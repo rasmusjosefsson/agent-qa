@@ -982,12 +982,102 @@ fn select_via_combobox(
         let _ = browser::press_key(session, "ArrowDown");
     }
     // Pick the option by name (role=option), then fall back to visible text.
-    if dom_activate::activate_role_name(session, "option", option)?
-        || dom_activate::activate_text(session, option)?
-    {
-        return Ok(());
+    // A miss with the list open is usually a volatile suffix (a balance, a
+    // count). Heal only when exactly one live option matches. An empty list
+    // is waited on once, then the opener is clicked again — the control is
+    // often still disabled until the previous choice's change event lands.
+    // The second click is last: clicking an already-open popup toggles it
+    // shut.
+    match resolve_open_option(session, option)? {
+        Listed::Picked => return Ok(()),
+        Listed::NoMatch => {
+            bail!("select: opened combobox {opener_name:?} but found no option matching {option:?}")
+        }
+        Listed::Empty => {}
     }
-    bail!("select: opened combobox {opener_name:?} but found no option matching {option:?}")
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    match resolve_open_option(session, option)? {
+        Listed::Picked => return Ok(()),
+        Listed::NoMatch => {
+            bail!("select: opened combobox {opener_name:?} but found no option matching {option:?}")
+        }
+        Listed::Empty => {}
+    }
+    let reopened = if let Some(steps) = &opener_scope {
+        matches!(
+            dom_activate::act_scoped(
+                session,
+                opener_role,
+                opener_name,
+                steps,
+                RoleAct::Click,
+                None
+            )?,
+            dom_activate::ScopedOutcome::Done
+        )
+    } else if opener_name.is_empty() {
+        dom_activate::activate_role_name(session, opener_role, "")?
+    } else {
+        dom_activate::activate_role_name(session, opener_role, opener_name)?
+            || dom_activate::activate_text(session, opener_name)?
+    };
+    if !reopened {
+        bail!("select: combobox {opener_name:?} did not offer any options");
+    }
+    match resolve_open_option(session, option)? {
+        Listed::Picked => Ok(()),
+        Listed::Empty => {
+            bail!("select: combobox {opener_name:?} did not offer any options")
+        }
+        Listed::NoMatch => {
+            bail!("select: opened combobox {opener_name:?} but found no option matching {option:?}")
+        }
+    }
+}
+
+enum Listed {
+    Picked,
+    Empty,
+    NoMatch,
+}
+
+/// Exact option, then a unique ladder match. `Empty` means the popup
+/// offered no option names yet.
+fn resolve_open_option(session: &str, option: &str) -> anyhow::Result<Listed> {
+    if pick_option(session, option)? {
+        return Ok(Listed::Picked);
+    }
+    let listed = crate::auto_heal::option_names(session).unwrap_or_default();
+    if heal_listed_option(session, option, &listed)? {
+        return Ok(Listed::Picked);
+    }
+    if listed.is_empty() {
+        Ok(Listed::Empty)
+    } else {
+        Ok(Listed::NoMatch)
+    }
+}
+
+fn pick_option(session: &str, option: &str) -> anyhow::Result<bool> {
+    use crate::dom_activate;
+    Ok(dom_activate::activate_role_name(session, "option", option)?
+        || dom_activate::activate_text(session, option)?)
+}
+
+/// When the recorded option label is not in the open list, choose the one
+/// live option the heal ladder accepts (digit drift, a dropped balance).
+fn heal_listed_option(session: &str, option: &str, names: &[String]) -> anyhow::Result<bool> {
+    if !crate::auto_heal::enabled() {
+        return Ok(false);
+    }
+    let Some(heal) = crate::auto_heal::match_listed_option(option, names) else {
+        return Ok(false);
+    };
+    if !pick_option(session, &heal.to)? {
+        return Ok(false);
+    }
+    crate::auto_heal::store_option_heal(heal);
+    Ok(true)
 }
 
 // ---------- end helpers ----------
@@ -3672,6 +3762,113 @@ mod tests {
         let err = dispatch_do(&s, &ctx, &mut scope).unwrap_err().to_string();
         clear_fake();
         assert!(err.contains("could not find combobox opener"), "got: {err}");
+    }
+
+    #[test]
+    fn select_heals_an_option_whose_balance_changed() {
+        let _g = lock_env();
+        std::env::remove_var("AGENT_QA_NO_HEAL");
+        let _ = crate::auto_heal::take_option_heal();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        let body = format!(
+            r#"#!/usr/bin/env python3
+import sys
+args = " ".join(sys.argv[1:])
+open({log:?}, "a").write(args + "\n")
+if "__aqCollectNames" in args:
+    sys.stdout.write('{{"names":["Everyday Checking","High-Yield Savings"]}}')
+elif "12,800.00" in args:
+    sys.stdout.write("false")
+elif "High-Yield Savings" in args:
+    sys.stdout.write("true")
+else:
+    sys.stdout.write("true")
+"#
+        );
+        let bin = write_exec(tmp.path(), "agent-browser", &body);
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+        let s = parse(json!({
+            "id": "s1", "intent": "smart-select To Account", "kind": "do", "verb": "select",
+            "on": { "role": "combobox", "name": "To Account" },
+            "value": { "from": "literal", "literal": "High-Yield Savings — $12,800.00" }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).expect("healed select");
+        let heal = crate::auto_heal::take_option_heal().expect("option heal");
+        clear_fake();
+        assert_eq!(heal.strategy, "name-prefix");
+        assert_eq!(heal.to, "High-Yield Savings");
+        let out = fs::read_to_string(&log).unwrap();
+        assert!(
+            out.contains("High-Yield Savings") && !out.contains("could not find"),
+            "browser log:\n{out}"
+        );
+    }
+
+    #[test]
+    fn select_waits_when_the_option_list_is_not_ready() {
+        let _g = lock_env();
+        std::env::remove_var("AGENT_QA_NO_HEAL");
+        let _ = crate::auto_heal::take_option_heal();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        let state = tmp.path().join("collects");
+        let body = format!(
+            r#"#!/usr/bin/env python3
+import sys
+args = " ".join(sys.argv[1:])
+open({log:?}, "a").write(args + "\n")
+if "__aqCollectNames" in args:
+    n = 0
+    try:
+        n = int(open({state:?}).read())
+    except Exception:
+        n = 0
+    n += 1
+    open({state:?}, "w").write(str(n))
+    if n == 1:
+        sys.stdout.write('{{"names":[]}}')
+    else:
+        sys.stdout.write('{{"names":["Everyday Checking","High-Yield Savings"]}}')
+elif "12,800.00" in args:
+    sys.stdout.write("false")
+elif "High-Yield Savings" in args:
+    sys.stdout.write("true")
+else:
+    sys.stdout.write("true")
+"#
+        );
+        let bin = write_exec(tmp.path(), "agent-browser", &body);
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+        let s = parse(json!({
+            "id": "s1", "intent": "smart-select To Account", "kind": "do", "verb": "select",
+            "on": { "role": "combobox", "name": "To Account" },
+            "value": { "from": "literal", "literal": "High-Yield Savings — $12,800.00" }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).expect("healed after the list appeared");
+        let heal = crate::auto_heal::take_option_heal().expect("option heal");
+        clear_fake();
+        assert_eq!(heal.to, "High-Yield Savings");
+        // Two collects: empty, then the list. A third would mean we clicked
+        // the opener again and toggled an open popup shut.
+        let n = fs::read_to_string(&state).unwrap_or_default();
+        assert_eq!(n.trim(), "2", "collect count");
     }
 
     #[test]

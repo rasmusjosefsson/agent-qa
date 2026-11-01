@@ -25,6 +25,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { cleanSummary, fmtRunTime, relRunTime, scenarioVerdict, verdictTone } from '../rows'
+import type { FlakyNote, ScenarioHealth } from '../types'
 import type { RunsApi } from '../useRuns'
 
 const TONE: Record<string, string> = {
@@ -36,19 +37,51 @@ const TONE: Record<string, string> = {
   chronic: 'bg-violet-500/12 text-violet-600 dark:text-violet-300',
 }
 
+// "smart-select To Account" → "To Account". Other intents stay as written.
+function stepName(intent: string | null | undefined, stepId: string): string {
+  const text = (intent || '').trim()
+  const stripped = text.replace(/^smart-(?:select|click|fill|assert|type)\s+/i, '')
+  return stripped || stepId
+}
+
+function explainFlake(error: string | null | undefined): string {
+  const text = (error || '').trim()
+  if (!text) return 'passed and failed across runs'
+  const option = /no option matching (?:"|“)(.+?)(?:"|”)/.exec(text)
+  if (option) return `the option “${option[1]}” was not in the list`
+  if (/did not offer any options/i.test(text)) return 'the list never opened'
+  if (/could not find combobox/i.test(text)) return 'the control was not on the page'
+  const line = text.split('\n')[0]
+  return line.length > 140 ? `${line.slice(0, 137)}…` : line
+}
+
+export function flakyTitle(h: Pick<ScenarioHealth, 'flaky' | 'flakyNotes'>): string {
+  const notes: FlakyNote[] = h.flakyNotes?.length
+    ? h.flakyNotes
+    : h.flaky.map((stepId) => ({ stepId }))
+  return notes
+    .map((n) => `${stepName(n.intent, n.stepId)} — ${explainFlake(n.lastError)}`)
+    .join('. ')
+}
+
 function HealthBadges({ sid, runs }: { sid: string; runs: RunsApi }) {
   const h = runs.healthBySid[sid]
   if (!h) return null
-  const pills: Array<{ tone: string; label: string; steps: string[] }> = [
-    { tone: 'flaky', label: 'flaky', steps: h.flaky },
-    { tone: 'slow', label: 'slow', steps: h.slow },
-    { tone: 'chronic', label: 'chronic', steps: h.chronic },
+  const pills: Array<{ tone: string; label: string; steps: string[]; title: string }> = [
+    { tone: 'flaky', label: 'flaky', steps: h.flaky, title: flakyTitle(h) },
+    { tone: 'slow', label: 'slow', steps: h.slow, title: `audit slow: ${h.slow.join(', ')}` },
+    {
+      tone: 'chronic',
+      label: 'chronic',
+      steps: h.chronic,
+      title: `audit heal-chronic: ${h.chronic.join(', ')}`,
+    },
   ].filter((p) => p.steps.length > 0)
   if (!pills.length) return null
   return (
     <>
       {pills.map((p) => (
-        <span key={p.tone} data-qa-volatile title={`audit ${p.label === 'chronic' ? 'heal-chronic' : p.label}: ${p.steps.join(', ')}`}>
+        <span key={p.tone} data-qa-volatile title={p.title}>
           <Badge tone={p.tone}>
             {p.steps.length} {p.label}
           </Badge>

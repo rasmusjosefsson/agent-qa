@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { RunsApi } from '../useRuns'
 import type { ScenarioSummary } from '../types'
-import { ScenarioSidebar } from './ScenarioSidebar'
+import { flakyTitle, ScenarioSidebar } from './ScenarioSidebar'
 
 function sc(sid: string, intent: string): ScenarioSummary {
   return {
@@ -42,8 +42,24 @@ describe('ScenarioSidebar health badges', () => {
     expect(html).toContain('2 flaky')
     expect(html).toContain('1 slow')
     expect(html).toContain('1 chronic')
-    expect(html).toContain('audit flaky: s1, s2')
+    expect(html).toContain('s1 — passed and failed across runs')
     expect(html).toContain('audit heal-chronic: s4')
+  })
+
+  it('names a flaky step and why its option text missed', () => {
+    expect(
+      flakyTitle({
+        flaky: ['s11'],
+        flakyNotes: [
+          {
+            stepId: 's11',
+            intent: 'smart-select To Account',
+            lastError:
+              'select: opened combobox "To Account" but found no option matching "High-Yield Savings — $12,800.00"',
+          },
+        ],
+      })
+    ).toBe('To Account — the option “High-Yield Savings — $12,800.00” was not in the list')
   })
 
   it('omits detectors with no flagged steps and scenarios with no flags', () => {

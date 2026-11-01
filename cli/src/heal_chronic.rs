@@ -212,6 +212,12 @@ pub(crate) fn collect_dir(
                 Some(s) => s.to_string(),
                 None => continue,
             };
+            // A select option label (a balance, a count) is expected to
+            // drift on every run. That heal has no locator patch to
+            // promote, so it is not chronic locator debt.
+            if v.get("mode").and_then(|m| m.as_str()) == Some("option-correction") {
+                continue;
+            }
             let acc = by_step.entry(step_id).or_default();
             acc.runs.insert(run_id.clone());
             if let Some(m) = v.get("mode").and_then(|m| m.as_str()) {
@@ -546,6 +552,26 @@ mod tests {
 
         assert_eq!(collect(&opts("j1", 3)).unwrap().len(), 1);
         assert_eq!(collect(&opts("j1", 2)).unwrap().len(), 2);
+        teardown();
+    }
+
+    #[test]
+    fn option_corrections_are_not_chronic() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        setup(tmp.path());
+        let jdir = tmp.path().join("j1");
+        // A balance that heals on every run is not a stale locator.
+        write_heal_row(&jdir, "rA", "s1", "option-correction");
+        write_heal_row(&jdir, "rB", "s1", "option-correction");
+        assert!(collect(&opts("j1", 2)).unwrap().is_empty());
+        // A real locator heal in a third run still counts only that run.
+        write_heal_row(&jdir, "rC", "s1", "locator-correction");
+        assert!(collect(&opts("j1", 2)).unwrap().is_empty());
+        write_heal_row(&jdir, "rD", "s1", "locator-correction");
+        let entries = collect(&opts("j1", 2)).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].runs_count, 2);
         teardown();
     }
 

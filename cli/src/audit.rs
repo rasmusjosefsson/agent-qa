@@ -913,7 +913,11 @@ fn verdict_for(run_dir: &std::path::Path) -> Result<VerdictInfo> {
             if mode == "value-rejection" && !rejection_steps.iter().any(|s| s == step) {
                 rejection_steps.push(step.to_string());
             }
-            if mode == "locator-correction" && !healed_steps.iter().any(|s| s == step) {
+            // Option-label heals are self-corrections too (FIX), but they
+            // have no locator patch — see heal-chronic, which ignores them.
+            if (mode == "locator-correction" || mode == "option-correction")
+                && !healed_steps.iter().any(|s| s == step)
+            {
                 healed_steps.push(step.to_string());
             }
         }
@@ -1496,7 +1500,9 @@ fn stats_all(json_out: bool, since_ms: Option<u64>, until_ms: Option<u64>) -> Re
 /// outcome sequence flips at least `--min-flips` times (default 2, i.e. a
 /// true P→F→P / F→P→F interleave) across at least `--min-runs` observations
 /// (default 3). One flip (P→F staying failed) reads as a regression, not
-/// flake, and `audit stats`/`list` already show that.
+/// flake, and `audit stats`/`list` already show that. A step whose last two
+/// observations both passed has settled — an earlier miss that auto-heal
+/// (or a later run) recovered is not an active flake.
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FlakyStep {
@@ -1506,6 +1512,8 @@ struct FlakyStep {
     seq: String,
     heals: usize,
     fail_runs: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    intent: Option<String>,
     last_error: Option<String>,
 }
 
@@ -1520,6 +1528,7 @@ fn collect_flaky(dir: &std::path::Path, min_flips: usize, min_runs: usize) -> Ve
         seen: usize,            // runs where the step reached a terminal row
         fail_runs: Vec<String>, // run ids where the terminal row was 'fail'
         heals: usize,           // heal.jsonl rows across all runs
+        last_intent: Option<String>,
         last_error: Option<String>,
     }
     let mut by_step: std::collections::BTreeMap<String, Acc> = Default::default();
@@ -1531,8 +1540,10 @@ fn collect_flaky(dir: &std::path::Path, min_flips: usize, min_runs: usize) -> Ve
             .unwrap_or_default();
         // Last terminal status per step wins (a step can emit running → fail
         // → pass under a retry/self-heal within one run).
-        let mut terminal: std::collections::BTreeMap<String, (char, Option<String>)> =
-            Default::default();
+        let mut terminal: std::collections::BTreeMap<
+            String,
+            (char, Option<String>, Option<String>),
+        > = Default::default();
         if let Ok(body) = fs::read_to_string(run.join("events.jsonl")) {
             for line in body.lines() {
                 let v: Value = match serde_json::from_str(line.trim()) {
@@ -1551,7 +1562,11 @@ fn collect_flaky(dir: &std::path::Path, min_flips: usize, min_runs: usize) -> Ve
                     .get("error")
                     .and_then(|e| e.as_str())
                     .map(|s| s.to_string());
-                terminal.insert(id, (if status == "pass" { 'P' } else { 'F' }, err));
+                let intent = v
+                    .get("intent")
+                    .and_then(|e| e.as_str())
+                    .map(|s| s.to_string());
+                terminal.insert(id, (if status == "pass" { 'P' } else { 'F' }, err, intent));
             }
         }
         let mut heal_steps: std::collections::BTreeSet<String> = Default::default();
@@ -1567,10 +1582,13 @@ fn collect_flaky(dir: &std::path::Path, min_flips: usize, min_runs: usize) -> Ve
         for id in &heal_steps {
             by_step.entry(id.clone()).or_default().heals += 1;
         }
-        for (id, (mark, err)) in terminal {
+        for (id, (mark, err, intent)) in terminal {
             let acc = by_step.entry(id).or_default();
             acc.seq.push(mark);
             acc.seen += 1;
+            if intent.is_some() {
+                acc.last_intent = intent;
+            }
             if mark == 'F' {
                 acc.fail_runs.push(run_id.clone());
                 acc.last_error = err;
@@ -1582,7 +1600,11 @@ fn collect_flaky(dir: &std::path::Path, min_flips: usize, min_runs: usize) -> Ve
         .into_iter()
         .filter_map(|(step_id, acc)| {
             let flips = acc.seq.windows(2).filter(|w| w[0] != w[1]).count();
-            if flips < min_flips || acc.seen < min_runs {
+            // Last two passes: the miss recovered and stayed recovered.
+            let settled = acc.seq.len() >= 2
+                && acc.seq[acc.seq.len() - 1] == 'P'
+                && acc.seq[acc.seq.len() - 2] == 'P';
+            if settled || flips < min_flips || acc.seen < min_runs {
                 return None;
             }
             Some(FlakyStep {
@@ -1592,6 +1614,7 @@ fn collect_flaky(dir: &std::path::Path, min_flips: usize, min_runs: usize) -> Ve
                 seq: acc.seq.iter().collect(),
                 heals: acc.heals,
                 fail_runs: acc.fail_runs,
+                intent: acc.last_intent,
                 last_error: acc.last_error,
             })
         })
@@ -1774,8 +1797,22 @@ fn slow(
 struct HealthRow {
     scenario_id: String,
     flaky: Vec<String>,
+    /// Same steps as `flaky`, with the recorded intent and the latest error
+    /// so a badge can say what drifted instead of a bare step id.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    flaky_notes: Vec<FlakyNote>,
     slow: Vec<String>,
     chronic: Vec<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FlakyNote {
+    step_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    intent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_error: Option<String>,
 }
 
 fn collect_health(root: &std::path::Path) -> Vec<HealthRow> {
@@ -1795,7 +1832,16 @@ fn collect_health(root: &std::path::Path) -> Vec<HealthRow> {
 
     sids.into_iter()
         .filter_map(|(sid, dir)| {
-            let flaky = collect_flaky(&dir, 2, 3)
+            let flaky_steps = collect_flaky(&dir, 2, 3);
+            let flaky_notes = flaky_steps
+                .iter()
+                .map(|f| FlakyNote {
+                    step_id: f.step_id.clone(),
+                    intent: f.intent.clone(),
+                    last_error: f.last_error.clone(),
+                })
+                .collect::<Vec<_>>();
+            let flaky = flaky_steps
                 .into_iter()
                 .map(|f| f.step_id)
                 .collect::<Vec<_>>();
@@ -1813,6 +1859,7 @@ fn collect_health(root: &std::path::Path) -> Vec<HealthRow> {
             Some(HealthRow {
                 scenario_id: sid,
                 flaky,
+                flaky_notes,
                 slow,
                 chronic,
             })
@@ -2326,7 +2373,7 @@ fn render_text(path: &std::path::Path, audit: &Value) {
 
 fn print_help() {
     println!(
-                "agent-qa audit \u{2014} inspect a replay's audit.json\n\nUsage:\n  agent-qa audit show <sid> [<runId | latest>] [--json | --format text|json|github]\n  agent-qa audit list <sid>                    Table view: every run's\n                                               summary / exit / profile / tag\n  agent-qa audit list <sid> --json             Structured rows on stdout\n  agent-qa audit list <sid> [--passed | --failed] [--tag <pat>] [--profile <pat>] [--limit N] [--slow <secs>] [--sort duration|runId-desc] [--since <iso-ts>] [--until <iso-ts>] [--format text|json|github]\n                                               Filters: case-insensitive substring\n                                               --passed/--failed are exit-code partitions\n  agent-qa audit stats <sid> [--since <iso-ts>] [--until <iso-ts>]\n                                               Pass/fail/tag rollup for one scenario\n  agent-qa audit stats <sid> --json            Structured rollup on stdout\n  agent-qa audit stats-all                     Per-scenario + overall pass/fail rollup\n  agent-qa audit stats-all --json              Structured rollup on stdout\n  agent-qa audit stats-all [--since <iso-ts>] [--until <iso-ts>]\n                                               Constrain to a date window\n  agent-qa audit diff <sid> <runIdA> <runIdB>  Unified diff between two replays'\n                                               audit.json (canonicalised JSON;\n                                               'latest' accepted for either side;\n                                               exit 1 on difference)\n  agent-qa audit summary <sid> [<runId | latest>]\n                                               Print just the summary line (one line out)\n  agent-qa audit exit-code <sid> [<runId | latest>]\n                                               Print just the run's exitCode (-1 if missing)\n  agent-qa audit field <sid> <runId | latest> <fieldName>\n                                               Print any top-level audit field. String/\n                                               number/bool print verbatim; null prints\n                                               empty; object/array prints compact JSON.\n  agent-qa audit count <sid>                   Print the number of runs under <sid>\n  agent-qa audit duration <sid> [<runId | latest>]\n                                               Print the run's duration in seconds\n                                               (finishedAt - startedAt, 3 decimals)\n  agent-qa audit flaky <sid> [--min-flips N] [--min-runs N] [--json]\n                                               Flag steps whose outcome interleaves\n                                               pass/fail across runs (outcome churn;\n                                               heal-chronic covers locator churn)\n  agent-qa audit slow <sid> [--pct N] [--min-ms N] [--recent N] [--min-runs N] [--json]\n                                               Flag steps whose recent pass median\n                                               regressed vs their earlier-run median\n                                               (default: last 2 runs >50% and >250ms\n                                               over baseline)\n  agent-qa audit health [--json]           Cross-scenario rollup of flaky + slow +
+                "agent-qa audit \u{2014} inspect a replay's audit.json\n\nUsage:\n  agent-qa audit show <sid> [<runId | latest>] [--json | --format text|json|github]\n  agent-qa audit list <sid>                    Table view: every run's\n                                               summary / exit / profile / tag\n  agent-qa audit list <sid> --json             Structured rows on stdout\n  agent-qa audit list <sid> [--passed | --failed] [--tag <pat>] [--profile <pat>] [--limit N] [--slow <secs>] [--sort duration|runId-desc] [--since <iso-ts>] [--until <iso-ts>] [--format text|json|github]\n                                               Filters: case-insensitive substring\n                                               --passed/--failed are exit-code partitions\n  agent-qa audit stats <sid> [--since <iso-ts>] [--until <iso-ts>]\n                                               Pass/fail/tag rollup for one scenario\n  agent-qa audit stats <sid> --json            Structured rollup on stdout\n  agent-qa audit stats-all                     Per-scenario + overall pass/fail rollup\n  agent-qa audit stats-all --json              Structured rollup on stdout\n  agent-qa audit stats-all [--since <iso-ts>] [--until <iso-ts>]\n                                               Constrain to a date window\n  agent-qa audit diff <sid> <runIdA> <runIdB>  Unified diff between two replays'\n                                               audit.json (canonicalised JSON;\n                                               'latest' accepted for either side;\n                                               exit 1 on difference)\n  agent-qa audit summary <sid> [<runId | latest>]\n                                               Print just the summary line (one line out)\n  agent-qa audit exit-code <sid> [<runId | latest>]\n                                               Print just the run's exitCode (-1 if missing)\n  agent-qa audit field <sid> <runId | latest> <fieldName>\n                                               Print any top-level audit field. String/\n                                               number/bool print verbatim; null prints\n                                               empty; object/array prints compact JSON.\n  agent-qa audit count <sid>                   Print the number of runs under <sid>\n  agent-qa audit duration <sid> [<runId | latest>]\n                                               Print the run's duration in seconds\n                                               (finishedAt - startedAt, 3 decimals)\n  agent-qa audit flaky <sid> [--min-flips N] [--min-runs N] [--json]\n                                               Flag steps whose outcome interleaves\n                                               pass/fail across runs (outcome churn;\n                                               heal-chronic covers locator churn).\n                                               A step that passed its last two runs\n                                               has settled and is not flagged\n  agent-qa audit slow <sid> [--pct N] [--min-ms N] [--recent N] [--min-runs N] [--json]\n                                               Flag steps whose recent pass median\n                                               regressed vs their earlier-run median\n                                               (default: last 2 runs >50% and >250ms\n                                               over baseline)\n  agent-qa audit health [--json]           Cross-scenario rollup of flaky + slow +
                                                heal-chronic — one row per scenario
                                                that has silent degradation\n  agent-qa audit verdict <sid> [<runId | latest>] [--json]\n                                               One-word run triage: PASS (exit 0) clean\n                                               green, FIX (exit 2) green but self-\n                                               corrected, BLOCK (exit 1) failed\n  agent-qa audit verdict --all [--json]\n                                               Suite triage board: one verdict row per\n                                               scenario's latest run; exit 1 if any\n                                               BLOCK (FIX rows are warnings only)\n  agent-qa audit cluster [--min-size N] [--json]\n                                               Group step failures across every scenario\n                                               by normalized error signature — one root\n                                               cause across N runs reads as one item\n  agent-qa audit explain <sid> [runId | latest] [--json]\n                                               One-block failure digest: verdict +\n                                               failing steps + heal trail + console\n                                               errors + failed requests, with the\n                                               follow-up commands that fit the\n                                               evidence (exit mirrors audit verdict)\n  agent-qa audit trend <sid> [--limit N] [--json]\n                                               Outcome + duration trend for the last N\n                                               runs (default all): pass%, median secs,\n                                               a ✓/✗ outcome line + a duration sparkline\n  agent-qa audit trend --all [--limit N] [--json]\n                                               Suite board: one trend row per scenario\n\n'latest' resolves to <sid>/replays/latest.txt if present, otherwise the\nhighest lex-sorted run directory (run_id is timestamp-prefixed)."
 
@@ -2790,6 +2837,29 @@ mod tests {
             2
         );
 
+        // FIX via option-correction: a green select whose label was rewritten
+        // in-run, with no locator patch and no autoHealed field.
+        let run_dir = jdir.join("replays").join("r-fix-option");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(
+            run_dir.join("audit.json"),
+            r#"{"runId":"r-fix-option","summary":"SUMMARY: 3/3 (PASS)","exitCode":0}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            run_dir.join("heal.jsonl"),
+            "{\"schema\":\"heal-row/v1\",\"mode\":\"option-correction\",\"stepId\":\"s9\"}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            verdict(
+                &["verdict".into(), "sid".into(), "r-fix-option".into()],
+                true
+            )
+            .unwrap(),
+            2
+        );
+
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
@@ -2944,6 +3014,13 @@ mod tests {
         assert_eq!(
             flaky(&["flaky".into(), "sid".into()], true, 2, 3).unwrap(),
             0
+        );
+        // One more pass settles it: last two observations are both passes,
+        // so the earlier miss is no longer an active flake.
+        write_events(&jdir, "2026-01-04__d", &[("s1", "pass"), ("s2", "fail")]);
+        assert!(
+            collect_flaky(&jdir, 2, 3).is_empty(),
+            "a recovered step should not stay flaky"
         );
         match prev {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
@@ -3141,6 +3218,9 @@ mod tests {
         assert_eq!(out.len(), 2);
         let a_row = out.iter().find(|r| r.scenario_id == "sid-a").unwrap();
         assert_eq!(a_row.flaky, vec!["s1"]);
+        assert_eq!(a_row.flaky_notes[0].step_id, "s1");
+        assert_eq!(a_row.flaky_notes[0].intent.as_deref(), Some("x"));
+        assert_eq!(a_row.flaky_notes[0].last_error.as_deref(), Some("boom"));
         assert_eq!(a_row.chronic, vec!["s2"]);
         assert!(a_row.slow.is_empty());
         let c_row = out.iter().find(|r| r.scenario_id == "sid-c").unwrap();
