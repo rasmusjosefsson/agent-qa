@@ -1000,7 +1000,9 @@ fn surface_from_configs(cwd: &Path, surface: &str) -> Result<Option<(PathBuf, St
 
 fn resolve_spec(spec: &str, base: &Path) -> Result<PathBuf> {
     let expanded = crate::global_config::expand_tilde(spec);
-    if expanded.is_absolute() {
+    // A leading slash is absolute on Unix and root-relative on Windows.
+    // Joining it would pin it to the toml file's drive (`C:/from/env`).
+    if expanded.is_absolute() || expanded.has_root() {
         return Ok(expanded);
     }
     if spec.contains('/') || spec.contains('\\') {
