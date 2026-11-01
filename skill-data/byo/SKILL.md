@@ -31,3 +31,9 @@ pin_tab = true
 `agent-qa start` saves the resolved connection in local recorder state. It
 passes that connection to every browser child during recording. The endpoint
 and pin policy never enter `scenario.json`.
+
+`pin_tab` binds the session to one tab. Another session cannot take that
+tab with `tab`. If the pinned tab closes, later commands fail with
+`tab_gone` instead of sliding onto a different tab. A `page_wedged` timeout
+on a CDP-attached browser leaves the tab in place — it is the user's tab,
+not one agent-qa is free to replace.

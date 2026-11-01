@@ -110,6 +110,13 @@ more than 32/255), the same threshold pixelmatch uses; fonts render a few
 levels differently across hosts and Chromium builds and shouldn't flake
 goldens.
 
+Step screenshots are `agent-browser screenshot --full`. agent-browser 0.39.4
+captures that full-page image at the page's CSS size on a high-DPI display.
+Baselines minted headed on a high-DPI screen with an older agent-browser
+were twice as large, with the page in the top-left quarter, and will miss
+until re-minted. Headless captures at device scale 1 are unchanged. Element
+clips are cropped from that full-page image, so they follow the same re-mint.
+
 ## In the workbench
 
 - The Runs pane renders the red diff map inline on a failed shot claim and

@@ -52,11 +52,13 @@ agent-qa cleanup --json
 ```
 
 A scoped `--session` cleanup against a *live* session only closes that session
-— it does not sweep unrelated orphans. When a `close --session` call fails
-(wedged daemon), cleanup terminates the recorded daemon pid directly and then
-rescans: a session's Chrome children only become unowned after the daemon
-dies, so the sweep re-collects the process table to catch them and remove
-their profile dirs.
+— it does not sweep unrelated orphans. The pinned agent-browser keeps
+accepting `close` while another command holds the session, so a long
+snapshot or navigation is not itself a reason to kill the daemon. When a
+`close --session` call still fails (wedged daemon), cleanup terminates the
+recorded daemon pid directly and then rescans: a session's Chrome children
+only become unowned after the daemon dies, so the sweep re-collects the
+process table to catch them and remove their profile dirs.
 
 Nothing is deleted or killed without being listed first — run `--dry-run`
 whenever you want the plan without the action.

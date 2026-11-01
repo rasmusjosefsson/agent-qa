@@ -372,9 +372,10 @@ fn try_named_control_click(session: &str, role: &str, name: &str) -> Result<bool
 
 /// Final fallback rung: take a fresh ARIA snapshot, find the line that
 /// matches `<role> "<name>" [... ref=eN]`, and click `@eN`. This
-/// bypasses agent-browser's role engine and visible-text matcher
-/// entirely — if the snapshot promises the element exists with that
-/// role+name, the backend-node-id click is guaranteed to land on it.
+/// bypasses agent-browser's role engine and visible-text matcher.
+/// `click_ref` scrolls the ref into view first. A hidden, disabled, or
+/// covered target still fails the click, and the error names a covering
+/// element when one is in the way.
 ///
 /// Returns Ok(()) on success, Err on snapshot failure / no match / click
 /// failure. Used after `find_role_act` and `find_text_act` both miss.

@@ -186,7 +186,7 @@ reload with `params.reload: true`.
 | `byo-doctor` | Read-only BYO browser enumeration via agent-browser. `--json`. |
 | `ps` | Correlated view of agent-browser residue: `live`/`orphan`/`stale` sessions from the socket-dir registry, unowned Chrome processes, stray `/tmp/agent-browser-chrome-*` profile dirs. `--json`. |
 | `cleanup` | Reap the residue `ps` reports: deletes stale/orphan registry files, kills unowned Chrome, removes stray profile dirs. `--all` also closes live sessions; `--session <n>`, `--older-than <dur>`, `--dry-run`, `--json`. |
-| `perf-snapshot` | One-shot perf trace via agent-browser, persisted under `<sid>/perf/` |
+| `perf-snapshot` | Navigation and paint timings from the live tab (`window.performance`), persisted under `<sid>/perf/` when `--sid` is set. React trees and DevTools traces stay `agent-qa browser` commands (`react tree`, `trace start`). |
 | `config show` | Resolve the active `agent-qa.toml` + paths + plugin discovery |
 
 ## Operational
