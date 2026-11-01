@@ -17,6 +17,12 @@
 //!   * `replays/<runId>/diffs/<stepId>.patch.json` — the `heal-patch/v1`
 //!     producer `heal-promote` was built to consume.
 //!
+//! A `select` whose option label drifted (a balance, a count) uses the
+//! same ladder against the open list and records mode `option-correction`.
+//! That row is not a locator patch: the control was right, and writing the
+//! live label back would be stale on the next run. An empty list is
+//! retried once. Two equally good options are not guessed.
+//!
 //! A failure no strategy can heal is probed for a value rejection (visible
 //! alert/toast/banner) and classified in the audit trail — never retried.
 //!
@@ -27,6 +33,7 @@
 //!                           though every step passed, so drift surfaces for
 //!                           review instead of silently self-correcting.
 
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
@@ -48,6 +55,30 @@ pub fn enabled() -> bool {
 /// `AGENT_QA_HEAL_STRICT` set → a healed run still exits non-zero.
 pub fn strict() -> bool {
     std::env::var_os("AGENT_QA_HEAL_STRICT").is_some()
+}
+
+/// A select whose option label drifted (a balance, a count) but still
+/// matches exactly one live option. The runner records this after the
+/// corrected option is chosen — the popup is already open, so the pick
+/// does not click the opener again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OptionHeal {
+    pub strategy: &'static str,
+    pub from: String,
+    pub to: String,
+}
+
+thread_local! {
+    static PENDING_OPTION: RefCell<Option<OptionHeal>> = const { RefCell::new(None) };
+}
+
+pub fn store_option_heal(heal: OptionHeal) {
+    PENDING_OPTION.with(|slot| *slot.borrow_mut() = Some(heal));
+}
+
+/// Take the option correction recorded by the select that just ran.
+pub fn take_option_heal() -> Option<OptionHeal> {
+    PENDING_OPTION.with(|slot| slot.borrow_mut().take())
 }
 
 /// One accepted correction: which strategy matched, the recorded name, the
@@ -256,6 +287,24 @@ pub fn persist_correction(
     )
 }
 
+/// Record an option-label correction. Unlike a locator patch, this does not
+/// rewrite `on` — the control was right, the option text drifted.
+pub fn persist_option(run: &RunPaths, step_id: &str, heal: &OptionHeal) -> Result<()> {
+    append_row(
+        &run.run_root,
+        &json!({
+            "schema": "heal-row/v1",
+            "ts": now_ts(),
+            "runId": run.run_id,
+            "stepId": step_id,
+            "mode": "option-correction",
+            "strategy": heal.strategy,
+            "from": heal.from,
+            "to": heal.to,
+        }),
+    )
+}
+
 /// Record a classified value rejection on the audit trail — surfaced, never
 /// retried (per the replay-robustness spec: no auto-retry with a different
 /// value).
@@ -415,6 +464,21 @@ const LADDER: &[Strategy] = &[
     ("name-prefix", |w, c| prefix_match(&norm(w), &norm(c))),
 ];
 
+/// Live accessible names of currently visible options.
+pub fn option_names(session: &str) -> Result<Vec<String>> {
+    collect_role_names(session, "option")
+}
+
+/// The same ladder as locator names, applied to option labels. `None` when
+/// the recorded label is already present or more than one option matches.
+pub fn match_listed_option(want: &str, candidates: &[String]) -> Option<OptionHeal> {
+    ladder(want, candidates).map(|(strategy, to)| OptionHeal {
+        strategy,
+        from: want.to_string(),
+        to,
+    })
+}
+
 /// Walk the ladder strict → permissive; first unique match wins.
 /// Returns (strategy name, corrected live name).
 ///
@@ -533,6 +597,46 @@ mod tests {
     #[test]
     fn ladder_returns_none_with_no_candidates() {
         assert_eq!(ladder("Save", &[]), None);
+    }
+
+    #[test]
+    fn option_balance_renumber_matches_one_account() {
+        let got = match_listed_option(
+            "High-Yield Savings — $12,800.00",
+            &names(&[
+                "Everyday Checking — $2,450.00",
+                "High-Yield Savings — $12,801.00",
+            ]),
+        )
+        .expect("one account");
+        assert_eq!(got.strategy, "digits-tolerant");
+        assert_eq!(got.to, "High-Yield Savings — $12,801.00");
+    }
+
+    #[test]
+    fn option_balance_suffix_falls_back_to_the_stable_name() {
+        let got = match_listed_option(
+            "High-Yield Savings — $12,800.00",
+            &names(&["Everyday Checking — $2,450.00", "High-Yield Savings"]),
+        )
+        .expect("stable name");
+        assert_eq!(got.strategy, "name-prefix");
+        assert_eq!(got.to, "High-Yield Savings");
+    }
+
+    #[test]
+    fn option_balance_refuses_two_similar_accounts() {
+        // Both live labels satisfy the same strategy — do not guess.
+        let got = match_listed_option(
+            "High-Yield Savings — $12,800.00",
+            &names(&["High-Yield", "High-Yield Savings"]),
+        );
+        assert_eq!(got, None);
+        let renumbered = match_listed_option(
+            "Savings — $1,250.00",
+            &names(&["Savings — $1,200.00", "Savings — $1,201.00"]),
+        );
+        assert_eq!(renumbered, None);
     }
 
     fn do_step(on: Option<Locator>) -> Step {

@@ -13,12 +13,23 @@ ordered strategy ladder — strict to permissive — that fires only when
 match the step retries once; a matched-but-still-failing retry is a hard
 failure.
 
+A `select` whose option label drifted uses that same ladder against the open
+list. A balance or count on the option ("High-Yield Savings — $12,800.00" →
+"High-Yield Savings — $12,801.00", or the amount dropped entirely) is healed
+when exactly one option matches, without clicking the opener a second time.
+An empty list is retried once, for a control that is still disabled until
+the previous choice lands. The heal is an `option-correction` row on
+`heal.jsonl`. Two equally good options are not guessed.
+
 Each successful heal is persisted for review:
 
-- `replays/<runId>/heal.jsonl` — `heal-row/v1` rows with mode
-  `locator-correction`
+- `replays/<runId>/heal.jsonl` — `heal-row/v1` rows. `locator-correction`
+  rows have a matching patch. `option-correction` rows record a select
+  label rewritten in-run; they are not promoted, because the next run's
+  balance or count would be stale again.
 - `replays/<runId>/diffs/<stepId>.patch.json` — a `heal-patch/v1` file that
-  `heal-promote --apply` writes back into `scenario.json` when you accept it
+  `heal-promote --apply` writes back into `scenario.json` when you accept it.
+  Option-label heals do not write one.
 
 Failures no strategy can heal are probed for a value rejection (visible
 alert/toast/banner) and classified in the audit — never retried.

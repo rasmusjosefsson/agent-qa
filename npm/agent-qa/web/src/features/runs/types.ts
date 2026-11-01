@@ -20,9 +20,18 @@ export interface RunSummary {
 // One row of `audit health --json` — step ids flagged by each silent-
 // degradation detector (flaky = outcome churn, slow = duration regression,
 // chronic = self-healing locator debt).
+export interface FlakyNote {
+  stepId: string
+  intent?: string | null
+  lastError?: string | null
+}
+
 export interface ScenarioHealth {
   scenarioId: string
   flaky: string[]
+  // Why each flaky step churned — intent plus the latest failure. Absent on
+  // older health payloads; the badge then names the step ids.
+  flakyNotes?: FlakyNote[]
   slow: string[]
   chronic: string[]
 }
