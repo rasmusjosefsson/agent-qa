@@ -115,32 +115,47 @@ describe('CenterPane scenario controls', () => {
     expect(html).toContain('host watchdog')
   })
 
-  it('shows a video chip when the run was recorded (--record-video)', () => {
+  it('shows the replay scrubber when the run was recorded', () => {
     const base = {
       detail: {
         sid: 's-vid',
         runId: '2026-08-13T15-00-00-000Z__beefcafe',
         audit: { summary: 'PASS 2/2', exitCode: 0 },
         status: { state: 'done', ok: true },
-        events: [],
+        events: [
+          { idx: 1, id: 'open', intent: 'Navigated to the homepage', kind: 'do:goto', status: 'pass', ms: 400 },
+          { idx: 2, id: 'check', intent: 'Verified', kind: 'check', status: 'pass', ms: 200 },
+        ],
         video: true,
+        videoFile: 'run.mp4',
+        cues: [
+          { id: 'open', idx: 1, tMs: 400 },
+          { id: 'check', idx: 2, tMs: 1800 },
+        ],
       },
       scenarioDef: null,
       sel: { sid: 's-vid', runId: '2026-08-13T15-00-00-000Z__beefcafe', stepIdx: null },
       runDefSteps: { sid: 's-vid', steps: [] },
       runsBySid: {},
+      selectStep() {},
     } as unknown as RunsApi
 
     const html = renderToStaticMarkup(
       <CenterPane runs={base} onReplay={() => {}} runConfig={runConfig} />
     )
-    expect(html).toContain('>video</button>')
-    expect(html).not.toContain('<video')
+    expect(html).toContain('aria-label="Replay timeline"')
+    expect(html).toContain('aria-label="Playback speed"')
+    expect(html).toContain('>8x</option>')
+    expect(html).toContain('>Frames</button>')
+    expect(html).toContain('>Video</button>')
+    expect(html).toContain('<video')
+    expect(html).toContain('Navigated to the homepage')
 
     const noVid = { ...base, detail: { ...base.detail, video: false } } as RunsApi
     const html2 = renderToStaticMarkup(
       <CenterPane runs={noVid} onReplay={() => {}} runConfig={runConfig} />
     )
-    expect(html2).not.toContain('>video</button>')
+    expect(html2).not.toContain('aria-label="Replay timeline"')
+    expect(html2).not.toContain('<video')
   })
 })

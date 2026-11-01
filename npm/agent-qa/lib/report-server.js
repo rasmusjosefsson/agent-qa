@@ -2516,7 +2516,7 @@ async function runDetail(root, sid, runId) {
   const shotDiffs = await listShotDiffs(runDir);
   // Same for {"domshot"} claims — text diffs under domshots-diff/.
   const domshotDiffs = await listDomshotDiffs(runDir);
-  const video = await fileExists(path.join(runDir, 'run.webm'));
+  const recorded = await videoArtifact(runDir);
   return {
     sid,
     runId,
@@ -2531,7 +2531,13 @@ async function runDetail(root, sid, runId) {
     heals,
     shotDiffs,
     domshotDiffs,
-    video,
+    video: recorded.video,
+    // Which file the scrubber should load. mp4 is what `--record-video`
+    // writes now; webm remains for runs recorded before that switch.
+    videoFile: recorded.videoFile,
+    // Step offsets from video-cues.json (ms since record start). Null
+    // when the run has no cue file — the scrubber estimates instead.
+    cues: recorded.cues,
     network,
   };
 }
@@ -2652,6 +2658,26 @@ async function serveArtifact(res, root, sid, runId, kind, stepId) {
   streamFile(res, full);
 }
 
+// Recording the scrubber can play, plus the step-offset cue file.
+// Prefer run.mp4 — that is the file the runner writes today.
+async function videoArtifact(runDir) {
+  const mp4 = await fileExists(path.join(runDir, 'run.mp4'));
+  const webm = await fileExists(path.join(runDir, 'run.webm'));
+  const videoFile = mp4 ? 'run.mp4' : webm ? 'run.webm' : null;
+  const doc = await readJson(path.join(runDir, 'video-cues.json'));
+  const cues =
+    doc && Array.isArray(doc.cues)
+      ? doc.cues
+          .filter((c) => c && typeof c.idx === 'number' && typeof c.tMs === 'number')
+          .map((c) => ({
+            idx: c.idx,
+            tMs: c.tMs,
+            ...(typeof c.id === 'string' ? { id: c.id } : {}),
+          }))
+      : null;
+  return { video: videoFile != null, videoFile, cues };
+}
+
 async function fileExists(p) {
   try {
     return (await fsp.stat(p)).isFile();
@@ -2663,7 +2689,7 @@ async function fileExists(p) {
 // Stream a top-level run artifact (run.webm video, console.json, junit.xml,
 // run.har, network.json). Allowlisted names only — same clamp discipline as
 // serveArtifact.
-async function serveRunFile(res, root, sid, runId, name) {
+async function serveRunFile(req, res, root, sid, runId, name) {
   if (![sid, runId].every(isSafeSegment)) {
     return badRequest(res, 'unsafe path segment');
   }
@@ -2679,12 +2705,58 @@ async function serveRunFile(res, root, sid, runId, name) {
     return notFound(res, 'not captured');
   }
   if (!stat.isFile()) return notFound(res, 'not captured');
+  const total = stat.size;
+  const range = parseByteRange(req.headers.range, total);
+  if (range === 'unsatisfiable') {
+    res.writeHead(416, { 'content-range': `bytes */${total}` });
+    res.end();
+    return;
+  }
+  if (range) {
+    res.writeHead(206, {
+      'content-type': type,
+      'content-length': range.end - range.start + 1,
+      'content-range': `bytes ${range.start}-${range.end}/${total}`,
+      'accept-ranges': 'bytes',
+      'cache-control': 'no-store',
+    });
+    const s = createReadStream(full, { start: range.start, end: range.end });
+    s.on('error', () => {
+      if (!res.destroyed) res.destroy();
+    });
+    s.pipe(res);
+    return;
+  }
   res.writeHead(200, {
     'content-type': type,
-    'content-length': stat.size,
+    'content-length': total,
+    'accept-ranges': 'bytes',
     'cache-control': 'no-store',
   });
   streamFile(res, full);
+}
+
+// `bytes=start-end` for video seeking. `null` means "send the whole file"
+// (no Range header). `'unsatisfiable'` is a 416.
+function parseByteRange(header, total) {
+  if (!header || total <= 0) return null;
+  const m = /^bytes=(\d*)-(\d*)$/.exec(String(header).trim());
+  if (!m || (m[1] === '' && m[2] === '')) return 'unsatisfiable';
+  let start;
+  let end;
+  if (m[1] === '') {
+    const suffix = Number(m[2]);
+    if (!Number.isFinite(suffix) || suffix <= 0) return 'unsatisfiable';
+    start = Math.max(0, total - suffix);
+    end = total - 1;
+  } else {
+    start = Number(m[1]);
+    end = m[2] === '' ? total - 1 : Number(m[2]);
+  }
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= total || start > end) {
+    return 'unsatisfiable';
+  }
+  return { start, end: Math.min(end, total - 1) };
 }
 
 // -------- run compare (agent-qa compare <sid> <a> <b>) --------
@@ -5909,7 +5981,7 @@ function createRequestHandler(root, deps, chat) {
             return serveArtifact(res, root, sid, runId, kind, stepId);
           }
           if (seg[5] === 'file' && seg.length === 7) {
-            return serveRunFile(res, root, sid, runId, decodeURIComponent(seg[6]));
+            return serveRunFile(req, res, root, sid, runId, decodeURIComponent(seg[6]));
           }
 
         }

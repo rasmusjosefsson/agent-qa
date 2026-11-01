@@ -101,6 +101,16 @@ function makeFixture() {
   // A real PNG byte payload (1x1) and a snapshot text file.
   fs.writeFileSync(path.join(runDir, 'screenshots', 'navHome.png'), Buffer.from('PNGDATA-navHome'));
   fs.writeFileSync(path.join(runDir, 'run.webm'), Buffer.from('WEBMDATA'));
+  fs.writeFileSync(
+    path.join(runDir, 'video-cues.json'),
+    JSON.stringify({
+      cues: [
+        { id: 'navHome', idx: 1, tMs: 400 },
+        { id: 'clickMissingLogin', idx: 2, tMs: 1800 },
+        { idx: 'nope', tMs: 'late' },
+      ],
+    })
+  );
   fs.writeFileSync(path.join(runDir, 'snapshots', 'navHome.txt'), 'heading "Example Domain"\n');
 
   // A secret OUTSIDE the run dir that a path-escape attempt would target.
@@ -506,6 +516,24 @@ test('report viewer endpoints', async (t) => {
     const res = await fetch(`${base}/api/scenarios/${fx.sid}/runs/${fx.runId}`);
     const body = await res.json();
     assert.equal(body.video, true);
+    assert.equal(body.videoFile, 'run.webm');
+    assert.deepEqual(body.cues, [
+      { id: 'navHome', idx: 1, tMs: 400 },
+      { id: 'clickMissingLogin', idx: 2, tMs: 1800 },
+    ]);
+  });
+
+  await t.test('GET /runs/:runId prefers run.mp4 over run.webm', async () => {
+    const mp4 = path.join(fx.root, fx.sid, 'replays', fx.runId, 'run.mp4');
+    fs.writeFileSync(mp4, Buffer.from('MP4DATA'));
+    try {
+      const res = await fetch(`${base}/api/scenarios/${fx.sid}/runs/${fx.runId}`);
+      const body = await res.json();
+      assert.equal(body.video, true);
+      assert.equal(body.videoFile, 'run.mp4');
+    } finally {
+      fs.unlinkSync(mp4);
+    }
   });
 
   await t.test('GET run file streams run.webm as video/webm', async () => {
@@ -514,7 +542,18 @@ test('report viewer endpoints', async (t) => {
     );
     assert.equal(res.status, 200);
     assert.equal(res.headers.get('content-type'), 'video/webm');
+    assert.equal(res.headers.get('accept-ranges'), 'bytes');
     assert.equal(await res.text(), 'WEBMDATA');
+  });
+
+  await t.test('GET run file honors a byte range so the scrubber can seek', async () => {
+    const url = `${base}/api/scenarios/${fx.sid}/runs/${fx.runId}/file/run.webm`;
+    const res = await fetch(url, { headers: { range: 'bytes=0-3' } });
+    assert.equal(res.status, 206);
+    assert.equal(res.headers.get('content-range'), 'bytes 0-3/8');
+    assert.equal(await res.text(), 'WEBM');
+    const bad = await fetch(url, { headers: { range: 'bytes=40-50' } });
+    assert.equal(bad.status, 416);
   });
 
   await t.test('GET run file rejects names outside the allowlist + traversal', async () => {

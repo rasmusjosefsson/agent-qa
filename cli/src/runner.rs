@@ -848,6 +848,10 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         quarantined,
     };
     let mut first_failure: Option<String> = None;
+    // Set only when `record start` succeeds, so a missing ffmpeg does not
+    // invent a cue file for a recording that was never opened.
+    let mut video_origin: Option<Instant> = None;
+    let mut video_cues: Vec<crate::video_cues::VideoCue> = Vec::new();
 
     if opts.dry_run {
         summary.total = scenario.steps.len() as u32;
@@ -895,7 +899,10 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 vid.clone()
             };
             match browser::record_video_start(&opts.session_name, &dest) {
-                Ok(()) => eprintln!("[v2-replay] recording → {}", dest.display()),
+                Ok(()) => {
+                    video_origin = Some(Instant::now());
+                    eprintln!("[v2-replay] recording → {}", dest.display());
+                }
                 Err(e) => eprintln!("[v2-replay] record start skipped: {e}"),
             }
         }
@@ -985,6 +992,14 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             };
             // A concise, vendor-neutral label for the progress line.
             let label = progress_label(step);
+            if let Some(origin) = video_origin {
+                let t_ms = u64::try_from(origin.elapsed().as_millis()).unwrap_or(u64::MAX);
+                video_cues.push(crate::video_cues::VideoCue {
+                    id: id.to_string(),
+                    idx,
+                    t_ms,
+                });
+            }
             // Disabled check (`enabled: false` — e.g. a golden turned off in
             // the workbench): no dispatch, a terminal `skip` event, and a
             // <skipped/> junit case so the step is visible, not silently gone.
@@ -1764,7 +1779,15 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     }
 
     // 8.5. Stop the video recording (started under `--record-video`).
-    // Runs before audit finalize so the artifact exists even on FAIL.
+    // Cue file lands first so a failed `record stop` still leaves the
+    // scrubber something to align against. Runs before audit finalize
+    // so the artifact exists even on FAIL.
+    if video_origin.is_some() {
+        let cues_path = run.run_root.join("video-cues.json");
+        if let Err(e) = crate::video_cues::write(&cues_path, &video_cues) {
+            eprintln!("[v2-replay] video-cues.json write failed: {e}");
+        }
+    }
     if opts.record_video.is_some() && !opts.dry_run {
         match browser::record_video_stop(&opts.session_name) {
             Ok(()) => {}

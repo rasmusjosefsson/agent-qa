@@ -8,6 +8,16 @@ All notable changes to agent-qa are documented here. This project follows
 
 ### Added
 
+- Replay scrubber in the workbench. A recorded run shows the video with a
+  marker per step, the step caption under the playhead, and a Frames /
+  Video switch. Playback speed goes to 8×: Video asks the browser for
+  that rate (and says so if the browser caps it); Frames steps the
+  captured screenshots on a timer, so 8× still moves. `--record-video`
+  writes `video-cues.json` next to the recording so the markers line up
+  with the moment each step started. The run detail reports `run.mp4`
+  as well as older `run.webm` files, and the file endpoint accepts byte
+  ranges so the playhead can seek.
+
 - Structural golden diffs open as a side-by-side line comparison.
   `diff-viewer.html?dom=1` diffs the baseline snapshot against the
   current one (unified and changed-only views). The workbench run card
