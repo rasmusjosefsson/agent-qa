@@ -804,13 +804,12 @@ re-audit of the surfaces the last wave didn't touch:
 
 ### Verified-not-broken in this sweep (no change needed)
 
-- **Role-locator select/check/uncheck do not need hit-tests** — the
-  residual item from pass XIII closes as a non-issue: `select` drives
+- **Role-locator select does not need a hit-test** — `select` drives
   `select_via_combobox` (opener activation → popup-count probe →
-  ArrowDown keyboard fallback → named option errors), and check/uncheck
-  dispatch through the click path that already has the ClickProbe
-  post-check + named-control/text/snapshot fallbacks. No coordinate
-  click exists on these paths to silently miss.
+  ArrowDown keyboard fallback → named option errors). `check` and
+  `uncheck` call agent-browser's own verbs (`check` is idempotent;
+  `find` has no `uncheck`, so a named role unchecks by snapshot ref).
+  They do not click, so a second `check` cannot toggle the box back off.
 - **live-bridge reconnect is bounded** — retries only while a
   subscriber is present, broadcasts `bridge-error` to subscribers,
   flushes a held click before dropping the socket, and unsubref'd

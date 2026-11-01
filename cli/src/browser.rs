@@ -17,9 +17,10 @@
 //!   - Socket-stall detection: surfaced with an actionable hint, NOT
 //!     retried (the wedge persists across requests).
 //!   - `outcome_unknown` and `page_wedged` (agent-browser 0.39+): surfaced
-//!     with a hint and never treated as a transient `open` retry. A lost
-//!     daemon reply may already have changed the page; a wedged tab is not
-//!     a network blip.
+//!     with a hint. A lost reply on `open` is retried — the first command
+//!     to a fresh daemon often never navigates. A lost reply on a click,
+//!     fill, or check is not retried. `page_wedged` is not a network blip
+//!     and is never retried.
 //!
 //! Verb modules call the helpers below (`open`, `eval`, `click`, `fill`,
 //! and the rest). A module-level dead_code allow remains because a few
@@ -533,18 +534,37 @@ fn socket_stall_hint(stderr: &str, stdout: &str, verb: &str, session: &str) -> S
     )
 }
 
-/// Hints for failure shapes agent-browser 0.39+ reports by code. These are
-/// not retried here: `outcome_unknown` means the daemon may already have
-/// run the command, and `page_wedged` means the tab stopped responding.
+/// A lost daemon reply. JSON mode reports `outcome_unknown`. Text mode
+/// reports the same failure as `EOF while parsing a value` and
+/// `may or may not have run`, without the code token.
+fn lost_reply_output(text: &str) -> bool {
+    text.contains("outcome_unknown")
+        || text.contains("may or may not have run")
+        || text.contains("EOF while parsing a value")
+}
+
+/// Hints for failure shapes agent-browser 0.39+ reports by code.
+/// `page_wedged` means the tab stopped responding. A lost reply on a
+/// mutation is not retried here; `open` retries it because a lost first
+/// reply leaves the tab blank.
 fn failure_hint(stderr: &str, stdout: &str, verb: &str, session: &str) -> String {
     let mut hint = socket_stall_hint(stderr, stdout, verb, session);
     let blob = format!("{stderr}\n{stdout}");
-    if blob.contains("outcome_unknown") {
-        hint.push_str(&format!(
-            "\n[agent-browser] outcome_unknown for session={session} verb={verb}.\n\
-             \x20               The daemon received this command and the reply was lost, so it was not retried.\n\
-             \x20               Snapshot the page (or `get url`) before repeating a click, fill, or navigation.\n"
-        ));
+    if lost_reply_output(&blob) {
+        if verb == "open" {
+            hint.push_str(&format!(
+                "\n[agent-browser] lost reply for session={session} verb=open.\n\
+                 \x20               The daemon received open and the reply was lost. A lost first open often\n\
+                 \x20               leaves the tab blank, so open is retried.\n\
+                 \x20               Do not retry a click, fill, or check that lost its reply — snapshot first.\n"
+            ));
+        } else {
+            hint.push_str(&format!(
+                "\n[agent-browser] lost reply for session={session} verb={verb}.\n\
+                 \x20               The daemon received this command and the reply was lost, so it was not retried.\n\
+                 \x20               Snapshot the page (or `get url`) before repeating a click, fill, or check.\n"
+            ));
+        }
     }
     if blob.contains("page_wedged") {
         hint.push_str(&format!(
@@ -557,20 +577,16 @@ fn failure_hint(stderr: &str, stdout: &str, verb: &str, session: &str) -> String
     hint
 }
 
-fn output_has_lost_or_wedged(text: &str) -> bool {
-    text.contains("outcome_unknown") || text.contains("page_wedged")
-}
-
 // ---------- public helpers ----------
 
 /// Number of `open` attempts before giving up on a transient navigation error.
 const OPEN_MAX_ATTEMPTS: u32 = 5;
 
 /// Open a URL in the named session's live tab. Transient navigation failures
-/// (connection refused/reset, timeouts, or a staging endpoint that's briefly
-/// unreachable / cold-starting) are retried with exponential backoff — 1s, 2s,
-/// 4s, 8s between attempts (~15s total) — so a short blip doesn't fail the whole
-/// replay. Non-transient failures return immediately.
+/// (connection refused/reset, timeouts, a briefly unreachable endpoint, or a
+/// lost daemon reply) are retried with exponential backoff — 1s, 2s, 4s, 8s
+/// between attempts (~15s total). A lost first `open` often leaves the tab
+/// blank, so retrying it is safe. `page_wedged` returns immediately.
 /// The env var agent-browser reads to launch a session's Chrome with a visible
 /// window instead of headless.
 pub const HEADED_ENV: &str = "AGENT_BROWSER_HEADED";
@@ -1119,10 +1135,15 @@ fn is_transient_navigation_error(err: &AgentBrowserError) -> bool {
         AgentBrowserError::NonZero {
             verb, stderr, hint, ..
         } if verb == "open" => {
-            // A lost reply or a wedged tab is not a blip. Retrying `open`
-            // can navigate twice or pile timeouts on a dead page.
-            if output_has_lost_or_wedged(stderr) || output_has_lost_or_wedged(hint) {
+            let blob = format!("{stderr}\n{hint}");
+            // A wedged tab is not a blip. Retrying piles timeouts on a dead page.
+            if blob.contains("page_wedged") {
                 return false;
+            }
+            // The first command against a fresh daemon often loses its reply
+            // and never navigates. Text mode omits the `outcome_unknown` token.
+            if lost_reply_output(&blob) {
+                return true;
             }
             stderr.is_empty()
                 || stderr.contains("net::ERR_HTTP_RESPONSE_CODE_FAILURE")
@@ -1392,6 +1413,42 @@ impl RoleAct {
             RoleAct::Text => "text",
         }
     }
+}
+
+/// `agent-browser check|uncheck <selector>`. `check` is a no-op when the
+/// control is already checked, so replay must not click to toggle.
+pub fn set_checked_selector(
+    session: &str,
+    selector: &str,
+    checked: bool,
+) -> Result<(), AgentBrowserError> {
+    let verb = if checked { "check" } else { "uncheck" };
+    run(session, [verb, selector], RunOpts::new())?;
+    Ok(())
+}
+
+/// `agent-browser find role <role> check --name <name>`. `find` has no
+/// `uncheck` action; uncheck a role by snapshot ref via
+/// [`set_checked_selector`].
+pub fn find_role_check(session: &str, role: &str, name: &str) -> Result<(), AgentBrowserError> {
+    run(
+        session,
+        ["find", "role", role, "check", "--name", name],
+        RunOpts::new(),
+    )?;
+    Ok(())
+}
+
+/// `agent-browser find xpath <expr> check`.
+pub fn find_xpath_check(session: &str, expr: &str) -> Result<(), AgentBrowserError> {
+    run(session, ["find", "xpath", expr, "check"], RunOpts::new())?;
+    Ok(())
+}
+
+/// `agent-browser find text <text> check`.
+pub fn find_text_check(session: &str, text: &str) -> Result<(), AgentBrowserError> {
+    run(session, ["find", "text", text, "check"], RunOpts::new())?;
+    Ok(())
 }
 
 /// Act on an element by ARIA role + accessible name.
@@ -1702,17 +1759,15 @@ pub fn frame_ctx(session: &str) -> Option<String> {
 }
 
 /// Switch the session's frame context: `Some(selector)` enters the iframe
-/// matching the CSS selector, `None` returns to the top document.
+/// matching that selector, `None` returns to the top document.
 /// Mirrors `agent-browser --session <s> frame <selector|main>`.
+/// `frame` accepts a CSS selector (`iframe.demo-frame`,
+/// `iframe[name='content']`) as well as `#id` and a snapshot ref. When
+/// the direct call fails, fall back to the iframe's a11y ref.
 pub fn switch_frame(session: &str, selector: Option<&str>) -> Result<(), AgentBrowserError> {
     match selector {
         Some(sel) => {
             if let Err(first) = run(session, vec!["frame", sel], RunOpts::new()) {
-                // agent-browser `frame` resolves only `#id` selectors and
-                // snapshot refs — a class/attribute selector
-                // (`iframe.demo-frame`, `iframe[src*=x]`) reports "Frame
-                // not found" even though the element exists. Fall back to
-                // entering it by its a11y ref.
                 switch_frame_via_ref(session, sel).map_err(|_| first)?;
             }
             let mut map = frame_ctx_map().lock().unwrap();
@@ -2343,7 +2398,7 @@ mod tests {
     }
 
     #[test]
-    fn outcome_unknown_emits_hint_and_open_does_not_retry() {
+    fn outcome_unknown_open_retries_once() {
         let _g = lock_env();
         let tmp = TempDir::new().unwrap();
         let state = tmp.path().join("count");
@@ -2352,24 +2407,53 @@ mod tests {
             N=$( ([ -f \"$COUNT_FILE\" ] && cat \"$COUNT_FILE\") || echo 0)\n\
             N=$((N+1))\n\
             echo \"$N\" > \"$COUNT_FILE\"\n\
-            echo 'Navigation failed: outcome_unknown' 1>&2\n\
-            exit 1\n",
+            if [ \"$N\" -eq 1 ]; then\n  echo 'Navigation failed: outcome_unknown' 1>&2\n  exit 1\nfi\n\
+            echo 'ok'\nexit 0\n",
             state.display()
         );
         let bin = fake_browser(tmp.path(), &body);
         set_bin(&bin);
-        let err = open("s", "https://example.com").unwrap_err();
+        open("s", "https://example.com").unwrap();
+        let n: u32 = fs::read_to_string(&state).unwrap().trim().parse().unwrap();
+        assert_eq!(n, 2, "a lost open reply is retried once");
+        clear_bin();
+    }
+
+    #[test]
+    fn lost_reply_phrase_without_code_retries_open_and_hints_clicks() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let state = tmp.path().join("count");
+        let phrase = "Invalid response: EOF while parsing a value at line 1 column 0 (the command reached the daemon but no response came back; it may or may not have run, so it was not retried)";
+        let body = format!(
+            "#!/bin/sh\nCOUNT_FILE='{}'\n\
+            if [ \"$3\" = click ]; then\n  echo '{phrase}' 1>&2\n  exit 1\nfi\n\
+            N=$( ([ -f \"$COUNT_FILE\" ] && cat \"$COUNT_FILE\") || echo 0)\n\
+            N=$((N+1))\n\
+            echo \"$N\" > \"$COUNT_FILE\"\n\
+            if [ \"$N\" -eq 1 ]; then\n  echo '{phrase}' 1>&2\n  exit 1\nfi\n\
+            echo 'ok'\nexit 0\n",
+            state.display(),
+        );
+        let bin = fake_browser(tmp.path(), &body);
+        set_bin(&bin);
+        let err = run("s", ["click", "#x"], RunOpts::new().capture()).unwrap_err();
         let s = format!("{err}");
         assert!(
-            s.contains("outcome_unknown"),
+            !s.contains("outcome_unknown"),
+            "text mode has no code token, got: {s}"
+        );
+        assert!(
+            s.contains("was not retried"),
             "expected lost-reply hint, got: {s}"
         );
         assert!(
             s.contains("Snapshot the page"),
             "expected snapshot hint, got: {s}"
         );
+        open("s", "https://example.com").unwrap();
         let n: u32 = fs::read_to_string(&state).unwrap().trim().parse().unwrap();
-        assert_eq!(n, 1, "outcome_unknown must not retry open");
+        assert_eq!(n, 2, "lost-reply text retries open once");
         clear_bin();
     }
 

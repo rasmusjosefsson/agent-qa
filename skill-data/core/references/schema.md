@@ -503,13 +503,15 @@ right tool there.
 
 ### Secondary click (rightclick)
 
-`do/rightclick` fires a secondary-button pointer+mouse chain on `on`
-(`pointerdown`/`mousedown` `button: 2` → `pointerup`/`mouseup` →
-`contextmenu`) — the gesture that opens context menus. Never fires a primary
-`click`, so handlers keyed on `click` stay quiet. It accepts every locator
-shape (role/css/testid/xpath/text, scope chains included). If the page opens a
-native dialog from the contextmenu handler, resolve it with the usual
-`dialog` step.
+`do/rightclick` opens a context menu with a trusted secondary button:
+`mouse move` to the target's center, then `mouse down right` and
+`mouse up right`. That `contextmenu` is `isTrusted`. When the daemon has
+no mouse input, replay falls back to a synthesized
+`pointerdown`/`mousedown` (`button: 2`) → `pointerup`/`mouseup` →
+`contextmenu` chain, which is `isTrusted` false. It never fires a primary
+`click`. It accepts every locator shape (role/css/testid/xpath/text, scope
+chains included). If the page opens a native dialog from the contextmenu
+handler, resolve it with the usual `dialog` step.
 
 ```json
 { "id": "s3", "intent": "open the context menu", "kind": "do", "verb": "rightclick",
