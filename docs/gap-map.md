@@ -91,21 +91,16 @@ the picture shifts materially.
 11. ~~**`wait url` can't match in-flight requests**~~ — same PR: the
     own-CDP poll sees requests while still pending, so a slow endpoint
     (>15s cold, e.g. demoblaze `/signup`) matches as soon as it lands.
-12. **Silent clicks on unhittable elements** — `agent-browser click`
-    reports success when the element's centre fails `elementFromPoint`
-    (below fold / zero-size / covered): the click dispatches to nothing
-    and the recorded scenario replays the miss. Seen on three sites
-    (formy submit anchor, testpages dialog buttons, buggy register).
-    Golden layer: `ensureHittable` (#321). Replay layer: #324 hit-tests
-    every raw-locator coordinate action (click/hover/focus/fill/dblclick/
-    xpath) — scrolls + warns `[v2-replay] ... is unhittable` so the miss
-    is visible in the step log. Role-locator hover/fill now hit-test
-    the resolved element too (#372) — a covered/offscreen target warns
-    instead of silently missing. A nameless role locator
-    (`{"role":"button"}`) still dispatches first-match, but the
-    ambiguity is now visible: when the snapshot shows >1 candidate the
-    step logs `role='X' has no name and matches N nodes` (#388).
-    Remaining: a daemon-side fix upstream would be the real close.
+12. ~~**Silent clicks on unhittable elements**~~ — closed for `click` and
+    `dblclick` by agent-browser 0.39.2: those verbs error when the target
+    is hidden, disabled, covered, or outside the viewport, and a covered
+    click names the covering element. Replay still scrolls the target
+    into view first (`ensure_click_target`, and `scrollintoview` before a
+    ref click) so an off-screen target satisfies that check instead of
+    failing. The old warning remains for hover and fill, which the
+    upstream check does not cover. History below is what shipped before
+    the daemon-side fix: `ensureHittable` (#321), the replay hit-test
+    (#324, #372), and the nameless-role ambiguity log (#388).
 13. ~~**Record-side resolution is still first-match**~~ — closed for the
     golden runners by `evals/golden/visible.ts` (#356): `pickVisible`
     makes the same visibility pick replay does, `clickVisibleEval`

@@ -16,6 +16,10 @@
 //!     once. One-shot, opt-out via `AGENT_QA_NO_AUTO_RECOVER=1`.
 //!   - Socket-stall detection: surfaced with an actionable hint, NOT
 //!     retried (the wedge persists across requests).
+//!   - `outcome_unknown` and `page_wedged` (agent-browser 0.39+): surfaced
+//!     with a hint and never treated as a transient `open` retry. A lost
+//!     daemon reply may already have changed the page; a wedged tab is not
+//!     a network blip.
 //!
 //! Verb modules call the helpers below (`open`, `eval`, `click`, `fill`,
 //! and the rest). A module-level dead_code allow remains because a few
@@ -371,7 +375,7 @@ fn run_with_bin(
     }
 
     if opts.throw_on_error && first.exit_code != 0 {
-        let hint = socket_stall_hint(&first.stderr, &first.stdout, &primary_verb, session);
+        let hint = failure_hint(&first.stderr, &first.stdout, &primary_verb, session);
         return Err(AgentBrowserError::NonZero {
             verb: primary_verb,
             exit_code: first.exit_code,
@@ -524,9 +528,37 @@ fn socket_stall_hint(stderr: &str, stdout: &str, verb: &str, session: &str) -> S
         \x20               Likely cause: a large Runtime.evaluate payload the daemon could not drain.\n\
         \x20               Auto-retry is disabled for this failure shape (the wedge persists across requests).\n\
         \x20               Recover manually:\n\
-        \x20                 agent-browser close --session {session}\n\
-        \x20                 agent-browser open --session {session} <url>\n"
+        \x20                 agent-qa browser close --session {session}\n\
+        \x20                 agent-qa browser --session {session} open <url>\n"
     )
+}
+
+/// Hints for failure shapes agent-browser 0.39+ reports by code. These are
+/// not retried here: `outcome_unknown` means the daemon may already have
+/// run the command, and `page_wedged` means the tab stopped responding.
+fn failure_hint(stderr: &str, stdout: &str, verb: &str, session: &str) -> String {
+    let mut hint = socket_stall_hint(stderr, stdout, verb, session);
+    let blob = format!("{stderr}\n{stdout}");
+    if blob.contains("outcome_unknown") {
+        hint.push_str(&format!(
+            "\n[agent-browser] outcome_unknown for session={session} verb={verb}.\n\
+             \x20               The daemon received this command and the reply was lost, so it was not retried.\n\
+             \x20               Snapshot the page (or `get url`) before repeating a click, fill, or navigation.\n"
+        ));
+    }
+    if blob.contains("page_wedged") {
+        hint.push_str(&format!(
+            "\n[agent-browser] page_wedged for session={session} verb={verb}.\n\
+             \x20               The tab stopped responding. In a browser agent-qa launched, a second timeout\n\
+             \x20               replaces that tab with a blank one — open the page again before the next gesture.\n\
+             \x20               A CDP-attached tab is left as-is; close it in that browser.\n"
+        ));
+    }
+    hint
+}
+
+fn output_has_lost_or_wedged(text: &str) -> bool {
+    text.contains("outcome_unknown") || text.contains("page_wedged")
 }
 
 // ---------- public helpers ----------
@@ -1084,7 +1116,14 @@ pub fn open(session: &str, url: &str) -> Result<(), AgentBrowserError> {
 
 fn is_transient_navigation_error(err: &AgentBrowserError) -> bool {
     match err {
-        AgentBrowserError::NonZero { verb, stderr, .. } if verb == "open" => {
+        AgentBrowserError::NonZero {
+            verb, stderr, hint, ..
+        } if verb == "open" => {
+            // A lost reply or a wedged tab is not a blip. Retrying `open`
+            // can navigate twice or pile timeouts on a dead page.
+            if output_has_lost_or_wedged(stderr) || output_has_lost_or_wedged(hint) {
+                return false;
+            }
             stderr.is_empty()
                 || stderr.contains("net::ERR_HTTP_RESPONSE_CODE_FAILURE")
                 || stderr.contains("net::ERR_CONNECTION_RESET")
@@ -1491,12 +1530,18 @@ pub fn find_text_act_quiet(
 }
 
 /// Click an element by its agent-browser snapshot ref (`@eN`). This is
-/// the lowest-level locator agent-browser exposes — it bypasses all
-/// accessible-name calc, role inference, and visibility heuristics by
-/// resolving the backend node id directly from the snapshot. Use this
-/// as the final rung of a fallback ladder: when the snapshot promises
-/// `<role> "<name>" [ref=eN]` but `find role --name` and `find text`
-/// both miss, clicking `@eN` is guaranteed to land on that exact node.
+/// the lowest-level locator agent-browser exposes — it resolves the
+/// backend node id from the snapshot. Use it as the final rung of a
+/// fallback ladder: when the snapshot promises `<role> "<name>" [ref=eN]`
+/// but `find role --name` and `find text` both miss, `@eN` addresses that
+/// node.
+///
+/// Since agent-browser 0.39.2, `click` fails when the target is hidden,
+/// disabled, covered, or outside the viewport. `scrollintoview` runs
+/// first so an off-screen ref is brought into view; a bad ref still
+/// fails on the click. Refs survive same-document updates and are
+/// invalidated on navigation. An ambiguous stale ref fails instead of
+/// clicking a different node.
 pub fn click_ref(session: &str, snapshot_ref: &str) -> Result<(), AgentBrowserError> {
     // agent-browser accepts both `@eN` and the bare `eN` form for the
     // `click` verb's selector argument; we always pass the `@`-prefixed
@@ -1506,6 +1551,11 @@ pub fn click_ref(session: &str, snapshot_ref: &str) -> Result<(), AgentBrowserEr
     } else {
         format!("@{snapshot_ref}")
     };
+    let _ = run(
+        session,
+        ["scrollintoview", with_at.as_str()],
+        RunOpts::new().lenient(),
+    );
     run(session, ["click", with_at.as_str()], RunOpts::new())?;
     Ok(())
 }
@@ -2289,6 +2339,96 @@ mod tests {
             s.contains("close --session s"),
             "expected recovery hint, got: {s}"
         );
+        clear_bin();
+    }
+
+    #[test]
+    fn outcome_unknown_emits_hint_and_open_does_not_retry() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let state = tmp.path().join("count");
+        let body = format!(
+            "#!/bin/sh\nCOUNT_FILE='{}'\n\
+            N=$( ([ -f \"$COUNT_FILE\" ] && cat \"$COUNT_FILE\") || echo 0)\n\
+            N=$((N+1))\n\
+            echo \"$N\" > \"$COUNT_FILE\"\n\
+            echo 'Navigation failed: outcome_unknown' 1>&2\n\
+            exit 1\n",
+            state.display()
+        );
+        let bin = fake_browser(tmp.path(), &body);
+        set_bin(&bin);
+        let err = open("s", "https://example.com").unwrap_err();
+        let s = format!("{err}");
+        assert!(
+            s.contains("outcome_unknown"),
+            "expected lost-reply hint, got: {s}"
+        );
+        assert!(
+            s.contains("Snapshot the page"),
+            "expected snapshot hint, got: {s}"
+        );
+        let n: u32 = fs::read_to_string(&state).unwrap().trim().parse().unwrap();
+        assert_eq!(n, 1, "outcome_unknown must not retry open");
+        clear_bin();
+    }
+
+    #[test]
+    fn page_wedged_emits_hint_and_open_does_not_retry() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let state = tmp.path().join("count");
+        let body = format!(
+            "#!/bin/sh\nCOUNT_FILE='{}'\n\
+            N=$( ([ -f \"$COUNT_FILE\" ] && cat \"$COUNT_FILE\") || echo 0)\n\
+            N=$((N+1))\n\
+            echo \"$N\" > \"$COUNT_FILE\"\n\
+            echo 'page_wedged' \n\
+            exit 1\n",
+            state.display()
+        );
+        let bin = fake_browser(tmp.path(), &body);
+        set_bin(&bin);
+        let err = run("s", ["eval", "while(true){}"], RunOpts::new().capture()).unwrap_err();
+        let s = format!("{err}");
+        assert!(s.contains("page_wedged"), "expected wedge hint, got: {s}");
+        assert!(
+            s.contains("open the page again"),
+            "expected re-open hint, got: {s}"
+        );
+        // stdout-only code still reaches the hint, and open refuses to retry it.
+        let err = open("s", "https://example.com").unwrap_err();
+        assert!(format!("{err}").contains("page_wedged"));
+        let n: u32 = fs::read_to_string(&state).unwrap().trim().parse().unwrap();
+        assert_eq!(n, 2, "eval once plus one open, no navigation retry");
+        clear_bin();
+    }
+
+    #[test]
+    fn click_ref_scrolls_into_view_before_click() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("log");
+        let body = format!("#!/bin/sh\necho \"$@\" >> '{}'\nexit 0\n", log.display());
+        let bin = fake_browser(tmp.path(), &body);
+        set_bin(&bin);
+        click_ref("s", "e12").unwrap();
+        let invocation = fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = invocation.lines().collect();
+        assert!(
+            lines.iter().any(|l| l.contains("scrollintoview @e12")),
+            "got {invocation:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("click @e12")),
+            "got {invocation:?}"
+        );
+        let scroll_at = lines
+            .iter()
+            .position(|l| l.contains("scrollintoview"))
+            .unwrap();
+        let click_at = lines.iter().position(|l| l.contains("click @e12")).unwrap();
+        assert!(scroll_at < click_at, "got {invocation:?}");
         clear_bin();
     }
 

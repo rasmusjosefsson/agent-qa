@@ -228,6 +228,7 @@ agent-browser and pings each plugin.
 | Variable                   | Effect                                                              |
 | -------------------------- | ------------------------------------------------------------------- |
 | `AGENT_BROWSER_BIN`        | Absolute path to the agent-browser binary (set by the npm shim)     |
+| `AGENT_BROWSER_DEFAULT_TIMEOUT` | agent-browser operation timeout in ms (default `25000`). Keep it at or below `30000`. Above that, the CLI read timeout can expire first and a mutation fails as `outcome_unknown` instead of a clean error. |
 | `AGENT_QA_SCENARIOS_DIR`    | Override the scenarios root (relative paths resolve against `cwd`)   |
 | `AGENT_QA_RECORD_DIR`      | Override the recorder workfile root                                 |
 | `AGENT_QA_PLUGINS`         | Colon-separated list of plugin binary paths                          |

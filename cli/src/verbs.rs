@@ -2066,13 +2066,12 @@ fn try_xpath_native_click(session: &str, xpath: &str) -> anyhow::Result<bool> {
 }
 
 /// Hit-test the element a raw locator resolves to before handing the action
-/// to agent-browser's coordinate dispatch. `agent-browser click` reports
-/// success even when the element's centre point misses `elementFromPoint`
-/// (below the fold, zero-size box, covered by an overlay) — the action then
-/// dispatches to nothing and the step passes while doing nothing. This
-/// guard scrolls the target into view first (the common miss) and warns
-/// loudly when it stays unhittable, so a silent miss shows up in the step
-/// log instead of passing invisibly.
+/// to agent-browser's coordinate dispatch. Since agent-browser 0.39.2,
+/// `click` and `dblclick` fail when the target is hidden, disabled, or
+/// outside the viewport, and a covered click names the covering element.
+/// This guard scrolls the target into view first so an off-screen click
+/// satisfies that check. Hover and fill still have no such rejection, so
+/// a target that stays unhittable is warned before those actions.
 ///
 /// `resolver` is a JS function body evaluating to the target Element (or
 /// null). Returns the post-scroll hit state: "ok", "missing", "empty",
@@ -2111,17 +2110,23 @@ fn ensure_click_target(session: &str, resolver: &str) -> String {
     }
 }
 
-/// Warn on the states that predict a silent coordinate-action miss.
+/// Warn when the target is still unhittable after the scroll.
 /// `missing` stays quiet — agent-browser's own lookup produces the miss
 /// error — and unknown states (a stubbed eval in tests, an older daemon)
-/// stay quiet too.
+/// stay quiet too. Click and dblclick name the rejection; other acts can
+/// still pass without landing.
 fn warn_unhittable(act: &str, locator_desc: &str, state: &str) {
     if matches!(
         state.split(':').next(),
         Some("offscreen" | "empty" | "covered")
     ) {
+        let why = if matches!(act, "click" | "dblclick") {
+            "agent-browser will reject the click (hidden, disabled, covered, or still outside the viewport)"
+        } else {
+            "the action may silently miss"
+        };
         eprintln!(
-            "[v2-replay] {act} target {locator_desc} is unhittable ({state}) after scroll — the {act} may silently miss"
+            "[v2-replay] {act} target {locator_desc} is unhittable ({state}) after scroll — {why}"
         );
     }
 }

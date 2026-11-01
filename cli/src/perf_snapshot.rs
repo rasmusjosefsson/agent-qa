@@ -7,8 +7,8 @@
 //!
 //! The surface is intentionally minimal: navigation + paint timings
 //! cover the everyday 'is the page loading at the speed I expect?'
-//! check. `--record-renders <ms>` for React-render profiling lands
-//! later when agent-browser's react-renders subverb is wired in.
+//! check. React trees and DevTools traces are agent-browser commands
+//! (`react tree`, `trace start`), not flags on this verb.
 
 use std::fs;
 
