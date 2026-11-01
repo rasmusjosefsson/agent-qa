@@ -3169,6 +3169,10 @@ function replayArgs(sid, session, opts = {}) {
     sid,
     ...(session ? ['--session', session] : []),
     opts && opts.headed === true ? '--headed' : '--headless',
+    // Film the run so headless replays still show the cursor, the click
+    // ripple, and the target border. The overlay only paints while
+    // recording; without this flag a headless run is a plain page.
+    '--record-video',
   ];
   if (opts && opts.profile) args.push('--profile', String(opts.profile));
   if (opts && opts.params && typeof opts.params === 'object') {
@@ -4698,6 +4702,7 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
           '--session',
           entry.browser.name,
           headed ? '--headed' : '--headless',
+          '--record-video',
           '--profile',
           resolved.profile || profile,
         ],

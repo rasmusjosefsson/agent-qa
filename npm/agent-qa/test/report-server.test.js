@@ -212,11 +212,13 @@ test('workbench run options default headless and replay args pin the CLI mode', 
     '--session',
     'replay-s-demo',
     '--headless',
+    '--record-video',
   ]);
   assert.deepEqual(srv._test.replayArgs('s-demo', null, { headed: true, params: { baseUrl: 'https://example.com' } }), [
     'replay',
     's-demo',
     '--headed',
+    '--record-video',
     '--param',
     'baseUrl=https://example.com',
   ]);

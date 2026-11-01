@@ -1,10 +1,10 @@
 //! In-page overlay painted during `--record-video` replays: a Cypress-style
 //! left rail listing every step — pending dimmed, current highlighted,
 //! pass/fail colored — a fake cursor that glides to each step's target and
-//! ripples on click verbs, plus a dashed sky ring bounding asserted
-//! elements on check steps (flashing green/red with the outcome). Injected
-//! per-step via `eval` — navigation wipes the DOM, so each call re-adds
-//! the elements; best-effort only, never fails a step.
+//! ripples on click verbs, plus a dashed sky ring around that target
+//! (checks flip the ring green/red with the outcome). Injected per-step
+//! via `eval` — navigation wipes the DOM, so each call re-adds the
+//! elements; best-effort only, never fails a step.
 
 use serde_json::{json, Value as Json};
 
@@ -180,11 +180,11 @@ return null;
 }"#;
 
 /// Pointer painter body — runs inside `function(q,kind,click,st){...}`
-/// after `RESOLVE`. Paints the assertion ring (dashed sky; flips green/red
-/// once the outcome lands) on check steps only, glides the fake cursor to
-/// the target's center, and ripples on click verbs. With no resolvable
-/// target the ring comes down but the cursor stays parked — jumping it
-/// off-screen between steps reads as flicker in the video.
+/// after `RESOLVE`. Boxes every resolved target (dashed sky; a check
+/// flips the box green/red once the outcome lands), glides the fake
+/// cursor to the target's center, and ripples on click verbs. With no
+/// resolvable target the ring comes down but the cursor stays parked —
+/// jumping it off-screen between steps reads as flicker in the video.
 const POINTER_BODY: &str = r##"var doc=document;try{
 var old=doc.getElementById('__aq_ring');if(old)old.remove();
 var el=resolve(doc,q);
@@ -192,17 +192,16 @@ if(!el||!el.getBoundingClientRect)return;
 var r=el.getBoundingClientRect();
 if(!(r.width>0||r.height>0)||r.bottom<=0||r.right<=0||r.top>=window.innerHeight||r.left>=window.innerWidth)return;
 var cx=r.left+r.width/2,cy=r.top+r.height/2;
-// Action steps carry the cursor + ripple — an element border around
-// buttons reads as clutter. The ring is reserved for assertions, where
-// bounding the asserted element is what the video needs to show.
-if(kind==='check'){
+// The box shows where the step acted. Checks recolor it with the
+// outcome; clicks keep the sky dash and add the cursor ripple below.
 var col='#38bdf8',dash=true;
+if(kind==='check'){
 if(st==='pass'){col='#22c55e';dash=false}
 else if(st==='fail'||st==='skip'){col='#ef4444';dash=false}
+}
 var ring=doc.createElement('div');ring.id='__aq_ring';
 ring.setAttribute('style','position:fixed;z-index:2147483646;left:'+(r.left-4)+'px;top:'+(r.top-4)+'px;width:'+(r.width+8)+'px;height:'+(r.height+8)+'px;border:'+(dash?'3px dashed':'3px solid')+' '+col+';border-radius:5px;box-shadow:0 0 0 4px '+col+'40,0 0 18px '+col+'8c;pointer-events:none;');
 (doc.documentElement||doc.body||doc).appendChild(ring);
-}
 var cur=doc.getElementById('__aq_cursor');
 if(!cur){
  cur=doc.createElement('div');cur.id='__aq_cursor';

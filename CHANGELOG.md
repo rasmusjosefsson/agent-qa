@@ -8,6 +8,15 @@ All notable changes to agent-qa are documented here. This project follows
 
 ### Added
 
+- The Headless switch keeps that label. On means the replay has no
+  browser window; off means the window is shown. It sits next to Replay.
+
+- Workbench replay passes `--record-video`, so a headless run films the
+  cursor, the click ripple, and a border around the step's target. The
+  border is back on action steps (click, type, and the rest); checks
+  still recolor it green or red with the outcome. Step screenshots hide
+  the overlay so pixel goldens stay clean.
+
 - Replay scrubber in the workbench. A recorded run shows the video with a
   marker per step, the step caption under the playhead, and a Frames /
   Video switch. Playback speed goes to 8×: Video asks the browser for
