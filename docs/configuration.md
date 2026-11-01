@@ -259,4 +259,9 @@ environment variable such as `OPENAI_API_KEY` in the workbench process are
 the other way in. The `opencode` backend needs the
 `opencode` CLI on `PATH` (`npm i -g opencode-ai`) — each chat spawns its own
 `opencode serve` process with that chat's per-session env, while `pi` runs
-in-process via its SDK.
+in-process via its SDK. When that pi backend is up and has no models, empty
+Chat says to run `pi`, then `/login`, restart the workbench, and start a new
+chat. The composer stays closed, and a missing-login failure is rewritten
+into that same next step. Settings says the chat backend applies on the next
+workbench start, and only when the stored value differs from the one this
+process booted with.
