@@ -55,13 +55,14 @@ const DOCK_WIDTH_EXPR: &str = r#"(function(){
 })()"#;
 
 const CURSOR_HIDE: &str = r#"(function(){
- ['__aq_ring','__aq_cursor','__aq_pulse','__aq_rail','__aq_step'].forEach(function(id){
+ ['__aq_ring','__aq_cursor','__aq_rail','__aq_step'].forEach(function(id){
   var e=document.getElementById(id);if(e)e.style.display='none';
  });
+ var pulse=document.getElementById('__aq_pulse');if(pulse)pulse.remove();
 })()"#;
 
 const CURSOR_SHOW: &str = r#"(function(){
- ['__aq_ring','__aq_cursor','__aq_pulse','__aq_rail','__aq_step'].forEach(function(id){
+ ['__aq_ring','__aq_cursor','__aq_rail','__aq_step'].forEach(function(id){
   var e=document.getElementById(id);if(e)e.style.display='';
  });
 })()"#;
@@ -103,7 +104,7 @@ fn crop_dock(path: &std::path::Path, left: u32) -> bool {
 fn visibility_expr(visible: bool) -> String {
     let vis = if visible { "" } else { "none" };
     format!(
-        "(function(){{try{{document.querySelectorAll('#__aq_rail,#__aq_step,#__aq_ring,#__aq_cursor,#__aq_pulse').forEach(function(e){{e.style.display='{vis}'}})}}catch(e){{}}}})()"
+        "(function(){{try{{document.querySelectorAll('#__aq_rail,#__aq_step,#__aq_ring,#__aq_cursor').forEach(function(e){{e.style.display='{vis}'}});if('{vis}'==='none'){{var p=document.getElementById('__aq_pulse');if(p)p.remove()}}}}catch(e){{}}}})()"
     )
 }
 
@@ -217,12 +218,20 @@ if(q.text){try{
  while(n=w.nextNode()){if(n.childElementCount===0&&(n.textContent||'').trim()===q.text)return n}
 }catch(e){}return null}
 if(q.role){try{
- var tags={button:'button,input[type=button],input[type=submit],input[type=reset],[role=button]',link:'a[href],[role=link]',textbox:'input:not([type]),input[type=text],input[type=email],input[type=password],input[type=search],input[type=tel],input[type=url],textarea,[role=textbox]',checkbox:'input[type=checkbox],[role=checkbox]',radio:'input[type=radio],[role=radio]',heading:'h1,h2,h3,h4,h5,h6,[role=heading]',img:'img,[role=img]',listbox:'select,[role=listbox]',option:'option,[role=option]',combobox:'select,[role=combobox]',slider:'input[type=range],[role=slider]',tab:'[role=tab]',menuitem:'[role=menuitem]',navigation:'nav,[role=navigation]',main:'main,[role=main]',form:'form,[role=form]',dialog:'dialog,[role=dialog]',alert:'[role=alert]',list:'ul,ol,[role=list]',listitem:'li,[role=listitem]',cell:'td,[role=cell]',columnheader:'th,[role=columnheader]',row:'tr,[role=row]',table:'table,[role=table]'};
+ var tags={button:'button,input[type=button],input[type=submit],input[type=reset],[role=button]',link:'a[href],[role=link]',textbox:'input:not([type]),input[type=text],input[type=email],input[type=password],input[type=search],input[type=tel],input[type=url],textarea,[role=textbox]',checkbox:'input[type=checkbox],[role=checkbox]',radio:'input[type=radio],[role=radio]',heading:'h1,h2,h3,h4,h5,h6,[role=heading]',img:'img,[role=img]',listbox:'select,[role=listbox]',option:'option,[role=option]',combobox:'select,[role=combobox]',slider:'input[type=range],[role=slider]',tab:'[role=tab]',menuitem:'[role=menuitem]',navigation:'nav,[role=navigation]',main:'main,[role=main]',form:'form,[role=form]',dialog:'dialog,[role=dialog]',alert:'[role=alert]',list:'ul,ol,[role=list]',listitem:'li,[role=listitem]',cell:'td,[role=cell]',columnheader:'th,[role=columnheader]',row:'tr,[role=row]',table:'table,[role=table]',paragraph:'p,[role=paragraph]'};
  var cand=doc.querySelectorAll('[role="'+q.role+'"]'+(tags[q.role]?','+tags[q.role]:''));
  for(var i=0;i<cand.length;i++){var c=cand[i];
   if(!q.name)return c;
   var nm=(c.getAttribute('aria-label')||'')||((c.textContent||'').trim())||((c.value||''));
   if(nm===q.name||nm.indexOf(q.name)>=0)return c;
+ }
+ var labels=doc.querySelectorAll('label');
+ for(var j=0;j<labels.length;j++){
+  var lb=labels[j];
+  var lt=((lb.getAttribute('aria-label')||'')||(lb.textContent||'')).trim();
+  if(lt!==q.name&&lt.indexOf(q.name)<0)continue;
+  var ctrl=lb.htmlFor?doc.getElementById(lb.htmlFor):lb.querySelector('input,textarea,select');
+  if(ctrl)return ctrl;
  }
 }catch(e){}return null}
 return null;
@@ -239,6 +248,11 @@ const POINTER_BODY: &str = r##"var doc=document;try{
 var stepEl=doc.getElementById('__aq_step');if(stepEl)stepEl.remove();
 var rail=doc.getElementById('__aq_rail');if(rail)rail.remove();
 var old=doc.getElementById('__aq_ring');if(old)old.remove();
+// One ripple, while a click is still running. A later step, or the
+// recolor after the click lands, must not play it again. Hiding and
+// showing the node restarts the animation, so drop it instead.
+var oldPulse=doc.getElementById('__aq_pulse');
+if(!(click && !st) && oldPulse)oldPulse.remove();
 var el=resolve(doc,q);
 if(!el||!el.getBoundingClientRect)return;
 var r=el.getBoundingClientRect();
@@ -264,8 +278,7 @@ if(!cursor){
  cursor.getBoundingClientRect();
 }
 cursor.style.left=(cx-5)+'px';cursor.style.top=(cy-3)+'px';
-if(click){
- var old2=doc.getElementById('__aq_pulse');if(old2)old2.remove();
+if(click && !st){
  var p=doc.createElement('div');p.id='__aq_pulse';
  p.setAttribute('style','position:fixed;z-index:2147483646;left:'+(cx-48)+'px;top:'+(cy-48)+'px;width:96px;height:96px;border:4px solid rgba(244,63,94,.95);border-radius:50%;background:radial-gradient(circle,rgba(244,63,94,.85) 0%,rgba(244,63,94,.4) 38%,rgba(244,63,94,0) 68%);pointer-events:none;animation:__aq_glow .8s ease-out forwards;');
  if(!doc.getElementById('__aq_style')){
@@ -496,7 +509,10 @@ mod tests {
     fn overlay_paints_the_action_and_not_a_step_list() {
         assert!(POINTER_BODY.contains("__aq_cursor"));
         assert!(POINTER_BODY.contains("__aq_ring"));
-        assert!(POINTER_BODY.contains("__aq_pulse"));
+        assert!(super::RESOLVE.contains("paragraph:'p"));
+        assert!(super::RESOLVE.contains("querySelectorAll('label')"));
+        assert!(POINTER_BODY.contains("if(click && !st)"));
+        assert!(POINTER_BODY.contains("if(!(click && !st) && oldPulse)oldPulse.remove()"));
         assert!(POINTER_BODY.contains("if(rail)rail.remove()"));
         assert!(POINTER_BODY.contains("if(stepEl)stepEl.remove()"));
         assert!(!POINTER_BODY.contains("pinRight"));

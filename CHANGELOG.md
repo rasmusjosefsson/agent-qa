@@ -17,8 +17,9 @@ All notable changes to agent-qa are documented here. This project follows
   still recolor it green or red with the outcome. A headed replay keeps
   a step list in that same window, docked on the left. The page shifts
   right so the list does not cover the UI. Finished steps stay quiet,
-  the running step is highlighted, and later steps stay faded. Step
-  screenshots are the page beside that list, so the list stays up for
+  the running step is highlighted, and later steps stay faded. The
+  click ripple plays once, on a click, and does not replay on the
+  following steps. Step screenshots are the page beside that list, so the list stays up for
   the whole replay. The cursor is left out of the shot.
 
 - The replay player follows the workbench theme. In light mode the
