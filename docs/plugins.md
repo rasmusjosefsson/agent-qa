@@ -4,7 +4,9 @@ Every app-specific concern — auth, session policy, setup hooks, GraphQL
 discovery defaults — enters via a **plugin**. This guide is the contract for
 writing one.
 
-This document is the wire contract.
+This document is the wire contract. A surface provider is a different
+process: desktop, iOS, and Android replay use that contract, not a
+plugin kind. See [`surfaces.md`](surfaces.md).
 
 ## Model
 

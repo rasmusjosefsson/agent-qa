@@ -14,6 +14,7 @@ agent-qa is a CLI (plus browser extension) that captures browser sessions as det
 - [Network claims](https://rasmusjosefsson.github.io/agent-qa/docs/network.md): network and console claims behind the UI
 - [Templates](https://rasmusjosefsson.github.io/agent-qa/docs/templates.md): reusable sub-scenarios via useTemplate
 - [Plugins](https://rasmusjosefsson.github.io/agent-qa/docs/plugins.md): JSON-over-stdio plugin contract
+- [Surfaces](https://rasmusjosefsson.github.io/agent-qa/docs/surfaces.md): desktop, iOS, and Android replay through a surface provider
 - [Browser extension](https://rasmusjosefsson.github.io/agent-qa/docs/extension.md): one-click capture → ingest → replay
 - [GitHub Action](https://rasmusjosefsson.github.io/agent-qa/docs/github-action.md): replay scenarios on every PR
 - [Lint rules](https://rasmusjosefsson.github.io/agent-qa/docs/lint-rules.md): scenario lint catalogue

@@ -28,6 +28,7 @@
   },
   "capabilities": [
     "record browser scenarios to scenario.json",
+    "desktop, iOS, and Android replay through a surface provider; the web path does not start one",
     "deterministic replay with per-step claims",
     "visual goldens (shot/domshot/layout) with baselines and diffs",
     "network, console, a11y, storage, and file claims",

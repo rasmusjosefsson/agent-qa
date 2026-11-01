@@ -365,10 +365,10 @@ auth = <span class="s">"./plugins/acme-auth/agent-qa-plugin-acme-auth"</span>
       <section class="section wrap" id="architecture">
         <div class="section-head">
           <span class="eyebrow">How it fits</span>
-          <h2>Two layers, one boundary.</h2>
+          <h2>The browser path stays the default.</h2>
           <p>
             <code>agent-browser</code> drives Chromium over CDP. <code>agent-qa</code> does the bookkeeping:
-            profiles, sidecars, replay, compare, heal. It never reimplements what the browser layer already does.
+            profiles, sidecars, replay, compare, heal. A desktop, iOS, or Android scenario names a <a href={to("docs/surfaces/")}>surface provider</a> instead, and that path never starts the browser.
           </p>
         </div>
         <div class="arch reveal">
@@ -382,6 +382,7 @@ auth = <span class="s">"./plugins/acme-auth/agent-qa-plugin-acme-auth"</span>
             <b>agent-qa</b>
             <div class="arch-side">
               <span>plugins · JSON over stdio</span>
+              <span>surfaces · desktop, iOS, Android</span>
               <span>evidence · on disk</span>
             </div>
           </div>
@@ -427,6 +428,7 @@ auth = <span class="s">"./plugins/acme-auth/agent-qa-plugin-acme-auth"</span>
           <a href={to("docs/quickstart/")}>Quickstart</a>
           <a href={to("docs/overview/")}>How it works</a>
           <a href={to("docs/plugins/")}>Plugins</a>
+          <a href={to("docs/surfaces/")}>Surfaces</a>
           <a href={to("docs/verbs/")}>Verbs</a>
           <a href={repo}>GitHub</a>
         </nav>

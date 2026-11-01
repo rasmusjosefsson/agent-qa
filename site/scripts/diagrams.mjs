@@ -86,13 +86,16 @@ export function system() {
     { title: "Chromium tab", sub: "real browser" },
     { title: "Target app", sub: "any web app" },
   ]
-  return svg(760, 300, "agent-qa sits between the agent and agent-browser, calls plugins, and writes evidence to disk", [
+  return svg(760, 300, "agent-qa sits between the agent and agent-browser on the web path, calls plugins, and sends desktop, iOS, and Android to a surface provider", [
     ...nodes.map((n, i) => node({ ...n, x: xs[i], y, w: ws[i] })),
     ...chain(xs, ws, y + 32),
-    label(309, 142, "spawn per gesture"),
-    node({ x: 103, y: 14, w: 190, h: 62, title: "Plugin", sub: "any language · JSON over stdio" }),
-    edge(`M198 116V80`),
-    label(206, 102, "auth · session · hooks", "start"),
+    label(309, 142, "web surface"),
+    node({ x: 20, y: 14, w: 190, h: 62, title: "Plugin", sub: "any language · JSON over stdio" }),
+    edge(`M170 116V80`),
+    label(178, 102, "auth · session · hooks", "start"),
+    node({ x: 430, y: 8, w: 250, h: 62, title: "Surface provider", sub: "desktop, iOS, Android" }),
+    edge(`M230 116C250 78 400 40 426 40`, "soft"),
+    label(330, 78, "not the web path"),
     node({ x: 196, y: 226, w: 230, h: 62, title: "Evidence on disk", sub: "audit.json, sidecars, screenshots", kind: "artifact" }),
     edge(`M222 184V222`, "soft"),
     edge(`M400 184V222`, "soft"),
@@ -109,7 +112,7 @@ export function modules() {
     ["Profiles", ["profile-add", "profile-status", "profile-bootstrap"]],
     ["Diagnostics", ["doctor", "byo-doctor", "perf-snapshot"]],
   ]
-  const infra = ["paths.rs", "scenario.rs", "schema.rs", "sidecar.rs", "value.rs", "browser.rs", "plugin/", "env_ops.rs", "verbs.rs", "verb_shape.rs", "claims.rs"]
+  const infra = ["paths.rs", "scenario.rs", "schema.rs", "sidecar.rs", "value.rs", "browser.rs", "surface/", "plugin/", "env_ops.rs", "verbs.rs", "verb_shape.rs", "claims.rs"]
   const chips = (xs) => xs.map((x) => `<li>${esc(x)}</li>`).join("")
   const verbs = groups.map(([g, xs]) => `<div class="aqa-mods-group"><span>${g}</span><ul>${chips(xs)}</ul></div>`).join("")
   return (

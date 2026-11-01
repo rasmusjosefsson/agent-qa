@@ -41,6 +41,7 @@ export default defineConfig({
           items: [
             { label: "Configuration", slug: "docs/configuration" },
             { label: "Plugins", slug: "docs/plugins" },
+            { label: "Surfaces", slug: "docs/surfaces" },
             { label: "Templates", slug: "docs/templates" },
             { label: "Flow DSL", slug: "docs/flow" },
             { label: "Golden screenshots", slug: "docs/visual-testing" },
