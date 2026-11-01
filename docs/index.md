@@ -19,6 +19,7 @@ Two layers. Keep them straight and most confusion goes away.
 | --------------------------- | ------------------------------------------------------------------------------- |
 | `agent-browser`             | Driving the browser. CDP, navigation, snapshots, screenshots, eval.             |
 | `agent-qa`                  | Scenario bookkeeping. Profiles, sidecars, replay, compare, heal.                 |
+| surface provider            | Optional. Desktop, iOS, and Android replay. The web path does not start one.    |
 
 agent-qa calls down into agent-browser for everything it does to the page. It never reimplements
 what agent-browser already provides.

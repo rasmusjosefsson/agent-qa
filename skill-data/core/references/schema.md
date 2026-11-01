@@ -38,8 +38,16 @@ and optional provenance.
 }
 ```
 
+`surface` selects who drives the scenario. Omit it, or set `"web"`, and replay
+uses the browser. `"desktop"`, `"ios"`, and `"android"` replay through a surface
+provider and do not launch the browser. `target` tells that provider what to
+launch (`app`, `window`, `device`). The provider is configured with
+`[surfaces]` in `agent-qa.toml`, not with `[plugins]`. See `docs/surfaces.md`.
+
 Use `record-step do` and `record-step check` to create steps. The recorder assigns
-`id` and `kind`. Do not hand-edit them into drafts.
+`id` and `kind`. Do not hand-edit them into drafts. The browser recorder writes
+web scenarios. A desktop, iOS, or Android scenario is authored with `surface`
+and `target`, then replayed.
 
 A check step polls its claim for up to 5s by default; give it
 `"context": {"timeoutMs": 30000}` to wait out slow async UI (capped at 60s).

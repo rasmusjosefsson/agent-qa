@@ -205,6 +205,7 @@ Default root: `<cwd>/tmp/agent-qa-scenarios/`. Override with
 | Diagnostics          | `doctor.rs`, `byo_doctor.rs`, `perf_snapshot.rs`       |
 | Browser client       | `browser.rs`                                           |
 | Plugin host          | `plugin/protocol.rs`, `plugin/discovery.rs`, `plugin/host.rs`, `plugin/cli.rs` |
+| Surface providers    | `surface/` — desktop, ios, android. Not on the web replay path. See [`surfaces.md`](surfaces.md). |
 | Paths                | `paths.rs`                                             |
 | Scenario types        | `scenario.rs`, `schema.rs`                              |
 | Operational refs     | `skill-data/`                                          |

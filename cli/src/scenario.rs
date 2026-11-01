@@ -1140,12 +1140,33 @@ pub struct Template {
 
 // ---------- Scenario root ----------
 
+/// What a non-web surface provider launches. The browser runner ignores it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SurfaceTarget {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Scenario {
     pub schema: String, // must equal "scenario/2"; enforced by JSON Schema
     pub id: String,
     pub intent: String,
+    /// Built-in browser surface when omitted or `"web"`. `"desktop"`,
+    /// `"ios"`, and `"android"` replay through a surface provider and
+    /// never launch the browser. See `docs/surfaces.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface: Option<String>,
+    /// Launch identity for a non-web surface (`app`, `window`, `device`).
+    /// The web runner does not read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<SurfaceTarget>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -111,6 +111,8 @@ pub(crate) fn assemble_scenario(state: &RecorderState) -> Result<serde_json::Val
         schema: "scenario/2".to_string(),
         id: state.sid.clone(),
         intent: state.intent.clone(),
+        surface: None,
+        target: None,
         tags: None,
         inputs: None,
         env: (!state.env_open.is_empty()).then(|| Env {

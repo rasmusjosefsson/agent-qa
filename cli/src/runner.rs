@@ -474,6 +474,19 @@ pub(crate) fn refuse_if_recording_active(session: &str) -> Result<()> {
 }
 
 pub fn run(opts: &RunOptions) -> Result<RunSummary> {
+    // Load + validate before any browser setup. One field check: a
+    // non-web `surface` returns through the provider and never resolves
+    // a browser connection, session lock, or CDP client. Omitted and
+    // `"web"` fall through to the browser runner below, unchanged.
+    let (scenario_file, scenario_dir) = resolve_source(&opts.source)?;
+    let bytes =
+        fs::read(&scenario_file).with_context(|| format!("read {}", scenario_file.display()))?;
+    let parsed = schema::validate_bytes(&bytes)
+        .with_context(|| format!("validate {}", scenario_file.display()))?;
+    if crate::surface::is_external(&parsed) {
+        return crate::surface::replay(opts, &scenario_file, &scenario_dir, &bytes, parsed);
+    }
+
     // 0. Browser launch mode (headless by default; --headed shows the window)
     // and persistent profile. Set before any agent-browser child is spawned
     // so a freshly-launched session picks them up.
@@ -482,15 +495,6 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     let connection = crate::browser::BrowserConnection::resolve()?;
     crate::browser::set_connection(&connection);
 
-    // 1. Load + validate FIRST — before the session lock, the browser
-    //    resets, or any subprocess spawn. A missing/corrupt/empty scenario
-    //    must fail instantly with just its error, not after four pages of
-    //    agent-browser warnings it never needed.
-    let (scenario_file, scenario_dir) = resolve_source(&opts.source)?;
-    let bytes =
-        fs::read(&scenario_file).with_context(|| format!("read {}", scenario_file.display()))?;
-    let parsed = schema::validate_bytes(&bytes)
-        .with_context(|| format!("validate {}", scenario_file.display()))?;
     let mut scenario: Scenario =
         serde_json::from_value(parsed.clone()).context("parse scenario")?;
     if scenario.steps.is_empty() {
@@ -1888,7 +1892,7 @@ fn flatten_steps(
 /// forever — the cap turns that stack overflow into a named error.
 const MAX_EXPAND_DEPTH: usize = 64;
 
-fn flatten_steps_with_scope(
+pub(crate) fn flatten_steps_with_scope(
     steps: &[Step],
     templates: Option<&std::collections::BTreeMap<String, crate::scenario::Template>>,
     inputs: Option<&std::collections::HashMap<String, serde_json::Value>>,
@@ -2242,7 +2246,9 @@ fn load_heal_overrides(
 /// Read `<scenario_dir>/inputs.local.json` — the gitignored file `flush`
 /// writes recorded secrets into so a committed scenario still replays on
 /// the machine that recorded it. Missing or unparsable → empty map.
-fn load_local_inputs(scenario_dir: &std::path::Path) -> BTreeMap<String, serde_json::Value> {
+pub(crate) fn load_local_inputs(
+    scenario_dir: &std::path::Path,
+) -> BTreeMap<String, serde_json::Value> {
     let p = scenario_dir.join("inputs.local.json");
     match fs::read(&p) {
         Ok(bytes) => serde_json::from_slice::<BTreeMap<String, serde_json::Value>>(&bytes)
@@ -2254,7 +2260,7 @@ fn load_local_inputs(scenario_dir: &std::path::Path) -> BTreeMap<String, serde_j
     }
 }
 
-fn resolve_inputs(
+pub(crate) fn resolve_inputs(
     declared: Option<&BTreeMap<String, InputDecl>>,
     overrides: &BTreeMap<String, String>,
     local: &BTreeMap<String, serde_json::Value>,

@@ -118,6 +118,8 @@ fn ingest_bundle(bundle: &Json, sid: Option<String>, source_ref: &str) -> Result
         schema: "scenario/2".to_string(),
         id: sid.clone(),
         intent,
+        surface: None,
+        target: None,
         tags: None,
         inputs: None,
         env,

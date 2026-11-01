@@ -42,6 +42,24 @@ Maps a plugin **kind** to a binary. Discovery (in priority order):
 The plugin protocol (subprocess + JSON over stdio) is documented in
 [`plugins.md`](plugins.md).
 
+### `[surfaces]`
+
+Non-web scenarios name a provider binary. The web surface is built in
+and does not read this table, so an empty or absent table changes
+nothing about browser replay. `desktop`, `ios`, and `android` share
+one protocol; each entry is the process that speaks it. See
+[`surfaces.md`](surfaces.md).
+
+```toml
+[surfaces]
+desktop = "./providers/desktop"   # relative to this file, or a $PATH name
+# ios = "agent-qa-surface-ios"
+# android = "agent-qa-surface-android"
+```
+
+`AGENT_QA_SURFACE_DESKTOP` (and the same form for `ios` / `android`)
+overrides the table for that surface.
+
 ### `[paths]`
 
 Override the on-disk roots. Resolution per root:
