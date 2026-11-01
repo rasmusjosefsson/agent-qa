@@ -52,6 +52,13 @@ describe('CenterPane scenario controls', () => {
     )
 
     expect(html).toContain('Replay</button>')
+    expect(html).toContain('aria-label="Headless"')
+    expect(html).not.toContain('Browser visible')
+    const headlessAt = html.indexOf('aria-label="Headless"')
+    const replayAt = html.indexOf('Replay</button>')
+    expect(headlessAt).toBeGreaterThan(-1)
+    expect(replayAt).toBeGreaterThan(headlessAt)
+    expect(html.slice(headlessAt, replayAt)).not.toContain('Run as')
     // Settings row wraps instead of overflowing a narrow pane, and its
     // selects can shrink below their content width.
     expect(html).toContain('flex flex-wrap items-center gap-x-2')
