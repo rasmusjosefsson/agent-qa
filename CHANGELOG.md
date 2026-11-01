@@ -14,11 +14,11 @@ All notable changes to agent-qa are documented here. This project follows
 - Workbench replay passes `--record-video`, so a headless run films the
   cursor, the click ripple, and a border around the step's target. The
   border is back on action steps (click, type, and the rest); checks
-  still recolor it green or red with the outcome. A headed replay also
-  opens a step log in its own window, tiled to the left of the app:
-  finished steps stay quiet, the running step is highlighted, and later
-  steps stay faded. The page itself is not covered. Step screenshots
-  hide the cursor overlay so pixel goldens stay clean.
+  still recolor it green or red with the outcome. A headed replay keeps
+  a step list in that same window, docked on the left. The page shifts
+  right so the list does not cover the UI. Finished steps stay quiet,
+  the running step is highlighted, and later steps stay faded. Step
+  screenshots hide the dock and the cursor so pixel goldens stay clean.
 
 - The replay player follows the workbench theme. In light mode the
   stage, timeline, and controls are light; in dark mode they stay dark.

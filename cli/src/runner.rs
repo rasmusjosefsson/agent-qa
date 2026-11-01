@@ -941,8 +941,8 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         // this is additive — the per-step stderr trace below is unchanged.
         let total = flat.len() as u32;
         // Cursor and target ring while a recording is on. A visible window
-        // also gets a step log tiled beside the app. Neither paints a
-        // step list over the page.
+        // also docks a step list on the left of that same window and shifts
+        // the page so the list does not cover it.
         let record_on = opts.record_video.is_some() && !opts.dry_run;
         let show_steps = opts.headed && !opts.dry_run;
         let step_captions: Vec<String> = if show_steps {
@@ -1192,7 +1192,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 step.clone()
             };
             // While recording, ring the target. When the window is visible,
-            // refresh the step log beside the app.
+            // refresh the step list docked in that same window.
             if record_on || show_steps {
                 crate::video_overlay::paint(
                     &opts.session_name,
@@ -1397,7 +1397,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                             &opts.session_name,
                             stabilize_shots,
                             &shot_masks,
-                            record_on,
+                            record_on || show_steps,
                             capture_layouts,
                         );
                     }
@@ -1537,7 +1537,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                             &opts.session_name,
                             stabilize_shots,
                             &shot_masks,
-                            record_on,
+                            record_on || show_steps,
                             capture_layouts,
                         );
                     }
@@ -2534,21 +2534,26 @@ fn capture_step_sidecars(
     }
     if let Ok(path) = step_sidecar_path(run, SidecarKind::Screenshots, step_id) {
         let masked = !shot_masks.is_empty() && apply_shot_mask(session, shot_masks);
-        // The replay-video overlay (cursor, ripple, target ring) is page
-        // DOM — hide it for the saved capture or `shot` claims diff our
-        // own chrome as page drift. Next step's annotate repaints it.
-        if record_overlay {
-            crate::video_overlay::set_visible(session, false);
-        }
-        match browser::screenshot(session, &path, true, Some(cap_ms)) {
-            Ok(true) => {}
-            Ok(false) => eprintln!(
-                "[v2-replay] screenshot {step_id} exited non-zero within the {cap_ms}ms cap (lenient — artifact may be missing or partial)"
-            ),
-            Err(e) => eprintln!("[v2-replay] screenshot {step_id} failed: {e}"),
-        }
-        if record_overlay {
-            crate::video_overlay::set_visible(session, true);
+        // The replay overlay (cursor, ripple, target ring, step dock) is
+        // page DOM — hide it and unshift the page for the saved capture,
+        // or `shot` claims diff our own chrome as page drift. Showing it
+        // again puts the dock back and shifts the page beside it.
+        let cleaned =
+            record_overlay && crate::video_overlay::capture_clean_screenshot(session, &path);
+        if !cleaned {
+            if record_overlay {
+                crate::video_overlay::set_visible(session, false);
+            }
+            match browser::screenshot(session, &path, true, Some(cap_ms)) {
+                Ok(true) => {}
+                Ok(false) => eprintln!(
+                    "[v2-replay] screenshot {step_id} exited non-zero within the {cap_ms}ms cap (lenient — artifact may be missing or partial)"
+                ),
+                Err(e) => eprintln!("[v2-replay] screenshot {step_id} failed: {e}"),
+            }
+            if record_overlay {
+                crate::video_overlay::set_visible(session, true);
+            }
         }
         if masked {
             clear_shot_mask(session);

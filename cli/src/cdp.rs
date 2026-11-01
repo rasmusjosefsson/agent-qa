@@ -255,9 +255,10 @@ pub fn with_connection<T>(
     out
 }
 
-/// The headed step log is its own window (`data:text/html,…aq-step-log`).
-/// It must not win "active page" or grants and emulation land on the log
-/// instead of the app.
+/// A leftover step-log window from an older build
+/// (`data:text/html,…aq-step-log`) must not win "active page", or grants
+/// and emulation land on that window instead of the app. The current step
+/// list is a dock in the app page, not its own target.
 pub(crate) fn is_app_page(url: &str) -> bool {
     !url.is_empty()
         && !url.starts_with("chrome://")

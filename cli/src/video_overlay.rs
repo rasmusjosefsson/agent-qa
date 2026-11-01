@@ -1,21 +1,23 @@
-//! Two headed-replay surfaces.
+//! Two headed-replay surfaces, both in the app's own window.
 //!
 //! The page overlay (`annotate`) is a fake cursor, a click ripple, and a
 //! dashed ring on the step's target. It is painted into the page only
-//! while `--record-video` is on, and it does not list steps — a list on
-//! the page covers the UI under test.
+//! while `--record-video` is on.
 //!
-//! The step log (`sync_step_log`) is a separate window tiled to the left
-//! of the app, the way a command log sits beside the page. Finished steps
-//! stay quiet, the running step is highlighted, and later steps stay
-//! faded. Navigation cannot wipe it, and it is not part of the page, so
-//! locators and screenshots stay on the app. Headless replays skip it;
-//! the workbench already lists the steps.
+//! The step log (`sync_step_log`) is a dock on the left of that same
+//! window. The page shifts right by the dock's width, including
+//! `position:fixed` UI (a transform on `body` makes it the containing
+//! block), so the list does not cover the app. The dock lives on
+//! `documentElement`, outside that transform, and the cursor is measured
+//! after the shift so the ring stays on the target. Finished steps stay
+//! quiet, the running step is highlighted, and later steps stay faded.
+//! The dock is `aria-hidden` and its rows sit in an open shadow root, so
+//! a locator cannot match a step label. Screenshots hide the dock and
+//! unshift the page. Headless replays skip it; the workbench already
+//! lists the steps.
 
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use anyhow::{anyhow, Result};
 use serde_json::{json, Value as Json};
 
 use crate::browser;
@@ -23,16 +25,152 @@ use crate::scenario::{ClaimSubject, Locator, NameMatch, RawLocatorKind, Step, Ve
 use crate::value::{substitute_scenario_vars, ValueScope};
 
 /// Hide/show the overlay around a screenshot capture — `shot` claims
-/// pixel-compare the saved sidecar, and a painted cursor would read as
-/// page drift. Element ids live under `__aq_`; the next `annotate`
-/// re-creates them, so hiding is a pure `display:none`.
+/// pixel-compare the saved sidecar, and a painted cursor or the step
+/// dock would read as page drift. Hiding also unshifts the page; showing
+/// shifts it back when the dock is present.
 pub fn set_visible(session: &str, visible: bool) {
+    let _ = browser::eval_expression(session, &visibility_expr(visible));
+}
+
+/// Save a screenshot with the cursor and the step dock hidden, then put
+/// them back on the same CDP turn. A separate hide command leaves the
+/// page unshifted for the whole screenshot subprocess, and the recording
+/// holds that frame until the dock returns.
+pub fn capture_clean_screenshot(session: &str, path: &std::path::Path) -> bool {
+    let captured = crate::cdp::with_connection(session, |conn| {
+        let sid = attach_app_page(conn)?;
+        let hidden = conn
+            .call_on(
+                "Runtime.evaluate",
+                json!({
+                    "expression": visibility_expr(false),
+                    "returnByValue": true,
+                }),
+                &sid,
+            )
+            .map(|v| v.get("exceptionDetails").is_none())
+            .unwrap_or(false);
+        let shot = if hidden {
+            let params = screenshot_params(conn, &sid);
+            conn.call_on("Page.captureScreenshot", params, &sid)
+        } else {
+            Err(anyhow::anyhow!("step dock did not hide for the screenshot"))
+        };
+        let _ = conn.call_on(
+            "Runtime.evaluate",
+            json!({
+                "expression": visibility_expr(true),
+                "returnByValue": true,
+            }),
+            &sid,
+        );
+        shot
+    });
+    match captured {
+        Ok(result) => write_png(
+            path,
+            result.get("data").and_then(|v| v.as_str()).unwrap_or(""),
+        ),
+        Err(e) => {
+            if !crate::cdp::is_unavailable(&e) {
+                eprintln!("[v2-replay] clean screenshot: {e:#}");
+            }
+            false
+        }
+    }
+}
+
+fn attach_app_page(conn: &mut crate::cdp::CdpConnection) -> anyhow::Result<String> {
+    let targets = conn.call("Target.getTargets", json!({}))?;
+    let app_id = targets
+        .get("targetInfos")
+        .and_then(|t| t.as_array())
+        .and_then(|infos| {
+            infos.iter().rev().find_map(|t| {
+                if t.get("type").and_then(|v| v.as_str()) != Some("page") {
+                    return None;
+                }
+                let url = t.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                if !crate::cdp::is_app_page(url) {
+                    return None;
+                }
+                t.get("targetId")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            })
+        })
+        .ok_or_else(|| anyhow::anyhow!("no app page for screenshot"))?;
+    let attached = conn.call(
+        "Target.attachToTarget",
+        json!({ "targetId": app_id, "flatten": true }),
+    )?;
+    attached
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("Target.attachToTarget: no sessionId"))
+}
+
+/// Viewport shot, or the full document when it is taller or wider than
+/// the window — the same case `screenshot --full` covers.
+fn screenshot_params(conn: &mut crate::cdp::CdpConnection, sid: &str) -> Json {
+    let metrics = conn
+        .call_on("Page.getLayoutMetrics", json!({}), sid)
+        .unwrap_or(Json::Null);
+    let content_w = css_px(&metrics, "/cssContentSize/width");
+    let content_h = css_px(&metrics, "/cssContentSize/height");
+    let view_w = css_px(&metrics, "/cssLayoutViewport/clientWidth");
+    let view_h = css_px(&metrics, "/cssLayoutViewport/clientHeight");
+    if content_w > view_w + 1.0 || content_h > view_h + 1.0 {
+        json!({
+            "format": "png",
+            "captureBeyondViewport": true,
+            "clip": {
+                "x": 0,
+                "y": 0,
+                "width": content_w,
+                "height": content_h,
+                "scale": 1,
+            },
+        })
+    } else {
+        json!({ "format": "png" })
+    }
+}
+
+fn css_px(v: &Json, path: &str) -> f64 {
+    let Some(n) = v.pointer(path) else {
+        return 0.0;
+    };
+    n.as_f64()
+        .or_else(|| n.as_i64().map(|i| i as f64))
+        .unwrap_or(0.0)
+}
+
+fn write_png(path: &std::path::Path, data: &str) -> bool {
+    use base64::Engine;
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(data.trim()) {
+        Ok(bytes) if !bytes.is_empty() => bytes,
+        _ => return false,
+    };
+    if let Err(e) = std::fs::write(path, bytes) {
+        eprintln!("[v2-replay] clean screenshot write: {e}");
+        return false;
+    }
+    true
+}
+
+fn visibility_expr(visible: bool) -> String {
     let vis = if visible { "" } else { "none" };
-    let expr = format!(
-        "try{{document.querySelectorAll('#__aq_rail,#__aq_step,#__aq_ring,#__aq_cursor,#__aq_pulse').forEach(function(e){{e.style.display='{vis}'}})}}catch(e){{}}"
-        , vis = vis
-    );
-    let _ = browser::eval_expression(session, &expr);
+    let show = if visible { "true" } else { "false" };
+    format!(
+        "(function(show){{{shift}\n\
+         try{{document.querySelectorAll('#__aq_rail,#__aq_step,#__aq_ring,#__aq_cursor,#__aq_pulse,#__aq_log').forEach(function(e){{e.style.display='{vis}'}})}}catch(e){{}}\n\
+         aqShift(show&&!!document.getElementById('__aq_log'));}})({show})",
+        shift = SHIFT_FN,
+        vis = vis,
+        show = show,
+    )
 }
 
 /// Paint the cursor and target ring for step `cur` (1-based).
@@ -226,8 +364,9 @@ pub(crate) fn row_state(index: usize, cur: u32, outcome: Option<&str>) -> &'stat
     }
 }
 
-/// Paint the in-page cursor when a recording is on, and refresh the
-/// beside-the-app step log when the browser window is visible.
+/// Paint the step dock before the cursor. The dock shifts the page, so
+/// the ring has to be measured after that move. A recording paints the
+/// cursor; a visible window also refreshes the dock.
 #[allow(clippy::too_many_arguments)]
 pub fn paint(
     session: &str,
@@ -239,66 +378,116 @@ pub fn paint(
     step: &Step,
     scope: &mut ValueScope,
 ) {
-    if record_on {
-        annotate(session, cur, outcomes, step, scope);
-    }
     if show_log {
         sync_step_log(session, cur, captions, outcomes);
     }
+    if record_on {
+        annotate(session, cur, outcomes, step, scope);
+    }
 }
 
-const LOG_HTML: &str = r#"<!doctype html>
-<!-- aq-step-log -->
-<html><head><meta charset="utf-8"><title>Steps</title>
-<style>
-html,body{margin:0;height:100%;background:#f4f4f5;color:#18181b;font:13px/1.4 ui-sans-serif,system-ui,sans-serif}
-header{position:sticky;top:0;padding:14px 16px 10px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#71717a;background:#f4f4f5;border-bottom:1px solid #e4e4e7}
-ol{list-style:none;margin:0;padding:8px}
-li{display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border-radius:8px;border-left:3px solid transparent}
-li .m{width:1em;flex:none;text-align:center;color:#71717a}
-li .n{width:1.6em;flex:none;font-variant-numeric:tabular-nums;color:#71717a}
-li .t{min-width:0}
-li.done{opacity:.55}
-li.skip{opacity:.45}
-li.wait{opacity:.38}
-li.now{opacity:1;background:#fff;font-weight:650;border-left-color:#4f46e5;box-shadow:0 1px 2px rgba(0,0,0,.06)}
-li.fail{opacity:1;background:#fef2f2;border-left-color:#dc2626;color:#991b1b}
-</style></head><body>
-<header>Steps</header>
-<ol id="rows"></ol>
-<script>
-window.__aqRender=function(rows){
- var ol=document.getElementById('rows');
- ol.textContent='';
- var focus=null;
- rows.forEach(function(s,i){
-  var li=document.createElement('li');
-  li.className=s.state;
-  var m=document.createElement('span');m.className='m';
-  m.textContent=s.state==='fail'?'!':(s.state==='now'?'\u203a':(s.state==='wait'?'\u00b7':'\u2713'));
-  var n=document.createElement('span');n.className='n';n.textContent=String(i+1);
-  var t=document.createElement('span');t.className='t';t.textContent=s.label||'';
-  li.appendChild(m);li.appendChild(n);li.appendChild(t);
-  ol.appendChild(li);
-  if(s.state==='now'||s.state==='fail')focus=li;
- });
- if(focus)focus.scrollIntoView({block:'center'});
-};
-</script></body></html>"#;
+/// Reserve a strip on the left and move the page — including its
+/// `position:fixed` UI — into the rest of the window. Inline styles, not
+/// a `<style>` tag, so a page content-security policy cannot block it.
+/// The saved inline values go back when the strip is released for a
+/// screenshot.
+const SHIFT_FN: &str = r#"function aqShift(on){
+ var b=document.body;if(!b)return;
+ var props=['margin-left','width','max-width','transform','min-height','box-sizing'];
+ if(on){
+  if(!b.getAttribute('data-aq-shift')){
+   var saved={};
+   props.forEach(function(p){saved[p]={v:b.style.getPropertyValue(p),i:b.style.getPropertyPriority(p)}});
+   b.setAttribute('data-aq-shift',JSON.stringify(saved));
+  }
+  b.classList.add('__aq_shifted');
+  b.style.setProperty('margin-left','320px','important');
+  b.style.setProperty('width','calc(100vw - 320px)','important');
+  b.style.setProperty('max-width','calc(100vw - 320px)','important');
+  b.style.setProperty('transform','translateZ(0)','important');
+  b.style.setProperty('min-height','100vh','important');
+  b.style.setProperty('box-sizing','border-box','important');
+ }else{
+  b.classList.remove('__aq_shifted');
+  var saved={};
+  try{saved=JSON.parse(b.getAttribute('data-aq-shift')||'{}')}catch(e){}
+  props.forEach(function(p){
+   var prev=saved[p];
+   if(prev&&prev.v)b.style.setProperty(p,prev.v,prev.i||'');
+   else b.style.removeProperty(p);
+  });
+  b.removeAttribute('data-aq-shift');
+ }
+}"#;
 
-struct LogSlot {
-    target_id: String,
-    session_id: String,
+/// Rows live in a shadow root on `documentElement` (not inside the shifted
+/// body) so the cursor's viewport coordinates still match the target.
+const DOCK_BODY: &str = r#"var doc=document;
+var oldRail=doc.getElementById('__aq_rail');if(oldRail)oldRail.remove();
+var oldStep=doc.getElementById('__aq_step');if(oldStep)oldStep.remove();
+var host=doc.getElementById('__aq_log');
+if(!host){
+ host=doc.createElement('div');
+ host.id='__aq_log';
+ host.setAttribute('aria-hidden','true');
+ host.style.cssText='all:initial;position:fixed;z-index:2147483647;left:0;top:0;bottom:0;width:320px;overflow:auto;background:#f4f4f5;border-right:1px solid #e4e4e7;box-sizing:border-box;pointer-events:auto;';
+ (doc.documentElement||doc.body).appendChild(host);
+ host.attachShadow({mode:'open'});
+}
+var root=host.shadowRoot;if(!root)return;
+var ol=root.getElementById('rows');
+if(!ol){
+ var header=doc.createElement('div');
+ header.textContent='Steps';
+ header.style.cssText='position:sticky;top:0;padding:14px 16px 10px;font:11px/1.3 ui-sans-serif,system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:#71717a;background:#f4f4f5;border-bottom:1px solid #e4e4e7;';
+ ol=doc.createElement('ol');
+ ol.id='rows';
+ ol.style.cssText='list-style:none;margin:0;padding:8px;';
+ root.appendChild(header);
+ root.appendChild(ol);
+}
+ol.textContent='';
+var focus=null;
+var base='display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border-radius:8px;border-left:3px solid transparent;font:13px/1.4 ui-sans-serif,system-ui,sans-serif;color:#18181b;';
+var look={done:'opacity:.55',skip:'opacity:.45',wait:'opacity:.38',now:'opacity:1;background:#fff;font-weight:650;border-left-color:#4f46e5;box-shadow:0 1px 2px rgba(0,0,0,.06)',fail:'opacity:1;background:#fef2f2;border-left-color:#dc2626;color:#991b1b'};
+for(var i=0;i<rows.length;i++){
+ var s=rows[i];
+ var li=doc.createElement('li');
+ li.style.cssText=base+(look[s.state]||'');
+ var m=doc.createElement('span');
+ m.style.cssText='width:1em;flex:none;text-align:center;color:#71717a;';
+ m.textContent=s.state==='fail'?'!':(s.state==='now'?'\u203a':(s.state==='wait'?'\u00b7':'\u2713'));
+ var n=doc.createElement('span');
+ n.style.cssText='width:1.6em;flex:none;font-variant-numeric:tabular-nums;color:#71717a;';
+ n.textContent=String(i+1);
+ var t=doc.createElement('span');
+ t.style.cssText='min-width:0;';
+ t.textContent=s.label||'';
+ li.appendChild(m);li.appendChild(n);li.appendChild(t);
+ ol.appendChild(li);
+ if(s.state==='now'||s.state==='fail')focus=li;
+}
+if(focus){
+ var top=focus.offsetTop-(host.clientHeight/2)+(focus.offsetHeight/2);
+ host.scrollTop=top<0?0:top;
+}
+host.style.display='';
+aqShift(true);"#;
+
+fn dock_expr(payload: &str) -> String {
+    format!(
+        "(function(rows){{{shift}\n{body}}})({payload})",
+        shift = SHIFT_FN,
+        body = DOCK_BODY,
+        payload = payload,
+    )
 }
 
-fn log_slots() -> &'static Mutex<HashMap<String, LogSlot>> {
-    static SLOTS: OnceLock<Mutex<HashMap<String, LogSlot>>> = OnceLock::new();
-    SLOTS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// Open (once) a step-log window beside the app and repaint its rows.
-/// Best-effort: a missing browser socket must not fail the step.
+/// Paint the step dock into the app page. Best-effort: a missing page
+/// must not fail the step. One process-wide pass closes a step-log
+/// window left by an older build so it cannot steal the next click.
 pub fn sync_step_log(session: &str, cur: u32, captions: &[String], outcomes: &[Option<&str>]) {
+    close_leftover_log_windows(session);
     let rows: Vec<Json> = captions
         .iter()
         .enumerate()
@@ -308,258 +497,63 @@ pub fn sync_step_log(session: &str, cur: u32, captions: &[String], outcomes: &[O
         })
         .collect();
     let payload = serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into());
-    if let Err(e) = crate::cdp::with_connection(session, |conn| push_log(conn, session, &payload)) {
-        if !crate::cdp::is_unavailable(&e) {
-            eprintln!("[v2-replay] step log: {e:#}");
-        }
+    let _ = browser::eval_expression(session, &dock_expr(&payload));
+}
+
+fn close_leftover_log_windows(session: &str) {
+    static CLOSED: AtomicBool = AtomicBool::new(false);
+    if CLOSED.load(Ordering::Relaxed) {
+        return;
     }
-}
-
-fn push_log(conn: &mut crate::cdp::CdpConnection, session: &str, payload: &str) -> Result<()> {
-    let targets = conn.call("Target.getTargets", json!({}))?;
-    let infos = targets
-        .get("targetInfos")
-        .and_then(|t| t.as_array())
-        .cloned()
-        .unwrap_or_default();
-    let app_id = infos.iter().rev().find_map(|t| {
-        if t.get("type").and_then(|v| v.as_str()) != Some("page") {
-            return None;
-        }
-        let url = t.get("url").and_then(|v| v.as_str()).unwrap_or("");
-        if !crate::cdp::is_app_page(url) {
-            return None;
-        }
-        t.get("targetId")
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-    });
-    let Some(app_id) = app_id else {
-        return Ok(());
-    };
-    let mut slots = log_slots()
-        .lock()
-        .map_err(|_| anyhow!("step log lock poisoned"))?;
-    let known = slots.get(session).and_then(|slot| {
-        infos
-            .iter()
-            .any(|t| t.get("targetId").and_then(|v| v.as_str()) == Some(slot.target_id.as_str()))
-            .then(|| slot.session_id.clone())
-            .map(|session_id| (slot.target_id.clone(), session_id))
-    });
-    let (_target_id, session_id) = if let Some(pair) = known {
-        pair
-    } else {
-        // Drop leftover log tabs. A tab in the app's window is what the
-        // next click would hit, and it is not a panel beside the page.
-        for id in log_target_ids(&infos) {
-            let _ = conn.call("Target.closeTarget", json!({ "targetId": id }));
-        }
-        let created = conn.call(
-            "Target.createTarget",
-            json!({
-                "url": log_data_url(),
-                "newWindow": true,
-                "background": true,
-                "width": 380,
-                "height": 800,
-            }),
-        )?;
-        let target_id = created
-            .get("targetId")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("Target.createTarget: no targetId"))?
-            .to_string();
-        let session_id = attach(conn, &target_id)?;
-        wait_log_ready(conn, &session_id)?;
-        if let Err(e) = tile(conn, &app_id, &target_id) {
-            eprintln!("[v2-replay] step log place: {e:#}");
-        }
-        let _ = conn.call("Target.activateTarget", json!({ "targetId": &app_id }));
-        slots.insert(
-            session.to_string(),
-            LogSlot {
-                target_id: target_id.clone(),
-                session_id: session_id.clone(),
-            },
-        );
-        (target_id, session_id)
-    };
-    drop(slots);
-    conn.call_on(
-        "Runtime.evaluate",
-        json!({
-            "expression": format!("window.__aqRender&&window.__aqRender({payload})"),
-            "returnByValue": true,
-        }),
-        &session_id,
-    )?;
-    // Creating the log window makes it the daemon's current tab. The next
-    // step must keep driving the app, not the list.
-    refocus_app(session, &app_id);
-    Ok(())
-}
-
-fn log_target_ids(infos: &[Json]) -> Vec<String> {
-    infos
-        .iter()
-        .filter_map(|t| {
+    let closed = crate::cdp::with_connection(session, |conn| {
+        let targets = conn.call("Target.getTargets", json!({}))?;
+        let infos = targets
+            .get("targetInfos")
+            .and_then(|t| t.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let mut app_id = None;
+        let mut dropped = false;
+        for t in &infos {
+            if t.get("type").and_then(|v| v.as_str()) != Some("page") {
+                continue;
+            }
             let url = t.get("url").and_then(|v| v.as_str()).unwrap_or("");
+            let id = t.get("targetId").and_then(|v| v.as_str());
             if url.contains("aq-step-log") {
-                t.get("targetId")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string)
-            } else {
-                None
+                if let Some(id) = id {
+                    let _ = conn.call("Target.closeTarget", json!({ "targetId": id }));
+                    dropped = true;
+                }
+            } else if crate::cdp::is_app_page(url) {
+                if let Some(id) = id {
+                    app_id = Some(id.to_string());
+                }
             }
-        })
-        .collect()
-}
-
-/// The document is the data URL, so the load itself is the log. The marker
-/// stays in the URL so this window is never treated as the app.
-fn log_data_url() -> String {
-    let mut out = String::from("data:text/html;charset=utf-8,");
-    for b in LOG_HTML.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
+        }
+        Ok((dropped, app_id))
+    });
+    match closed {
+        Ok((dropped, app_id)) => {
+            if dropped {
+                if let Some(app_id) = app_id {
+                    let _ = browser::run(
+                        session,
+                        ["tab", &app_id],
+                        browser::RunOpts::new().capture().lenient(),
+                    );
+                }
             }
-            _ => out.push_str(&format!("%{b:02X}")),
+            CLOSED.store(true, Ordering::Relaxed);
         }
+        Err(e) if crate::cdp::is_unavailable(&e) => {}
+        Err(e) => eprintln!("[v2-replay] step log: {e:#}"),
     }
-    out
-}
-
-fn wait_log_ready(conn: &mut crate::cdp::CdpConnection, session_id: &str) -> Result<()> {
-    for _ in 0..25 {
-        let ready = conn.call_on(
-            "Runtime.evaluate",
-            json!({
-                "expression": "typeof window.__aqRender",
-                "returnByValue": true,
-            }),
-            session_id,
-        )?;
-        let kind = ready
-            .get("result")
-            .and_then(|r| r.get("value"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if kind == "function" {
-            return Ok(());
-        }
-        std::thread::sleep(std::time::Duration::from_millis(40));
-    }
-    anyhow::bail!("step log did not load");
-}
-
-fn refocus_app(session: &str, app_id: &str) {
-    let _ = crate::browser::run(
-        session,
-        ["tab", app_id],
-        crate::browser::RunOpts::new().capture().lenient(),
-    );
-}
-
-fn attach(conn: &mut crate::cdp::CdpConnection, target_id: &str) -> Result<String> {
-    let attached = conn.call(
-        "Target.attachToTarget",
-        json!({ "targetId": target_id, "flatten": true }),
-    )?;
-    attached
-        .get("sessionId")
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
-        .ok_or_else(|| anyhow!("Target.attachToTarget: no sessionId"))
-}
-
-/// Put the log on the left and the app in the remaining screen, flush,
-/// like a command log beside the page.
-fn tile(conn: &mut crate::cdp::CdpConnection, app_id: &str, log_id: &str) -> Result<()> {
-    let (x, y, w, h) = screen_box(conn, app_id)?;
-    if w < 900 || h < 500 {
-        return Ok(());
-    }
-    let log_w = 380;
-    // Leave maximized state before a move, or the bounds are ignored.
-    set_bounds(conn, log_id, x, y, log_w, h)?;
-    set_bounds(conn, app_id, x + log_w, y, w - log_w, h)?;
-    Ok(())
-}
-
-fn screen_box(conn: &mut crate::cdp::CdpConnection, app_id: &str) -> Result<(i64, i64, i64, i64)> {
-    let app_session = attach(conn, app_id)?;
-    let screen = conn.call_on(
-        "Runtime.evaluate",
-        json!({
-            "expression": "JSON.stringify({x:screen.availLeft||0,y:screen.availTop||0,w:screen.availWidth||0,h:screen.availHeight||0})",
-            "returnByValue": true,
-        }),
-        &app_session,
-    )?;
-    let raw = screen
-        .get("result")
-        .and_then(|r| r.get("value"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let box_: Json = serde_json::from_str(raw).unwrap_or(Json::Null);
-    let x = box_.get("x").and_then(|v| v.as_i64()).unwrap_or(0);
-    let y = box_.get("y").and_then(|v| v.as_i64()).unwrap_or(0);
-    let w = box_.get("w").and_then(|v| v.as_i64()).unwrap_or(0);
-    let h = box_.get("h").and_then(|v| v.as_i64()).unwrap_or(0);
-    if w >= 900 && h >= 500 {
-        return Ok((x, y, w, h));
-    }
-    let win = conn.call("Browser.getWindowForTarget", json!({ "targetId": app_id }))?;
-    let bounds = win.get("bounds").cloned().unwrap_or(Json::Null);
-    Ok((
-        bounds.get("left").and_then(|v| v.as_i64()).unwrap_or(0),
-        bounds.get("top").and_then(|v| v.as_i64()).unwrap_or(0),
-        bounds.get("width").and_then(|v| v.as_i64()).unwrap_or(w),
-        bounds.get("height").and_then(|v| v.as_i64()).unwrap_or(h),
-    ))
-}
-
-fn set_bounds(
-    conn: &mut crate::cdp::CdpConnection,
-    target_id: &str,
-    left: i64,
-    top: i64,
-    width: i64,
-    height: i64,
-) -> Result<()> {
-    let win = conn.call(
-        "Browser.getWindowForTarget",
-        json!({ "targetId": target_id }),
-    )?;
-    let window_id = win
-        .get("windowId")
-        .and_then(|v| v.as_i64())
-        .ok_or_else(|| anyhow!("Browser.getWindowForTarget: no windowId"))?;
-    conn.call(
-        "Browser.setWindowBounds",
-        json!({ "windowId": window_id, "bounds": { "windowState": "normal" } }),
-    )?;
-    conn.call(
-        "Browser.setWindowBounds",
-        json!({
-            "windowId": window_id,
-            "bounds": {
-                "left": left,
-                "top": top,
-                "width": width,
-                "height": height,
-                "windowState": "normal",
-            },
-        }),
-    )?;
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{row_state, LOG_HTML, POINTER_BODY};
+    use super::{dock_expr, row_state, visibility_expr, DOCK_BODY, POINTER_BODY};
 
     #[test]
     fn overlay_paints_the_action_and_not_a_step_list() {
@@ -573,15 +567,29 @@ mod tests {
     }
 
     #[test]
-    fn step_log_fades_finished_and_upcoming_rows() {
+    fn step_log_docks_in_the_same_window() {
         assert_eq!(row_state(0, 2, Some("pass")), "done");
         assert_eq!(row_state(1, 2, None), "now");
         assert_eq!(row_state(2, 2, None), "wait");
         assert_eq!(row_state(1, 2, Some("fail")), "fail");
         assert_eq!(row_state(0, 1, None), "now");
-        assert!(LOG_HTML.contains("li.done{opacity:.55}"));
-        assert!(LOG_HTML.contains("li.wait{opacity:.38}"));
-        assert!(LOG_HTML.contains("li.now{opacity:1"));
+        assert!(DOCK_BODY.contains("id='__aq_log'"));
+        assert!(DOCK_BODY.contains("aria-hidden"));
+        assert!(DOCK_BODY.contains("attachShadow"));
+        assert!(DOCK_BODY.contains("done:'opacity:.55'"));
+        assert!(DOCK_BODY.contains("wait:'opacity:.38'"));
+        assert!(DOCK_BODY.contains("now:'opacity:1"));
+        assert!(DOCK_BODY.contains("aqShift(true)"));
+        let expr = dock_expr("[]");
+        assert!(expr.contains("translateZ(0)"));
+        assert!(expr.contains("margin-left"));
+        assert!(!expr.contains("createTarget"));
+        assert!(!expr.contains("newWindow"));
+        let hidden = visibility_expr(false);
+        assert!(hidden.contains("#__aq_log"));
+        assert!(hidden.contains("__aq_shifted"));
+        assert!(hidden.contains("})(false)"));
+        assert!(visibility_expr(true).contains("})(true)"));
         assert!(crate::cdp::is_app_page("http://127.0.0.1:8765/"));
         assert!(!crate::cdp::is_app_page("data:text/html,aq-step-log"));
     }
