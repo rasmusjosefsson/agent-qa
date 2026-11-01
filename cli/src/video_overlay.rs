@@ -1,10 +1,10 @@
-//! In-page overlay painted during `--record-video` replays: a Cypress-style
-//! left rail listing every step — pending dimmed, current highlighted,
-//! pass/fail colored — a fake cursor that glides to each step's target and
-//! ripples on click verbs, plus a dashed sky ring around that target
-//! (checks flip the ring green/red with the outcome). Injected per-step
-//! via `eval` — navigation wipes the DOM, so each call re-adds the
-//! elements; best-effort only, never fails a step.
+//! In-page overlay painted during `--record-video` replays: a fake cursor
+//! that glides to each step's target and ripples on click verbs, plus a
+//! dashed sky ring around that target (checks flip the ring green/red
+//! with the outcome). The workbench already lists the steps, so this does
+//! not paint a second list over the page. Injected per-step via `eval` —
+//! navigation wipes the DOM, so each call re-adds the elements;
+//! best-effort only, never fails a step.
 
 use serde_json::{json, Value as Json};
 
@@ -13,9 +13,9 @@ use crate::scenario::{ClaimSubject, Locator, NameMatch, RawLocatorKind, Step, Ve
 use crate::value::{substitute_scenario_vars, ValueScope};
 
 /// Hide/show the overlay around a screenshot capture — `shot` claims
-/// pixel-compare the saved sidecar, and a painted rail would read as
-/// page drift. Element ids live under `__aq_`; both are re-created by the
-/// next `annotate` anyway, so hiding is a pure `display:none`.
+/// pixel-compare the saved sidecar, and a painted cursor would read as
+/// page drift. Element ids live under `__aq_`; the next `annotate`
+/// re-creates them, so hiding is a pure `display:none`.
 pub fn set_visible(session: &str, visible: bool) {
     let vis = if visible { "" } else { "none" };
     let expr = format!(
@@ -25,13 +25,12 @@ pub fn set_visible(session: &str, visible: bool) {
     let _ = browser::eval_expression(session, &expr);
 }
 
-/// Paint the overlay for step `cur` (1-based). `labels` is the full
-/// post-window step list; `outcomes[i]` is `Some("pass"|"fail"|"skip")`
-/// once a step settles, `None` while pending/running. Errors are swallowed
-/// — a dead page or unresolvable locator must not affect replay.
+/// Paint the cursor and target ring for step `cur` (1-based).
+/// `outcomes[i]` is `Some("pass"|"fail"|"skip")` once a step settles,
+/// `None` while pending/running. Errors are swallowed — a dead page or
+/// unresolvable locator must not affect replay.
 pub fn annotate(
     session: &str,
-    labels: &[String],
     cur: u32,
     outcomes: &[Option<&str>],
     step: &Step,
@@ -68,13 +67,12 @@ pub fn annotate(
         .get(cur.saturating_sub(1) as usize)
         .copied()
         .flatten();
-    let expr = format!(
-        "({OVERLAY_FN})({},{},{})",
-        serde_json::to_string(labels).unwrap_or_else(|_| "[]".into()),
-        cur,
-        serde_json::to_string(&outcomes).unwrap_or_else(|_| "[]".into()),
+    // Drop a rail left by an older build. The step list lives in the
+    // workbench; painting it on the page covers the UI under test.
+    let _ = browser::eval_expression(
+        session,
+        "try{var r=document.getElementById('__aq_rail');if(r)r.remove()}catch(e){}",
     );
-    let _ = browser::eval_expression(session, &expr);
     let painter = format!(
         "(function(q,kind,click,st){{{RESOLVE}\n{POINTER_BODY}}})({},{},{},{})",
         serde_json::to_string(&target).unwrap_or_else(|_| "null".into()),
@@ -83,50 +81,6 @@ pub fn annotate(
         serde_json::to_string(&st).unwrap_or_else(|_| "null".into()),
     );
     let _ = browser::eval_expression(session, &painter);
-}
-
-/// Concise label for one rail row — verb + accessible name for targeted
-/// verbs, else the authored intent.
-pub fn rail_label(step: &Step) -> String {
-    match step {
-        Step::Do {
-            verb, intent, on, ..
-        } => {
-            let v = format!("{verb:?}").to_ascii_lowercase();
-            let name = match on {
-                // Raw selector text is technical noise — the authored
-                // intent reads better; role names are human-meaningful.
-                Some(Locator::Raw(_)) if !intent.trim().is_empty() => {
-                    Some(intent.trim().to_string())
-                }
-                other => locator_name(other.as_ref())
-                    .or_else(|| (!intent.trim().is_empty()).then(|| intent.trim().to_string())),
-            };
-            match name {
-                Some(name) => format!("{v} \"{name}\""),
-                None => v,
-            }
-        }
-        Step::Check { intent, .. } => {
-            if intent.trim().is_empty() {
-                "check".to_string()
-            } else {
-                format!("check — {}", intent.trim())
-            }
-        }
-    }
-}
-
-/// Accessible-name for a row: role name first, then the raw selector text.
-fn locator_name(on: Option<&Locator>) -> Option<String> {
-    match on? {
-        Locator::Role(r) => r.name.as_ref().map(|n| match n {
-            NameMatch::Plain(s) => s.clone(),
-            NameMatch::Pattern { pattern, .. } => pattern.clone(),
-            NameMatch::I18n { i18n_key } => i18n_key.clone(),
-        }),
-        Locator::Raw(r) => Some(r.raw.value.clone()),
-    }
 }
 
 /// Lower a step locator to the JSON descriptor the page script resolves.
@@ -225,62 +179,18 @@ if(click){
 }
 }catch(e){}"##;
 
-/// (labels, cur, outcomes) → paints the step rail. cur is 1-based.
-const OVERLAY_FN: &str = r#"function(labels,cur,outcomes){
-var doc=document;try{
-var rail=doc.getElementById('__aq_rail');
-if(!rail){
- rail=doc.createElement('div');rail.id='__aq_rail';
- rail.setAttribute('style','position:fixed;left:0;top:0;bottom:0;z-index:2147483647;width:196px;background:linear-gradient(180deg,rgba(9,13,20,.94),rgba(9,13,20,.88));backdrop-filter:blur(8px);color:#cbd5e1;font:500 10.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;padding:10px 8px;pointer-events:none;overflow:hidden;border-right:1px solid rgba(148,163,184,.14);box-shadow:2px 0 16px rgba(0,0,0,.3);');
- (doc.documentElement||doc.body||doc).appendChild(rail);
-}
-var html='<div style="font:700 9px/1 ui-monospace,monospace;letter-spacing:.16em;color:#5b6a82;text-transform:uppercase;padding:1px 6px 8px;border-bottom:1px solid rgba(148,163,184,.12);margin-bottom:6px">replay</div>';
-for(var i=0;i<labels.length;i++){
- var st=outcomes[i]||'',glyph='·',col='#64748b',op=.38,bg='transparent',edge='';
- var n=i+1;
- if(st==='pass'){glyph='✓';col='#34d399';op=.7}
- else if(st==='fail'){glyph='✗';col='#fb7185';op=1;bg='rgba(251,113,133,.1)'}
- else if(st==='skip'){glyph='–';col='#94a3b8';op=.5}
- else if(n===cur){glyph='▸';col='#f8fafc';op=1;bg='rgba(244,63,94,.16)';edge='box-shadow:inset 2px 0 0 #f43f5e;'}
- html+='<div style="opacity:'+op+';background:'+bg+';'+edge+'border-radius:5px;padding:2px 6px;margin:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:'+col+'"><span style="display:inline-block;width:19px;color:#4b586e;font-size:9.5px">'+(n<10?'0'+n:n)+'</span> '+glyph+' <span style="color:'+(n===cur||st?col:'#8b98ab')+'">'+labels[i]+'</span></div>';
-}
-rail.innerHTML=html;
-var rows=rail.children;var at=cur-1;
-if(rows[at]&&rail.scrollHeight>rail.clientHeight)rail.scrollTop=Math.max(0,at*20-rail.clientHeight/3);
-}catch(e){}}"#;
-
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use serde_json::json;
+    use super::POINTER_BODY;
 
     #[test]
-    fn rail_label_prefers_intent_for_raw_locators() {
-        let step: Step = serde_json::from_value(json!({
-            "kind": "do", "id": "s", "intent": "add the todo",
-            "verb": "click", "on": {"raw": {"kind": "css", "value": "#add"}, "reason": "r"}
-        }))
-        .unwrap();
-        assert_eq!(rail_label(&step), "click \"add the todo\"");
-    }
-
-    #[test]
-    fn rail_label_uses_role_name() {
-        let step: Step = serde_json::from_value(json!({
-            "kind": "do", "id": "s", "intent": "x",
-            "verb": "click", "on": {"role": "button", "name": "Submit"}
-        }))
-        .unwrap();
-        assert_eq!(rail_label(&step), "click \"Submit\"");
-    }
-
-    #[test]
-    fn rail_label_for_check_uses_intent() {
-        let step: Step = serde_json::from_value(json!({
-            "kind": "check", "id": "c", "intent": "page rendered",
-            "claim": {"subject": {"url": true}, "predicate": "exists"}
-        }))
-        .unwrap();
-        assert_eq!(rail_label(&step), "check — page rendered");
+    fn overlay_paints_cursor_and_ring_not_a_step_list() {
+        assert!(POINTER_BODY.contains("__aq_cursor"));
+        assert!(POINTER_BODY.contains("__aq_ring"));
+        assert!(POINTER_BODY.contains("__aq_pulse"));
+        assert!(
+            !POINTER_BODY.contains("__aq_rail"),
+            "the in-page step list covers the page under test"
+        );
     }
 }

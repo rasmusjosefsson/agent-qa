@@ -225,14 +225,14 @@ export function ReplayScrubber({
   const frame = shown?.shot && shown.id ? artifactUrl(sid, runId, 'screenshots', shown.id) : null
 
   return (
-    <div className="shrink-0 border-b border-border bg-neutral-950 text-neutral-100">
-      <div className="relative bg-black">
+    <div className="shrink-0 border-b border-border bg-card text-foreground">
+      <div className="relative bg-muted">
         <video
           ref={videoRef}
           src={runFileUrl(sid, runId, file)}
           preload="metadata"
           playsInline
-          className={cn('mx-auto max-h-[min(42vh,360px)] w-full bg-black', mode !== 'video' && 'hidden')}
+          className={cn('mx-auto max-h-[min(42vh,360px)] w-full bg-muted', mode !== 'video' && 'hidden')}
           onLoadedMetadata={(e) => {
             const el = e.currentTarget
             setDuration(Number.isFinite(el.duration) ? el.duration : 0)
@@ -260,7 +260,7 @@ export function ReplayScrubber({
               className="mx-auto max-h-[min(42vh,360px)] w-full object-contain object-top"
             />
           ) : (
-            <div className="grid h-36 place-items-center text-xs text-neutral-500">
+            <div className="grid h-36 place-items-center text-xs text-muted-foreground">
               {shown ? 'No frame captured for this step' : 'No frames in this run'}
             </div>
           ))}
@@ -276,7 +276,7 @@ export function ReplayScrubber({
           aria-valuemax={Math.round(dur * 1000)}
           aria-valuenow={Math.round(head * 1000)}
           aria-valuetext={`${formatClock(head)} of ${formatClock(dur)}`}
-          className="relative h-8 cursor-pointer touch-none outline-none focus-visible:ring-1 focus-visible:ring-cyan-400/70"
+          className="relative h-8 cursor-pointer touch-none outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
           onPointerDown={(e) => {
             e.currentTarget.setPointerCapture(e.pointerId)
             seekFromClientX(e.clientX)
@@ -293,11 +293,11 @@ export function ReplayScrubber({
             e.preventDefault()
           }}
         >
-          <div className="absolute top-1/2 right-0 left-0 h-[3px] -translate-y-1/2 rounded-full bg-white/15">
-            <div className="h-full rounded-full bg-teal-500" style={{ width: `${pct}%` }} />
+          <div className="absolute top-1/2 right-0 left-0 h-[3px] -translate-y-1/2 rounded-full bg-border">
+            <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
           </div>
           <div
-            className="pointer-events-none absolute top-1/2 z-10 h-3.5 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-sm"
+            className="pointer-events-none absolute top-1/2 z-10 h-3.5 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-foreground shadow-sm"
             style={{ left: `${pct}%` }}
           />
           {markers.map((m) => {
@@ -319,10 +319,10 @@ export function ReplayScrubber({
                 className={cn(
                   'absolute top-1/2 z-20 grid size-[18px] -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border transition-transform',
                   active
-                    ? 'size-5 border-cyan-300 bg-cyan-400 text-neutral-950'
+                    ? 'size-5 border-primary bg-primary text-primary-foreground'
                     : m.status === 'fail'
-                      ? 'border-red-400/80 bg-neutral-900 text-red-200 hover:bg-neutral-800'
-                      : 'border-white/40 bg-neutral-900 text-neutral-100 hover:bg-neutral-800'
+                      ? 'border-destructive/70 bg-card text-destructive hover:bg-muted'
+                      : 'border-border bg-card text-foreground hover:bg-muted'
                 )}
               >
                 <MarkerIcon cat={m.cat} className={active ? 'size-3' : 'size-2.5'} />
@@ -330,18 +330,18 @@ export function ReplayScrubber({
             )
           })}
         </div>
-        <div className="tnum pb-1 text-right font-mono text-[11px] text-neutral-400">
+        <div className="tnum pb-1 text-right font-mono text-[11px] text-muted-foreground">
           {formatClock(head)} / {formatClock(mode === 'video' && duration > 0 ? duration : dur)}
         </div>
       </div>
 
-      <div className="flex items-center gap-2 border-t border-white/10 px-3 py-2">
+      <div className="flex items-center gap-2 border-t border-border px-3 py-2">
         <div className="flex min-w-0 flex-1 items-center gap-2 text-[13px]">
           {shown && (
             <span
               className={cn(
                 'grid size-5 shrink-0 place-items-center rounded-full',
-                shown.status === 'fail' ? 'bg-red-500/20 text-red-300' : 'bg-white/10 text-neutral-200'
+                shown.status === 'fail' ? 'bg-destructive/15 text-destructive' : 'bg-muted text-muted-foreground'
               )}
             >
               <MarkerIcon cat={shown.cat} />
@@ -355,7 +355,7 @@ export function ReplayScrubber({
           type="button"
           onClick={() => void toggle()}
           aria-label={playing ? 'Pause' : 'Play'}
-          className="grid size-7 shrink-0 place-items-center rounded-md bg-white/10 text-neutral-100 hover:bg-white/15"
+          className="grid size-7 shrink-0 place-items-center rounded-md bg-muted text-foreground hover:bg-accent"
         >
           {playing ? <PauseIcon className="size-3.5" /> : <PlayIcon className="size-3.5 fill-current" />}
         </button>
@@ -372,7 +372,7 @@ export function ReplayScrubber({
               : 'Play faster. 8x asks the browser for eight times speed; Frames always steps at that rate.'
           }
           onChange={(e) => setRate(Number(e.target.value))}
-          className="h-7 rounded-md bg-white/10 px-1.5 text-xs font-medium text-neutral-100 outline-none hover:bg-white/15"
+          className="h-7 rounded-md border border-border bg-card px-1.5 text-xs font-medium text-foreground outline-none hover:bg-muted"
         >
           {PLAYBACK_RATES.map((n) => (
             <option key={n} value={n}>
@@ -381,18 +381,18 @@ export function ReplayScrubber({
           ))}
         </select>
         {capped != null && mode === 'video' && (
-          <span className="shrink-0 text-[10px] text-neutral-500" data-qa-volatile>
+          <span className="shrink-0 text-[10px] text-muted-foreground" data-qa-volatile>
             capped {capped}x
           </span>
         )}
-        <div className="flex shrink-0 overflow-hidden rounded-md bg-white/5 text-[11px] font-medium">
+        <div className="flex shrink-0 overflow-hidden rounded-md border border-border bg-muted text-[11px] font-medium">
           <button
             type="button"
             aria-pressed={mode === 'frames'}
             onClick={() => setMode('frames')}
             className={cn(
               'px-2.5 py-1',
-              mode === 'frames' ? 'bg-white/15 text-white' : 'text-neutral-400 hover:text-neutral-200'
+              mode === 'frames' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
             )}
           >
             Frames
@@ -403,7 +403,7 @@ export function ReplayScrubber({
             onClick={() => setMode('video')}
             className={cn(
               'px-2.5 py-1',
-              mode === 'video' ? 'bg-white/15 text-white' : 'text-neutral-400 hover:text-neutral-200'
+              mode === 'video' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
             )}
           >
             Video

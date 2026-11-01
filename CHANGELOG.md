@@ -14,8 +14,13 @@ All notable changes to agent-qa are documented here. This project follows
 - Workbench replay passes `--record-video`, so a headless run films the
   cursor, the click ripple, and a border around the step's target. The
   border is back on action steps (click, type, and the rest); checks
-  still recolor it green or red with the outcome. Step screenshots hide
-  the overlay so pixel goldens stay clean.
+  still recolor it green or red with the outcome. The recording does not
+  paint a step list over the page — the workbench already lists the
+  steps, and a rail on the page covers the UI under test. Step
+  screenshots hide the overlay so pixel goldens stay clean.
+
+- The replay player follows the workbench theme. In light mode the
+  stage, timeline, and controls are light; in dark mode they stay dark.
 
 - Replay scrubber in the workbench. A recorded run shows the video with a
   marker per step, the step caption under the playhead, and a Frames /

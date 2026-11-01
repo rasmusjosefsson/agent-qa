@@ -940,15 +940,10 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         // live status file and the events stream both key off it. All of
         // this is additive — the per-step stderr trace below is unchanged.
         let total = flat.len() as u32;
-        // Video overlay state: one rail row per step (post-window), painted
-        // before each dispatch and re-painted with the outcome after.
-        // Only touched when --record-video is on.
+        // Video overlay: cursor and target ring, painted before each
+        // dispatch and re-painted with the outcome after. Only touched
+        // when --record-video is on. The step list stays in the workbench.
         let record_on = opts.record_video.is_some() && !opts.dry_run;
-        let rail_labels: Vec<String> = if record_on {
-            flat.iter().map(crate::video_overlay::rail_label).collect()
-        } else {
-            Vec::new()
-        };
         let mut rail_outcomes: Vec<Option<&'static str>> = vec![None; flat.len()];
         // Resolve once how per-step progress is rendered (quiet /
         // plain-or-piped / pretty-TTY). Pure formatting; no behaviour change.
@@ -1012,7 +1007,6 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                     rail_outcomes[(idx - 1) as usize] = Some("skip");
                     crate::video_overlay::annotate(
                         &opts.session_name,
-                        &rail_labels,
                         idx,
                         &rail_outcomes,
                         step,
@@ -1108,7 +1102,6 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                         rail_outcomes[(idx - 1) as usize] = Some("skip");
                         crate::video_overlay::annotate(
                             &opts.session_name,
-                            &rail_labels,
                             idx,
                             &rail_outcomes,
                             step,
@@ -1184,13 +1177,11 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             } else {
                 step.clone()
             };
-            // Video overlay: while recording, repaint the step rail (this
-            // step running, prior outcomes colored) + ring the target
-            // element so the video shows what replay does.
+            // Video overlay: while recording, move the cursor onto this
+            // step's target and ring it so the video shows the action.
             if record_on {
                 crate::video_overlay::annotate(
                     &opts.session_name,
-                    &rail_labels,
                     idx,
                     &rail_outcomes,
                     &patched_step,
@@ -1394,11 +1385,10 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                         );
                     }
                     if record_on {
-                        // Show the just-landed outcome on the rail before
-                        // the next step repaints it as running.
+                        // Recolor the target ring with the outcome before
+                        // the next step paints the next target.
                         crate::video_overlay::annotate(
                             &opts.session_name,
-                            &rail_labels,
                             idx,
                             &rail_outcomes,
                             &patched_step,
@@ -1439,7 +1429,6 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                             rail_outcomes[(idx - 1) as usize] = Some("skip");
                             crate::video_overlay::annotate(
                                 &opts.session_name,
-                                &rail_labels,
                                 idx,
                                 &rail_outcomes,
                                 &patched_step,
@@ -1532,7 +1521,6 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                     if record_on {
                         crate::video_overlay::annotate(
                             &opts.session_name,
-                            &rail_labels,
                             idx,
                             &rail_outcomes,
                             &patched_step,
@@ -2520,9 +2508,9 @@ fn capture_step_sidecars(
     }
     if let Ok(path) = step_sidecar_path(run, SidecarKind::Screenshots, step_id) {
         let masked = !shot_masks.is_empty() && apply_shot_mask(session, shot_masks);
-        // The replay-video overlay (step rail + target ring) is page DOM —
-        // hide it for the saved capture or `shot` claims diff our own
-        // chrome as page drift. Next step's annotate repaints it.
+        // The replay-video overlay (cursor, ripple, target ring) is page
+        // DOM — hide it for the saved capture or `shot` claims diff our
+        // own chrome as page drift. Next step's annotate repaints it.
         if record_overlay {
             crate::video_overlay::set_visible(session, false);
         }
