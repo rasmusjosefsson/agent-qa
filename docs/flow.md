@@ -60,7 +60,14 @@ never silently dropped.
 | `#` / `//` | comment |
 
 `{{inputs.name}}`, `{{vars.x}}`, and env templating work anywhere a literal
-does — the text is passed through verbatim.
+does. The DSL stores the token as text. Replay substitutes `{{inputs.name}}`
+from the scenario's declared inputs the same way it substitutes `{{vars.name}}`.
+
+A `when present` block runs its children only when that locator is on the
+page. A skipped child names the control (`skipped — “Pay now” is not on the
+page`). A text presence probe reads rendered text and skips `script`,
+`style`, `noscript`, and `template`, so a label that only lives in the
+bundle does not count as on the page.
 
 ## Locators
 
