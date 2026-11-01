@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest'
 import {
   cleanSummary,
   collapseEvents,
+  flattenAuthored,
   fmtMs,
   icon,
   isRunLive,
@@ -25,6 +26,7 @@ describe('fmtMs / icon', () => {
     expect(icon('fail')).toBe('✗')
     expect(icon('running')).toBe('…')
     expect(icon('pending')).toBe('○')
+    expect(icon('skip')).toBe('–')
     expect(icon('whatever')).toBe('·')
   })
 })
@@ -81,6 +83,66 @@ describe('mergeRows', () => {
     expect(rows).toHaveLength(2)
     expect(rows[0]).toMatchObject({ id: 's0', status: 'pass' })
     expect(rows[1]).toMatchObject({ id: 's1', status: 'pending', pending: true, idx: 2, kind: 'click' })
+  })
+  it('shows both branches of a when block, including the one that was skipped', () => {
+    const events = [
+      { idx: 1, id: 'pay', status: 'skip', error: 'skipped — “Pay now” is not on the page' },
+      { idx: 2, id: 'paid', status: 'skip' },
+      { idx: 3, id: 'place', status: 'pass' },
+      { idx: 4, id: 'placed', status: 'pass' },
+    ]
+    const def = [
+      {
+        id: 'express',
+        verb: 'when',
+        intent: 'Express checkout is showing',
+        params: {
+          present: { role: 'button', name: 'Pay now' },
+          steps: [
+            { id: 'pay', verb: 'click', intent: 'Pay now' },
+            { id: 'paid', verb: 'check', intent: 'Payment sent' },
+          ],
+        },
+      },
+      {
+        id: 'classic',
+        verb: 'when',
+        params: {
+          present: { role: 'button', name: 'Place order' },
+          steps: [
+            { id: 'place', verb: 'click', intent: 'Place order' },
+            { id: 'placed', kind: 'check', intent: 'Order placed' },
+          ],
+        },
+      },
+    ]
+    const rows = mergeRows(events, def)
+    expect(rows.map((r) => r.id)).toEqual(['pay', 'paid', 'place', 'placed'])
+    expect(rows[0]).toMatchObject({ status: 'skip' })
+    expect(rows[2]).toMatchObject({ status: 'pass' })
+  })
+})
+
+describe('flattenAuthored', () => {
+  it('names the control a when branch is waiting on', () => {
+    const flat = flattenAuthored([
+      {
+        id: 'express',
+        verb: 'when',
+        params: {
+          present: { role: 'button', name: 'Pay now' },
+          steps: [{ id: 'pay', verb: 'click', intent: 'Pay now' }],
+        },
+      },
+    ])
+    expect(flat).toEqual([
+      {
+        id: 'pay',
+        verb: 'click',
+        intent: 'Pay now',
+        branch: 'only when button “Pay now” is on the page',
+      },
+    ])
   })
 })
 

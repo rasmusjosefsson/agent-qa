@@ -12,6 +12,8 @@ import { effectiveSettings } from '@/lib/settings-api'
 import { Group, Panel, useDefaultLayout } from 'react-resizable-panels'
 import { ResizeHandle } from '@/components/ResizeHandle'
 import { getPersonas, getEnvironments } from '@/lib/run-config-api'
+import { getScenarioDef } from '@/lib/runs-api'
+import { replayParams, visibleInputs, type InputDecl } from './replay-params'
 import type { PersonaRecord } from '@/features/personas/types'
 import type { EnvironmentRecord } from '@/features/environments/types'
 
@@ -35,6 +37,9 @@ export function RunsPage() {
   const [personaId, setPersonaId] = useState('')
   const [envId, setEnvId] = useState('')
   const [headed, setHeaded] = useState(false)
+  // Declared inputs per scenario, plus whatever the person typed over the default.
+  const [declaredBySid, setDeclaredBySid] = useState<Record<string, Record<string, InputDecl>>>({})
+  const [draftsBySid, setDraftsBySid] = useState<Record<string, Record<string, string>>>({})
   // Seed from the workbench "headed by default" setting once it loads.
   useEffect(() => {
     void effectiveSettings()
@@ -88,17 +93,54 @@ export function RunsPage() {
     if (viewedRunActive && replayingSid === runs.sel.sid) setReplayingSid(null)
   }, [viewedRunActive, replayingSid, runs.sel.sid])
 
+  const selectedSid = runs.sel.sid
+  useEffect(() => {
+    if (!selectedSid || declaredBySid[selectedSid]) return
+    let alive = true
+    getScenarioDef(selectedSid)
+      .then((d) => {
+        if (!alive) return
+        setDeclaredBySid((prev) => (prev[selectedSid] ? prev : { ...prev, [selectedSid]: d.scenario?.inputs || {} }))
+      })
+      .catch(() => {
+        if (alive) setDeclaredBySid((prev) => (prev[selectedSid] ? prev : { ...prev, [selectedSid]: {} }))
+      })
+    return () => {
+      alive = false
+    }
+  }, [selectedSid, declaredBySid])
+
+  const declared = selectedSid ? declaredBySid[selectedSid] : undefined
+  const drafts = (selectedSid && draftsBySid[selectedSid]) || {}
+  const inputs = visibleInputs(declared).map((inp) => ({
+    ...inp,
+    value: Object.prototype.hasOwnProperty.call(drafts, inp.name) ? drafts[inp.name] : inp.value,
+  }))
+
   const onReplay = async (sid: string) => {
     setReplayErr('')
     setReplayingSid(sid)
     const persona = personas.find((p) => p.id === personaId)
     const env = environments.find((e) => e.id === envId)
-    const params: Record<string, string> = env ? { ...env.params } : {}
-    if (env?.baseUrl) params.baseUrl = env.baseUrl
+    const envParams: Record<string, string> = env ? { ...env.params } : {}
+    if (env?.baseUrl) envParams.baseUrl = env.baseUrl
+    const forSid = declaredBySid[sid]
+    const shown = visibleInputs(forSid).map((inp) => ({
+      ...inp,
+      value:
+        draftsBySid[sid] && Object.prototype.hasOwnProperty.call(draftsBySid[sid], inp.name)
+          ? draftsBySid[sid][inp.name]
+          : inp.value,
+    }))
+    const params = replayParams(
+      forSid,
+      envParams,
+      Object.fromEntries(shown.map((inp) => [inp.name, inp.value])),
+    )
     const res = await runs.replay(sid, {
       headed,
       profile: persona?.profile || undefined,
-      params: Object.keys(params).length ? params : undefined,
+      params,
       personaId: personaId || undefined,
       environmentId: envId || undefined,
     })
@@ -123,6 +165,11 @@ export function RunsPage() {
     setPersonaId,
     setEnvId,
     setHeaded,
+    inputs,
+    setInput: (name: string, value: string) => {
+      if (!selectedSid) return
+      setDraftsBySid((prev) => ({ ...prev, [selectedSid]: { ...(prev[selectedSid] || {}), [name]: value } }))
+    },
   }
 
   // Right pane: live screencast while the run is in flight and no step pinned,

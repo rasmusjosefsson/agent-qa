@@ -323,6 +323,27 @@ fn progress_label(step: &Step) -> String {
     }
 }
 
+/// Why a `when` child did not run, in the words a person sees on the run.
+/// Names the control when it has one, so a flag branch reads as
+/// "Pay now is not on the page" rather than an internal block id.
+fn when_skip_reason(cond: &crate::scenario::WhenCond) -> String {
+    let (locator, want_present) = match &cond.condition {
+        crate::scenario::WhenCondition::Present { locator } => (locator, true),
+        crate::scenario::WhenCondition::Absent { locator } => (locator, false),
+    };
+    let what = match locator {
+        Locator::Role(_) => locator_name(Some(locator))
+            .map(|n| format!("“{n}”"))
+            .unwrap_or_else(|| "that control".to_string()),
+        Locator::Raw(raw) => format!("“{}\"", raw.raw.value),
+    };
+    if want_present {
+        format!("skipped — {what} is not on the page")
+    } else {
+        format!("skipped — {what} is still on the page")
+    }
+}
+
 /// The accessible-name of a role locator (or its pattern / i18n key), used
 /// only for the human progress label. Raw selectors are omitted to keep
 /// the line legible.
@@ -1001,7 +1022,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                         kind: kind_label.clone(),
                         status: "skip".to_string(),
                         ms: Some(0),
-                        error: None,
+                        error: Some("skipped — this check is turned off".to_string()),
                         screenshot: None,
                         snapshot: None,
                     },
@@ -1018,16 +1039,15 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 if let Some(tags) = step_ctx.run_for.as_ref().filter(|t| !t.is_empty()) {
                     if !tags.iter().any(|t| run_tags.contains(t)) {
                         gate = Some(format!(
-                            "runFor [{}] — run tags [{}]",
-                            tags.join(", "),
-                            run_tags.iter().cloned().collect::<Vec<_>>().join(", ")
+                            "skipped — this step runs only for {}",
+                            tags.join(", ")
                         ));
                     }
                 }
                 if gate.is_none() {
                     if let Some(tags) = step_ctx.skip_for.as_ref().filter(|t| !t.is_empty()) {
                         if let Some(hit) = tags.iter().find(|t| run_tags.contains(*t)) {
-                            gate = Some(format!("skipFor {hit}"));
+                            gate = Some(format!("skipped — this step is turned off for {hit}"));
                         }
                     }
                 }
@@ -1062,7 +1082,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                                 }
                             };
                             if !holds {
-                                gate = Some(format!("when {} condition unmet", cond.block));
+                                gate = Some(when_skip_reason(cond));
                                 break;
                             }
                         }
@@ -1098,7 +1118,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                             kind: kind_label.clone(),
                             status: "skip".to_string(),
                             ms: Some(0),
-                            error: None,
+                            error: Some(reason),
                             screenshot: None,
                             snapshot: None,
                         },
@@ -7244,6 +7264,28 @@ if [ \"$3\" = 'screenshot' ]; then\n  shift 3\n  [ \"$1\" = '--full' ] && shift\
         assert_eq!(fmt_duration(0), "0ms");
         assert_eq!(fmt_duration(1000), "1.0s");
         assert_eq!(fmt_duration(1234), "1.2s");
+    }
+
+    #[test]
+    fn when_skip_reason_names_the_missing_control() {
+        let present: crate::scenario::WhenCond = serde_json::from_value(serde_json::json!({
+            "block": "express",
+            "condition": { "present": { "locator": { "role": "button", "name": "Pay now" } } }
+        }))
+        .unwrap();
+        assert_eq!(
+            when_skip_reason(&present),
+            "skipped — “Pay now” is not on the page"
+        );
+        let absent: crate::scenario::WhenCond = serde_json::from_value(serde_json::json!({
+            "block": "classic",
+            "condition": { "absent": { "locator": { "role": "button", "name": "Place order" } } }
+        }))
+        .unwrap();
+        assert_eq!(
+            when_skip_reason(&absent),
+            "skipped — “Place order” is still on the page"
+        );
     }
 
     #[test]

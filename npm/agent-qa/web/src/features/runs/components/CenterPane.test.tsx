@@ -60,6 +60,38 @@ describe('CenterPane scenario controls', () => {
     expect(html).toContain('min-w-0 max-w-[16rem]')
   })
 
+  it('shows both branches and a field for a declared input', () => {
+    const runs = scenarioRuns()
+    runs.scenarioDef = {
+      ...runs.scenarioDef,
+      inputs: { flow: { type: 'string', default: '', description: 'Empty is classic' } },
+      steps: [
+        {
+          id: 'express',
+          verb: 'when',
+          params: {
+            present: { role: 'button', name: 'Pay now' },
+            steps: [{ id: 'pay', verb: 'click', intent: 'Pay now' }],
+          },
+        },
+      ],
+    } as RunsApi['scenarioDef']
+    const html = renderToStaticMarkup(
+      <CenterPane
+        runs={runs}
+        onReplay={() => {}}
+        runConfig={{
+          ...runConfig,
+          inputs: [{ name: 'flow', value: '', description: 'Empty is classic' }],
+          setInput() {},
+        }}
+      />
+    )
+    expect(html).toContain('Pay now')
+    expect(html).toContain('only when button “Pay now” is on the page')
+    expect(html).toContain('aria-label="Input flow"')
+  })
+
   it('warns when setup has reported no progress for over a minute', () => {
     const runs = {
       detail: {

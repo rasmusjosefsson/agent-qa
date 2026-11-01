@@ -91,6 +91,10 @@ export interface ScenarioStep {
   intent?: string
   on?: { role?: string; name?: string; raw?: { kind?: string; value?: string }; reason?: string }
   value?: { literal?: unknown }
+  // `when` / `group` carry their children here. `branch` is a display note
+  // added when those children are flattened for the run list.
+  params?: { steps?: ScenarioStep[]; present?: unknown; absent?: unknown; [k: string]: unknown }
+  branch?: string
   [k: string]: unknown
 }
 
@@ -98,6 +102,9 @@ export interface ScenarioDef {
   id?: string
   intent?: string
   steps?: ScenarioStep[]
+  // Declared replay inputs. The Runs page shows these next to Replay so a
+  // flag (or any other input) can be flipped without leaving the scenario.
+  inputs?: Record<string, { type?: string; default?: unknown; description?: string; sensitive?: boolean }>
   // The recorded setup baseline. A `useProfile` op names the login the run must
   // sign in as — used to default the "Replay as" persona.
   env?: { open?: Array<{ kind?: string; name?: string }>; [k: string]: unknown }
