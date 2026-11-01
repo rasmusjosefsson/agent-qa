@@ -3911,6 +3911,13 @@ function createChatManager(deps, root) {
       recordDir: () => (recordRoot ? path.join(recordRoot, browser.name) : null),
       isLive: () => resolvedHub != null,
       isBusy: () => !!(resolvedHub && resolvedHub.isStreaming),
+      // Cursor model catalog is read once, at hub start. After Chat-tab
+      // login the same hub re-reads it so the picker leaves the fallback row.
+      reloadModels() {
+        const hub = resolvedHub;
+        if (!hub || typeof hub.reloadModels !== 'function') return Promise.resolve(null);
+        return Promise.resolve(hub.reloadModels()).catch(() => null);
+      },
       getHub() {
         if (!chat) return Promise.resolve(null);
         if (chat.hub) {
@@ -4013,7 +4020,26 @@ function createChatManager(deps, root) {
     return first || create();
   }
 
+  async function reloadCursorModels() {
+    await Promise.all(
+      [...chats.values()].map((e) => (typeof e.reloadModels === 'function' ? e.reloadModels() : null)),
+    );
+  }
+
   function dispose() {
+    if (deps && deps.providerConnect && typeof deps.providerConnect.cancelAll === 'function') {
+      try {
+        deps.providerConnect.cancelAll();
+      } catch {
+        /* login already finished */
+      }
+    } else if (deps && deps.cursorConnect && typeof deps.cursorConnect.cancel === 'function') {
+      try {
+        deps.cursorConnect.cancel();
+      } catch {
+        /* login child already gone */
+      }
+    }
     // Close each chat's agent-browser daemon too (mirrors remove()). Without
     // this, quitting the server (SIGINT/SIGTERM) disposed the agents but left
     // every chat-<id> browser daemon running — they survived and piled up in
@@ -4059,6 +4085,7 @@ function createChatManager(deps, root) {
     get: (id) => chats.get(id) || null,
     list: () => Array.from(chats.values()).map(chatMeta),
     pruneGoneRecords,
+    reloadCursorModels,
     remove(id) {
       const e = chats.get(id);
       if (!e) return false;
@@ -4111,6 +4138,60 @@ function annotatePromptWithContext(deps, entry, text) {
   } catch {
     return text;
   }
+}
+
+// One login child per workbench. Tests inject `deps.cursorConnect`; the
+// real server builds it on first use from the Cursor CLI on PATH.
+async function ensureCursorConnect(deps) {
+  if (deps && deps.cursorConnect) return deps.cursorConnect;
+  const bag = deps || {};
+  if (bag.cursorConnect) return bag.cursorConnect;
+  const url = pathToFileURL(path.join(__dirname, 'chat-agent.mjs')).href;
+  const mod = await import(url);
+  bag.cursorConnect = mod.createCursorConnect({ env: process.env, cwd: process.cwd() });
+  if (deps) deps.cursorConnect = bag.cursorConnect;
+  return bag.cursorConnect;
+}
+
+async function ensureProviderConnect(deps) {
+  if (deps && deps.providerConnect) return deps.providerConnect;
+  const bag = deps || {};
+  const url = pathToFileURL(path.join(__dirname, 'chat-agent.mjs')).href;
+  const mod = await import(url);
+  const cursor = await ensureCursorConnect(bag);
+  bag.providerConnect = mod.createProviderConnect({
+    cursorConnect: cursor,
+    env: process.env,
+    cwd: process.cwd(),
+  });
+  if (deps) deps.providerConnect = bag.providerConnect;
+  return bag.providerConnect;
+}
+
+function publicProvider(row) {
+  return {
+    id: row.id,
+    label: row.label,
+    state: row.state,
+    methods: row.methods || [],
+    pending: !!row.pending,
+    url: row.url || null,
+    userCode: row.userCode || null,
+    verificationUri: row.verificationUri || null,
+    message: row.message || null,
+    prompt: row.prompt || null,
+  };
+}
+
+function publicCursorAuth(snap) {
+  const body = {
+    state: snap.state,
+    pending: !!snap.pending,
+    url: snap.url || null,
+    message: snap.message || null,
+  };
+  if (snap.install) body.install = snap.install;
+  return body;
 }
 
 async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
@@ -4211,6 +4292,79 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
       });
     }
     return sendJson(res, 200, { ok: true });
+  }
+
+  // Cursor CLI login for the Chat tab. The CLI stays logged out until the
+  // user finishes the browser flow; the tab polls cursor-auth and opens the
+  // link `agent login` prints. The one-time URL is returned to this localhost
+  // caller and is not written to disk.
+  if (route === 'cursor-auth' && req.method === 'GET') {
+    const connect = await ensureCursorConnect(deps);
+    const snap = await connect.status();
+    if (snap.reload && manager && typeof manager.reloadCursorModels === 'function') {
+      await manager.reloadCursorModels();
+    }
+    return sendJson(res, 200, publicCursorAuth(snap));
+  }
+  if (route === 'cursor-login' && req.method === 'POST') {
+    const connect = await ensureCursorConnect(deps);
+    const snap = await connect.start();
+    if (snap.reload && manager && typeof manager.reloadCursorModels === 'function') {
+      await manager.reloadCursorModels();
+    }
+    return sendJson(res, snap.state === 'missing' ? 409 : 200, publicCursorAuth(snap));
+  }
+  if (route === 'cursor-login/cancel' && req.method === 'POST') {
+    const connect = await ensureCursorConnect(deps);
+    return sendJson(res, 200, publicCursorAuth(connect.cancel()));
+  }
+
+  // Every provider the chat can sign in: Cursor, OpenAI, and the rest of the
+  // pi catalog. OAuth returns a browser link. An API key is accepted once
+  // and handed to that provider's login; it is not echoed back.
+  if (route === 'providers' && req.method === 'GET') {
+    const connect = await ensureProviderConnect(deps);
+    const snap = await connect.list();
+    if (snap.reload && manager && typeof manager.reloadCursorModels === 'function') {
+      await manager.reloadCursorModels();
+    }
+    return sendJson(res, 200, { providers: (snap.providers || []).map(publicProvider) });
+  }
+  {
+    const providerRoute = /^providers\/([^/]+)\/(login|cancel)$/.exec(route);
+    if (providerRoute && req.method === 'POST') {
+      const providerId = providerRoute[1];
+      if (!isSafeSegment(providerId)) return badRequest(res, 'bad provider id');
+      const connect = await ensureProviderConnect(deps);
+      if (providerRoute[2] === 'cancel') {
+        const row = connect.cancel(providerId);
+        return sendJson(res, 200, row ? publicProvider(row) : { ok: true });
+      }
+      let body = {};
+      try {
+        body = await readJsonBody(req);
+      } catch {
+        body = {};
+      }
+      if (body.secret != null && typeof body.secret !== 'string') return badRequest(res, 'secret must be a string');
+      if (typeof body.secret === 'string' && body.secret.length > 2000) return badRequest(res, 'secret is too long');
+      if (body.method != null && body.method !== 'oauth' && body.method !== 'api_key') {
+        return badRequest(res, 'method must be oauth or api_key');
+      }
+      try {
+        const row = await connect.start(providerId, {
+          method: body.method,
+          secret: body.secret,
+          answer: typeof body.answer === 'string' ? body.answer : undefined,
+        });
+        return sendJson(res, 200, publicProvider(row));
+      } catch (err) {
+        const code = err && err.code;
+        const message = String((err && err.message) || err);
+        if (code === 'unknown_provider') return sendJson(res, 404, { error: message });
+        return badRequest(res, message);
+      }
+    }
   }
 
   // ----- resolve the target chat -----

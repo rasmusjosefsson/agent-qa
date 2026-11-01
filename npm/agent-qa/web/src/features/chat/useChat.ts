@@ -133,5 +133,12 @@ export function useChat(cid: string) {
     return apiBrowserNavigate(payload)
   }, [])
 
-  return { state, root, sendPrompt, abort, newChat, setModel, setThinking, navigateBrowser }
+  // Re-read /state after Cursor login so the model picker leaves the fallback row.
+  const refreshState = useCallback(() => {
+    void getChatState(cid)
+      .then((body) => dispatch({ type: 'patch_meta', payload: body }))
+      .catch(() => {})
+  }, [cid])
+
+  return { state, root, sendPrompt, abort, newChat, setModel, setThinking, navigateBrowser, refreshState }
 }
