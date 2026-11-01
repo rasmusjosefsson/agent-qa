@@ -4,8 +4,10 @@ Instructions for AI coding agents working in this repo.
 
 ## What this repo is
 
-A Rust CLI for recording and replaying user scenarios against any web app via
-CDP. Generic, plugin-based, vendor-neutral.
+A Rust CLI for recording and replaying user scenarios. The web surface drives
+a web app through agent-browser and CDP. Desktop, iOS, and Android replay
+through a surface provider and do not start the browser. Generic,
+plugin-based, vendor-neutral.
 
 ## Hard rules
 
@@ -24,9 +26,11 @@ CDP. Generic, plugin-based, vendor-neutral.
    audit trails, handoffs, docs, commit messages, or PR text. Keep generic
    evidence in this repository. Keep downstream evidence and credentials in
    the downstream extension or local ignored artifacts.
-3. **Plugins are the only extension point.** Don't bake in adapter
-   implementations — only the protocol and the host live here. See
-   `docs/plugins.md`.
+3. **Two extension points, both out of process.** App-specific behavior
+   (auth, session policy, hooks) is a plugin. A non-web surface (desktop,
+   iOS, Android) is a surface provider. The host and the protocol live
+   here; the driver binary does not. Do not bake either adapter into the
+   browser runner. See `docs/plugins.md` and `docs/surfaces.md`.
 4. **agent-browser is a hard dependency.** It is resolved by the Node
    launcher (`npm/agent-qa/bin/agent-qa.js`) via `require.resolve` and
    passed to the Rust binary as `AGENT_BROWSER_BIN`. The Rust binary
@@ -38,6 +42,34 @@ CDP. Generic, plugin-based, vendor-neutral.
 2. Land code under the matching subdirectory of `cli/src/` (see
    `docs/architecture.md` for the layout).
 3. Add focused unit tests + add/update the parity gate.
+4. If a user or an agent would notice the change, update the docs in the
+   same change. See below.
+
+## Docs move with the change
+
+`docs/` is the source the site publishes. A new markdown file stays off
+the site until the site lists it. Do this before landing, not as a
+follow-up.
+
+- Edit the page that already documents the area (`docs/configuration.md`,
+  `docs/architecture.md`, `docs/verbs.md`, and the rest). Link it from
+  the page a reader would open instead, so the two are not confused.
+- A new page also needs a row in `site/scripts/sync-docs.mjs`, a sidebar
+  entry in `site/astro.config.mjs`, and a line in `site/public/llms.txt`.
+- Update `site/src/pages/index.astro` when the product boundary changes,
+  and `site/public/.well-known/agent.json` when the capability list
+  changes. The homepage still describes the browser path as the default.
+- When an agent must record or replay differently, update `skill-data/`
+  in the same change. `skills/agent-qa/SKILL.md` stays a loader. Command
+  syntax lives in `skill-data`, served by `agent-qa skills get`.
+- Adding or removing a published page, or editing `site/`, rewrites the
+  docs golden scenario. From `evals/`, run `bun evals/docsite/gen.ts` and
+  commit `evals/docsite/scenarios/docs-pages/scenario.json`. Screenshot
+  baselines are minted in CI with `/docs-goldens accept`, not on a dev
+  machine. Say that in the PR.
+- Confirm with `npm --prefix site run build`. Do not commit
+  `site/src/content/docs/docs/` or `site/public/docs/`. Those are
+  generated.
 
 ## Cursor Cloud specific instructions
 

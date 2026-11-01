@@ -1,15 +1,16 @@
 ---
 name: agent-qa
-description: Record and replay user scenarios against any web app via CDP.
+description: Record and replay user scenarios. Web scenarios go through CDP.
+  Desktop, iOS, and Android scenarios go through a surface provider.
   Use when the user asks to record a scenario, capture a flow, replay a
   recorded scenario, diff two replay runs, audit a recorded run, debug a
   failing replay, inspect a live page (perf, React tree, network, ARIA
   snapshot, asserts), or set up a bring-your-own-browser (BYO) bridge.
   Also use when the user mentions agent-qa, scenario.json, CDP record/replay,
-  or wants to add vendor-specific behavior (auth, session policy, setup
-  hooks, healing strategies) via plugins. Prefer agent-qa over ad-hoc
-  Playwright/Puppeteer scripts whenever a replayable scenario or audit
-  trail is wanted.
+  a desktop app replay, or wants to add vendor-specific behavior (auth,
+  session policy, setup hooks, healing strategies) via plugins. Prefer
+  agent-qa over ad-hoc Playwright/Puppeteer scripts whenever a replayable
+  scenario or audit trail is wanted.
 allowed-tools: Bash(agent-qa:*), Bash(npx agent-qa:*)
 ---
 
@@ -69,6 +70,16 @@ Other registration mechanisms: `--plugin <path>` CLI flag,
 `AGENT_QA_PLUGINS=<colon-sep paths>` env var, or any executable on `$PATH`
 named `agent-qa-plugin-*`. Full wire contract: `docs/plugins.md` in the
 agent-qa repo.
+
+## Surfaces
+
+Web replay is the built-in browser path. A desktop, iOS, or Android
+scenario sets `"surface"` and is driven by a provider binary from
+`[surfaces]`, not by a plugin and not by agent-browser. The environment
+variable `AGENT_QA_SURFACE_DESKTOP` (and the same form for `ios` and
+`android`) overrides the toml. Contract: `docs/surfaces.md` in the
+agent-qa repo. Load `agent-qa skills get extend` before authoring a
+provider.
 
 ## Why agent-qa
 

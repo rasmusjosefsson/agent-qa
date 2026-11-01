@@ -210,6 +210,30 @@ mod tests {
     /// test so a future schema tightening catches the doc drift before
     /// the CI smoke-install step does.
     #[test]
+    fn external_surface_and_target_validate() {
+        let j = json!({
+            "schema": "scenario/2",
+            "id": "desk",
+            "intent": "save the note",
+            "surface": "desktop",
+            "target": { "app": "TextEdit", "window": "Untitled" },
+            "steps": [
+                { "id": "s0", "intent": "save", "kind": "do", "verb": "click",
+                  "on": { "role": "button", "name": "Save" } }
+            ]
+        });
+        validate_value(&j).expect("desktop scenario should validate");
+        for surface in ["ios", "android", "web"] {
+            let mut next = j.clone();
+            next["surface"] = json!(surface);
+            validate_value(&next).unwrap_or_else(|e| panic!("{surface} should validate: {e}"));
+        }
+        let mut bad = j.clone();
+        bad["surface"] = json!("watch");
+        validate_value(&bad).expect_err("unknown surface");
+    }
+
+    #[test]
     fn smoke_example_scenario_validates() {
         const SMOKE: &str = include_str!("../../examples/scenarios/smoke/scenario.json");
         let value: serde_json::Value =

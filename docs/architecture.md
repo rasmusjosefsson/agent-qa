@@ -17,6 +17,7 @@ flowchart TB
     Agent["Coding / QA agent (or human)"]
     CLI["agent-qa CLI<br/>(Rust binary, single crate)"]
     Plugin["Plugin<br/>(any-language subprocess<br/>over JSON+stdio)"]
+    Surface["Surface provider<br/>(desktop, ios, android)"]
     AB["agent-browser<br/>(Rust binary, CDP driver)"]
     Browser["Chromium tab"]
     App["Target web app"]
@@ -24,17 +25,21 @@ flowchart TB
 
     Agent --> CLI
     CLI -- "auth / session policy / hooks" --> Plugin
-    CLI -- "spawn for every gesture" --> AB
+    CLI -- "desktop, ios, android" --> Surface
+    CLI -- "web surface" --> AB
     AB --> Browser
     Browser --> App
     CLI --> Disk
     AB --> Disk
 ```
 
-The arrow that matters: agent-qa depends on agent-browser. Never the
-other way around. agent-qa never forks or shadows agent-browser.
+The arrow that matters: on the web surface, agent-qa depends on
+agent-browser. Never the other way around. agent-qa never forks or
+shadows agent-browser.
 
 The plugin arm is how every app-specific concern enters the system.
+Desktop, iOS, and Android leave through a surface provider, and that
+path does not start the browser. See [`surfaces.md`](surfaces.md).
 
 ## Inside the binary
 
@@ -75,6 +80,7 @@ flowchart LR
       Sidecar[sidecar.rs]
       Value[value.rs]
       Browser[browser.rs]
+      Surface[surface/]
       PluginHost[plugin/]
       EnvOps[env_ops.rs]
       Verbs[verbs.rs<br/>verb_shape.rs]
@@ -205,6 +211,7 @@ Default root: `<cwd>/tmp/agent-qa-scenarios/`. Override with
 | Diagnostics          | `doctor.rs`, `byo_doctor.rs`, `perf_snapshot.rs`       |
 | Browser client       | `browser.rs`                                           |
 | Plugin host          | `plugin/protocol.rs`, `plugin/discovery.rs`, `plugin/host.rs`, `plugin/cli.rs` |
+| Surface providers    | `surface/` — desktop, ios, android. Not on the web replay path. See [`surfaces.md`](surfaces.md). |
 | Paths                | `paths.rs`                                             |
 | Scenario types        | `scenario.rs`, `schema.rs`                              |
 | Operational refs     | `skill-data/`                                          |

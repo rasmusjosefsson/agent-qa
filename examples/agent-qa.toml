@@ -22,6 +22,12 @@
 # session-policy = "./tools/session-policy"
 # setup-hook = "agent-qa-plugin-setup"
 
+# Surface providers for non-web scenarios. The browser path does not
+# read this table. See docs/surfaces.md. Relative paths are relative
+# to this file. AGENT_QA_SURFACE_DESKTOP (and _IOS / _ANDROID) win.
+# [surfaces]
+# desktop = "./examples/surfaces/desktop/provider.js"
+
 # Override the scenarios / record roots. AGENT_QA_SCENARIOS_DIR /
 # AGENT_QA_RECORD_DIR env vars take priority over these settings.
 [paths]

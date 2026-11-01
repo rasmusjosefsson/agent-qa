@@ -19,6 +19,7 @@ Two layers. Keep them straight and most confusion goes away.
 | --------------------------- | ------------------------------------------------------------------------------- |
 | `agent-browser`             | Driving the browser. CDP, navigation, snapshots, screenshots, eval.             |
 | `agent-qa`                  | Scenario bookkeeping. Profiles, sidecars, replay, compare, heal.                 |
+| surface provider            | Optional. Desktop, iOS, and Android replay. The web path does not start one.    |
 
 agent-qa calls down into agent-browser for everything it does to the page. It never reimplements
 what agent-browser already provides.
@@ -130,7 +131,8 @@ Never heal an explicit assertion to hide a regression. If the contract failed, r
 | Move or rename artifacts  | `cli/src/paths.rs`.                                            |
 | Profile resolution / auth | `cli/src/profile_*.rs` + the configured `auth` plugin.         |
 | Recording behavior        | `cli/src/record_step.rs`, `cli/src/start.rs`, `cli/src/flush.rs`. |
-| Replay behavior           | `cli/src/runner.rs`, `cli/src/verbs.rs`.                       |
+| Replay behavior           | `cli/src/runner.rs`, `cli/src/verbs.rs`. Web stays here. Desktop, iOS, and Android go through `cli/src/surface/`. |
+| Surface provider          | [`surfaces.md`](surfaces.md). A separate process, not a plugin. |
 | Compare behavior          | `cli/src/compare/mod.rs`, `cli/src/compare/screenshots.rs`.    |
 | Heal behavior             | `cli/src/heal_respond.rs`, `cli/src/heal_apply.rs`, `cli/src/heal_promote.rs`, `cli/src/runner.rs`. |
 | Operational reference     | `skill-data/core/SKILL.md` and `skill-data/core/references/*`. |
@@ -138,6 +140,7 @@ Never heal an explicit assertion to hide a regression. If the contract failed, r
 ## Read next
 
 - [`architecture.md`](architecture.md) — codemap and runtime flows.
+- [`surfaces.md`](surfaces.md) — desktop, iOS, and Android replay. The web path does not start a provider.
 - [`verbs.md`](verbs.md) — complete CLI verb reference.
 - [`visual-testing.md`](visual-testing.md) — golden screenshots: shot claims, baselines, re-mint loop.
 - [`github-action.md`](github-action.md) — `uses:` replay-on-PR gate for an app repo.

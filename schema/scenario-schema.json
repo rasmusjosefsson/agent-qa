@@ -10,6 +10,21 @@
     "schema": { "const": "scenario/2" },
     "id": { "type": "string", "minLength": 1 },
     "intent": { "type": "string", "minLength": 1 },
+    "surface": {
+      "type": "string",
+      "enum": ["web", "desktop", "ios", "android"],
+      "$comment": "Omitted means web, the built-in browser runner. desktop, ios, and android replay through a surface provider and never launch the browser. See docs/surfaces.md."
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "app": { "type": "string", "minLength": 1 },
+        "window": { "type": "string", "minLength": 1 },
+        "device": { "type": "string", "minLength": 1 }
+      },
+      "$comment": "What the surface provider launches. Ignored on the web surface. app is the desktop or mobile application, window a desktop window title, device a mobile device name."
+    },
     "tags": { "type": "array", "items": { "type": "string" } },
     "inputs": {
       "type": "object",

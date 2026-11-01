@@ -89,6 +89,7 @@ mod smart_fill;
 mod smart_hover;
 mod smart_select;
 mod start;
+mod surface;
 mod telemetry;
 mod test_util;
 mod time;

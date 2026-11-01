@@ -21,6 +21,7 @@ const DOCS = {
   architecture: { file: "architecture.md", description: "Codemap and runtime flows of the agent-qa binary." },
   configuration: { file: "configuration.md", description: "agent-qa.toml, environment variables, and precedence." },
   plugins: { file: "plugins.md", description: "The plugin contract: JSON over stdio, any language." },
+  surfaces: { file: "surfaces.md", description: "Desktop, iOS, and Android replay through a surface provider. The web path does not start one." },
   verbs: { file: "verbs.md", description: "Complete CLI verb reference." },
   templates: { file: "templates.md", description: "Reusable sub-scenarios loaded by runTemplate." },
   flow: { file: "flow.md", description: "Author scenarios as one line per step — compile to scenario.json, describe back." },
