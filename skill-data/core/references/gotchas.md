@@ -49,15 +49,7 @@
   uses the one element with the same role and name. When several match, the
   action fails and clicks nothing — snapshot again and use the new ref.
 
-- **`outcome_unknown` means the command may already have run.** If the CLI
-  loses the daemon's reply after the daemon received a click, fill, check,
-  or navigation, agent-browser does not send it again. The error code is
-  `outcome_unknown`. Snapshot or `get url` before repeating it, or you will
-  double-apply the gesture. Read-only commands (`snapshot`, `get url`,
-  `get text`) are retried by agent-browser itself. Keep
-  `AGENT_BROWSER_DEFAULT_TIMEOUT` at or below `30000` (the default is
-  `25000`). A higher value lets the CLI read timeout fire first and turns a
-  slow action into `outcome_unknown` plus an EAGAIN stall.
+- **A lost daemon reply is `outcome_unknown`, or in text mode `EOF while parsing a value` / `may or may not have run`.** agent-browser does not send a click, fill, or check again after that — the gesture may already have landed. Snapshot or `get url` before repeating it. Read-only commands (`snapshot`, `get url`, `get text`) are retried by agent-browser itself. `open` is the exception agent-qa retries: the first command to a fresh daemon often loses its reply and leaves the tab blank, and a second `open` of the same URL is what actually navigates. Keep `AGENT_BROWSER_DEFAULT_TIMEOUT` at or below `30000` (the default is `25000`). A higher value lets the CLI read timeout fire first and turns a slow action into a lost reply plus an EAGAIN stall.
 
 - **`page_wedged` means the tab stopped responding.** A script that never
   returns fails with `page_wedged`. When agent-qa launched the browser, a

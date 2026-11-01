@@ -117,6 +117,6 @@ Then `agent-qa start "<one-line assertion>" --session inspect` and follow the re
 - Don't run `agent-qa start` for a debug-only ask. It mints a scenario id and a recorder buffer you will not flush.
 - Don't pass `--byo`, `--launch`, `--port`, `--tab`, or `--clone-profile`. They are not flags.
 - Don't call a bare `agent-browser`. Use `agent-qa browser`.
-- Don't retry a click, fill, or `open` after `outcome_unknown` until a snapshot or `get url` shows whether it landed.
+- Don't retry a click, fill, or check after a lost reply (`outcome_unknown`, or text `EOF while parsing a value`) until a snapshot or `get url` shows whether it landed. agent-qa retries `open` itself.
 - Don't feed `snapshot --delta` or an annotated screenshot into a scenario. `record-step` captures its own full snapshot and full-page PNG.
 - Don't raise `AGENT_BROWSER_DEFAULT_TIMEOUT` above `30000`.
