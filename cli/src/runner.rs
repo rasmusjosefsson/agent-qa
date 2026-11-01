@@ -940,10 +940,18 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         // live status file and the events stream both key off it. All of
         // this is additive — the per-step stderr trace below is unchanged.
         let total = flat.len() as u32;
-        // Video overlay: cursor and target ring, painted before each
-        // dispatch and re-painted with the outcome after. Only touched
-        // when --record-video is on. The step list stays in the workbench.
+        // Cursor and target ring while a recording is on. A visible window
+        // also gets a step log tiled beside the app. Neither paints a
+        // step list over the page.
         let record_on = opts.record_video.is_some() && !opts.dry_run;
+        let show_steps = opts.headed && !opts.dry_run;
+        let step_captions: Vec<String> = if show_steps {
+            flat.iter()
+                .map(crate::video_overlay::step_caption)
+                .collect()
+        } else {
+            Vec::new()
+        };
         let mut rail_outcomes: Vec<Option<&'static str>> = vec![None; flat.len()];
         // Resolve once how per-step progress is rendered (quiet /
         // plain-or-piped / pretty-TTY). Pure formatting; no behaviour change.
@@ -1003,11 +1011,14 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 ..
             } = step
             {
-                if record_on {
+                if record_on || show_steps {
                     rail_outcomes[(idx - 1) as usize] = Some("skip");
-                    crate::video_overlay::annotate(
+                    crate::video_overlay::paint(
                         &opts.session_name,
+                        show_steps,
+                        record_on,
                         idx,
+                        &step_captions,
                         &rail_outcomes,
                         step,
                         &mut scope,
@@ -1098,11 +1109,14 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                     }
                 }
                 if let Some(reason) = gate {
-                    if record_on {
+                    if record_on || show_steps {
                         rail_outcomes[(idx - 1) as usize] = Some("skip");
-                        crate::video_overlay::annotate(
+                        crate::video_overlay::paint(
                             &opts.session_name,
+                            show_steps,
+                            record_on,
                             idx,
+                            &step_captions,
                             &rail_outcomes,
                             step,
                             &mut scope,
@@ -1177,12 +1191,15 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             } else {
                 step.clone()
             };
-            // Video overlay: while recording, move the cursor onto this
-            // step's target and ring it so the video shows the action.
-            if record_on {
-                crate::video_overlay::annotate(
+            // While recording, ring the target. When the window is visible,
+            // refresh the step log beside the app.
+            if record_on || show_steps {
+                crate::video_overlay::paint(
                     &opts.session_name,
+                    show_steps,
+                    record_on,
                     idx,
+                    &step_captions,
                     &rail_outcomes,
                     &patched_step,
                     &mut scope,
@@ -1370,7 +1387,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             };
             match result {
                 Ok(()) => {
-                    if record_on {
+                    if record_on || show_steps {
                         rail_outcomes[(idx - 1) as usize] = Some("pass");
                     }
                     if !opts.no_sidecars {
@@ -1384,12 +1401,15 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                             capture_layouts,
                         );
                     }
-                    if record_on {
+                    if record_on || show_steps {
                         // Recolor the target ring with the outcome before
                         // the next step paints the next target.
-                        crate::video_overlay::annotate(
+                        crate::video_overlay::paint(
                             &opts.session_name,
+                            show_steps,
+                            record_on,
                             idx,
+                            &step_captions,
                             &rail_outcomes,
                             &patched_step,
                             &mut scope,
@@ -1425,11 +1445,14 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                             !tags.is_empty() && tags.iter().any(|t| run_tags.contains(t))
                         });
                     if expected_fail {
-                        if record_on {
+                        if record_on || show_steps {
                             rail_outcomes[(idx - 1) as usize] = Some("skip");
-                            crate::video_overlay::annotate(
+                            crate::video_overlay::paint(
                                 &opts.session_name,
+                                show_steps,
+                                record_on,
                                 idx,
+                                &step_captions,
                                 &rail_outcomes,
                                 &patched_step,
                                 &mut scope,
@@ -1504,7 +1527,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                     }
                     let step_continues =
                         matches!(on_failure, Some(crate::scenario::OnFailure::Continue));
-                    if record_on {
+                    if record_on || show_steps {
                         rail_outcomes[(idx - 1) as usize] = Some("fail");
                     }
                     if !opts.no_sidecars {
@@ -1518,10 +1541,13 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                             capture_layouts,
                         );
                     }
-                    if record_on {
-                        crate::video_overlay::annotate(
+                    if record_on || show_steps {
+                        crate::video_overlay::paint(
                             &opts.session_name,
+                            show_steps,
+                            record_on,
                             idx,
+                            &step_captions,
                             &rail_outcomes,
                             &patched_step,
                             &mut scope,
