@@ -84,6 +84,25 @@ Cross-compile + per-platform npm publish + umbrella publish are all
 in CI; you only need an `NPM_TOKEN` secret with publish access. Full
 walkthrough in [`docs/releasing.md`](docs/releasing.md).
 
+## Docs on a pull request
+
+A change under `cli/src`, `npm/agent-qa/lib`, `npm/agent-qa/bin`, or
+`npm/agent-qa/web/src` (tests excluded) needs a doc a reader would open:
+a page in `docs/` (not `gap-map.md`, `qa-playground.md`, or `docs/specs/`),
+a `skill-data/` reference, `README.md`, `CONTRIBUTING.md`, or a hand-written
+page under `site/src/content/`. The description checklist is the reminder.
+The `docs check` workflow is the gate (`scripts/check-pr-docs.sh`).
+
+When the change has no reader-facing effect, put this on its own line in
+the description, with a real reason:
+
+```text
+Docs-exempt: tests only, no reader-facing change
+```
+
+`CHANGELOG.md` and an internal note in `docs/gap-map.md` do not satisfy
+the gate.
+
 ## Code of conduct
 
 Be kind. Don't ship vendor-specific code into the core. The CI gate

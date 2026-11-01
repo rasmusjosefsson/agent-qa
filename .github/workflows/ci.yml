@@ -48,6 +48,8 @@ jobs:
       - name: rustfmt
         working-directory: cli
         run: cargo fmt --check
+      - name: docs check self-test
+        run: scripts/check-pr-docs.test.sh
 
   test-windows:
     name: test (windows-latest)

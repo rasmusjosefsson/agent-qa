@@ -1706,6 +1706,557 @@ function killProcessGroup(pid) {
   }
 }
 
+/**
+ * Pull the one-time Cursor login URL out of `agent login` output.
+ * Only `https://cursor.com/login…` is accepted, so a noisy CLI cannot
+ * hand the workbench an off-site link to open.
+ * @param {string} text
+ * @returns {string|null}
+ */
+export function parseCursorLoginUrl(text) {
+  const m = /https:\/\/cursor\.com\/login[^\s)]+/.exec(String(text || ''));
+  if (!m) return null;
+  return m[0].replace(/[.,]+$/, '');
+}
+
+/**
+ * Read `agent status --format json`. `isAuthenticated` is the signal the
+ * CLI prints today; a text "Not logged in" is the fallback.
+ * @returns {{ state: 'logged-in'|'logged-out'|'unknown', message: string|null }}
+ */
+export function parseCursorAuthStatus(stdout, stderr, code) {
+  const text = String(stdout || '').trim();
+  let data = null;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = null;
+  }
+  if (data && typeof data === 'object') {
+    if (data.isAuthenticated === true) {
+      return { state: 'logged-in', message: data.message ? String(data.message) : null };
+    }
+    if (data.isAuthenticated === false) {
+      return { state: 'logged-out', message: data.message ? String(data.message) : 'Not logged in' };
+    }
+  }
+  const blob = `${stdout || ''}\n${stderr || ''}`;
+  if (/not logged in|unauthenticated|authentication required/i.test(blob)) {
+    return { state: 'logged-out', message: 'Not logged in' };
+  }
+  if (/\blogged in\b/i.test(blob)) return { state: 'logged-in', message: null };
+  if (code && code !== 0) {
+    return { state: 'unknown', message: stripLoginUrls(stderr) || `status exited ${code}` };
+  }
+  return { state: 'unknown', message: null };
+}
+
+function stripLoginUrls(text) {
+  return String(text || '')
+    .replace(/https?:\/\/\S+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * One Cursor login at a time for this workbench process. `agent login`
+ * stays up until the browser flow finishes; the Chat tab polls `status()`
+ * and opens the link the CLI prints. The login URL is never written to disk.
+ * @param {object} [config]
+ * @param {object} [config.env]
+ * @param {string} [config.cwd]
+ * @param {() => string|null} [config.resolveBin]
+ * @param {(bin: string) => Promise<{state: string, message: string|null}>} [config.runStatus]
+ * @param {typeof spawn} [config.spawnImpl]
+ */
+export function createCursorConnect(config = {}) {
+  const env = { ...(config.env || process.env) };
+  const cwd = config.cwd || process.cwd();
+  const resolveBin =
+    config.resolveBin ||
+    (() => {
+      try {
+        return requireCursorBinary(env);
+      } catch {
+        return null;
+      }
+    });
+  const runStatus =
+    config.runStatus ||
+    (async (bin) => {
+      const captured = await runCaptured(bin, ['status', '--format', 'json'], {
+        cwd,
+        env,
+        timeoutMs: 8000,
+      });
+      return parseCursorAuthStatus(captured.stdout, captured.stderr, captured.timedOut ? 1 : captured.code);
+    });
+  const spawnFn = config.spawnImpl || spawn;
+
+  let child = null;
+  let url = null;
+  let buffer = '';
+  let note = null;
+  // 'unknown' until the first status read, so an already-logged-in CLI
+  // does not look like a fresh sign-in (and does not reload models).
+  let lastState = 'unknown';
+
+  function view(state, message, reload) {
+    const missing = state === 'missing';
+    return {
+      state,
+      pending: child != null,
+      url: state === 'logged-in' ? null : url,
+      message: message || note || null,
+      ...(missing ? { install: CURSOR_INSTALL } : {}),
+      ...(reload ? { reload: true } : {}),
+    };
+  }
+
+  function absorb(chunk) {
+    buffer = (buffer + chunk).slice(-8192);
+    const found = parseCursorLoginUrl(buffer);
+    if (found) url = found;
+  }
+
+  function stopChild() {
+    const current = child;
+    if (!current) return;
+    child = null;
+    try {
+      current.kill('SIGTERM');
+    } catch {
+      /* already gone */
+    }
+  }
+
+  async function status() {
+    const bin = resolveBin();
+    if (!bin) return view('missing', 'cursor CLI not found');
+    let parsed;
+    try {
+      parsed = await runStatus(bin);
+    } catch (err) {
+      return view('unknown', stripLoginUrls((err && err.message) || err) || 'status failed');
+    }
+    const became = parsed.state === 'logged-in' && lastState === 'logged-out';
+    lastState = parsed.state;
+    if (parsed.state === 'logged-in') {
+      stopChild();
+      url = null;
+      note = null;
+    }
+    return view(parsed.state, parsed.message, became);
+  }
+
+  function waitForUrl(ms) {
+    const started = Date.now();
+    return new Promise((resolve) => {
+      const tick = () => {
+        if (url || !child || Date.now() - started >= ms) {
+          resolve();
+          return;
+        }
+        setTimeout(tick, 40);
+      };
+      tick();
+    });
+  }
+
+  async function start() {
+    const current = await status();
+    if (current.state === 'logged-in' || current.state === 'missing') return current;
+    if (child) return view(current.state === 'unknown' ? 'logged-out' : current.state, current.message);
+    const bin = resolveBin();
+    if (!bin) return view('missing', 'cursor CLI not found');
+    buffer = '';
+    url = null;
+    note = null;
+    const childEnv = { ...env, NO_OPEN_BROWSER: '1' };
+    let spawned;
+    try {
+      spawned = spawnFn(bin, ['login'], {
+        cwd,
+        env: childEnv,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (err) {
+      note = stripLoginUrls((err && err.message) || err) || 'login failed to start';
+      return view('logged-out', note);
+    }
+    child = spawned;
+    if (spawned.stdout && typeof spawned.stdout.on === 'function') {
+      spawned.stdout.on('data', (chunk) => absorb(chunk.toString()));
+    }
+    if (spawned.stderr && typeof spawned.stderr.on === 'function') {
+      spawned.stderr.on('data', (chunk) => absorb(chunk.toString()));
+    }
+    if (typeof spawned.once === 'function') {
+      spawned.once('error', (err) => {
+        note = stripLoginUrls((err && err.message) || err) || 'login failed';
+        if (child === spawned) child = null;
+      });
+      spawned.once('close', () => {
+        if (child === spawned) child = null;
+      });
+    }
+    await waitForUrl(3000);
+    return view(lastState === 'logged-in' ? 'logged-in' : 'logged-out', current.message);
+  }
+
+  function cancel() {
+    stopChild();
+    url = null;
+    buffer = '';
+    return view(lastState === 'logged-in' ? 'logged-in' : 'logged-out');
+  }
+
+  return { status, start, cancel };
+}
+
+function safeHttpsUrl(value) {
+  try {
+    const url = new URL(String(value || ''));
+    if (url.protocol !== 'https:') return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function providerLoginMethods(provider) {
+  const methods = [];
+  if (provider && provider.auth && provider.auth.oauth && typeof provider.auth.oauth.login === 'function') {
+    methods.push('oauth');
+  }
+  if (provider && provider.auth && provider.auth.apiKey && typeof provider.auth.apiKey.login === 'function') {
+    methods.push('api_key');
+  }
+  return methods;
+}
+
+function scrubLoginText(text, secret) {
+  let out = stripLoginUrls(text);
+  if (secret && out.includes(secret)) out = out.split(secret).join('');
+  return out.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * One sign-in surface for every chat provider. Cursor uses `agent login`.
+ * The rest use the pi model runtime: OpenAI, Anthropic, and the other
+ * built-in providers, each with its own OAuth link or API-key prompt.
+ * Secrets and one-time URLs stay in memory for the localhost caller.
+ * @param {object} [config]
+ * @param {ReturnType<typeof createCursorConnect>} [config.cursorConnect]
+ * @param {() => Promise<object>} [config.loadRuntime]
+ */
+export function createProviderConnect(config = {}) {
+  const cursor = config.cursorConnect || createCursorConnect(config);
+  const loadRuntime = config.loadRuntime || loadPiModelRuntime;
+  let runtimePromise = null;
+  const sessions = new Map();
+  const previous = new Map();
+
+  function remember(id, state) {
+    const prev = previous.get(id);
+    previous.set(id, state);
+    return state === 'logged-in' && prev === 'logged-out';
+  }
+
+  async function runtime() {
+    if (!runtimePromise) {
+      runtimePromise = Promise.resolve()
+        .then(() => loadRuntime())
+        .catch((err) => {
+          runtimePromise = null;
+          throw err;
+        });
+    }
+    return runtimePromise;
+  }
+
+  function cursorRow(snap) {
+    const state = snap.state === 'logged-in' || snap.state === 'missing' ? snap.state : 'logged-out';
+    return {
+      id: 'cursor',
+      label: 'Cursor',
+      state,
+      methods: ['oauth'],
+      pending: !!snap.pending,
+      url: state === 'logged-in' ? null : snap.url || null,
+      userCode: null,
+      verificationUri: null,
+      message: snap.message || null,
+      prompt: null,
+    };
+  }
+
+  function slotRow(provider, state, slot) {
+    const signedIn = state === 'logged-in';
+    return {
+      id: provider.id,
+      label: provider.name || provider.id,
+      state,
+      methods: providerLoginMethods(provider),
+      pending: !!(slot && slot.pending) && !signedIn,
+      url: signedIn ? null : (slot && slot.url) || null,
+      userCode: signedIn ? null : (slot && slot.userCode) || null,
+      verificationUri: signedIn ? null : (slot && slot.verificationUri) || null,
+      message: (slot && slot.message) || null,
+      prompt: signedIn ? null : publicLoginPrompt(slot && slot.prompt),
+    };
+  }
+
+  async function list() {
+    const cursorSnap = await cursor.status();
+    let reload = remember('cursor', cursorSnap.state === 'logged-in' ? 'logged-in' : 'logged-out');
+    const providers = [cursorRow(cursorSnap)];
+    let rt = null;
+    try {
+      rt = await runtime();
+    } catch {
+      rt = null;
+    }
+    if (rt && typeof rt.getProviders === 'function') {
+      for (const provider of rt.getProviders()) {
+        const methods = providerLoginMethods(provider);
+        if (!methods.length || provider.id === 'cursor') continue;
+        let state = 'logged-out';
+        const slot = sessions.get(provider.id);
+        if (slot && slot.signedIn) state = 'logged-in';
+        else {
+          try {
+            const check = await rt.checkAuth(provider.id);
+            if (check) state = 'logged-in';
+          } catch {
+            state = 'unknown';
+          }
+        }
+        if (state === 'logged-in' && slot) {
+          slot.pending = false;
+          slot.url = null;
+          slot.secret = null;
+        }
+        if (remember(provider.id, state)) reload = true;
+        providers.push(slotRow(provider, state, slot));
+      }
+    }
+    return { providers, ...(reload ? { reload: true } : {}) };
+  }
+
+  function publicSlot(provider, slot) {
+    const state = slot && slot.signedIn ? 'logged-in' : 'logged-out';
+    return slotRow(provider, state, slot);
+  }
+
+  async function start(id, body = {}) {
+    if (id === 'cursor') {
+      const snap = await cursor.start();
+      return cursorRow(snap);
+    }
+    const rt = await runtime();
+    const provider = rt.getProvider(id);
+    const methods = providerLoginMethods(provider);
+    if (!provider || !methods.length) {
+      const error = new Error(`unknown provider: ${id}`);
+      error.code = 'unknown_provider';
+      throw error;
+    }
+    const method = body.method || (methods.includes('oauth') ? 'oauth' : 'api_key');
+    if (!methods.includes(method)) {
+      const error = new Error(`login method not available: ${method}`);
+      error.code = 'bad_method';
+      throw error;
+    }
+    let slot = sessions.get(id);
+    if (slot && slot.pending && slot.answer && (body.secret || body.answer)) {
+      const secret = body.secret || null;
+      const value = body.answer || body.secret;
+      slot.secret = null;
+      const answer = slot.answer;
+      slot.answer = null;
+      slot.fail = null;
+      answer(value);
+      await waitForSlot(slot, 3000);
+      return publicSlot(provider, slot);
+    }
+    if (slot && slot.pending) return publicSlot(provider, slot);
+
+    const ac = new AbortController();
+    slot = {
+      pending: true,
+      url: null,
+      userCode: null,
+      verificationUri: null,
+      message: null,
+      prompt: null,
+      secret: typeof body.secret === 'string' ? body.secret : null,
+      signedIn: false,
+      done: false,
+      abort: ac,
+      answer: null,
+      fail: null,
+    };
+    sessions.set(id, slot);
+    const heldSecret = slot.secret;
+    const interaction = {
+      signal: ac.signal,
+      notify(event) {
+        if (!event || typeof event !== 'object') return;
+        if (event.type === 'auth_url') {
+          const url = safeHttpsUrl(event.url);
+          if (url) slot.url = url;
+        } else if (event.type === 'device_code') {
+          slot.userCode = event.userCode ? String(event.userCode) : null;
+          const verify = safeHttpsUrl(event.verificationUri);
+          if (verify) {
+            slot.verificationUri = verify;
+            if (!slot.url) slot.url = verify;
+          }
+        } else if (event.type === 'info' || event.type === 'progress') {
+          slot.message = scrubLoginText(event.message, heldSecret) || null;
+        }
+      },
+      prompt(prompt) {
+        const kind = prompt && prompt.type;
+        if ((kind === 'secret' || kind === 'text' || kind === 'manual_code') && slot.secret) {
+          const value = slot.secret;
+          slot.secret = null;
+          return Promise.resolve(value);
+        }
+        if (kind === 'select' && prompt.options && prompt.options.length === 1) {
+          return Promise.resolve(prompt.options[0].id);
+        }
+        slot.prompt = prompt;
+        return new Promise((resolve, reject) => {
+          slot.answer = (value) => {
+            slot.prompt = null;
+            slot.secret = null;
+            resolve(value);
+          };
+          slot.fail = reject;
+          if (prompt && prompt.signal) {
+            prompt.signal.addEventListener(
+              'abort',
+              () => {
+                slot.prompt = null;
+                reject(new Error('Login cancelled'));
+              },
+              { once: true },
+            );
+          }
+          ac.signal.addEventListener(
+            'abort',
+            () => {
+              slot.prompt = null;
+              reject(new Error('Login cancelled'));
+            },
+            { once: true },
+          );
+        });
+      },
+    };
+    const loginOptions = {};
+    if (typeof rt.getDeviceId === 'function') {
+      loginOptions.getDeviceId = () => rt.getDeviceId();
+    }
+    slot.task = Promise.resolve()
+      .then(() => rt.login(id, method, interaction, loginOptions))
+      .then(() => {
+        slot.pending = false;
+        slot.done = true;
+        slot.signedIn = true;
+        slot.url = null;
+        slot.userCode = null;
+        slot.secret = null;
+        slot.prompt = null;
+      })
+      .catch((err) => {
+        slot.pending = false;
+        slot.done = true;
+        slot.secret = null;
+        if (!slot.message) slot.message = scrubLoginText((err && err.message) || err, heldSecret) || 'login failed';
+      });
+    await waitForSlot(slot, 3000);
+    return publicSlot(provider, slot);
+  }
+
+  function cancel(id) {
+    if (!id || id === 'cursor') {
+      const snap = cursor.cancel();
+      if (id === 'cursor') return cursorRow(snap);
+    }
+    const slot = id ? sessions.get(id) : null;
+    if (slot) {
+      try {
+        slot.abort.abort();
+      } catch {
+        /* already aborted */
+      }
+      if (slot.fail) slot.fail(new Error('Login cancelled'));
+      sessions.delete(id);
+    }
+    return null;
+  }
+
+  function cancelAll() {
+    cursor.cancel();
+    for (const id of [...sessions.keys()]) cancel(id);
+  }
+
+  return { list, start, cancel, cancelAll };
+}
+
+function publicLoginPrompt(prompt) {
+  if (!prompt || typeof prompt !== 'object') return null;
+  const out = { type: prompt.type, message: String(prompt.message || '') };
+  if (prompt.placeholder) out.placeholder = String(prompt.placeholder);
+  if (Array.isArray(prompt.options)) {
+    out.options = prompt.options
+      .filter((option) => option && option.id)
+      .map((option) => ({ id: String(option.id), label: String(option.label || option.id) }));
+  }
+  return out;
+}
+
+function waitForSlot(slot, ms) {
+  const started = Date.now();
+  return new Promise((resolve) => {
+    const tick = () => {
+      if (
+        slot.url ||
+        slot.userCode ||
+        slot.prompt ||
+        slot.done ||
+        slot.signedIn ||
+        Date.now() - started >= ms
+      ) {
+        resolve();
+        return;
+      }
+      setTimeout(tick, 40);
+    };
+    tick();
+  });
+}
+
+async function loadPiModelRuntime() {
+  const { sdk } = await loadPiSdk();
+  if (!sdk.ModelRuntime || typeof sdk.ModelRuntime.create !== 'function') {
+    throw new Error('pi model runtime unavailable');
+  }
+  const runtime = await sdk.ModelRuntime.create({ refreshOnCreate: false });
+  // OpenAI's browser login asks for this installation's device id. Pi stores
+  // it in the agent settings dir the first time it is needed.
+  if (sdk.SettingsManager && typeof sdk.SettingsManager.create === 'function') {
+    const settings = sdk.SettingsManager.create(process.cwd());
+    if (settings && typeof settings.getOrCreateDeviceId === 'function') {
+      runtime.getDeviceId = () => settings.getOrCreateDeviceId();
+    }
+  }
+  return runtime;
+}
+
 async function listCursorModels(bin, env, cwd) {
   const captured = await runCaptured(bin, ['--list-models', '--trust', '--workspace', cwd], {
     cwd,
@@ -2089,12 +2640,23 @@ export async function createCursorBackend(config = {}) {
     });
   };
 
-  return createChatHub({
+  const hub = createChatHub({
     createSession,
     listModels: () => modelList,
     idleMs: config.idleMs,
     logger: config.logger,
   });
+  // Login happens after the hub is built, while the picker still holds the
+  // fallback "Cursor" row. Re-read the catalog once status flips to logged-in.
+  hub.reloadModels = async () => {
+    const fresh = await listCursorModels(bin, env, cwd);
+    if (fresh.length > 0) {
+      modelList = fresh;
+      modelsFromCli = true;
+    }
+    return modelList;
+  };
+  return hub;
 }
 
 function pickAutoChatBackend(det) {
@@ -2163,7 +2725,7 @@ async function createPiBackend(config = {}) {
     }
   };
   const createSession = makeSessionFactory(sdk, config, { modelRuntime });
-  return createChatHub({
+  const hub = createChatHub({
     createSession,
     listModels,
     idleMs: config.idleMs,
@@ -2174,6 +2736,19 @@ async function createPiBackend(config = {}) {
       !!(config.sessionDir && existsSync(join(config.sessionDir, 'current.path'))),
     logger: config.logger,
   });
+  // A provider login updates the runtime's credential store. Re-read
+  // availability so the picker shows the models that login unlocked.
+  hub.reloadModels = async () => {
+    try {
+      if (modelRuntime && typeof modelRuntime.getAvailable === 'function') {
+        await modelRuntime.getAvailable();
+      }
+    } catch {
+      /* keep the last snapshot */
+    }
+    return listModels();
+  };
+  return hub;
 }
 
 export const __internal = {

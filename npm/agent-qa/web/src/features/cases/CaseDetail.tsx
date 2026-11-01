@@ -85,6 +85,7 @@ export function CaseDetail({ id }: { id: string }) {
   const [expected, setExpected] = useState('')
   const [tagsText, setTagsText] = useState('')
   const [inputs, setInputs] = useState<Record<string, InputDecl>>({})
+  const [recordings, setRecordings] = useState<ScenarioSummary[]>([])
 
   const hydrate = (c: CaseRecord, s: ScenarioSummary | null) => {
     setLoaded(c)
@@ -111,6 +112,12 @@ export function CaseDetail({ id }: { id: string }) {
         }
       })
   }, [id])
+
+  useEffect(() => {
+    getScenarios()
+      .then((r) => setRecordings((r.scenarios || []).filter((s) => s.hasScenario)))
+      .catch(() => {})
+  }, [])
 
   // Keep the inputs map in sync with the [TOKEN]s used in steps + expected.
   const tokens = useMemo(
@@ -237,6 +244,22 @@ export function CaseDetail({ id }: { id: string }) {
       if (pollRef.current) window.clearTimeout(pollRef.current)
     }
   }, [loaded, id])
+
+  const linkRecording = async (sid: string) => {
+    setErr('')
+    if (notFound) {
+      const saved = await save()
+      if (!saved) return
+    }
+    try {
+      const r = await linkCase(id, sid || null)
+      hydrate(r.case, r.case.scenario)
+      setFlash(sid ? 'Linked' : 'Unlinked')
+      setTimeout(() => setFlash(''), 1500)
+    } catch (e) {
+      setErr(String((e as Error).message || e))
+    }
+  }
 
   const setInput = (token: string, patch: Partial<InputDecl>) =>
     setInputs((prev) => ({ ...prev, [token]: { ...prev[token], ...patch } }))
@@ -384,7 +407,29 @@ export function CaseDetail({ id }: { id: string }) {
             </Field>
           )}
 
-          <Field label="Tags" hint="Comma-separated.">
+          <Field
+            label="Recorded scenario"
+            hint="Attach a recording so this case can be picked into a nightly set."
+          >
+            <select
+              aria-label="Recorded scenario"
+              value={loaded.scenarioSid || ''}
+              onChange={(e) => void linkRecording(e.target.value)}
+              className="h-8 w-full rounded-lg border border-border bg-card px-2 text-sm text-foreground shadow-xs outline-none transition-colors hover:border-primary/30 focus-visible:border-primary/50 focus-visible:ring-3 focus-visible:ring-primary/10"
+            >
+              <option value="">Not linked</option>
+              {loaded.scenarioSid && !recordings.some((s) => s.sid === loaded.scenarioSid) && (
+                <option value={loaded.scenarioSid}>{loaded.scenarioSid}</option>
+              )}
+              {recordings.map((s) => (
+                <option key={s.sid} value={s.sid}>
+                  {s.intent || s.scenarioId || s.sid}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="Tags" hint="Comma-separated. A set can include every case that carries a label.">
             <Input
               value={tagsText}
               onChange={(e) => setTagsText(e.target.value)}

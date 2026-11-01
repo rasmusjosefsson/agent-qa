@@ -11,6 +11,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { EventEmitter } = require('node:events');
 const { pathToFileURL } = require('node:url');
 
 const srv = require('../lib/report-server.js');
@@ -1409,6 +1410,276 @@ test('cursor backend falls back to the auto model when --list-models fails', asy
   } finally {
     hub.dispose();
   }
+});
+
+test('cursor reloadModels replaces the fallback row after login', async () => {
+  const { createChatBackend } = await chatAgent();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-cursor-reload-'));
+  const exe = writeCursorFake(dir);
+  const env = {
+    PATH: dir,
+    AGENT_QA_CURSOR_BIN: exe,
+    CURSOR_FAKE_LIST_FAIL: '1',
+  };
+  const hub = await createChatBackend({ backend: 'cursor', cwd: dir, env });
+  try {
+    assert.deepEqual((await hub.getState()).models, [{ provider: 'cursor', id: 'auto', label: 'Cursor' }]);
+    delete env.CURSOR_FAKE_LIST_FAIL;
+    await hub.reloadModels();
+    const models = (await hub.getState()).models;
+    assert.ok(models.some((m) => m.id === 'composer-1' && m.provider === 'cursor'));
+  } finally {
+    hub.dispose();
+  }
+});
+
+test('cursor connect returns one login link and reports the logged-in transition', async () => {
+  const { createCursorConnect, parseCursorLoginUrl, parseCursorAuthStatus } = await chatAgent();
+  const link = 'https://cursor.com/loginDeepControl?challenge=example';
+  assert.equal(
+    parseCursorLoginUrl(`Open a browser and navigate to this link: ${link}\n`),
+    link,
+  );
+  assert.equal(parseCursorLoginUrl('go to https://evil.example/login'), null);
+  assert.equal(parseCursorAuthStatus('{"isAuthenticated":false,"message":"Not logged in"}', '', 0).state, 'logged-out');
+  assert.equal(parseCursorAuthStatus('{"isAuthenticated":true}', '', 0).state, 'logged-in');
+
+  let signedIn = false;
+  let spawns = 0;
+  let opened = null;
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.pid = 4242;
+  child.kill = () => {
+    child.killed = true;
+    child.emit('close', 0);
+  };
+  const connect = createCursorConnect({
+    env: {},
+    resolveBin: () => '/opt/fake-agent',
+    runStatus: async () =>
+      signedIn
+        ? { state: 'logged-in', message: null }
+        : { state: 'logged-out', message: 'Not logged in' },
+    spawnImpl: (bin, args, opts) => {
+      spawns += 1;
+      opened = { bin, args, noBrowser: opts.env.NO_OPEN_BROWSER };
+      setImmediate(() => {
+        child.stdout.emit('data', `Open a browser and navigate to this link: ${link}\n`);
+      });
+      return child;
+    },
+  });
+
+  const started = await connect.start();
+  assert.equal(started.state, 'logged-out');
+  assert.equal(started.pending, true);
+  assert.equal(started.url, link);
+  assert.equal(spawns, 1);
+  assert.deepEqual(opened.args, ['login']);
+  assert.equal(opened.noBrowser, '1');
+
+  const again = await connect.start();
+  assert.equal(spawns, 1);
+  assert.equal(again.url, link);
+
+  signedIn = true;
+  const done = await connect.status();
+  assert.equal(done.state, 'logged-in');
+  assert.equal(done.reload, true);
+  assert.equal(done.url, null);
+  assert.equal(child.killed, true);
+
+  const still = await connect.status();
+  assert.equal(still.state, 'logged-in');
+  assert.equal(still.reload, undefined);
+});
+
+test('cursor-login route hands the browser link to the chat tab and reloads models once', async (t) => {
+  const hub = makeStubHub();
+  let reloaded = 0;
+  hub.reloadModels = async () => {
+    reloaded += 1;
+  };
+  let polls = 0;
+  const link = 'https://cursor.com/loginDeepControl?challenge=example';
+  const cursorConnect = {
+    async status() {
+      polls += 1;
+      if (polls < 2) return { state: 'logged-out', pending: false, url: null, message: 'Not logged in' };
+      return { state: 'logged-in', pending: false, url: null, message: null, reload: true };
+    },
+    async start() {
+      return { state: 'logged-out', pending: true, url: link, message: 'Not logged in' };
+    },
+    cancel() {
+      return { state: 'logged-out', pending: false, url: null, message: null };
+    },
+  };
+  const { server, base } = await boot(fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-cursor-login-')), {
+    chat: { hub },
+    cursorConnect,
+  });
+  t.after(() => server.close());
+
+  const state = await fetch(`${base}/api/chat/state`);
+  assert.equal(state.status, 200);
+
+  const login = await fetch(`${base}/api/chat/cursor-login`, { method: 'POST' });
+  assert.equal(login.status, 200);
+  const started = await login.json();
+  assert.equal(started.pending, true);
+  assert.equal(started.url, link);
+  assert.equal(started.reload, undefined);
+
+  const first = await (await fetch(`${base}/api/chat/cursor-auth`)).json();
+  assert.equal(first.state, 'logged-out');
+  assert.equal(reloaded, 0);
+
+  const second = await (await fetch(`${base}/api/chat/cursor-auth`)).json();
+  assert.equal(second.state, 'logged-in');
+  assert.equal(second.url, null);
+  assert.equal(reloaded, 1);
+});
+
+test('provider connect covers OpenAI and the other providers without echoing a key', async () => {
+  const { createProviderConnect } = await chatAgent();
+  const signed = new Set();
+  let lastSecret = null;
+  const openai = {
+    id: 'openai',
+    name: 'OpenAI',
+    auth: { oauth: { login() {} }, apiKey: { login() {} } },
+  };
+  const anthropic = {
+    id: 'anthropic',
+    name: 'Anthropic',
+    auth: { apiKey: { login() {} } },
+  };
+  const runtime = {
+    getProviders: () => [openai, anthropic],
+    getProvider: (id) => [openai, anthropic].find((provider) => provider.id === id),
+    checkAuth: async (id) => (signed.has(id) ? { type: 'api_key' } : undefined),
+    login: async (id, method, interaction) => {
+      if (method === 'oauth') {
+        interaction.notify({ type: 'auth_url', url: 'https://auth.openai.com/authorize?example=1' });
+        interaction.notify({ type: 'auth_url', url: 'http://evil.example/insecure' });
+        interaction.notify({
+          type: 'device_code',
+          userCode: 'ABCD-EFGH',
+          verificationUri: 'https://auth.openai.com/device',
+        });
+        return new Promise(() => {});
+      }
+      lastSecret = await interaction.prompt({ type: 'secret', message: 'API key', placeholder: 'sk-...' });
+      signed.add(id);
+      return { type: 'api_key' };
+    },
+  };
+  const connect = createProviderConnect({
+    cursorConnect: {
+      async status() {
+        return { state: 'logged-out', pending: false, url: null, message: 'Not logged in' };
+      },
+      async start() {
+        return {
+          state: 'logged-out',
+          pending: true,
+          url: 'https://cursor.com/loginDeepControl?challenge=example',
+          message: null,
+        };
+      },
+      cancel() {
+        return { state: 'logged-out', pending: false, url: null };
+      },
+    },
+    loadRuntime: async () => runtime,
+  });
+
+  const listed = await connect.list();
+  assert.deepEqual(
+    listed.providers.map((provider) => provider.id),
+    ['cursor', 'openai', 'anthropic'],
+  );
+  const started = await connect.start('openai', { method: 'oauth' });
+  assert.equal(started.pending, true);
+  assert.equal(started.url, 'https://auth.openai.com/authorize?example=1');
+  assert.equal(started.userCode, 'ABCD-EFGH');
+  assert.equal(started.verificationUri, 'https://auth.openai.com/device');
+  assert.equal(JSON.stringify(started).includes('evil.example'), false);
+
+  const saved = await connect.start('anthropic', { method: 'api_key', secret: 'sk-test-secret' });
+  assert.equal(saved.state, 'logged-in');
+  assert.equal(lastSecret, 'sk-test-secret');
+  assert.equal(JSON.stringify(saved).includes('sk-test-secret'), false);
+
+  const again = await connect.list();
+  assert.equal(again.providers.find((provider) => provider.id === 'anthropic').state, 'logged-in');
+  assert.equal(again.reload, true);
+  await assert.rejects(() => connect.start('nope'), /unknown provider/);
+});
+
+test('provider login route lists OpenAI and does not echo an API key', async (t) => {
+  const hub = makeStubHub();
+  const secret = 'sk-route-secret';
+  let seen = null;
+  const providerConnect = {
+    async list() {
+      return {
+        providers: [
+          { id: 'cursor', label: 'Cursor', state: 'logged-in', methods: ['oauth'], pending: false },
+          { id: 'openai', label: 'OpenAI', state: 'logged-out', methods: ['oauth', 'api_key'], pending: false },
+        ],
+      };
+    },
+    async start(_id, body) {
+      if (_id === 'nope') {
+        const error = new Error('unknown provider: nope');
+        error.code = 'unknown_provider';
+        throw error;
+      }
+      seen = body.secret || null;
+      return { id: 'openai', label: 'OpenAI', state: 'logged-in', methods: ['api_key'], pending: false };
+    },
+    cancel() {
+      return null;
+    },
+    cancelAll() {},
+  };
+  const { server, base } = await boot(fs.mkdtempSync(path.join(os.tmpdir(), 'aqa-provider-login-')), {
+    chat: { hub },
+    providerConnect,
+  });
+  t.after(() => server.close());
+
+  const listed = await (await fetch(`${base}/api/chat/providers`)).json();
+  assert.ok(listed.providers.some((provider) => provider.id === 'openai' && provider.label === 'OpenAI'));
+
+  const bad = await fetch(`${base}/api/chat/providers/openai/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ method: 'wat' }),
+  });
+  assert.equal(bad.status, 400);
+
+  const login = await fetch(`${base}/api/chat/providers/openai/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ method: 'api_key', secret }),
+  });
+  assert.equal(login.status, 200);
+  const saved = await login.json();
+  assert.equal(saved.state, 'logged-in');
+  assert.equal(seen, secret);
+  assert.equal(JSON.stringify(saved).includes(secret), false);
+
+  const missing = await fetch(`${base}/api/chat/providers/nope/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ method: 'oauth' }),
+  });
+  assert.equal(missing.status, 404);
 });
 
 test('cursor auto-selects when its CLI is the first available backend', async () => {

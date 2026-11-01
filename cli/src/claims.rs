@@ -2651,11 +2651,7 @@ pub(crate) fn locator_resolves(
                     // when no element with the text exists, so the
                     // surrounding poll_until reads the same signal as a
                     // failed find.
-                    let expr = format!(
-                        "(() => {{ const want = {q}; const hit = [...document.querySelectorAll('*')].find(el => (el.innerText || el.textContent || '').includes(want)); if (!hit) throw new Error('text not found: ' + want); }})()",
-                        q = serde_json::to_string(&v).expect("string serializes")
-                    );
-                    browser::eval_expression(session, &expr)?;
+                    browser::eval_expression(session, &visible_text_probe_expr(&v))?;
                 }
             }
             Ok(())
@@ -2704,12 +2700,20 @@ fn text_presence_probe(session: &str, name: &str) -> Result<()> {
 }
 
 fn probe_text(session: &str, want: &str) -> Result<()> {
-    let expr = format!(
-        "(() => {{ const want = {q}; const hit = [...document.querySelectorAll('*')].find(el => (el.innerText || el.textContent || '').includes(want)); if (!hit) throw new Error('text not found: ' + want); }})()",
-        q = serde_json::to_string(want).expect("string serializes")
-    );
-    browser::eval_expression(session, &expr)?;
+    browser::eval_expression(session, &visible_text_probe_expr(want))?;
     Ok(())
+}
+
+/// Presence of `want` in rendered text. Script, style, and template source
+/// is not page text — a feature-flag branch must not count as present just
+/// because the other label is still in the bundle.
+fn visible_text_probe_expr(want: &str) -> String {
+    let q = serde_json::to_string(want).expect("string serializes");
+    format!(
+        "(() => {{ const want = {q}; const skip = new Set(['SCRIPT','STYLE','NOSCRIPT','TEMPLATE']); \
+          const hit = [...document.querySelectorAll('*')].find(el => !skip.has(el.tagName) && (el.innerText || el.textContent || '').includes(want)); \
+          if (!hit) throw new Error('text not found: ' + want); }})()"
+    )
 }
 
 /// Snapshot-based presence probe: parse the ARIA snapshot for

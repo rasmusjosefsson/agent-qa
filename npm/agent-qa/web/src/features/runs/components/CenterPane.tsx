@@ -12,6 +12,7 @@ import { InsertCheckDialog } from './InsertCheckDialog'
 import {
   cleanSummary,
   collapseEvents,
+  flattenAuthored,
   fmtMs,
   fmtRunTime,
   relRunTime,
@@ -31,6 +32,35 @@ const STATUS_TONE: Record<string, string> = {
   fail: 'text-destructive',
   running: 'text-warning',
   pending: 'text-muted-foreground',
+  skip: 'text-muted-foreground',
+}
+
+function InputFields({
+  inputs,
+  setInput,
+  disabled,
+}: {
+  inputs: { name: string; value: string; description?: string }[]
+  setInput?: (name: string, value: string) => void
+  disabled?: boolean
+}) {
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-muted-foreground">
+      <span>Inputs</span>
+      {inputs.map((inp) => (
+        <label key={inp.name} className="flex min-w-0 items-center gap-1.5" title={inp.description || inp.name}>
+          <span className="font-mono text-[11px] text-foreground">{inp.name}</span>
+          <input
+            aria-label={`Input ${inp.name}`}
+            value={inp.value}
+            disabled={disabled}
+            onChange={(e) => setInput?.(inp.name, e.target.value)}
+            className="h-7 w-36 rounded-lg border border-border bg-card px-2 font-mono text-xs text-foreground shadow-xs outline-none transition-colors hover:border-primary/30 focus-visible:border-primary/50 focus-visible:ring-3 focus-visible:ring-primary/10 disabled:opacity-50"
+          />
+        </label>
+      ))}
+    </div>
+  )
 }
 
 function VerbBadge({ verb }: { verb: unknown }) {
@@ -54,6 +84,9 @@ export interface RunConfig {
   setPersonaId: (v: string) => void
   setEnvId: (v: string) => void
   setHeaded: (v: boolean) => void
+  // Declared scenario inputs, so a flag can be flipped on this replay.
+  inputs?: { name: string; value: string; description?: string }[]
+  setInput?: (name: string, value: string) => void
 }
 
 export function CenterPane({
@@ -81,7 +114,7 @@ export function CenterPane({
 
   // Mode A — a recorded scenario is previewed (no run selected).
   if (scenarioDef && !detail) {
-    const steps = scenarioDef.steps || []
+    const steps = flattenAuthored(scenarioDef.steps || [])
     const runList = (sel.sid && runsBySid[sel.sid]) || []
     const lastRun = runList.length
       ? [...runList].sort((a, b) => (a.runId < b.runId ? 1 : -1))[0]
@@ -175,6 +208,11 @@ export function CenterPane({
               </div>
             </div>
           )}
+          {sel.sid && runConfig?.inputs && runConfig.inputs.length > 0 && (
+            <div className="border-t border-border/60 px-5 py-2">
+              <InputFields inputs={runConfig.inputs} setInput={runConfig.setInput} disabled={busy} />
+            </div>
+          )}
         </div>
         <ol className="min-h-0 flex-1 space-y-px overflow-auto p-2.5">
           {steps.map((st, i) => (
@@ -184,7 +222,10 @@ export function CenterPane({
             >
               <span className="tnum grid size-5 shrink-0 place-items-center rounded-full bg-muted font-mono text-[10px] text-muted-foreground">{i}</span>
               <VerbBadge verb={st.verb} />
-              <span className="truncate text-[13px]">{st.intent || stepText(st)}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[13px]">{st.intent || stepText(st)}</span>
+                {st.branch && <span className="block truncate text-[11px] text-muted-foreground">{st.branch}</span>}
+              </span>
               {st.id && (
                 <button
                   type="button"
@@ -215,6 +256,7 @@ export function CenterPane({
     const summary = a.summary || (live ? `running ${s.currentIdx || 0}/${s.total || '?'}` : stale ? 'interrupted' : 'in flight')
     const tone = /PASS/.test(summary) ? 'pass' : /FAIL/.test(summary) ? 'fail' : stale ? 'stopped' : 'running'
     const events = collapseEvents(detail.events || [])
+    const skipCount = events.filter((e) => e.status === 'skip').length
     const currentIdx = typeof s.currentIdx === 'number' ? s.currentIdx : -1
     const liveCurrent = live ? currentIdx : -1
     const defSteps = runDefSteps.sid === sel.sid ? runDefSteps.steps : null
@@ -292,10 +334,30 @@ export function CenterPane({
             >
               {cleanSummary(summary)}
             </span>
+            {skipCount > 0 && (
+              <span
+                className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+                title="Steps in the other branch did not run. The run still passed."
+              >
+                {skipCount} skipped
+              </span>
+            )}
             {live && (
               <span className="inline-flex items-center gap-1.5 text-xs font-medium text-warning">
                 <span className="aqa-ping size-1.5 rounded-full bg-current" /> live
               </span>
+            )}
+            {!live && sel.sid && (
+              <button
+                type="button"
+                onClick={() => onReplay(sel.sid!)}
+                disabled={busy}
+                title={busy ? 'A replay is already running for this scenario' : 'Run this scenario again'}
+                className="flex h-7 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[11px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {busy ? <Loader2Icon className="size-3 animate-spin" /> : <PlayIcon className="size-3 fill-current" />}
+                Replay
+              </button>
             )}
             {detail.video && (
               <button
@@ -381,6 +443,9 @@ export function CenterPane({
           <div className="mt-0.5 text-xs text-muted-foreground">
             {fmtRunTime(detail.runId)} <span className="font-mono opacity-50">· {detail.runId}</span>
           </div>
+          {runConfig?.inputs && runConfig.inputs.length > 0 && (
+            <InputFields inputs={runConfig.inputs} setInput={runConfig.setInput} disabled={busy} />
+          )}
           {signingIn && (
             <div className="mt-2 flex items-center gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
               <Loader2Icon className="size-3.5 shrink-0 animate-spin" />
@@ -489,6 +554,14 @@ export function CenterPane({
                       </span>
                     )
                   })()}
+                  {st.status === 'skip' && (
+                    <span
+                      className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+                      title={st.error || 'This step did not run'}
+                    >
+                      skipped
+                    </span>
+                  )}
                   {st.kind && <span className="shrink-0 text-xs text-muted-foreground">({st.kind})</span>}
                   <span data-qa-volatile className={cn('tnum ml-auto shrink-0 font-mono text-[11px] text-muted-foreground transition-[margin]', st.id && !live && 'group-hover:mr-7')}>{pending ? '' : fmtMs(st.ms)}</span>
                 </button>

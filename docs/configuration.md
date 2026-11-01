@@ -246,6 +246,7 @@ agent-browser and pings each plugin.
 | Variable                   | Effect                                                              |
 | -------------------------- | ------------------------------------------------------------------- |
 | `AGENT_BROWSER_BIN`        | Absolute path to the agent-browser binary (set by the npm shim)     |
+| `AGENT_BROWSER_DEFAULT_TIMEOUT` | agent-browser operation timeout in ms (default `25000`). Keep it at or below `30000`. Above that, the CLI read timeout can expire first and a mutation fails as `outcome_unknown` instead of a clean error. |
 | `AGENT_QA_SCENARIOS_DIR`    | Override the scenarios root (relative paths resolve against `cwd`)   |
 | `AGENT_QA_RECORD_DIR`      | Override the recorder workfile root                                 |
 | `AGENT_QA_PLUGINS`         | Colon-separated list of plugin binary paths                          |
@@ -264,9 +265,21 @@ the `credentials` plugin you install, not to agent-qa — see its README.
 The `cursor` backend shells the Cursor Agent CLI once per turn
 (`agent --print --output-format stream-json`). Resolution order is
 `AGENT_QA_CURSOR_BIN`, then `cursor-agent` on `PATH`, then `agent` on `PATH`.
-Install with `curl https://cursor.com/install -fsS | bash`. Auth is
-`CURSOR_API_KEY` in the environment, or an existing `agent login` — the key
-is not passed on the command line. The `opencode` backend needs the
+Install with `curl https://cursor.com/install -fsS | bash`. The Chat tab
+shows **Connect** for every provider that is still signed out: Cursor,
+OpenAI, Anthropic, and the rest of the built-in catalog. Cursor runs
+`agent login` and opens the browser link it prints. Another provider uses
+the same banner: OAuth opens that provider's login page, and an API-key
+provider takes the key there. The key is handed to that provider's login
+once and is not written into the repo or placed on a command line. After a
+login finishes, the model list reloads. `CURSOR_API_KEY` and a provider
+environment variable such as `OPENAI_API_KEY` in the workbench process are
+the other way in. The `opencode` backend needs the
 `opencode` CLI on `PATH` (`npm i -g opencode-ai`) — each chat spawns its own
 `opencode serve` process with that chat's per-session env, while `pi` runs
-in-process via its SDK.
+in-process via its SDK. When that pi backend is up and has no models, empty
+Chat says to run `pi`, then `/login`, restart the workbench, and start a new
+chat. The composer stays closed, and a missing-login failure is rewritten
+into that same next step. Settings says the chat backend applies on the next
+workbench start, and only when the stored value differs from the one this
+process booted with.

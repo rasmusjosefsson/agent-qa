@@ -155,9 +155,11 @@ pub enum Verb {
     /// Double-click an element (css/testId locator via `on`).
     #[serde(rename = "dblclick")]
     DblClick,
-    /// Secondary-button click — opens context menus: dispatches the
-    /// pointer/mouse chain with `button: 2` then `contextmenu`. Any locator
-    /// kind via `on` (resolved in-page like `drag` endpoints).
+    /// Secondary-button click — opens context menus. Replay sends a trusted
+    /// `mouse move` + `mouse down right` + `mouse up right` at the target's
+    /// center. When the daemon has no mouse input, it falls back to a
+    /// synthesized `contextmenu` (`isTrusted` false). Any locator kind via
+    /// `on` (resolved in-page like `drag` endpoints).
     #[serde(rename = "rightclick")]
     RightClick,
     /// Browser tab management: `value` is the `tab` subcommand tail —

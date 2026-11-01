@@ -711,6 +711,67 @@ pub fn build_element_state_js(ep: &DragEndpoint) -> String {
     )
 }
 
+/// JS resolving one endpoint to a unique CSS selector (`"#id"` or an
+/// `nth-of-type` path) or `"miss"`. Used to aim `check`/`uncheck` at a
+/// locator those verbs cannot take directly (scoped role, xpath, text).
+/// `__aqSel` marker for test doubles.
+pub fn build_css_selector_js(ep: &DragEndpoint) -> String {
+    format!(
+        r#"(() => {{ const __aqSel = true;
+{prelude}
+{find}
+{finder}
+  const el = __aqDragFind({ep});
+  if (!el || el.nodeType !== 1) return "miss";
+  const esc = (s) => (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+  if (el.id) {{
+    const idSel = '#' + esc(el.id);
+    try {{ if (document.querySelectorAll(idSel).length === 1) return idSel; }} catch (e) {{}}
+  }}
+  const parts = [];
+  let node = el;
+  while (node && node.nodeType === 1 && node !== document.documentElement) {{
+    let i = 1, sib = node;
+    while ((sib = sib.previousElementSibling)) {{ if (sib.tagName === node.tagName) i++; }}
+    parts.unshift(node.tagName.toLowerCase() + ":nth-of-type(" + i + ")");
+    node = node.parentElement;
+  }}
+  return parts.join(" > ");
+}})()"#,
+        prelude = activation_prelude(),
+        find = scoped_find_helper_js(),
+        finder = endpoint_finder_js(),
+        ep = drag_endpoint_json(ep),
+    )
+}
+
+/// JS resolving one endpoint to top-viewport center coordinates
+/// `{"x":…,"y":…}` or `"miss"`. Pairs with `mouse move` / `mouse down right`
+/// / `mouse up right` for a trusted secondary click. Inside a frame, offsets
+/// by the iframe rect — trusted mouse events land in the top viewport.
+/// `__aqPoint` marker for test doubles.
+pub fn build_point_coords_js(ep: &DragEndpoint) -> String {
+    format!(
+        r#"(() => {{ const __aqPoint = true;
+{prelude}
+{find}
+{finder}
+  const el = __aqDragFind({ep});
+  if (!el) return "miss";
+  try {{ el.scrollIntoView({{ block: "center", inline: "center", behavior: "instant" }}); }} catch (e) {{}}
+  const __fr = (typeof __f !== "undefined" && __f && __f.getBoundingClientRect)
+    ? (() => {{ try {{ __f.scrollIntoView({{ block: "center", inline: "center", behavior: "instant" }}); }} catch (e) {{}} return __f.getBoundingClientRect(); }})()
+    : {{ left: 0, top: 0 }};
+  const r = el.getBoundingClientRect();
+  return {{ x: r.left + r.width / 2 + __fr.left, y: r.top + r.height / 2 + __fr.top }};
+}})()"#,
+        prelude = activation_prelude(),
+        find = scoped_find_helper_js(),
+        finder = endpoint_finder_js(),
+        ep = drag_endpoint_json(ep),
+    )
+}
+
 /// JS resolving one endpoint and dispatching a secondary-button click on it:
 /// `pointerdown{button:2} → mousedown{button:2} → pointerup{button:2} →
 /// mouseup{button:2} → contextmenu{button:2}` — no `click` (a real right

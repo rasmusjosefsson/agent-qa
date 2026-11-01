@@ -248,10 +248,15 @@ page state itself — no external flag needed.
 `params.present` / `params.absent` take one locator (exactly one of the
 two, `on:`-shaped). The block never dispatches — the runner flattens it
 and every child carries the condition; a skipped child emits the same
-terminal `skip` event as `enabled:false`. The probe runs once per block
-at its position and the verdict is cached for the block's children —
-don't wrap steps whose condition flips mid-block. `when` nests (every
-condition ANDs) and composes with group/loop/template.
+terminal `skip` event as `enabled:false`, and the event names the
+control: `skipped — “Pay now” is not on the page`, or `is still on the
+page` when the condition was `absent`. A text presence probe reads
+rendered text and skips `script`, `style`, `noscript`, and `template`,
+so a label that only lives in the bundle does not count as on the page.
+The probe runs once per block at its position and the verdict is cached
+for the block's children — don't wrap steps whose condition flips
+mid-block. `when` nests (every condition ANDs) and composes with
+group/loop/template.
 
 Two declarative siblings on any step's `context` gate by *profile tag*
 instead of page state — the run's tag set is the `--persona` id plus any
@@ -511,13 +516,15 @@ right tool there.
 
 ### Secondary click (rightclick)
 
-`do/rightclick` fires a secondary-button pointer+mouse chain on `on`
-(`pointerdown`/`mousedown` `button: 2` → `pointerup`/`mouseup` →
-`contextmenu`) — the gesture that opens context menus. Never fires a primary
-`click`, so handlers keyed on `click` stay quiet. It accepts every locator
-shape (role/css/testid/xpath/text, scope chains included). If the page opens a
-native dialog from the contextmenu handler, resolve it with the usual
-`dialog` step.
+`do/rightclick` opens a context menu with a trusted secondary button:
+`mouse move` to the target's center, then `mouse down right` and
+`mouse up right`. That `contextmenu` is `isTrusted`. When the daemon has
+no mouse input, replay falls back to a synthesized
+`pointerdown`/`mousedown` (`button: 2`) → `pointerup`/`mouseup` →
+`contextmenu` chain, which is `isTrusted` false. It never fires a primary
+`click`. It accepts every locator shape (role/css/testid/xpath/text, scope
+chains included). If the page opens a native dialog from the contextmenu
+handler, resolve it with the usual `dialog` step.
 
 ```json
 { "id": "s3", "intent": "open the context menu", "kind": "do", "verb": "rightclick",

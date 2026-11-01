@@ -13,6 +13,7 @@ export function icon(status: string | undefined): string {
   if (status === 'fail') return '✗'
   if (status === 'running') return '…'
   if (status === 'pending') return '○'
+  if (status === 'skip') return '–'
   return '·'
 }
 
@@ -59,12 +60,61 @@ export function collapseEvents(events: RunEvent[]): RunEvent[] {
   return [...byIdx.values()].sort((a, b) => a.idx - b.idx)
 }
 
+// `when` and `group` never emit their own event — the runner flattens them
+// and dispatches the children. Surface those children (with a branch note)
+// so a flag's old and new paths both show up before and after a run.
+export function flattenAuthored(steps: ScenarioStep[]): ScenarioStep[] {
+  const out: ScenarioStep[] = []
+  const walk = (list: ScenarioStep[], branch?: string) => {
+    for (const step of list) {
+      const kids = containerSteps(step)
+      if (kids) {
+        walk(kids, branchNote(step) || branch)
+        continue
+      }
+      out.push(branch ? { ...step, branch } : step)
+    }
+  }
+  walk(steps)
+  return out
+}
+
+function containerSteps(step: ScenarioStep): ScenarioStep[] | null {
+  if (step.verb !== 'when' && step.verb !== 'group') return null
+  const nested = step.params?.steps
+  return Array.isArray(nested) ? nested : null
+}
+
+function branchNote(step: ScenarioStep): string | undefined {
+  if (step.verb === 'group') return step.intent || undefined
+  if (step.verb !== 'when' || !step.params) return undefined
+  if (step.params.present != null) return `only when ${locatorPhrase(step.params.present)} is on the page`
+  if (step.params.absent != null) return `only when ${locatorPhrase(step.params.absent)} is not on the page`
+  return step.intent || undefined
+}
+
+function locatorPhrase(loc: unknown): string {
+  if (typeof loc === 'string') return loc
+  if (!loc || typeof loc !== 'object') return 'that control'
+  const o = loc as { role?: string; name?: unknown; raw?: { value?: string } }
+  const name = typeof o.name === 'string' ? o.name : null
+  if (o.role && name) return `${o.role} “${name}”`
+  if (o.role) return o.role
+  if (o.raw?.value) return o.raw.value
+  return 'that control'
+}
+
 // Merge the full scenario step list (if known) with the run events so not-yet
-// run steps appear up front in a disabled "pending" state.
+// run steps appear up front in a disabled "pending" state. Container steps
+// expand to the children the runner actually dispatches. Events whose ids
+// are not in that list (an included file, for example) stay on the end.
 export function mergeRows(events: RunEvent[], defSteps: ScenarioStep[] | null): RunEvent[] {
   if (!defSteps || !defSteps.length) return events
+  const flat = flattenAuthored(defSteps)
   const byId = new Map(events.map((e) => [e.id, e]))
-  return defSteps.map((ds, i) => {
+  const seen = new Set<string>()
+  const rows = flat.map((ds, i) => {
+    if (ds.id) seen.add(ds.id)
     const ev = ds.id != null ? byId.get(ds.id) : undefined
     if (ev) return ev
     return {
@@ -73,10 +123,14 @@ export function mergeRows(events: RunEvent[], defSteps: ScenarioStep[] | null): 
       intent: ds.intent || stepText(ds),
       kind: ds.verb,
       status: 'pending',
-      total: defSteps.length,
+      total: flat.length,
       pending: true,
     }
   })
+  const extra = events
+    .filter((e) => e.id && !seen.has(e.id))
+    .sort((a, b) => a.idx - b.idx)
+  return extra.length ? [...rows, ...extra] : rows
 }
 
 export function isRunLive(detail: { status?: { state?: string } | null } | null): boolean {

@@ -32,31 +32,32 @@ fn compiled() -> &'static Validator {
 /// CLI output without parsing structured error objects.
 pub fn validate_value(value: &Json) -> Result<()> {
     let schema = compiled();
-    let result = schema.validate(value);
-    match result {
-        Ok(()) => Ok(()),
-        Err(errors) => {
-            let lines: Vec<String> = errors
-                .map(|e| {
-                    let path = e.instance_path.to_string();
-                    // An env.open op failing its arm of the oneOf gets its
-                    // required fields named — the bare oneOf message never does.
-                    let hint = path
-                        .strip_prefix("/env/open/")
-                        .and_then(|i| i.parse::<usize>().ok())
-                        .and_then(|i| value.pointer(&format!("/env/open/{i}")))
-                        .map(|op| format!(" — {}", env_op_hint(op)))
-                        .unwrap_or_default();
-                    format!("  at /{path}: {e}{hint}")
-                })
-                .collect();
-            Err(anyhow!(
-                "{} schema error(s):\n{}",
-                lines.len(),
-                lines.join("\n")
-            ))
-        }
+    // jsonschema >=0.30: `validate` returns the first error only;
+    // `iter_errors` collects every failure (same shape as older Err iterators).
+    let errors: Vec<_> = schema.iter_errors(value).collect();
+    if errors.is_empty() {
+        return Ok(());
     }
+    let lines: Vec<String> = errors
+        .into_iter()
+        .map(|e| {
+            let path = e.instance_path().to_string();
+            // An env.open op failing its arm of the oneOf gets its
+            // required fields named — the bare oneOf message never does.
+            let hint = path
+                .strip_prefix("/env/open/")
+                .and_then(|i| i.parse::<usize>().ok())
+                .and_then(|i| value.pointer(&format!("/env/open/{i}")))
+                .map(|op| format!(" — {}", env_op_hint(op)))
+                .unwrap_or_default();
+            format!("  at /{path}: {e}{hint}")
+        })
+        .collect();
+    Err(anyhow!(
+        "{} schema error(s):\n{}",
+        lines.len(),
+        lines.join("\n")
+    ))
 }
 
 /// Convenience: parse `bytes` as JSON, then validate.

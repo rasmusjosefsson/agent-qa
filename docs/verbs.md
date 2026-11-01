@@ -56,21 +56,22 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `audit exit-code <sid> <runId \| latest>` | Print just the run's exitCode (-1 if absent) |
 | `audit field <sid> <runId \| latest> <name>` | Print any top-level audit field (scalars verbatim; object/array as compact JSON) |
 | `audit diff <sid> <runIdA> <runIdB>` | Unified diff between two replays' audit.json. `latest` accepted for either side. |
-| `audit flaky <sid>` | Flag steps whose outcome interleaves pass/fail across runs — the flake signature (vs `heal-chronic`, which flags locator churn). Flags: `--min-flips N` (default 2), `--min-runs N` (default 3), `--json` |
+| `audit flaky <sid>` | Flag steps whose outcome interleaves pass/fail across runs — the flake signature (vs `heal-chronic`, which flags locator churn). A step that passed its last two runs has settled and is not flagged. Flags: `--min-flips N` (default 2), `--min-runs N` (default 3), `--json` |
 | `audit slow <sid>` | Flag steps whose duration regressed — every one of the last `--recent` pass runs (default 2) exceeds the earlier-run median by `+--pct%` (default 50) and `--min-ms` (default 250). Pass rows only; a fail's `ms` is the timeout budget, not step cost. |
 | `audit health` | Cross-scenario rollup of `flaky` + `slow` + `heal-chronic` at their defaults — one row per scenario with silent degradation, none when the suite is quiet. `--json` emits one compact line (the workbench consumes it to badge scenario rows). |
 | `audit trend <sid>` | Outcome + duration trend over the scenario's runs — pass%, median secs, a `✓/✗` outcome line, and a duration sparkline. `--limit N` (default: all runs) windows to the latest N; `--json` emits the same data structured. |
 | `audit trend --all` | Suite board: one trend row per scenario that has replays (sid, pass%, run count, median, outcomes, sparkline). `--limit N` windows each row to the latest N runs; `--json` emits the rows array. |
-| `audit trend <sid>` | Outcome + duration trend over the scenario's runs — pass%, median secs, a `✓/✗` outcome line, and a duration sparkline. `--limit N` (default: all runs) windows to the latest N; `--json` emits the same data structured. |
 | `audit cluster` | Group step failures across every scenario's runs by normalized error signature (quoted literals + digit runs stripped) — one root cause across N runs reads as one cluster with its member list. `--min-size N` (default 2) hides lone failures; `--json` for the structured list. |
-| `audit verdict <sid> <runId \| latest>` | One-word triage for the run: `PASS` (exit 0) green and clean, `FIX` (exit 2) green but self-corrected (auto-heals or value-rejections — review heal.jsonl + promote), `BLOCK` (exit 1) failed. `--json` for the structured verdict incl. the offending stepIds. |
+| `audit verdict <sid> <runId \| latest>` | One-word triage for the run: `PASS` (exit 0) green and clean, `FIX` (exit 2) green but self-corrected (locator auto-heals, an in-run option-label correction, or value-rejections — review `heal.jsonl`). `heal-promote` writes locator patches back. An option-label correction stays in the log, because the next run's label would be stale. `BLOCK` (exit 1) failed. `--json` for the structured verdict incl. the offending stepIds. |
 | `audit explain <sid> [runId \| latest]` | One-block failure digest for a run: verdict + failing steps (error + screenshot pointer) + heal trail + console errors + failed/pending requests, plus a `next:` list of the follow-up commands that fit the evidence. Exit code mirrors `audit verdict` (0/1/2). `--json` prints the same digest structurally — the single read an agent needs to repair a broken run. |
 
 
 
 ## Plans
 
-Plans/cases/sets are the workbench's run-scope records under `<root>/_plans`, `_sets`, `_cases` (created/edited in the UI); `plan` is their terminal + CI twin.
+Plans/cases/sets are the workbench's run-scope records under `<root>/_plans`, `_sets`, `_cases` (created/edited in the UI); `plan` is their terminal + CI twin. Leaving a case, set, or plan with unsaved edits asks before the form is dropped. A case can attach a recording that already exists.
+
+On a run, `when` and `group` expand to their children, and a skipped child names the control (`“Pay now” is not on the page`). A declared input sits next to Replay. A plan run from the workbench forwards only params the member scenario declares. `plan run --param` on the CLI requires each key to be declared on the scenario it reaches.
 
 | Verb | What it does |
 | --- | --- |
@@ -89,7 +90,7 @@ Plans/cases/sets are the workbench's run-scope records under `<root>/_plans`, `_
 | `heal-promote <sid>` | Apply replay-side patches into `scenario.json` (rebase-guarded) |
 | `heal-apply <sid>` | Mark a heal-response as consumed |
 | `heal-list <sid>` | List heal-responses. Flags: `--run <runId>`, `--mode value-correction\|reject`, `--applied`, `--unapplied`, `--json` |
-| `heal-chronic <sid>` | Flag steps that auto-healed in ≥ `--min-runs` distinct runs (default 2) — silent locator debt. Prints the `heal-promote` command per step. Flags: `--min-runs N`, `--json`, `--issue` (paste-ready markdown issue body for the handoff) |
+| `heal-chronic <sid>` | Flag locator patches that auto-healed in ≥ `--min-runs` distinct runs (default 2) — silent locator debt. An `option-correction` row (a select label rewritten in-run) stays out of this list. Prints the `heal-promote` command per step. Flags: `--min-runs N`, `--json`, `--issue` (paste-ready markdown issue body for the handoff) |
 | `shot-accept <sid>` | Mint screenshot baselines for `{"shot"}` claims: copies the run's per-step PNGs into `<sid>/baselines/`. Flags: `--run <runId>` (default `latest.txt`), `--steps <csv>` (default every captured shot), `--json` |
 | `layout-accept <sid>` | Mint element-geometry baselines for `{"layout"}` claims: copies `<run>/layouts/<stepId>.json` into `<sid>/baselines/<stepId>.layout.json`. Same flags as `shot-accept` |
 | `baselines pull\|push\|status` | Sync `<sid>/baselines/` with the `[baselines]` remote store (github repo / turso db). Args: `<sid>` or `--all`, `--json`. Replay pulls automatically before the step loop; accept verbs push after minting — see configuration.md `[baselines]` |
@@ -186,7 +187,7 @@ reload with `params.reload: true`.
 | `byo-doctor` | Read-only BYO browser enumeration via agent-browser. `--json`. |
 | `ps` | Correlated view of agent-browser residue: `live`/`orphan`/`stale` sessions from the socket-dir registry, unowned Chrome processes, stray `/tmp/agent-browser-chrome-*` profile dirs. `--json`. |
 | `cleanup` | Reap the residue `ps` reports: deletes stale/orphan registry files, kills unowned Chrome, removes stray profile dirs. `--all` also closes live sessions; `--session <n>`, `--older-than <dur>`, `--dry-run`, `--json`. |
-| `perf-snapshot` | One-shot perf trace via agent-browser, persisted under `<sid>/perf/` |
+| `perf-snapshot` | Navigation and paint timings from the live tab (`window.performance`), persisted under `<sid>/perf/` when `--sid` is set. React trees and DevTools traces stay `agent-qa browser` commands (`react tree`, `trace start`). |
 | `config show` | Resolve the active `agent-qa.toml` + paths + plugin discovery |
 
 ## Operational

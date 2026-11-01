@@ -34,6 +34,30 @@
   without recording. Only fall back to an `@ref` from a fresh
   `agent-qa aria-snapshot` when name-based matching itself is ambiguous.
 
+- **A click or double-click that cannot land fails.** The pinned
+  agent-browser rejects `click` and `dblclick` when the target is hidden,
+  disabled, covered, or outside the viewport. It does not report success
+  for a miss. An overlay error names the covering element (`covered by
+  <div#…>`). Dismiss or click that element, `scrollintoview` the original
+  target when it was off-screen, then take a fresh snapshot before reusing
+  a ref. `click --new-tab` skips these checks. Hover and fill do not; a
+  successful hover is still not proof the pointer is over the target.
+
+- **Snapshot refs survive same-document updates and die on navigation.**
+  Replaced nodes and navigated pages or iframes invalidate their refs
+  without recycling the id. When a ref's element was replaced, agent-browser
+  uses the one element with the same role and name. When several match, the
+  action fails and clicks nothing — snapshot again and use the new ref.
+
+- **A lost daemon reply is `outcome_unknown`, or in text mode `EOF while parsing a value` / `may or may not have run`.** agent-browser does not send a click, fill, or check again after that — the gesture may already have landed. Snapshot or `get url` before repeating it. Read-only commands (`snapshot`, `get url`, `get text`) are retried by agent-browser itself. `open` is the exception agent-qa retries: the first command to a fresh daemon often loses its reply and leaves the tab blank, and a second `open` of the same URL is what actually navigates. Keep `AGENT_BROWSER_DEFAULT_TIMEOUT` at or below `30000` (the default is `25000`). A higher value lets the CLI read timeout fire first and turns a slow action into a lost reply plus an EAGAIN stall.
+
+- **`page_wedged` means the tab stopped responding.** A script that never
+  returns fails with `page_wedged`. When agent-qa launched the browser, a
+  second timeout replaces that tab with a blank one — open the page again
+  before the next gesture. A page that recovers in between keeps its tab.
+  With `AGENT_BROWSER_CDP` the tab belongs to that browser and is left
+  as-is; close the stuck tab there.
+
 - **`smart-click` takes an accessible name, not a snapshot ref.** Supported
   flags are `--role` (default `button`), repeatable `--scope <role> <name>`
   (outermost container first), `--session`, and `--no-record`. It reads the

@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -57,7 +58,10 @@ import {
   deleteChat,
   getRecording,
   getChatInfo,
+  getProviderAuth,
+  startProviderLogin,
   type ChatMeta,
+  type ProviderAuth,
   type RecordingState,
 } from '@/lib/api'
 import {
@@ -490,8 +494,11 @@ function ChatConversation({
   leftPct: number
   setLeftPct: (value: number) => void
 }) {
-  const { state, root, sendPrompt, abort, setModel, setThinking, navigateBrowser } =
+  const { state, root, sendPrompt, abort, setModel, setThinking, navigateBrowser, refreshState } =
     useChat(cid)
+  const refreshAfterLogin = useCallback(() => {
+    refreshState()
+  }, [refreshState])
   const [text, setText] = useState('')
   const [copied, setCopied] = useState(false)
   const [infoOpen, setInfoOpen] = useState(false)
@@ -651,6 +658,7 @@ function ChatConversation({
           {state.hydrated && !state.available && (
             <ChatSetupNotice reason={state.reason} install={state.install} backend={state.backend} />
           )}
+          {state.available && <ProviderConnectNotice onConnected={refreshAfterLogin} />}
           <div className="flex items-center justify-between gap-2 border-b border-border px-2 py-1">
             {/* Which backend is actually under the hood (cursor, pi, opencode),
                 the active model, and cumulative usage — answers "am I on the
@@ -1116,6 +1124,212 @@ function ConnectBar({ cid }: { cid: string }) {
           {msg.text}
         </span>
       )}
+    </div>
+  )
+}
+
+const PROVIDER_ORDER = ['cursor', 'openai', 'anthropic', 'google', 'xai', 'github-copilot', 'openrouter']
+
+function providerRank(id: string): number {
+  const index = PROVIDER_ORDER.indexOf(id)
+  return index === -1 ? PROVIDER_ORDER.length : index
+}
+
+// One Connect banner for every provider that is still signed out: Cursor,
+// OpenAI, and the rest. OAuth opens the browser link. An API-key provider
+// takes the key in this banner and does not echo it back.
+function ProviderConnectNotice({ onConnected }: { onConnected: () => void }) {
+  const [rows, setRows] = useState<ProviderAuth[] | null>(null)
+  const [picked, setPicked] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [secret, setSecret] = useState('')
+  const [useKey, setUseKey] = useState(false)
+  const sawLoggedOut = useRef<Set<string>>(new Set())
+  const told = useRef<Set<string>>(new Set())
+
+  useEffect(() => {
+    let alive = true
+    let timer = 0
+    const tick = async () => {
+      const next = await getProviderAuth()
+      if (!alive) return
+      setRows(next)
+      const pending = next.some((row) => row.pending)
+      for (const row of next) {
+        if (row.state === 'logged-out' || row.state === 'unknown' || row.pending) sawLoggedOut.current.add(row.id)
+        if (row.state === 'logged-in' && sawLoggedOut.current.has(row.id) && !told.current.has(row.id)) {
+          told.current.add(row.id)
+          onConnected()
+        }
+      }
+      if (pending) timer = window.setTimeout(() => void tick(), 1000)
+    }
+    void tick()
+    return () => {
+      alive = false
+      window.clearTimeout(timer)
+    }
+  }, [onConnected])
+
+  const open = (rows || [])
+    .filter((row) => row.state !== 'logged-in' && row.state !== 'missing')
+    .slice()
+    .sort((a, b) => providerRank(a.id) - providerRank(b.id) || a.label.localeCompare(b.label))
+  const current = open.find((row) => row.id === picked) || open[0]
+
+  useEffect(() => {
+    if (current && current.id !== picked) setPicked(current.id)
+  }, [current, picked])
+
+  if (!current) return null
+
+  const methods = current.methods || []
+  const keyOnly = methods.includes('api_key') && !methods.includes('oauth')
+  const pasteCode = current.prompt?.type === 'manual_code' || current.prompt?.type === 'text'
+  const showKey = keyOnly || useKey || current.prompt?.type === 'secret' || pasteCode
+  const detail =
+    current.prompt?.message ||
+    (current.message && !/not logged in/i.test(current.message) ? current.message : null)
+
+  const apply = (next: ProviderAuth) => {
+    setRows((prev) => (prev || []).map((row) => (row.id === next.id ? { ...row, ...next } : row)))
+    if (next.state === 'logged-in' && sawLoggedOut.current.has(next.id) && !told.current.has(next.id)) {
+      told.current.add(next.id)
+      onConnected()
+    }
+    if (next.url) window.open(next.url, '_blank', 'noopener,noreferrer')
+  }
+
+  const connect = async (method: 'oauth' | 'api_key') => {
+    if (busy) return
+    setBusy(true)
+    const submitted = secret
+    setSecret('')
+    try {
+      apply(
+        await startProviderLogin(current.id, {
+          method,
+          ...(method === 'api_key' && submitted ? { secret: submitted } : {}),
+        })
+      )
+    } catch {
+      apply({ ...current, message: `Could not start ${current.label} login.` })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const answer = async (value: string) => {
+    if (busy) return
+    setBusy(true)
+    try {
+      apply(await startProviderLogin(current.id, { answer: value }))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-border bg-muted/30 px-4 py-2.5">
+      <LogInIcon className="size-4 shrink-0 text-muted-foreground" />
+      <div className="min-w-0 flex-1 basis-56">
+        <div className="text-[13px] font-semibold tracking-tight">Connect {current.label}</div>
+        <div className="truncate text-xs text-muted-foreground" title={detail || undefined}>
+          {detail || 'Sign in once in the browser. This chat uses that login, then loads the model list.'}
+        </div>
+      </div>
+      {open.length > 1 ? (
+        <select
+          aria-label="Provider"
+          value={current.id}
+          onChange={(event) => {
+            setPicked(event.target.value)
+            setUseKey(false)
+            setSecret('')
+          }}
+          className="h-8 rounded-lg border border-border bg-card px-2 text-[12px] text-foreground"
+        >
+          {open.map((row) => (
+            <option key={row.id} value={row.id}>
+              {row.label}
+            </option>
+          ))}
+        </select>
+      ) : null}
+      {current.userCode ? (
+        <span className="font-mono text-[12px] text-foreground" title="Device code">
+          {current.userCode}
+        </span>
+      ) : null}
+      {current.url ? (
+        <a
+          href={current.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-[12px] text-foreground shadow-sm transition-colors hover:bg-muted"
+        >
+          Open the login page
+        </a>
+      ) : null}
+      {current.prompt?.type === 'select' && current.prompt.options ? (
+        current.prompt.options.map((option) => (
+          <button
+            key={option.id}
+            type="button"
+            disabled={busy}
+            onClick={() => void answer(option.id)}
+            className="inline-flex shrink-0 items-center rounded-lg border border-border bg-card px-2.5 py-1.5 text-[12px] text-foreground"
+          >
+            {option.label}
+          </button>
+        ))
+      ) : showKey ? (
+        <form
+          className="flex items-center gap-1.5"
+          onSubmit={(event) => {
+            event.preventDefault()
+            const value = secret
+            setSecret('')
+            if (pasteCode) void answer(value)
+            else void connect('api_key')
+          }}
+        >
+          <input
+            type={current.prompt?.type === 'secret' || !pasteCode ? 'password' : 'text'}
+            autoComplete="off"
+            value={secret}
+            placeholder={current.prompt?.placeholder || (pasteCode ? 'Paste the code' : 'API key')}
+            aria-label={pasteCode ? `${current.label} login code` : `${current.label} API key`}
+            onChange={(event) => setSecret(event.target.value)}
+            className="h-8 w-40 rounded-lg border border-border bg-card px-2 text-[12px]"
+          />
+          <button
+            type="submit"
+            disabled={busy || !secret.trim()}
+            className="inline-flex shrink-0 items-center rounded-lg bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground disabled:opacity-60"
+          >
+            {busy ? 'Saving…' : pasteCode ? 'Continue' : 'Save key'}
+          </button>
+        </form>
+      ) : (
+        <button
+          type="button"
+          onClick={() => void connect('oauth')}
+          disabled={busy}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:opacity-60"
+        >
+          {busy ? 'Starting login…' : current.pending ? 'Waiting for the browser…' : 'Connect'}
+        </button>
+      )}
+      {methods.includes('oauth') && methods.includes('api_key') && !showKey && current.prompt?.type !== 'select' ? (
+        <button
+          type="button"
+          onClick={() => setUseKey(true)}
+          className="text-[12px] text-muted-foreground underline-offset-2 hover:underline"
+        >
+          API key
+        </button>
+      ) : null}
     </div>
   )
 }

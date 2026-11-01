@@ -1425,12 +1425,62 @@ test('POST /api/plans/:id/run replays each member scenario via deps.replay', asy
       opts: {
         headed: true,
         profile: 'qa-admin',
-        params: { baseUrl: 'https://staging.example.com' },
+        // The fixture scenario declares no inputs, so the environment's
+        // baseUrl is not forwarded — an undeclared --param fails the member.
         env: {},
       },
     },
   ]);
   assert.deepEqual(prepared, [{ session: 'qa-admin-session', headed: true }]);
+});
+
+test('POST /api/plans/:id/run keeps a flag param only on scenarios that declare it', async (t) => {
+  const fx = makeFixture();
+  const branched = 'checkout-branch';
+  fs.mkdirSync(path.join(fx.root, branched), { recursive: true });
+  fs.writeFileSync(
+    path.join(fx.root, branched, 'scenario.json'),
+    JSON.stringify({
+      schema: 'scenario/2',
+      id: branched,
+      intent: 'Checkout covers classic and express',
+      inputs: { flow: { type: 'string', default: '' } },
+      steps: [{ id: 's0', kind: 'do' }],
+    }),
+  );
+  const calls = [];
+  const deps = {
+    prepareBrowserSession: async () => {},
+    replay: async (sid, session, opts) => {
+      calls.push({ sid, session, opts });
+      return { ok: true };
+    },
+  };
+  const { server, base } = await boot(fx.root, deps);
+  t.after(() => server.close());
+  const j = (m, p, body) =>
+    fetch(`${base}${p}`, {
+      method: m,
+      headers: { 'content-type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+  await j('POST', '/api/cases/checkout', { title: 'Checkout' });
+  await j('POST', '/api/cases/checkout/link', { scenarioSid: branched });
+  await j('POST', '/api/cases/catalog', { title: 'Catalog' });
+  await j('POST', '/api/cases/catalog/link', { scenarioSid: fx.sid });
+  await j('POST', '/api/plans/nightly', {
+    name: 'Nightly',
+    scope: { caseIds: ['checkout', 'catalog'] },
+  });
+
+  const res = await j('POST', '/api/plans/nightly/run', {
+    params: { flow: 'new', region: 'eu' },
+  });
+  assert.equal(res.status, 202);
+  const bySid = Object.fromEntries(calls.map((c) => [c.sid, c.opts.params]));
+  assert.deepEqual(bySid[branched], { flow: 'new' });
+  assert.equal(bySid[fx.sid], undefined);
 });
 
 test('POST /api/plans/:id/run serializes members and writes a last-run ledger', async (t) => {

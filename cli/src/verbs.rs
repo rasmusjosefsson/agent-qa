@@ -207,10 +207,10 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
             Ok(None)
         }
         Verb::Check | Verb::Uncheck => {
-            // Checkbox toggle: agent-browser doesn't expose set-state
-            // directly, so we click. Real state-aware behaviour lands
-            // when a check claim follows this in a scenario.
-            click_locator(ctx.session, on.unwrap(), scope, ctx.scenario_dir)?;
+            let checked = matches!(verb, Verb::Check);
+            let label = if checked { "check" } else { "uncheck" };
+            set_checked(ctx.session, on.unwrap(), scope, ctx.scenario_dir, checked)
+                .map_err(|e| anyhow!("step '{id}' {label}: {e}"))?;
             Ok(None)
         }
         Verb::Hover => {
@@ -415,6 +415,15 @@ pub fn dispatch_do(step: &Step, ctx: &DoContext, scope: &mut ValueScope) -> Resu
         Verb::RightClick => {
             let ep = drag_endpoint(on.unwrap(), scope, ctx.scenario_dir)
                 .map_err(|e| anyhow!("step '{id}' rightclick: {e}"))?;
+            match rightclick_via_mouse(ctx.session, &ep)
+                .map_err(|e| anyhow!("step '{id}' rightclick: {e}"))?
+            {
+                MousePoint::Done => return Ok(None),
+                MousePoint::Miss => {
+                    bail!("step '{id}' rightclick: locator did not resolve")
+                }
+                MousePoint::Unsupported => {}
+            }
             let js = crate::dom_activate::build_contextmenu_js(&ep);
             let r = browser::eval_expression(ctx.session, &js)
                 .map_err(|e| anyhow!("step '{id}' rightclick: {e}"))?;
@@ -2066,13 +2075,12 @@ fn try_xpath_native_click(session: &str, xpath: &str) -> anyhow::Result<bool> {
 }
 
 /// Hit-test the element a raw locator resolves to before handing the action
-/// to agent-browser's coordinate dispatch. `agent-browser click` reports
-/// success even when the element's centre point misses `elementFromPoint`
-/// (below the fold, zero-size box, covered by an overlay) — the action then
-/// dispatches to nothing and the step passes while doing nothing. This
-/// guard scrolls the target into view first (the common miss) and warns
-/// loudly when it stays unhittable, so a silent miss shows up in the step
-/// log instead of passing invisibly.
+/// to agent-browser's coordinate dispatch. Since agent-browser 0.39.2,
+/// `click` and `dblclick` fail when the target is hidden, disabled, or
+/// outside the viewport, and a covered click names the covering element.
+/// This guard scrolls the target into view first so an off-screen click
+/// satisfies that check. Hover and fill still have no such rejection, so
+/// a target that stays unhittable is warned before those actions.
 ///
 /// `resolver` is a JS function body evaluating to the target Element (or
 /// null). Returns the post-scroll hit state: "ok", "missing", "empty",
@@ -2111,17 +2119,23 @@ fn ensure_click_target(session: &str, resolver: &str) -> String {
     }
 }
 
-/// Warn on the states that predict a silent coordinate-action miss.
+/// Warn when the target is still unhittable after the scroll.
 /// `missing` stays quiet — agent-browser's own lookup produces the miss
 /// error — and unknown states (a stubbed eval in tests, an older daemon)
-/// stay quiet too.
+/// stay quiet too. Click and dblclick name the rejection; other acts can
+/// still pass without landing.
 fn warn_unhittable(act: &str, locator_desc: &str, state: &str) {
     if matches!(
         state.split(':').next(),
         Some("offscreen" | "empty" | "covered")
     ) {
+        let why = if matches!(act, "click" | "dblclick") {
+            "agent-browser will reject the click (hidden, disabled, covered, or still outside the viewport)"
+        } else {
+            "the action may silently miss"
+        };
         eprintln!(
-            "[v2-replay] {act} target {locator_desc} is unhittable ({state}) after scroll — the {act} may silently miss"
+            "[v2-replay] {act} target {locator_desc} is unhittable ({state}) after scroll — {why}"
         );
     }
 }
@@ -2411,6 +2425,214 @@ pub(crate) fn resolve_name_match(
         }
         None => Ok(None),
     }
+}
+
+/// Set a checkbox or radio to `checked` with agent-browser's `check` /
+/// `uncheck`. Both are idempotent (`check` does nothing when already
+/// checked). A click would toggle and undo a second `check`.
+fn set_checked(
+    session: &str,
+    loc: &Locator,
+    scope: &mut ValueScope,
+    scenario_dir: &std::path::Path,
+    checked: bool,
+) -> Result<()> {
+    let verb = if checked { "check" } else { "uncheck" };
+    match loc {
+        Locator::Role(role) if role.scope.as_deref().is_some_and(|s| !s.is_empty()) => {
+            let ep = drag_endpoint(loc, scope, scenario_dir)?;
+            let sel = resolved_css_selector(session, &ep)?;
+            browser::set_checked_selector(session, &sel, checked)
+                .map_err(|e| anyhow!("{verb} '{sel}': {e}"))?;
+            Ok(())
+        }
+        Locator::Role(role) => {
+            let name =
+                resolve_name_match(role.name.as_ref(), scope, scenario_dir)?.unwrap_or_default();
+            if name.is_empty() {
+                set_checked_unique_role(session, &role.role, checked)
+            } else if checked {
+                browser::find_role_check(session, &role.role, &name)
+                    .map_err(|e| anyhow!("find role {} check --name '{name}': {e}", role.role))?;
+                Ok(())
+            } else {
+                uncheck_role_ref(session, &role.role, &name)
+            }
+        }
+        Locator::Raw(raw) => {
+            let v = crate::value::substitute_scenario_vars(&raw.raw.value, scope);
+            match raw.raw.kind {
+                RawLocatorKind::Css => {
+                    browser::set_checked_selector(session, &v, checked)
+                        .map_err(|e| anyhow!("{verb} '{v}': {e}"))?;
+                    Ok(())
+                }
+                RawLocatorKind::TestId => {
+                    let css = format!("[data-testid=\"{}\"]", v.replace('"', "\\\""));
+                    browser::set_checked_selector(session, &css, checked)
+                        .map_err(|e| anyhow!("{verb} '{css}': {e}"))?;
+                    Ok(())
+                }
+                RawLocatorKind::Xpath if checked => {
+                    browser::find_xpath_check(session, &v)
+                        .map_err(|e| anyhow!("check xpath: {e}"))?;
+                    Ok(())
+                }
+                RawLocatorKind::Text if checked => {
+                    browser::find_text_check(session, &v)
+                        .map_err(|e| anyhow!("check text: {e}"))?;
+                    Ok(())
+                }
+                RawLocatorKind::Xpath | RawLocatorKind::Text => {
+                    let ep = drag_endpoint(loc, scope, scenario_dir)?;
+                    let sel = resolved_css_selector(session, &ep)?;
+                    browser::set_checked_selector(session, &sel, false)
+                        .map_err(|e| anyhow!("uncheck '{sel}': {e}"))?;
+                    Ok(())
+                }
+            }
+        }
+    }
+}
+
+/// One snapshot node for this role — a nameless locator must not check
+/// the first of several controls.
+fn set_checked_unique_role(session: &str, role: &str, checked: bool) -> Result<()> {
+    let snap = browser::snapshot_full(session).map_err(|e| anyhow!("snapshot for {role}: {e}"))?;
+    let refs = role_refs_in_snapshot(&snap, role);
+    if refs.len() != 1 {
+        bail!(
+            "role '{role}' has no name and matches {} nodes — add a name or scope",
+            refs.len()
+        );
+    }
+    let r = refs[0].clone();
+    let sel = format!("@{r}");
+    let verb = if checked { "check" } else { "uncheck" };
+    browser::set_checked_selector(session, &sel, checked)
+        .map_err(|e| anyhow!("{verb} {sel}: {e}"))?;
+    Ok(())
+}
+
+/// `find` has no `uncheck` action. Resolve the single role+name ref and
+/// `uncheck @ref`.
+fn uncheck_role_ref(session: &str, role: &str, name: &str) -> Result<()> {
+    let snap = browser::snapshot_full(session).map_err(|e| anyhow!("snapshot for uncheck: {e}"))?;
+    let lines = browser::find_lines_in_snapshot(&snap, role, name);
+    let r = match lines.len() {
+        1 => browser::find_ref_in_snapshot(&snap, role, name)
+            .ok_or_else(|| anyhow!("role '{role}' name '{name}' has no snapshot ref"))?,
+        0 => bail!("role '{role}' name '{name}' matched no snapshot node"),
+        n => bail!("role '{role}' name '{name}' matched {n} snapshot nodes — add a scope"),
+    };
+    let sel = format!("@{r}");
+    browser::set_checked_selector(session, &sel, false)
+        .map_err(|e| anyhow!("uncheck {sel}: {e}"))?;
+    Ok(())
+}
+
+fn role_refs_in_snapshot(snapshot: &str, role: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in snapshot.lines() {
+        let trimmed = line.trim_start_matches([' ', '-', '\t']);
+        let Some(rest) = trimmed.strip_prefix(role) else {
+            continue;
+        };
+        if !rest.is_empty() && !rest.starts_with([' ', '[', '\t']) {
+            continue;
+        }
+        if let Some(r) = ref_token(trimmed) {
+            out.push(r);
+        }
+    }
+    out
+}
+
+fn ref_token(line: &str) -> Option<String> {
+    let idx = line.find("ref=")?;
+    let rest = &line[idx + 4..];
+    let end = rest
+        .find(|c: char| !c.is_ascii_alphanumeric())
+        .unwrap_or(rest.len());
+    let r = &rest[..end];
+    if r.is_empty() {
+        None
+    } else {
+        Some(r.to_string())
+    }
+}
+
+fn resolved_css_selector(session: &str, ep: &crate::dom_activate::DragEndpoint) -> Result<String> {
+    let out = browser::eval_expression(session, &crate::dom_activate::build_css_selector_js(ep))
+        .map_err(|e| anyhow!("resolve selector: {e}"))?;
+    let sel = decode_eval_string(&out);
+    if sel.is_empty() || sel == "miss" {
+        bail!("locator did not resolve");
+    }
+    Ok(sel)
+}
+
+fn decode_eval_string(out: &str) -> String {
+    let trimmed = out.trim();
+    serde_json::from_str::<String>(trimmed)
+        .unwrap_or_else(|_| trimmed.trim_matches('"').to_string())
+}
+
+fn parse_eval_value(out: &str) -> Option<serde_json::Value> {
+    let trimmed = out.trim();
+    let parsed: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+    if let Some(s) = parsed.as_str() {
+        if let Ok(inner) = serde_json::from_str::<serde_json::Value>(s) {
+            return Some(inner);
+        }
+    }
+    Some(parsed)
+}
+
+/// Outcome of the trusted secondary-click attempt.
+enum MousePoint {
+    Done,
+    Miss,
+    /// Coordinate resolution or `mouse move` failed — the daemon lacks
+    /// real input (fake browser) or is too old. Caller falls back to a
+    /// synthesized `contextmenu`.
+    Unsupported,
+}
+
+/// Right-click by real pointer input. `mouse down right` / `mouse up right`
+/// produce a trusted `contextmenu`. A synthesized event is `isTrusted`
+/// false and pages that check that flag ignore it.
+fn rightclick_via_mouse(
+    session: &str,
+    ep: &crate::dom_activate::DragEndpoint,
+) -> Result<MousePoint> {
+    let out = browser::eval_expression(session, &crate::dom_activate::build_point_coords_js(ep))
+        .map_err(|e| anyhow!("rightclick coords: {e}"))?;
+    let Some(parsed) = parse_eval_value(&out) else {
+        return Ok(MousePoint::Unsupported);
+    };
+    if parsed.as_str() == Some("miss") {
+        return Ok(MousePoint::Miss);
+    }
+    let (Some(x), Some(y)) = (
+        parsed.get("x").and_then(|n| n.as_f64()),
+        parsed.get("y").and_then(|n| n.as_f64()),
+    ) else {
+        return Ok(MousePoint::Unsupported);
+    };
+    let opts = || browser::RunOpts::new();
+    let ax = format!("{x:.0}");
+    let ay = format!("{y:.0}");
+    if browser::run(session, ["mouse", "move", ax.as_str(), ay.as_str()], opts()).is_err() {
+        return Ok(MousePoint::Unsupported);
+    }
+    if let Err(e) = browser::run(session, ["mouse", "down", "right"], opts()) {
+        let _ = browser::run(session, ["mouse", "up", "right"], opts());
+        return Err(anyhow!("mouse down right: {e}"));
+    }
+    browser::run(session, ["mouse", "up", "right"], opts())
+        .map_err(|e| anyhow!("mouse up right: {e}"))?;
+    Ok(MousePoint::Done)
 }
 
 /// Outcome of the trusted-input drag attempt.
@@ -3071,6 +3293,160 @@ mod tests {
         assert!(
             out.contains("--session sess find role textbox fill --name Email a@b"),
             "got: {out}"
+        );
+    }
+
+    #[test]
+    fn check_css_uses_check_not_a_click() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "check",
+            "on": { "raw": { "kind": "css", "value": "#terms" }, "reason": "terms" }
+        }));
+        let out = run_one(&s);
+        assert!(out.contains("check #terms"), "got: {out}");
+        assert!(!out.contains("click"), "got: {out}");
+    }
+
+    #[test]
+    fn uncheck_css_uses_uncheck() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "uncheck",
+            "on": { "raw": { "kind": "css", "value": "#terms" }, "reason": "terms" }
+        }));
+        let out = run_one(&s);
+        assert!(out.contains("uncheck #terms"), "got: {out}");
+        assert!(!out.contains("click"), "got: {out}");
+    }
+
+    #[test]
+    fn check_role_uses_find_role_check() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "check",
+            "on": { "role": "checkbox", "name": "News" }
+        }));
+        let out = run_one(&s);
+        assert!(
+            out.contains("find role checkbox check --name News"),
+            "got: {out}"
+        );
+        assert!(!out.contains("click"), "got: {out}");
+    }
+
+    #[test]
+    fn check_xpath_uses_find_xpath_check() {
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "check",
+            "on": { "raw": { "kind": "xpath", "value": "//input[@name='news']" }, "reason": "news" }
+        }));
+        let out = run_one(&s);
+        assert!(
+            out.contains("find xpath //input[@name='news'] check"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn uncheck_role_uses_snapshot_ref() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        let body = format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\nif [ \"$3\" = snapshot ]; then printf '%s\\n' '- checkbox \"Accept terms\" [checked=true, ref=e7]'; fi\nexit 0\n",
+            log.display()
+        );
+        let bin = write_exec(tmp.path(), "agent-browser", &body);
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "uncheck",
+            "on": { "role": "checkbox", "name": "Accept terms" }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        assert!(out.contains("uncheck @e7"), "got: {out}");
+        assert!(!out.contains("click"), "got: {out}");
+    }
+
+    #[test]
+    fn rightclick_uses_trusted_mouse_when_coords_resolve() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        let body = format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\nif [ \"$3\" = eval ]; then printf '%s' '{{\"x\":8,\"y\":9}}'; fi\nexit 0\n",
+            log.display()
+        );
+        let bin = write_exec(tmp.path(), "agent-browser", &body);
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "rightclick",
+            "on": { "raw": { "kind": "css", "value": "#rc" }, "reason": "menu" }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        assert!(out.contains("mouse move 8 9"), "got: {out}");
+        assert!(out.contains("mouse down right"), "got: {out}");
+        assert!(out.contains("mouse up right"), "got: {out}");
+        assert!(
+            !out.contains("__aqCtx"),
+            "synthetic fallback must not run: {out}"
+        );
+    }
+
+    #[test]
+    fn rightclick_falls_back_to_synthetic_when_mouse_missing() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        let body = format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\n\
+            if [ \"$3\" = mouse ]; then exit 1; fi\n\
+            if [ \"$3\" = eval ]; then\n\
+              case \"$4\" in\n\
+                *__aqPoint*) printf '%s' '{{\"x\":8,\"y\":9}}' ;;\n\
+                *__aqCtx*) printf true ;;\n\
+              esac\n\
+            fi\nexit 0\n",
+            log.display()
+        );
+        let bin = write_exec(tmp.path(), "agent-browser", &body);
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "rightclick",
+            "on": { "raw": { "kind": "css", "value": "#rc" }, "reason": "menu" }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: false,
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        assert!(out.contains("mouse move 8 9"), "got: {out}");
+        assert!(
+            out.contains("__aqCtx"),
+            "expected synthetic fallback: {out}"
         );
     }
 
