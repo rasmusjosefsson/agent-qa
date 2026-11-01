@@ -4,10 +4,10 @@
 //!
 //!   - [`resolve_value`] — turn a typed [`crate::scenario::Value`] into a
 //!     concrete [`serde_json::Value`] using the per-run [`ValueScope`].
-//!   - [`substitute_scenario_vars`] — substitute `{{vars.<name>(.path)?}}`
-//!     tokens in a string. Powers the recorder's `fill-unique` literal
-//!     templates and any other scenario/2 fill that embeds variable
-//!     references.
+//!   - [`substitute_scenario_vars`] — substitute `{{vars.<name>}}` and
+//!     `{{inputs.<name>}}` tokens in a string. Powers the recorder's
+//!     `fill-unique` literal templates and any other scenario/2 fill that
+//!     embeds variable references.
 //!   - [`render_mint_template`] — expand a mint template into a concrete
 //!     string.
 //!   - [`value_to_string`] — render a resolved JSON value as text for
@@ -15,7 +15,7 @@
 //!   - [`select_json_path`] — minimal JSONPath subset (dotted, integer
 //!     index incl. negative, wildcard, slice, `<json>` segment).
 //!
-//! `{{vars.*}}` is the scenario/2 binding form.
+//! `{{vars.*}}` and `{{inputs.*}}` both read the run's inputs.
 //!
 //! A few helpers are part of the value surface but not referenced from
 //! every verb. The module allow covers those until each one has a caller.
@@ -138,13 +138,13 @@ fn vars_re() -> &'static Regex {
     static CELL: OnceLock<Regex> = OnceLock::new();
     CELL.get_or_init(|| {
         Regex::new(
-            r"\{\{\s*vars\.([A-Za-z_][A-Za-z0-9_]*)((?:\.[A-Za-z_$][A-Za-z0-9_$]*|\[[^\]]+\])*)\s*\}\}",
+            r"\{\{\s*(?:vars|inputs)\.([A-Za-z_][A-Za-z0-9_]*)((?:\.[A-Za-z_$][A-Za-z0-9_$]*|\[[^\]]+\])*)\s*\}\}",
         )
         .expect("vars regex compiles")
     })
 }
 
-/// Substitute scenario/2 `{{vars.<name>}}` template tokens in a string.
+/// Substitute scenario/2 `{{vars.<name>}}` and `{{inputs.<name>}}` tokens.
 ///
 /// Resolution order per token:
 ///   1. `vars._unique` — per-run minted random hex (8 chars). Cached so
@@ -680,6 +680,10 @@ mod tests {
         assert_eq!(
             substitute_scenario_vars("hi {{vars.user}}", &mut sc),
             "hi alice"
+        );
+        assert_eq!(
+            substitute_scenario_vars("http://example.com/?flow={{inputs.user}}", &mut sc),
+            "http://example.com/?flow=alice"
         );
     }
 

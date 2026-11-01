@@ -1350,7 +1350,7 @@ async function handlePlans(req, res, root, seg, deps, chat) {
         skipped.push({ caseId: cid, reason: 'scenario missing or unreadable' });
         continue;
       }
-      launchable.push({ caseId: cid, sid });
+      launchable.push({ caseId: cid, sid, scn });
     }
     // Launch members serially, one child at a time. Persona replays share
     // the `<profile>-session` browser and the session lock refuses a second
@@ -1406,7 +1406,11 @@ async function handlePlans(req, res, root, seg, deps, chat) {
       const session = sessionForReplay(m.sid, runOpts.profile);
       const before = new Set(replayRunIds(root, m.sid));
       try {
-        const out = await launchReplay(deps, m.sid, session, runOpts);
+        const memberOpts = { ...runOpts };
+        const params = paramsForScenario(m.scn, runOpts.params);
+        if (params) memberOpts.params = params;
+        else delete memberOpts.params;
+        const out = await launchReplay(deps, m.sid, session, memberOpts);
         return { out, before };
       } catch (e) {
         return { error: String((e && e.message) || e), before };
@@ -3071,6 +3075,20 @@ function cdpUrlResolver(runCli, session) {
     if (!j.url) throw new Error('cdp-url returned no url (no live session?)');
     return j.url;
   };
+}
+
+// A plan or environment carries one bag of params for every member. A param
+// the scenario does not declare is not a typo at the suite level — passing it
+// makes that member fail before it starts. Keep only declared inputs.
+function paramsForScenario(scn, params) {
+  if (!params || typeof params !== 'object') return undefined;
+  const declared = scn && scn.inputs && typeof scn.inputs === 'object' ? scn.inputs : null;
+  if (!declared) return undefined;
+  const out = {};
+  for (const [k, v] of Object.entries(params)) {
+    if (Object.prototype.hasOwnProperty.call(declared, k)) out[k] = String(v);
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 function replayArgs(sid, session, opts = {}) {
@@ -5310,6 +5328,9 @@ function createRequestHandler(root, deps, chat) {
         if (auth.error) return sendJson(res, 200, { ok: false, error: auth.error });
         replayOpts.env = auth.env;
         if (auth.profile) replayOpts.profile = auth.profile;
+        const params = paramsForScenario(scn, replayOpts.params);
+        if (params) replayOpts.params = params;
+        else delete replayOpts.params;
         const session = sessionForReplay(sid, replayOpts.profile);
         let out;
         try {

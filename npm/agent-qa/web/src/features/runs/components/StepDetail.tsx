@@ -153,7 +153,12 @@ export function StepDetail({ runs, onLightbox }: { runs: Api; onLightbox: (url: 
           <ShotDiffCard sid={sid} runId={runId} shotStep={shotDiff} onLightbox={onLightbox} />
         )}
         {domshotDiff && <DomshotDiffCard sid={sid} runId={runId} domshotStep={domshotDiff} />}
-        {step.error && (
+        {step.error && step.status === 'skip' && (
+          <p className="mb-3 rounded-md border border-border bg-muted/40 p-2 text-xs text-muted-foreground">
+            {step.error}
+          </p>
+        )}
+        {step.error && step.status !== 'skip' && (
           <pre className="mb-3 whitespace-pre-wrap rounded-md border border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">
             {step.error}
           </pre>
