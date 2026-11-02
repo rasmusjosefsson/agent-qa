@@ -16,10 +16,6 @@
 //!     index incl. negative, wildcard, slice, `<json>` segment).
 //!
 //! `{{vars.*}}` and `{{inputs.*}}` both read the run's inputs.
-//!
-//! A few helpers are part of the value surface but not referenced from
-//! every verb. The module allow covers those until each one has a caller.
-#![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;

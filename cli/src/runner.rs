@@ -9,7 +9,6 @@
 //!
 //! Numbered comments inside `run` are the source of truth for the
 //! optional tails (notify, video, junit, baselines, auto-promote).
-#![allow(dead_code)]
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
@@ -1900,6 +1899,7 @@ fn now_iso() -> String {
 /// `params.steps[]` for a group must deserialise as `Vec<Step>`;
 /// `params.template` for useTemplate must name a key in
 /// `templates`. Bad shape errors with the step's id in the message.
+#[cfg(test)]
 fn flatten_steps(
     steps: &[Step],
     templates: Option<&std::collections::BTreeMap<String, crate::scenario::Template>>,

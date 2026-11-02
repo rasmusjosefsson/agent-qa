@@ -23,9 +23,7 @@
 //!     and is never retried.
 //!
 //! Verb modules call the helpers below (`open`, `eval`, `click`, `fill`,
-//! and the rest). A module-level dead_code allow remains because a few
-//! helpers are kept for callers that have not switched over yet.
-#![allow(dead_code)]
+//! and the rest).
 
 use std::collections::HashMap;
 use std::env;
@@ -79,15 +77,6 @@ pub enum AgentBrowserError {
         /// (e.g. socket stall). Empty string if no hint.
         hint: String,
     },
-}
-
-impl AgentBrowserError {
-    pub fn exit_code(&self) -> Option<i32> {
-        match self {
-            AgentBrowserError::NonZero { exit_code, .. } => Some(*exit_code),
-            _ => None,
-        }
-    }
 }
 
 // ---------- binary resolution ----------
@@ -1155,13 +1144,6 @@ fn is_transient_navigation_error(err: &AgentBrowserError) -> bool {
     }
 }
 
-/// Wait `ms` milliseconds.
-pub fn wait_ms(session: &str, ms: u64) -> Result<(), AgentBrowserError> {
-    let arg = ms.to_string();
-    run(session, ["wait", arg.as_str()], RunOpts::new())?;
-    Ok(())
-}
-
 /// Bound on post-navigation `networkidle` waits — an analytics/beacon-
 /// heavy page never goes idle, so an uncapped `wait --load` stalls for
 /// agent-browser's internal timeout (~30s). Same 5s bound as the crawl
@@ -1486,21 +1468,6 @@ pub fn find_role_act_quiet(
         args.push(v);
     }
     run(session, args, RunOpts::new().capture())?;
-    Ok(())
-}
-
-/// Act on an element matched by a CSS selector.
-pub fn find_css_act(
-    session: &str,
-    selector: &str,
-    act: RoleAct,
-    value: Option<&str>,
-) -> Result<(), AgentBrowserError> {
-    let mut args: Vec<&str> = vec!["find", "css", selector, act.as_str()];
-    if let Some(v) = value {
-        args.push(v);
-    }
-    run(session, args, RunOpts::new())?;
     Ok(())
 }
 

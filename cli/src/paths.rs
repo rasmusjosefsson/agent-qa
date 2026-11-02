@@ -1,25 +1,16 @@
-//! Canonical paths used by every agent-qa verb.
-//!
-//! Every consumer that needs a scenario / replay / compare / recording
-//! sub-path goes through this module — recomputing `path::join` inline is
-//! how artefacts end up in two places.
+//! Shared path helpers for the scenarios root, a scenario directory,
+//! replay run listing, the perf directory, recorder workfiles, and profiles.
 //!
 //! ## Configuration
 //!
 //! The scenarios root is overridable via [`SCENARIOS_DIR_ENV`]:
 //!
-//! - Absolute path → used as-is.
-//! - Relative path → resolved against the current working directory.
-//! - Unset (default) → `<cwd>/tmp/agent-qa-scenarios`.
+//! - Absolute path is used as-is.
+//! - Relative path resolves against the current working directory.
+//! - When unset, the root is `<cwd>/tmp/agent-qa-scenarios`.
 //!
-//! Resolved fresh on every call so tests / scripts that mutate the env
-//! between calls see the change. The cost is irrelevant next to the disk
-//! I/O every caller is about to do.
-//!
-//! Prefer these helpers over `scenario_dir.join(...)`. Several callers
-//! still join inline, so the bin target allows dead_code. The unit test
-//! `canonical_subpaths_match_the_on_disk_layout` locks the segments.
-#![cfg_attr(not(test), allow(dead_code))]
+//! Resolved fresh on every call so tests and scripts that change the env
+//! between calls see the change.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -187,22 +178,6 @@ pub fn scenario_dir(sid: &str) -> Result<PathBuf> {
     Ok(scenarios_root().join(safe_segment(sid, "sid")?))
 }
 
-// ---------- replay tree ----------
-
-pub fn replay_dir(sid: &str, replay_id: &str) -> Result<PathBuf> {
-    Ok(scenario_dir(sid)?
-        .join("replays")
-        .join(safe_segment(replay_id, "replayId")?))
-}
-
-pub fn replay_screenshots_dir(sid: &str, replay_id: &str) -> Result<PathBuf> {
-    Ok(replay_dir(sid, replay_id)?.join("screenshots"))
-}
-
-pub fn replay_snapshots_dir(sid: &str, replay_id: &str) -> Result<PathBuf> {
-    Ok(replay_dir(sid, replay_id)?.join("snapshots"))
-}
-
 /// Directories under `<sid>/replays/` that are actual replay runs —
 /// i.e. they carry `audit.json` (finished) or `events.jsonl`
 /// (in-flight / crashed before the audit write). Anything else —
@@ -223,54 +198,6 @@ pub fn run_dirs(replays_dir: &Path) -> Vec<PathBuf> {
     };
     out.sort();
     out
-}
-
-// ---------- recording tree (sidecar tree spec) ----------
-
-pub fn recording_dir(sid: &str) -> Result<PathBuf> {
-    Ok(scenario_dir(sid)?.join("recording"))
-}
-
-pub fn recording_snapshots_dir(sid: &str) -> Result<PathBuf> {
-    Ok(recording_dir(sid)?.join("snapshots"))
-}
-
-pub fn recording_screenshots_dir(sid: &str) -> Result<PathBuf> {
-    Ok(recording_dir(sid)?.join("screenshots"))
-}
-
-pub fn recording_network_dir(sid: &str) -> Result<PathBuf> {
-    Ok(recording_dir(sid)?.join("network"))
-}
-
-pub fn recording_probes_dir(sid: &str) -> Result<PathBuf> {
-    Ok(recording_dir(sid)?.join("probes"))
-}
-
-pub fn recording_perf_dir(sid: &str) -> Result<PathBuf> {
-    Ok(recording_dir(sid)?.join("perf"))
-}
-
-pub fn recording_failed_dir(sid: &str) -> Result<PathBuf> {
-    Ok(recording_dir(sid)?.join("failed"))
-}
-
-pub fn recording_audit_file(sid: &str) -> Result<PathBuf> {
-    Ok(recording_dir(sid)?.join("audit.json"))
-}
-
-pub fn recording_heal_jsonl(sid: &str) -> Result<PathBuf> {
-    Ok(recording_dir(sid)?.join("heal.jsonl"))
-}
-
-// ---------- compare tree ----------
-
-pub fn compare_dir(sid: &str) -> Result<PathBuf> {
-    Ok(scenario_dir(sid)?.join("compare"))
-}
-
-pub fn compare_run_dir(sid: &str, folder_name: &str) -> Result<PathBuf> {
-    Ok(compare_dir(sid)?.join(safe_segment(folder_name, "compare folder")?))
 }
 
 // ---------- perf ----------
@@ -405,73 +332,10 @@ mod tests {
     }
 
     #[test]
-    fn replay_dir_combines() {
+    fn perf_dir_is_under_the_scenario() {
         let _g = lock_env();
         env::set_var(SCENARIOS_DIR_ENV, "/tmp/jx");
-        let p = replay_dir("sid", "rid").unwrap();
-        assert_eq!(p, PathBuf::from("/tmp/jx/sid/replays/rid"));
-        env::remove_var(SCENARIOS_DIR_ENV);
-    }
-
-    #[test]
-    fn canonical_subpaths_match_the_on_disk_layout() {
-        let _g = lock_env();
-        env::set_var(SCENARIOS_DIR_ENV, "/tmp/jx");
-        let root = PathBuf::from("/tmp/jx/sid");
-        assert_eq!(
-            replay_screenshots_dir("sid", "rid").unwrap(),
-            root.join("replays/rid/screenshots")
-        );
-        assert_eq!(
-            replay_snapshots_dir("sid", "rid").unwrap(),
-            root.join("replays/rid/snapshots")
-        );
-        assert_eq!(recording_dir("sid").unwrap(), root.join("recording"));
-        assert_eq!(
-            recording_snapshots_dir("sid").unwrap(),
-            root.join("recording/snapshots")
-        );
-        assert_eq!(
-            recording_screenshots_dir("sid").unwrap(),
-            root.join("recording/screenshots")
-        );
-        assert_eq!(
-            recording_network_dir("sid").unwrap(),
-            root.join("recording/network")
-        );
-        assert_eq!(
-            recording_probes_dir("sid").unwrap(),
-            root.join("recording/probes")
-        );
-        assert_eq!(
-            recording_perf_dir("sid").unwrap(),
-            root.join("recording/perf")
-        );
-        assert_eq!(
-            recording_failed_dir("sid").unwrap(),
-            root.join("recording/failed")
-        );
-        assert_eq!(
-            recording_audit_file("sid").unwrap(),
-            root.join("recording/audit.json")
-        );
-        assert_eq!(
-            recording_heal_jsonl("sid").unwrap(),
-            root.join("recording/heal.jsonl")
-        );
-        assert_eq!(
-            compare_run_dir("sid", "folder").unwrap(),
-            root.join("compare/folder")
-        );
-        assert_eq!(perf_dir("sid").unwrap(), root.join("perf"));
-        env::remove_var(SCENARIOS_DIR_ENV);
-    }
-
-    #[test]
-    fn replay_dir_rejects_traversal_in_sid() {
-        let _g = lock_env();
-        env::set_var(SCENARIOS_DIR_ENV, "/tmp/jx");
-        replay_dir("../escape", "rid").unwrap_err();
+        assert_eq!(perf_dir("sid").unwrap(), PathBuf::from("/tmp/jx/sid/perf"));
         env::remove_var(SCENARIOS_DIR_ENV);
     }
 
