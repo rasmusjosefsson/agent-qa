@@ -39,26 +39,20 @@ describe('CenterPane scenario controls', () => {
       scenarios: [],
     } as unknown as RunsApi
     const html = renderToStaticMarkup(
-      <CenterPane runs={runs} onReplay={() => {}} runConfig={runConfig} />
+      <CenterPane runs={runs} runConfig={runConfig} />
     )
     expect(html).toContain('Record your first scenario')
     expect(html).toContain('href="/chat"')
     expect(html).toContain('Open Chat')
   })
 
-  it('puts replay settings in their own wrapping row under the title', () => {
+  it('keeps run settings under the title and leaves Replay on the scenario card', () => {
     const html = renderToStaticMarkup(
-      <CenterPane runs={scenarioRuns()} onReplay={() => {}} runConfig={runConfig} />
+      <CenterPane runs={scenarioRuns()} runConfig={runConfig} />
     )
 
-    expect(html).toContain('Replay</button>')
-    expect(html).toContain('aria-label="Headless"')
-    expect(html).not.toContain('Browser visible')
-    const headlessAt = html.indexOf('aria-label="Headless"')
-    const replayAt = html.indexOf('Replay</button>')
-    expect(headlessAt).toBeGreaterThan(-1)
-    expect(replayAt).toBeGreaterThan(headlessAt)
-    expect(html.slice(headlessAt, replayAt)).not.toContain('Run as')
+    expect(html).not.toContain('>Replay</button>')
+    expect(html).not.toContain('aria-label="Headless"')
     // Settings row wraps instead of overflowing a narrow pane, and its
     // selects can shrink below their content width.
     expect(html).toContain('flex flex-wrap items-center gap-x-2')
@@ -86,7 +80,6 @@ describe('CenterPane scenario controls', () => {
     const html = renderToStaticMarkup(
       <CenterPane
         runs={runs}
-        onReplay={() => {}}
         runConfig={{
           ...runConfig,
           inputs: [{ name: 'flow', value: '', description: 'Empty is classic' }],
@@ -115,7 +108,7 @@ describe('CenterPane scenario controls', () => {
     } as unknown as RunsApi
 
     const html = renderToStaticMarkup(
-      <CenterPane runs={runs} onReplay={() => {}} runConfig={runConfig} />
+      <CenterPane runs={runs} runConfig={runConfig} />
     )
 
     expect(html).toContain('No replay progress for over a minute')
@@ -148,7 +141,7 @@ describe('CenterPane scenario controls', () => {
     } as unknown as RunsApi
 
     const html = renderToStaticMarkup(
-      <CenterPane runs={base} onReplay={() => {}} runConfig={runConfig} />
+      <CenterPane runs={base} runConfig={runConfig} />
     )
     expect(html).toContain('aria-label="Replay timeline"')
     expect(html).toContain('aria-label="Playback speed"')
@@ -160,9 +153,12 @@ describe('CenterPane scenario controls', () => {
 
     const noVid = { ...base, detail: { ...base.detail, video: false } } as RunsApi
     const html2 = renderToStaticMarkup(
-      <CenterPane runs={noVid} onReplay={() => {}} runConfig={runConfig} />
+      <CenterPane runs={noVid} runConfig={runConfig} />
     )
     expect(html2).not.toContain('aria-label="Replay timeline"')
     expect(html2).not.toContain('<video')
+    // Replay belongs to the scenario card. A past run does not grow its own.
+    expect(html).not.toContain('>Replay</button>')
+    expect(html2).not.toContain('>Replay</button>')
   })
 })

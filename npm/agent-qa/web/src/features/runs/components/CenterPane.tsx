@@ -1,6 +1,5 @@
 // web/src/features/runs/components/CenterPane.tsx
 import { useState } from 'react'
-import { BrowserModeToggle } from '@/components/browser-mode-toggle'
 import { TrendChip } from './TrendChip'
 import { cn } from '@/lib/utils'
 import { CameraIcon, GitCompareIcon, Loader2Icon, PlayIcon, PlusIcon, WrenchIcon } from 'lucide-react'
@@ -92,14 +91,12 @@ export interface RunConfig {
 
 export function CenterPane({
   runs,
-  onReplay,
   busy,
   runConfig,
 }: {
   runs: RunsApi
-  onReplay: (sid: string) => void
-  // A replay of the selected scenario is already in flight — disable Replay so
-  // a second run can't collide with it on the shared browser session.
+  // A replay of the selected scenario is already in flight — disable the
+  // run options so they can't change under a run that's already going.
   busy?: boolean
   runConfig?: RunConfig
 }) {
@@ -119,11 +116,11 @@ export function CenterPane({
       : null
     return (
       <Pane>
-        {/* Two rows: what this scenario is + the Replay action, then the
-            settings the next replay uses. */}
+        {/* What this scenario is, then the settings the next replay uses.
+            Replay itself sits on the scenario card. */}
         <div className="border-b border-border">
-          <div className="flex items-start gap-4 px-5 pt-4 pb-3">
-            <div className="min-w-0 flex-1">
+          <div className="px-5 pt-4 pb-3">
+            <div className="min-w-0">
               <h2
                 className="line-clamp-2 text-[15px] font-semibold leading-snug tracking-tight"
                 title={scenarioDef.intent || scenarioDef.id || 'Scenario'}
@@ -141,34 +138,6 @@ export function CenterPane({
                 <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground opacity-50">{sel.sid}</div>
               )}
             </div>
-            {sel.sid && (
-              <div className="flex shrink-0 items-center gap-2">
-                {runConfig && (
-                  <BrowserModeToggle
-                    headed={runConfig.headed}
-                    onChange={runConfig.setHeaded}
-                    disabled={busy}
-                  />
-                )}
-                <button
-                  type="button"
-                  onClick={() => onReplay(sel.sid!)}
-                  disabled={busy}
-                  title={busy ? 'A replay is already running for this scenario' : undefined}
-                  className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                {busy ? (
-                  <>
-                    <Loader2Icon className="size-3.5 animate-spin" /> Replaying…
-                  </>
-                ) : (
-                  <>
-                    <PlayIcon className="size-3.5 fill-current" /> Replay
-                  </>
-                )}
-                </button>
-              </div>
-            )}
           </div>
           {sel.sid && runConfig && (runConfig.personas.length > 0 || runConfig.environments.length > 0) && (
             <div className="flex flex-wrap items-center gap-x-2 gap-y-2 border-t border-border/60 bg-muted/30 px-5 py-2 text-xs text-muted-foreground">
@@ -342,25 +311,6 @@ export function CenterPane({
               <span className="inline-flex items-center gap-1.5 text-xs font-medium text-warning">
                 <span className="aqa-ping size-1.5 rounded-full bg-current" /> live
               </span>
-            )}
-            {!live && sel.sid && runConfig && (
-              <BrowserModeToggle
-                headed={runConfig.headed}
-                onChange={runConfig.setHeaded}
-                disabled={busy}
-              />
-            )}
-            {!live && sel.sid && (
-              <button
-                type="button"
-                onClick={() => onReplay(sel.sid!)}
-                disabled={busy}
-                title={busy ? 'A replay is already running for this scenario' : 'Run this scenario again'}
-                className="flex h-7 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[11px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {busy ? <Loader2Icon className="size-3 animate-spin" /> : <PlayIcon className="size-3 fill-current" />}
-                Replay
-              </button>
             )}
             {healedCount > 0 && (
               <span

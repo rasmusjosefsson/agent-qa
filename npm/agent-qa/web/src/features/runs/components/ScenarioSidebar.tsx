@@ -1,7 +1,8 @@
 // web/src/features/runs/components/ScenarioSidebar.tsx
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
-import { GlobeIcon, RefreshCwIcon, Trash2Icon } from 'lucide-react'
+import { BrowserModeToggle } from '@/components/browser-mode-toggle'
+import { GlobeIcon, Loader2Icon, PlayIcon, RefreshCwIcon, Trash2Icon } from 'lucide-react'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -163,7 +164,22 @@ function CrawlDialog({ runs }: { runs: RunsApi }) {
   )
 }
 
-export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
+export function ScenarioSidebar({
+  runs,
+  onReplay,
+  busySid = null,
+  headed = false,
+  onHeadedChange,
+}: {
+  runs: RunsApi
+  // Replay belongs to the scenario card. Past runs listed under it are
+  // results of that scenario, not separate things to replay.
+  onReplay?: (sid: string) => void
+  busySid?: string | null
+  // Headless sits with Replay on the selected scenario, not on a past run.
+  headed?: boolean
+  onHeadedChange?: (headed: boolean) => void
+}) {
   const { scenarios, expanded, runsBySid, sel } = runs
   return (
     <nav className="flex h-full min-h-0 flex-col overflow-hidden bg-sidebar/60">
@@ -197,7 +213,8 @@ export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
           const list = runsBySid[sc.sid]
           return (
             <li key={sc.sid} className="group">
-              <div className={cn('flex items-center rounded-lg transition-colors', open ? 'bg-accent/60 shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--primary)_12%,transparent)]' : 'hover:bg-muted/70')}>
+              <div className={cn('rounded-lg transition-colors', open ? 'bg-accent/60 shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--primary)_12%,transparent)]' : 'hover:bg-muted/70')}>
+                <div className="flex items-center">
                 <button
                   type="button"
                   onClick={() => void runs.toggleScenario(sc.sid)}
@@ -258,6 +275,33 @@ export function ScenarioSidebar({ runs }: { runs: RunsApi }) {
                     </AlertDialogFooter>
                   </AlertDialogContent>
                 </AlertDialog>
+                </div>
+                {onReplay && (
+                  <div className="flex flex-wrap items-center gap-1.5 px-2 pb-2">
+                    {onHeadedChange && sel.sid === sc.sid && (
+                      <BrowserModeToggle
+                        headed={headed}
+                        onChange={onHeadedChange}
+                        disabled={busySid === sc.sid}
+                      />
+                    )}
+                    <button
+                      type="button"
+                      aria-label="Replay scenario"
+                      title="Replay this scenario"
+                      disabled={busySid === sc.sid}
+                      onClick={() => onReplay(sc.sid)}
+                      className="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[12px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {busySid === sc.sid ? (
+                        <Loader2Icon className="size-3.5 animate-spin" />
+                      ) : (
+                        <PlayIcon className="size-3.5 fill-current" />
+                      )}
+                      {busySid === sc.sid ? 'Replaying…' : 'Replay'}
+                    </button>
+                  </div>
+                )}
               </div>
               {open && (
                 <div className="ml-3.5 mt-1 mb-1.5 space-y-0.5 border-l border-border pl-2">
