@@ -3135,10 +3135,42 @@ async function launchReplay(deps, sid, session, opts) {
   }
 }
 
+// True when this session's agent-browser daemon is alive AND still has a
+// browser process. `get cdp-url` launches a browser when the window is
+// gone, and the new one opens on about:blank. The preview polls that
+// command, so a closed window would come straight back.
+function browserDaemonHasBrowser(session) {
+  const name = session ? String(session) : 'default';
+  if (!name || name.includes('/') || name.includes('..')) return false;
+  const pidFile = path.join(os.homedir(), '.agent-browser', `${name}.pid`);
+  let daemonPid;
+  try {
+    daemonPid = Number(fs.readFileSync(pidFile, 'utf8').trim());
+  } catch {
+    return false;
+  }
+  if (!Number.isInteger(daemonPid) || daemonPid <= 0) return false;
+  try {
+    process.kill(daemonPid, 0);
+  } catch {
+    return false;
+  }
+  try {
+    const kids = fs.readFileSync(`/proc/${daemonPid}/task/${daemonPid}/children`, 'utf8');
+    return kids.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
 // Build a getCdpUrl() that resolves a session's CDP WebSocket endpoint via
 // the Rust `cdp-url` verb. session=null → the recorder's env session.
+// Refuses to ask when no browser is running, because that ask launches one.
 function cdpUrlResolver(runCli, session) {
   return async () => {
+    if (!browserDaemonHasBrowser(session)) {
+      throw new Error('no live browser');
+    }
     const args = ['cdp-url', ...(session ? ['--session', session] : []), '--json'];
     const r = await runCli(args);
     if (r.spawnError) throw new Error(String(r.spawnError.message || r.spawnError));
@@ -6283,5 +6315,6 @@ module.exports = {
     finalizeIncompleteReplay,
     makeReplaySpawner,
     replaySetupTimeoutMs,
+    cdpUrlResolver,
   },
 };

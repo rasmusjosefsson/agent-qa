@@ -16,9 +16,12 @@
 //! page beside the dock after the shot, so the list is not taken down.
 //!
 //! The saved recording is cropped the same way. The live window keeps
-//! the list; the preview plays the page. Headless replays remove a dock
-//! left on a reused page and never paint one — the workbench already
-//! lists the steps.
+//! the list; the preview plays the page. The dock is painted through the
+//! same eval path as the cursor. A second debugger socket is not opened
+//! for it: that socket was resetting the tab to `about:blank`, and the
+//! session daemon then held the blank window open. Headless replays
+//! remove a dock left on a reused page and never paint one. The
+//! workbench already lists the steps.
 
 use std::path::Path;
 use std::process::Command;
@@ -440,9 +443,6 @@ fn dock_expr(payload: &str) -> String {
 /// Paint the step dock into the app page. Best-effort: a missing page
 /// must not fail the step. One process-wide pass closes a step-log
 /// window left by an older build so it cannot steal the next click.
-/// The same paint is installed for the next document, so a navigation
-/// does not film a frame of the page without the list (the saved
-/// recording is cropped by that list's width).
 pub fn sync_step_log(session: &str, cur: u32, captions: &[String], outcomes: &[Option<&str>]) {
     close_leftover_log_windows(session);
     let rows: Vec<Json> = captions
@@ -454,29 +454,23 @@ pub fn sync_step_log(session: &str, cur: u32, captions: &[String], outcomes: &[O
         })
         .collect();
     let payload = serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into());
-    let expr = dock_expr(&payload);
-    let _ = browser::eval_expression(session, &expr);
-    persist_document_script(session, &expr);
+    let _ = browser::eval_expression(session, &dock_expr(&payload));
     note_dock_span(session);
 }
 
 /// Drop a dock left on a reused page. Headless replays call this before
 /// filming so the preview is the page. Body styles are restored only
-/// when this dock saved them. The same clear runs on the next document,
-/// after any dock script a previous window installed.
+/// when this dock saved them.
 pub fn clear_step_log(session: &str) {
     if let Ok(mut span) = DOCK_SPAN.lock() {
         *span = None;
     }
-    persist_document_script(session, &clear_expr());
     let _ = browser::eval_expression(session, &clear_expr());
 }
 
 /// CSS px of the dock's right edge over the layout width. The recording
 /// is device pixels, so the crop is this fraction of the file's width.
 static DOCK_SPAN: Mutex<Option<(f64, f64)>> = Mutex::new(None);
-static DOCK_SCRIPT_ID: Mutex<Option<String>> = Mutex::new(None);
-static SCRIPT_WARNED: AtomicBool = AtomicBool::new(false);
 
 const DOCK_SPAN_EXPR: &str = r#"(function(){
  var d=document.getElementById('__aq_log');
@@ -491,46 +485,6 @@ fn clear_expr() -> String {
         "(function(){{{shift}\nvar d=document.getElementById('__aq_log');if(d)d.remove();\nvar rail=document.getElementById('__aq_rail');if(rail)rail.remove();\nvar stepEl=document.getElementById('__aq_step');if(stepEl)stepEl.remove();\nvar b=document.body;if(b&&(b.getAttribute('data-aq-shift')||b.classList.contains('__aq_shifted')))aqShift(false);}})()",
         shift = SHIFT_FN
     )
-}
-
-/// Run `inner` on the top document once it has a body. Child frames
-/// skip it, so a dock is not painted inside an iframe.
-fn document_script(inner: &str) -> String {
-    format!(
-        "(function(){{if(window.top!==window)return;var go=function(){{{inner}}};if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',go,{{once:true}});else go();}})()"
-    )
-}
-
-fn persist_document_script(session: &str, inner: &str) {
-    let source = document_script(inner);
-    // The first CDP socket of a just-launched browser sometimes resets.
-    // The pool drops that socket; one retry connects cleanly.
-    for attempt in 0..2 {
-        let previous = DOCK_SCRIPT_ID.lock().ok().and_then(|slot| slot.clone());
-        match crate::cdp::replace_new_document_script(session, &source, previous.as_deref()) {
-            Ok(Some(id)) => {
-                if let Ok(mut slot) = DOCK_SCRIPT_ID.lock() {
-                    *slot = Some(id);
-                }
-                return;
-            }
-            Ok(None) => return,
-            Err(e) => {
-                if let Ok(mut slot) = DOCK_SCRIPT_ID.lock() {
-                    *slot = None;
-                }
-                if attempt == 0 {
-                    continue;
-                }
-                if SCRIPT_WARNED
-                    .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
-                    .is_ok()
-                {
-                    eprintln!("[v2-replay] step list script: {e:#}");
-                }
-            }
-        }
-    }
 }
 
 fn parse_span(out: &str) -> Option<(f64, f64)> {
@@ -789,6 +743,7 @@ mod tests {
         assert!(!CURSOR_HIDE.contains("__aq_log"));
         assert!(!CURSOR_SHOW.contains("__aq_log"));
         assert!(crate::cdp::is_app_page("http://127.0.0.1:8765/"));
+        assert!(!crate::cdp::is_app_page("about:blank"));
         assert!(!crate::cdp::is_app_page("data:text/html,aq-step-log"));
         // 320 CSS px on a 1790 CSS px viewport, filmed 1764 px wide.
         // 315.35 rounds to 315, then up to an even column.
@@ -800,11 +755,8 @@ mod tests {
         assert!(clear.contains("getElementById('__aq_log')"));
         assert!(clear.contains("data-aq-shift"));
         assert!(clear.contains("__aq_shifted"));
-        let wrapped = super::document_script("INNER");
-        assert!(wrapped.contains("window.top!==window"));
-        assert!(wrapped.contains("DOMContentLoaded"));
-        assert!(wrapped.contains("INNER"));
-        assert!(!wrapped.contains("runImmediately"));
+        assert!(!clear.contains("attachToTarget"));
+        assert!(!clear.contains("addScriptToEvaluateOnNewDocument"));
         let dir = std::env::temp_dir();
         let shot = dir.join(format!("aq-dock-crop-{}.png", std::process::id()));
         image::RgbImage::from_pixel(10, 4, image::Rgb([10, 20, 30]))

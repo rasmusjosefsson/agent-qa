@@ -983,6 +983,17 @@ test('POST /replay threads headed mode through session preparation and deps.repl
   assert.equal(calls[1].opts.headed, true);
 });
 
+test('cdp-url resolver does not launch a browser when the session is down', async () => {
+  const { cdpUrlResolver } = srv._test;
+  let calls = 0;
+  const get = cdpUrlResolver(async () => {
+    calls += 1;
+    return { code: 0, stdout: '{"url":"ws://127.0.0.1:1/devtools/browser/x"}\n' };
+  }, 'no-such-session-aq');
+  await assert.rejects(() => get(), /no live browser/);
+  assert.equal(calls, 0);
+});
+
 test('GET /replay-stream subscribes the per-session screencast bridge', async (t) => {
   const fx = makeFixture();
   const seen = [];

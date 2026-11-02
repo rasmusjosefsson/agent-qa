@@ -261,7 +261,9 @@ pub fn with_connection<T>(
 /// list is a dock in the app page, not its own target.
 pub(crate) fn is_app_page(url: &str) -> bool {
     !url.is_empty()
+        && url != "about:blank"
         && !url.starts_with("chrome://")
+        && !url.starts_with("chrome-untrusted://")
         && !url.starts_with("devtools://")
         && !url.contains("aq-step-log")
 }
@@ -428,56 +430,6 @@ fn emulate_override_in(session: &str, method: &str, params: Json) -> Result<bool
         let sid = attach_flat(conn, &target_id)?;
         conn.call_on(method, params, &sid)?;
         Ok(true)
-    })
-}
-
-/// Replace the page-target script that runs in every new document.
-/// `previous` is the identifier from the last call in this process; a
-/// missing or already-dropped identifier is ignored. Returns the new
-/// identifier, or `None` when no page is open yet.
-pub fn replace_new_document_script(
-    session: &str,
-    source: &str,
-    previous: Option<&str>,
-) -> Result<Option<String>> {
-    match replace_new_document_script_in(session, source, previous) {
-        Err(e) if is_unavailable(&e) => Ok(None),
-        out => out,
-    }
-}
-
-fn replace_new_document_script_in(
-    session: &str,
-    source: &str,
-    previous: Option<&str>,
-) -> Result<Option<String>> {
-    with_connection(session, |conn| {
-        let page = active_page(conn)?.map(|(id, _)| id);
-        let Some(target_id) = page else {
-            return Ok(None);
-        };
-        let sid = attach_flat(conn, &target_id)?;
-        if let Some(prev) = previous.filter(|id| !id.is_empty()) {
-            let _ = conn.call_on(
-                "Page.removeScriptToEvaluateOnNewDocument",
-                json!({ "identifier": prev }),
-                &sid,
-            );
-        }
-        let added = conn.call_on(
-            "Page.addScriptToEvaluateOnNewDocument",
-            json!({ "source": source }),
-            &sid,
-        )?;
-        let id = added
-            .get("identifier")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        if id.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(id))
     })
 }
 
