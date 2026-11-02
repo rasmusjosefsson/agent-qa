@@ -12,17 +12,10 @@
 //!   - every field is optional unless the schema marks it required
 //!   - extra fields are rejected at the schema layer; serde ignores them
 //!     here so we don't double-reject
-//!
-//! Some variants and fields exist so deserialization accepts the schema.
-//! They are not all constructed in this module, so dead_code stays
-//! allowed at module scope.
-#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 use std::collections::BTreeMap;
-
-pub const SCENARIO_SCHEMA_ID: &str = "scenario/2";
 
 // ---------- supporting unions ----------
 

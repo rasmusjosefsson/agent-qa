@@ -8,9 +8,8 @@
 //!     (8 random hex chars; profile only when it matches the safe
 //!     filename regex)
 //!   - per-kind subdirs from [`SidecarKind`] (`snapshots/`, `screenshots/`,
-//!     `network/`, `probes/`, `perf/`, `layouts/`) with `<stepId>.<ext>`
-//!     keying (LITERAL stepId — no zero-padded positional index)
-//!   - `heal.jsonl` — one run-scoped JSONL of heal events
+//!     `layouts/`) with `<stepId>.<ext>` keying (LITERAL stepId — no
+//!     zero-padded positional index)
 //!   - `events.jsonl` / `status.json` — step stream and live cursor
 //!   - `audit.json` — run-level metadata
 //!   - `replays/latest.txt` — one-line pointer to latest `<runId>`
@@ -18,7 +17,6 @@
 //!
 //! Per the spec, the contract (`scenario.json`) MUST NOT be mutated by
 //! the runner. This module never opens `scenario.json` for writing.
-#![allow(dead_code)]
 
 use std::fs;
 use std::io::Write;
@@ -46,9 +44,6 @@ pub struct RunPaths {
 pub enum SidecarKind {
     Snapshots,
     Screenshots,
-    Network,
-    Probes,
-    Perf,
     Layouts,
 }
 
@@ -57,9 +52,6 @@ impl SidecarKind {
         match self {
             SidecarKind::Snapshots => "snapshots",
             SidecarKind::Screenshots => "screenshots",
-            SidecarKind::Network => "network",
-            SidecarKind::Probes => "probes",
-            SidecarKind::Perf => "perf",
             SidecarKind::Layouts => "layouts",
         }
     }
@@ -67,9 +59,6 @@ impl SidecarKind {
         match self {
             SidecarKind::Snapshots => "txt",
             SidecarKind::Screenshots => "png",
-            SidecarKind::Network => "json",
-            SidecarKind::Probes => "json",
-            SidecarKind::Perf => "json",
             SidecarKind::Layouts => "json",
         }
     }
@@ -281,25 +270,6 @@ pub fn ensure_kind_dir(run: &RunPaths, kind: SidecarKind) -> Result<PathBuf> {
     Ok(dir)
 }
 
-// ---------- heal jsonl ----------
-
-/// Append one heal event as a JSONL line to `<run_root>/heal.jsonl`.
-/// Caller passes the canonical row shape; this helper is a thin
-/// formatter so heal pipelines stay free of file I/O glue.
-pub fn append_heal_jsonl(run: &RunPaths, row: &Json) -> Result<()> {
-    let path = run.run_root.join("heal.jsonl");
-    use std::fs::OpenOptions;
-    let mut f = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .with_context(|| format!("open {}", path.display()))?;
-    let line = format!("{row}\n");
-    f.write_all(line.as_bytes())
-        .with_context(|| format!("append {}", path.display()))?;
-    Ok(())
-}
-
 // ---------- audit ----------
 
 pub fn write_run_audit(run: &RunPaths, audit: &RunAudit) -> Result<()> {
@@ -507,15 +477,15 @@ mod tests {
     fn step_sidecar_path_combines_safely() {
         let tmp = TempDir::new().unwrap();
         let rp = prepare_run_root(tmp.path(), "r1").unwrap();
-        let p = step_sidecar_path(&rp, SidecarKind::Probes, "step.42").unwrap();
-        assert!(p.ends_with("replays/r1/probes/step.42.json"));
+        let p = step_sidecar_path(&rp, SidecarKind::Layouts, "step.42").unwrap();
+        assert!(p.ends_with("replays/r1/layouts/step.42.json"));
     }
 
     #[test]
     fn step_sidecar_path_rejects_unsafe_step_id() {
         let tmp = TempDir::new().unwrap();
         let rp = prepare_run_root(tmp.path(), "r1").unwrap();
-        step_sidecar_path(&rp, SidecarKind::Probes, "../escape").unwrap_err();
+        step_sidecar_path(&rp, SidecarKind::Layouts, "../escape").unwrap_err();
     }
 
     #[test]
@@ -531,24 +501,9 @@ mod tests {
     fn ensure_kind_dir_creates_dir() {
         let tmp = TempDir::new().unwrap();
         let rp = prepare_run_root(tmp.path(), "r1").unwrap();
-        let dir = ensure_kind_dir(&rp, SidecarKind::Network).unwrap();
+        let dir = ensure_kind_dir(&rp, SidecarKind::Screenshots).unwrap();
         assert!(dir.is_dir());
-        assert_eq!(dir, rp.run_root.join("network"));
-    }
-
-    // ----- heal jsonl -----
-
-    #[test]
-    fn append_heal_jsonl_creates_and_appends() {
-        let tmp = TempDir::new().unwrap();
-        let rp = prepare_run_root(tmp.path(), "r1").unwrap();
-        append_heal_jsonl(&rp, &json!({ "step": "s1", "outcome": "absorb" })).unwrap();
-        append_heal_jsonl(&rp, &json!({ "step": "s2", "outcome": "patch" })).unwrap();
-        let body = fs::read_to_string(rp.run_root.join("heal.jsonl")).unwrap();
-        let lines: Vec<&str> = body.trim_end().split('\n').collect();
-        assert_eq!(lines.len(), 2);
-        assert!(lines[0].contains("\"step\":\"s1\""));
-        assert!(lines[1].contains("\"step\":\"s2\""));
+        assert_eq!(dir, rp.run_root.join("screenshots"));
     }
 
     // ----- audit -----
