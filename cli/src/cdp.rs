@@ -255,9 +255,22 @@ pub fn with_connection<T>(
     out
 }
 
+/// A leftover step-log window from an older build
+/// (`data:text/html,…aq-step-log`) must not win "active page", or grants
+/// and emulation land on that window instead of the app. The current step
+/// list is a dock in the app page, not its own target.
+pub(crate) fn is_app_page(url: &str) -> bool {
+    !url.is_empty()
+        && url != "about:blank"
+        && !url.starts_with("chrome://")
+        && !url.starts_with("chrome-untrusted://")
+        && !url.starts_with("devtools://")
+        && !url.contains("aq-step-log")
+}
+
 /// The active page target — last non-chrome page the browser reports
 /// (`chrome://newtab`-style leftovers sort first in practice and must not
-/// win).
+/// win). The step-log window is excluded.
 pub(crate) fn active_page(conn: &mut CdpConnection) -> Result<Option<(String, String)>> {
     let targets = conn.call("Target.getTargets", json!({}))?;
     Ok(targets
@@ -269,7 +282,7 @@ pub(crate) fn active_page(conn: &mut CdpConnection) -> Result<Option<(String, St
                     return false;
                 }
                 let u = t.get("url").and_then(|v| v.as_str()).unwrap_or("");
-                !u.starts_with("chrome://") && !u.starts_with("devtools://") && !u.is_empty()
+                is_app_page(u)
             })
         })
         .and_then(|t| {

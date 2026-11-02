@@ -2516,7 +2516,7 @@ async function runDetail(root, sid, runId) {
   const shotDiffs = await listShotDiffs(runDir);
   // Same for {"domshot"} claims — text diffs under domshots-diff/.
   const domshotDiffs = await listDomshotDiffs(runDir);
-  const video = await fileExists(path.join(runDir, 'run.webm'));
+  const recorded = await videoArtifact(runDir);
   return {
     sid,
     runId,
@@ -2531,7 +2531,13 @@ async function runDetail(root, sid, runId) {
     heals,
     shotDiffs,
     domshotDiffs,
-    video,
+    video: recorded.video,
+    // Which file the scrubber should load. mp4 is what `--record-video`
+    // writes now; webm remains for runs recorded before that switch.
+    videoFile: recorded.videoFile,
+    // Step offsets from video-cues.json (ms since record start). Null
+    // when the run has no cue file — the scrubber estimates instead.
+    cues: recorded.cues,
     network,
   };
 }
@@ -2652,6 +2658,26 @@ async function serveArtifact(res, root, sid, runId, kind, stepId) {
   streamFile(res, full);
 }
 
+// Recording the scrubber can play, plus the step-offset cue file.
+// Prefer run.mp4 — that is the file the runner writes today.
+async function videoArtifact(runDir) {
+  const mp4 = await fileExists(path.join(runDir, 'run.mp4'));
+  const webm = await fileExists(path.join(runDir, 'run.webm'));
+  const videoFile = mp4 ? 'run.mp4' : webm ? 'run.webm' : null;
+  const doc = await readJson(path.join(runDir, 'video-cues.json'));
+  const cues =
+    doc && Array.isArray(doc.cues)
+      ? doc.cues
+          .filter((c) => c && typeof c.idx === 'number' && typeof c.tMs === 'number')
+          .map((c) => ({
+            idx: c.idx,
+            tMs: c.tMs,
+            ...(typeof c.id === 'string' ? { id: c.id } : {}),
+          }))
+      : null;
+  return { video: videoFile != null, videoFile, cues };
+}
+
 async function fileExists(p) {
   try {
     return (await fsp.stat(p)).isFile();
@@ -2663,7 +2689,7 @@ async function fileExists(p) {
 // Stream a top-level run artifact (run.webm video, console.json, junit.xml,
 // run.har, network.json). Allowlisted names only — same clamp discipline as
 // serveArtifact.
-async function serveRunFile(res, root, sid, runId, name) {
+async function serveRunFile(req, res, root, sid, runId, name) {
   if (![sid, runId].every(isSafeSegment)) {
     return badRequest(res, 'unsafe path segment');
   }
@@ -2679,12 +2705,58 @@ async function serveRunFile(res, root, sid, runId, name) {
     return notFound(res, 'not captured');
   }
   if (!stat.isFile()) return notFound(res, 'not captured');
+  const total = stat.size;
+  const range = parseByteRange(req.headers.range, total);
+  if (range === 'unsatisfiable') {
+    res.writeHead(416, { 'content-range': `bytes */${total}` });
+    res.end();
+    return;
+  }
+  if (range) {
+    res.writeHead(206, {
+      'content-type': type,
+      'content-length': range.end - range.start + 1,
+      'content-range': `bytes ${range.start}-${range.end}/${total}`,
+      'accept-ranges': 'bytes',
+      'cache-control': 'no-store',
+    });
+    const s = createReadStream(full, { start: range.start, end: range.end });
+    s.on('error', () => {
+      if (!res.destroyed) res.destroy();
+    });
+    s.pipe(res);
+    return;
+  }
   res.writeHead(200, {
     'content-type': type,
-    'content-length': stat.size,
+    'content-length': total,
+    'accept-ranges': 'bytes',
     'cache-control': 'no-store',
   });
   streamFile(res, full);
+}
+
+// `bytes=start-end` for video seeking. `null` means "send the whole file"
+// (no Range header). `'unsatisfiable'` is a 416.
+function parseByteRange(header, total) {
+  if (!header || total <= 0) return null;
+  const m = /^bytes=(\d*)-(\d*)$/.exec(String(header).trim());
+  if (!m || (m[1] === '' && m[2] === '')) return 'unsatisfiable';
+  let start;
+  let end;
+  if (m[1] === '') {
+    const suffix = Number(m[2]);
+    if (!Number.isFinite(suffix) || suffix <= 0) return 'unsatisfiable';
+    start = Math.max(0, total - suffix);
+    end = total - 1;
+  } else {
+    start = Number(m[1]);
+    end = m[2] === '' ? total - 1 : Number(m[2]);
+  }
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= total || start > end) {
+    return 'unsatisfiable';
+  }
+  return { start, end: Math.min(end, total - 1) };
 }
 
 // -------- run compare (agent-qa compare <sid> <a> <b>) --------
@@ -2881,16 +2953,25 @@ function sessionForReplay(sid, profile) {
 // The runner records the actual session in audit.sessionName — deriving it
 // from audit.profile instead can point the bridge at a browser nobody is
 // using (black pane). Fall back to the profile-derived name, then per-sid.
-async function replayStreamSession(root, sid) {
-  const latest = await latestRunId(path.join(root, sid));
-  if (latest) {
-    const audit = await readJson(path.join(root, sid, 'replays', latest, 'audit.json'));
-    if (audit && typeof audit.sessionName === 'string' && isSafeSegment(audit.sessionName)) {
-      return audit.sessionName;
-    }
-    if (audit && audit.profile) return sessionForReplay(sid, audit.profile);
+async function sessionFromRunAudit(scenarioDir, sid, runId) {
+  if (!runId) return null;
+  const audit = await readJson(path.join(scenarioDir, 'replays', runId, 'audit.json'));
+  if (audit && typeof audit.sessionName === 'string' && isSafeSegment(audit.sessionName)) {
+    return audit.sessionName;
   }
-  return replaySessionFor(sid);
+  if (audit && audit.profile) return sessionForReplay(sid, audit.profile);
+  return null;
+}
+
+async function replayStreamSession(root, sid) {
+  const scenarioDir = path.join(root, sid);
+  // latest.txt flips when a run finishes, so a live replay must be read
+  // from the in-flight run. Watching the previous audit attaches the
+  // screencast to a browser this run is not driving.
+  const active = await sessionFromRunAudit(scenarioDir, sid, await findActiveRunId(scenarioDir));
+  if (active) return active;
+  const latest = await sessionFromRunAudit(scenarioDir, sid, await latestRunId(scenarioDir));
+  return latest || replaySessionFor(sid);
 }
 
 // List live agent-browser session names by reading the per-session unix
@@ -3063,17 +3144,120 @@ async function launchReplay(deps, sid, session, opts) {
   }
 }
 
-// Build a getCdpUrl() that resolves a session's CDP WebSocket endpoint via
-// the Rust `cdp-url` verb. session=null → the recorder's env session.
-function cdpUrlResolver(runCli, session) {
+// Chrome writes its DevTools port beside the profile:
+//   <port>\n/devtools/browser/<id>\n
+function cdpUrlFromActivePort(text) {
+  const lines = String(text).split(/\r?\n/);
+  const port = (lines[0] || '').trim();
+  const wsPath = (lines[1] || '').trim();
+  if (!/^\d+$/.test(port) || !wsPath.startsWith('/devtools/')) return null;
+  return `ws://127.0.0.1:${port}${wsPath}`;
+}
+
+// The debugger URL of a session whose Chrome is already running, read from
+// the daemon's child and DevToolsActivePort. Never asks agent-browser:
+// `get cdp-url` both launches a fresh about:blank when the window is gone
+// and waits behind whatever command the replay is currently driving, so the
+// preview stays on "Connecting…" until that step returns.
+// `io` is a test seam (home, readFileSync, kill).
+function readLiveCdpUrl(session, io) {
+  const name = session ? String(session) : '';
+  if (!name || !isSafeSegment(name)) return null;
+  const readFileSync = (io && io.readFileSync) || fs.readFileSync.bind(fs);
+  const kill = (io && io.kill) || ((pid, sig) => process.kill(pid, sig));
+  const home =
+    (io && io.home) ||
+    process.env.AGENT_BROWSER_HOME ||
+    path.join(os.homedir(), '.agent-browser');
+  let daemonPid;
+  try {
+    daemonPid = Number(String(readFileSync(path.join(home, `${name}.pid`), 'utf8')).trim());
+  } catch {
+    return null;
+  }
+  if (!Number.isInteger(daemonPid) || daemonPid <= 0) return null;
+  try {
+    kill(daemonPid, 0);
+  } catch {
+    return null;
+  }
+  // Chrome is often a child of a worker thread, not the thread-group
+  // leader. /proc/<pid>/task/<pid>/children stays empty in that case, so
+  // the preview would sit on "Connecting…" for the whole run.
+  const readdirSync = (io && io.readdirSync) || fs.readdirSync.bind(fs);
+  let tids = [String(daemonPid)];
+  try {
+    const listed = readdirSync(`/proc/${daemonPid}/task`);
+    if (listed && listed.length) tids = listed.map(String);
+  } catch {
+    /* fall back to the leader thread */
+  }
+  const kids = new Set();
+  for (const tid of tids) {
+    try {
+      for (const kid of String(readFileSync(`/proc/${daemonPid}/task/${tid}/children`, 'utf8'))
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)) {
+        kids.add(kid);
+      }
+    } catch {
+      /* thread exited between readdir and read */
+    }
+  }
+  for (const kid of kids) {
+    let args;
+    try {
+      args = String(readFileSync(`/proc/${kid}/cmdline`)).split('\0');
+    } catch {
+      continue;
+    }
+    let dir = null;
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      if (a.startsWith('--user-data-dir=')) dir = a.slice('--user-data-dir='.length);
+      else if (a === '--user-data-dir') dir = args[i + 1] || null;
+    }
+    if (!dir || !dir.startsWith('/')) continue;
+    let portFile;
+    try {
+      portFile = readFileSync(path.join(dir, 'DevToolsActivePort'), 'utf8');
+    } catch {
+      continue;
+    }
+    const url = cdpUrlFromActivePort(portFile);
+    if (url) return url;
+  }
+  return null;
+}
+
+// Session the authoring editor is recording into, if a recorder state file
+// is present. Otherwise the editor's live pane watches the "default" session.
+function readRecorderSession(io) {
+  try {
+    const readFileSync = (io && io.readFileSync) || fs.readFileSync.bind(fs);
+    const dir = resolveRecordRoot({
+      env: (io && io.env) || process.env,
+      cwd: (io && io.cwd) || process.cwd(),
+    });
+    const state = JSON.parse(String(readFileSync(path.join(dir, 'recorder-state.json'), 'utf8')));
+    if (state && typeof state.session === 'string' && isSafeSegment(state.session)) return state.session;
+  } catch {
+    /* no active recording */
+  }
+  return null;
+}
+
+// Build a getCdpUrl() for the live preview. session=null → the recorder's
+// session, else "default". Reads Chrome's port off disk. Does not call the
+// CLI: that call launches a browser when none is running, and while a replay
+// is mid-step it sits in the daemon queue so the pane stays blank.
+function cdpUrlResolver(_runCli, session, io) {
   return async () => {
-    const args = ['cdp-url', ...(session ? ['--session', session] : []), '--json'];
-    const r = await runCli(args);
-    if (r.spawnError) throw new Error(String(r.spawnError.message || r.spawnError));
-    if (r.code !== 0) throw new Error((r.stderr || 'cdp-url failed').trim());
-    const j = lastJsonLine(r.stdout) || {};
-    if (!j.url) throw new Error('cdp-url returned no url (no live session?)');
-    return j.url;
+    const name = session || readRecorderSession(io) || 'default';
+    const direct = readLiveCdpUrl(name, io);
+    if (direct) return direct;
+    throw new Error('no live browser');
   };
 }
 
@@ -3097,6 +3281,10 @@ function replayArgs(sid, session, opts = {}) {
     sid,
     ...(session ? ['--session', session] : []),
     opts && opts.headed === true ? '--headed' : '--headless',
+    // Film the run so headless replays still show the cursor, the click
+    // ripple, and the target border. The overlay only paints while
+    // recording; without this flag a headless run is a plain page.
+    '--record-video',
   ];
   if (opts && opts.profile) args.push('--profile', String(opts.profile));
   if (opts && opts.params && typeof opts.params === 'object') {
@@ -4626,6 +4814,7 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
           '--session',
           entry.browser.name,
           headed ? '--headed' : '--headless',
+          '--record-video',
           '--profile',
           resolved.profile || profile,
         ],
@@ -5909,7 +6098,7 @@ function createRequestHandler(root, deps, chat) {
             return serveArtifact(res, root, sid, runId, kind, stepId);
           }
           if (seg[5] === 'file' && seg.length === 7) {
-            return serveRunFile(res, root, sid, runId, decodeURIComponent(seg[6]));
+            return serveRunFile(req, res, root, sid, runId, decodeURIComponent(seg[6]));
           }
 
         }
@@ -6206,5 +6395,8 @@ module.exports = {
     finalizeIncompleteReplay,
     makeReplaySpawner,
     replaySetupTimeoutMs,
+    cdpUrlResolver,
+    readLiveCdpUrl,
+    cdpUrlFromActivePort,
   },
 };

@@ -1,14 +1,14 @@
 // web/src/features/runs/components/CenterPane.tsx
 import { useState } from 'react'
-import { BrowserModeToggle } from '@/components/browser-mode-toggle'
 import { TrendChip } from './TrendChip'
 import { cn } from '@/lib/utils'
 import { CameraIcon, GitCompareIcon, Loader2Icon, PlayIcon, PlusIcon, WrenchIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { SpaLink } from '@/components/spa-link'
-import { acceptAllDomshots, acceptAllShots, runFileUrl } from '@/lib/runs-api'
+import { acceptAllDomshots, acceptAllShots } from '@/lib/runs-api'
 import { CompareView } from './CompareView'
-import { InsertCheckDialog } from './InsertCheckDialog' 
+import { InsertCheckDialog } from './InsertCheckDialog'
+import { ReplayScrubber } from './ReplayScrubber' 
 import {
   cleanSummary,
   collapseEvents,
@@ -91,14 +91,12 @@ export interface RunConfig {
 
 export function CenterPane({
   runs,
-  onReplay,
   busy,
   runConfig,
 }: {
   runs: RunsApi
-  onReplay: (sid: string) => void
-  // A replay of the selected scenario is already in flight — disable Replay so
-  // a second run can't collide with it on the shared browser session.
+  // A replay of the selected scenario is already in flight — disable the
+  // run options so they can't change under a run that's already going.
   busy?: boolean
   runConfig?: RunConfig
 }) {
@@ -108,9 +106,6 @@ export function CenterPane({
   // Baseline runId for the compare picker ("" → the run before the selected
   // one, computed below).
   const [baseline, setBaseline] = useState('')
-  // run.webm player — toggled by the video chip in the run header; the file
-  // exists only for runs replayed with --record-video (detail.video).
-  const [showVideo, setShowVideo] = useState(false)
 
   // Mode A — a recorded scenario is previewed (no run selected).
   if (scenarioDef && !detail) {
@@ -121,11 +116,11 @@ export function CenterPane({
       : null
     return (
       <Pane>
-        {/* Two rows: what this scenario is + the Replay action, then the
-            settings the next replay uses. */}
+        {/* What this scenario is, then the settings the next replay uses.
+            Replay itself sits on the scenario card. */}
         <div className="border-b border-border">
-          <div className="flex items-start gap-4 px-5 pt-4 pb-3">
-            <div className="min-w-0 flex-1">
+          <div className="px-5 pt-4 pb-3">
+            <div className="min-w-0">
               <h2
                 className="line-clamp-2 text-[15px] font-semibold leading-snug tracking-tight"
                 title={scenarioDef.intent || scenarioDef.id || 'Scenario'}
@@ -143,30 +138,9 @@ export function CenterPane({
                 <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground opacity-50">{sel.sid}</div>
               )}
             </div>
-            {sel.sid && (
-              <button
-                type="button"
-                onClick={() => onReplay(sel.sid!)}
-                disabled={busy}
-                title={busy ? 'A replay is already running for this scenario' : undefined}
-                className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 text-[13px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {busy ? (
-                  <>
-                    <Loader2Icon className="size-3.5 animate-spin" /> Replaying…
-                  </>
-                ) : (
-                  <>
-                    <PlayIcon className="size-3.5 fill-current" /> Replay
-                  </>
-                )}
-              </button>
-            )}
           </div>
-          {sel.sid && runConfig && (
+          {sel.sid && runConfig && (runConfig.personas.length > 0 || runConfig.environments.length > 0) && (
             <div className="flex flex-wrap items-center gap-x-2 gap-y-2 border-t border-border/60 bg-muted/30 px-5 py-2 text-xs text-muted-foreground">
-              {(runConfig.personas.length > 0 || runConfig.environments.length > 0) && (
-                <>
                   <span>Run as</span>
                   <select
                     value={runConfig.personaId}
@@ -197,15 +171,6 @@ export function CenterPane({
                       </option>
                     ))}
                   </select>
-                </>
-              )}
-              <div className="ml-auto">
-                <BrowserModeToggle
-                  headed={runConfig.headed}
-                  onChange={runConfig.setHeaded}
-                  disabled={busy}
-                />
-              </div>
             </div>
           )}
           {sel.sid && runConfig?.inputs && runConfig.inputs.length > 0 && (
@@ -347,29 +312,6 @@ export function CenterPane({
                 <span className="aqa-ping size-1.5 rounded-full bg-current" /> live
               </span>
             )}
-            {!live && sel.sid && (
-              <button
-                type="button"
-                onClick={() => onReplay(sel.sid!)}
-                disabled={busy}
-                title={busy ? 'A replay is already running for this scenario' : 'Run this scenario again'}
-                className="flex h-7 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[11px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {busy ? <Loader2Icon className="size-3 animate-spin" /> : <PlayIcon className="size-3 fill-current" />}
-                Replay
-              </button>
-            )}
-            {detail.video && (
-              <button
-                type="button"
-                onClick={() => setShowVideo((v) => !v)}
-                title="This run was recorded with --record-video — toggle the run.webm player"
-                className="flex items-center gap-1 rounded bg-info/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-info hover:bg-info/25"
-              >
-                <PlayIcon className="size-3" />
-                video
-              </button>
-            )}
             {healedCount > 0 && (
               <span
                 className="flex items-center gap-1 rounded bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-warning"
@@ -492,15 +434,18 @@ export function CenterPane({
               {runs.compareErr}
             </div>
           )}
-          {detail.video && showVideo && sel.sid && (
-            <video
-              controls
-              preload="metadata"
-              src={runFileUrl(sel.sid, detail.runId, 'run.webm')}
-              className="mt-2 w-full rounded-md border border-border bg-black"
-            />
-          )}
         </div>
+        {!live && detail.video && sel.sid && (
+          <ReplayScrubber
+            sid={sel.sid}
+            runId={detail.runId}
+            steps={rows}
+            cues={detail.cues}
+            videoFile={detail.videoFile}
+            selectedIdx={sel.stepIdx}
+            onSelect={(idx) => runs.selectStep(idx)}
+          />
+        )}
         {runs.compare ? (
           <CompareView runs={runs} />
         ) : (

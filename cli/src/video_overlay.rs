@@ -1,10 +1,32 @@
-//! In-page overlay painted during `--record-video` replays: a Cypress-style
-//! left rail listing every step — pending dimmed, current highlighted,
-//! pass/fail colored — a fake cursor that glides to each step's target and
-//! ripples on click verbs, plus a dashed sky ring bounding asserted
-//! elements on check steps (flashing green/red with the outcome). Injected
-//! per-step via `eval` — navigation wipes the DOM, so each call re-adds
-//! the elements; best-effort only, never fails a step.
+//! Two headed-replay surfaces, both in the app's own window.
+//!
+//! The page overlay (`annotate`) is a fake cursor, a click ripple, and a
+//! dashed ring on the step's target. It is painted into the page only
+//! while `--record-video` is on.
+//!
+//! The step log (`sync_step_log`) is a dock on the left of that same
+//! window. The page shifts right by the dock's width, including
+//! `position:fixed` UI (a transform on `body` makes it the containing
+//! block), so the list does not cover the app. The dock lives on
+//! `documentElement`, outside that transform, and the cursor is measured
+//! after the shift so the ring stays on the target. Finished steps stay
+//! quiet, the running step is highlighted, and later steps stay faded.
+//! The dock is `aria-hidden` and its rows sit in an open shadow root, so
+//! a locator cannot match a step label. Screenshots are cropped to the
+//! page beside the dock after the shot, so the list is not taken down.
+//!
+//! The saved recording is cropped the same way. The live window keeps
+//! the list; the preview plays the page. The dock is painted through the
+//! same eval path as the cursor. A second debugger socket is not opened
+//! for it: that socket was resetting the tab to `about:blank`, and the
+//! session daemon then held the blank window open. Headless replays
+//! remove a dock left on a reused page and never paint one. The
+//! workbench already lists the steps.
+
+use std::path::Path;
+use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use serde_json::{json, Value as Json};
 
@@ -12,26 +34,96 @@ use crate::browser;
 use crate::scenario::{ClaimSubject, Locator, NameMatch, RawLocatorKind, Step, Verb};
 use crate::value::{substitute_scenario_vars, ValueScope};
 
-/// Hide/show the overlay around a screenshot capture — `shot` claims
-/// pixel-compare the saved sidecar, and a painted rail would read as
-/// page drift. Element ids live under `__aq_`; both are re-created by the
-/// next `annotate` anyway, so hiding is a pure `display:none`.
+/// Hide/show the cursor, ripple, and target ring around a screenshot.
+/// The step dock stays. Pulling it down unshifts the page, and the
+/// recording holds that frame until the dock is built again.
 pub fn set_visible(session: &str, visible: bool) {
-    let vis = if visible { "" } else { "none" };
-    let expr = format!(
-        "try{{document.querySelectorAll('#__aq_rail,#__aq_ring,#__aq_cursor,#__aq_pulse').forEach(function(e){{e.style.display='{vis}'}})}}catch(e){{}}"
-        , vis = vis
-    );
-    let _ = browser::eval_expression(session, &expr);
+    let _ = browser::eval_expression(session, &visibility_expr(visible));
 }
 
-/// Paint the overlay for step `cur` (1-based). `labels` is the full
-/// post-window step list; `outcomes[i]` is `Some("pass"|"fail"|"skip")`
-/// once a step settles, `None` while pending/running. Errors are swallowed
-/// — a dead page or unresolvable locator must not affect replay.
+/// Save a screenshot of the page beside the dock. The capture is a normal
+/// viewport shot, then the dock is cropped off the file. A CDP clip
+/// capture is itself a frame of the recording, so the panel would appear
+/// to vanish for that frame.
+pub fn capture_clean_screenshot(session: &str, path: &std::path::Path, timeout_ms: u64) -> bool {
+    let left = dock_crop_px(session);
+    let _ = browser::eval_expression(session, CURSOR_HIDE);
+    let ok = matches!(
+        browser::screenshot(session, path, true, Some(timeout_ms)),
+        Ok(true)
+    );
+    let _ = browser::eval_expression(session, CURSOR_SHOW);
+    ok && crop_dock(path, left)
+}
+
+const DOCK_WIDTH_EXPR: &str = r#"(function(){
+ var d=document.getElementById('__aq_log');
+ if(!d||!d.getBoundingClientRect)return 0;
+ var r=d.getBoundingClientRect();
+ if(!(r.width>0))return 0;
+ return Math.round(r.right*(window.devicePixelRatio||1));
+})()"#;
+
+const CURSOR_HIDE: &str = r#"(function(){
+ ['__aq_ring','__aq_cursor','__aq_rail','__aq_step'].forEach(function(id){
+  var e=document.getElementById(id);if(e)e.style.display='none';
+ });
+ var pulse=document.getElementById('__aq_pulse');if(pulse)pulse.remove();
+})()"#;
+
+const CURSOR_SHOW: &str = r#"(function(){
+ ['__aq_ring','__aq_cursor','__aq_rail','__aq_step'].forEach(function(id){
+  var e=document.getElementById(id);if(e)e.style.display='';
+ });
+})()"#;
+
+fn dock_crop_px(session: &str) -> u32 {
+    let Ok(out) = browser::eval_expression(session, DOCK_WIDTH_EXPR) else {
+        return 0;
+    };
+    let t = out.trim().trim_matches('"');
+    t.parse::<f64>()
+        .ok()
+        .map(|n| n.round().max(0.0) as u32)
+        .unwrap_or(0)
+}
+
+/// Drop the dock strip from a saved shot. The live page is unchanged.
+fn crop_dock(path: &std::path::Path, left: u32) -> bool {
+    if left == 0 {
+        return true;
+    }
+    let img = match image::open(path) {
+        Ok(img) => img,
+        Err(e) => {
+            eprintln!("[v2-replay] clean screenshot read: {e}");
+            return false;
+        }
+    };
+    if left >= img.width() {
+        return true;
+    }
+    let cropped = img.crop_imm(left, 0, img.width() - left, img.height());
+    if let Err(e) = cropped.save(path) {
+        eprintln!("[v2-replay] clean screenshot crop: {e}");
+        return false;
+    }
+    true
+}
+
+fn visibility_expr(visible: bool) -> String {
+    let vis = if visible { "" } else { "none" };
+    format!(
+        "(function(){{try{{document.querySelectorAll('#__aq_rail,#__aq_step,#__aq_ring,#__aq_cursor').forEach(function(e){{e.style.display='{vis}'}});if('{vis}'==='none'){{var p=document.getElementById('__aq_pulse');if(p)p.remove()}}}}catch(e){{}}}})()"
+    )
+}
+
+/// Paint the cursor and target ring for step `cur` (1-based).
+/// `outcomes[i]` is `Some("pass"|"fail"|"skip")` once a step settles,
+/// `None` while pending/running. Errors are swallowed — a dead page or
+/// unresolvable locator must not affect replay.
 pub fn annotate(
     session: &str,
-    labels: &[String],
     cur: u32,
     outcomes: &[Option<&str>],
     step: &Step,
@@ -68,13 +160,12 @@ pub fn annotate(
         .get(cur.saturating_sub(1) as usize)
         .copied()
         .flatten();
-    let expr = format!(
-        "({OVERLAY_FN})({},{},{})",
-        serde_json::to_string(labels).unwrap_or_else(|_| "[]".into()),
-        cur,
-        serde_json::to_string(&outcomes).unwrap_or_else(|_| "[]".into()),
+    // Drop a rail left by an older build. The step list lives in the
+    // workbench; painting it on the page covers the UI under test.
+    let _ = browser::eval_expression(
+        session,
+        "try{var r=document.getElementById('__aq_rail');if(r)r.remove()}catch(e){}",
     );
-    let _ = browser::eval_expression(session, &expr);
     let painter = format!(
         "(function(q,kind,click,st){{{RESOLVE}\n{POINTER_BODY}}})({},{},{},{})",
         serde_json::to_string(&target).unwrap_or_else(|_| "null".into()),
@@ -85,47 +176,16 @@ pub fn annotate(
     let _ = browser::eval_expression(session, &painter);
 }
 
-/// Concise label for one rail row — verb + accessible name for targeted
-/// verbs, else the authored intent.
-pub fn rail_label(step: &Step) -> String {
-    match step {
-        Step::Do {
-            verb, intent, on, ..
-        } => {
-            let v = format!("{verb:?}").to_ascii_lowercase();
-            let name = match on {
-                // Raw selector text is technical noise — the authored
-                // intent reads better; role names are human-meaningful.
-                Some(Locator::Raw(_)) if !intent.trim().is_empty() => {
-                    Some(intent.trim().to_string())
-                }
-                other => locator_name(other.as_ref())
-                    .or_else(|| (!intent.trim().is_empty()).then(|| intent.trim().to_string())),
-            };
-            match name {
-                Some(name) => format!("{v} \"{name}\""),
-                None => v,
-            }
-        }
-        Step::Check { intent, .. } => {
-            if intent.trim().is_empty() {
-                "check".to_string()
-            } else {
-                format!("check — {}", intent.trim())
-            }
-        }
+/// One line for the step log: the author's intent, or the verb when the
+/// step has no intent.
+pub(crate) fn step_caption(step: &Step) -> String {
+    let intent = step.intent().trim();
+    if !intent.is_empty() {
+        return intent.to_string();
     }
-}
-
-/// Accessible-name for a row: role name first, then the raw selector text.
-fn locator_name(on: Option<&Locator>) -> Option<String> {
-    match on? {
-        Locator::Role(r) => r.name.as_ref().map(|n| match n {
-            NameMatch::Plain(s) => s.clone(),
-            NameMatch::Pattern { pattern, .. } => pattern.clone(),
-            NameMatch::I18n { i18n_key } => i18n_key.clone(),
-        }),
-        Locator::Raw(r) => Some(r.raw.value.clone()),
+    match step {
+        Step::Do { verb, .. } => format!("{verb:?}").to_ascii_lowercase(),
+        Step::Check { .. } => "check".to_string(),
     }
 }
 
@@ -168,53 +228,67 @@ if(q.text){try{
  while(n=w.nextNode()){if(n.childElementCount===0&&(n.textContent||'').trim()===q.text)return n}
 }catch(e){}return null}
 if(q.role){try{
- var tags={button:'button,input[type=button],input[type=submit],input[type=reset],[role=button]',link:'a[href],[role=link]',textbox:'input:not([type]),input[type=text],input[type=email],input[type=password],input[type=search],input[type=tel],input[type=url],textarea,[role=textbox]',checkbox:'input[type=checkbox],[role=checkbox]',radio:'input[type=radio],[role=radio]',heading:'h1,h2,h3,h4,h5,h6,[role=heading]',img:'img,[role=img]',listbox:'select,[role=listbox]',option:'option,[role=option]',combobox:'select,[role=combobox]',slider:'input[type=range],[role=slider]',tab:'[role=tab]',menuitem:'[role=menuitem]',navigation:'nav,[role=navigation]',main:'main,[role=main]',form:'form,[role=form]',dialog:'dialog,[role=dialog]',alert:'[role=alert]',list:'ul,ol,[role=list]',listitem:'li,[role=listitem]',cell:'td,[role=cell]',columnheader:'th,[role=columnheader]',row:'tr,[role=row]',table:'table,[role=table]'};
+ var tags={button:'button,input[type=button],input[type=submit],input[type=reset],[role=button]',link:'a[href],[role=link]',textbox:'input:not([type]),input[type=text],input[type=email],input[type=password],input[type=search],input[type=tel],input[type=url],textarea,[role=textbox]',checkbox:'input[type=checkbox],[role=checkbox]',radio:'input[type=radio],[role=radio]',heading:'h1,h2,h3,h4,h5,h6,[role=heading]',img:'img,[role=img]',listbox:'select,[role=listbox]',option:'option,[role=option]',combobox:'select,[role=combobox]',slider:'input[type=range],[role=slider]',tab:'[role=tab]',menuitem:'[role=menuitem]',navigation:'nav,[role=navigation]',main:'main,[role=main]',form:'form,[role=form]',dialog:'dialog,[role=dialog]',alert:'[role=alert]',list:'ul,ol,[role=list]',listitem:'li,[role=listitem]',cell:'td,[role=cell]',columnheader:'th,[role=columnheader]',row:'tr,[role=row]',table:'table,[role=table]',paragraph:'p,[role=paragraph]'};
  var cand=doc.querySelectorAll('[role="'+q.role+'"]'+(tags[q.role]?','+tags[q.role]:''));
  for(var i=0;i<cand.length;i++){var c=cand[i];
   if(!q.name)return c;
   var nm=(c.getAttribute('aria-label')||'')||((c.textContent||'').trim())||((c.value||''));
   if(nm===q.name||nm.indexOf(q.name)>=0)return c;
  }
+ var labels=doc.querySelectorAll('label');
+ for(var j=0;j<labels.length;j++){
+  var lb=labels[j];
+  var lt=((lb.getAttribute('aria-label')||'')||(lb.textContent||'')).trim();
+  if(lt!==q.name&&lt.indexOf(q.name)<0)continue;
+  var ctrl=lb.htmlFor?doc.getElementById(lb.htmlFor):lb.querySelector('input,textarea,select');
+  if(ctrl)return ctrl;
+ }
 }catch(e){}return null}
 return null;
 }"#;
 
 /// Pointer painter body — runs inside `function(q,kind,click,st){...}`
-/// after `RESOLVE`. Paints the assertion ring (dashed sky; flips green/red
-/// once the outcome lands) on check steps only, glides the fake cursor to
-/// the target's center, and ripples on click verbs. With no resolvable
+/// after `RESOLVE`. Drops a step pill or rail left by an older build,
+/// then boxes every resolved target (dashed sky; a check flips the box
+/// green/red once the outcome lands), glides the fake cursor to the
+/// target's center, and ripples on click verbs. With no resolvable
 /// target the ring comes down but the cursor stays parked — jumping it
 /// off-screen between steps reads as flicker in the video.
 const POINTER_BODY: &str = r##"var doc=document;try{
+var stepEl=doc.getElementById('__aq_step');if(stepEl)stepEl.remove();
+var rail=doc.getElementById('__aq_rail');if(rail)rail.remove();
 var old=doc.getElementById('__aq_ring');if(old)old.remove();
+// One ripple, while a click is still running. A later step, or the
+// recolor after the click lands, must not play it again. Hiding and
+// showing the node restarts the animation, so drop it instead.
+var oldPulse=doc.getElementById('__aq_pulse');
+if(!(click && !st) && oldPulse)oldPulse.remove();
 var el=resolve(doc,q);
 if(!el||!el.getBoundingClientRect)return;
 var r=el.getBoundingClientRect();
 if(!(r.width>0||r.height>0)||r.bottom<=0||r.right<=0||r.top>=window.innerHeight||r.left>=window.innerWidth)return;
 var cx=r.left+r.width/2,cy=r.top+r.height/2;
-// Action steps carry the cursor + ripple — an element border around
-// buttons reads as clutter. The ring is reserved for assertions, where
-// bounding the asserted element is what the video needs to show.
-if(kind==='check'){
+// The box shows where the step acted. Checks recolor it with the
+// outcome; clicks keep the sky dash and add the cursor ripple below.
 var col='#38bdf8',dash=true;
+if(kind==='check'){
 if(st==='pass'){col='#22c55e';dash=false}
 else if(st==='fail'||st==='skip'){col='#ef4444';dash=false}
+}
 var ring=doc.createElement('div');ring.id='__aq_ring';
 ring.setAttribute('style','position:fixed;z-index:2147483646;left:'+(r.left-4)+'px;top:'+(r.top-4)+'px;width:'+(r.width+8)+'px;height:'+(r.height+8)+'px;border:'+(dash?'3px dashed':'3px solid')+' '+col+';border-radius:5px;box-shadow:0 0 0 4px '+col+'40,0 0 18px '+col+'8c;pointer-events:none;');
 (doc.documentElement||doc.body||doc).appendChild(ring);
-}
-var cur=doc.getElementById('__aq_cursor');
-if(!cur){
- cur=doc.createElement('div');cur.id='__aq_cursor';
- cur.setAttribute('style','position:fixed;z-index:2147483647;width:32px;height:32px;pointer-events:none;transition:left .28s ease,top .28s ease;left:'+cx+'px;top:'+cy+'px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.65));');
- cur.innerHTML='<svg width="32" height="32" viewBox="0 0 24 24"><path d="M4 2 L20 12 L13 13 L17 20 L14 21.5 L10 14.5 L4 19 Z" fill="#fff" stroke="#0f172a" stroke-width="2.2"/></svg>';
- (doc.documentElement||doc.body||doc).appendChild(cur);
+var cursor=doc.getElementById('__aq_cursor');
+if(!cursor){
+ cursor=doc.createElement('div');cursor.id='__aq_cursor';
+ cursor.setAttribute('style','position:fixed;z-index:2147483647;width:32px;height:32px;pointer-events:none;transition:left .28s ease,top .28s ease;left:'+cx+'px;top:'+cy+'px;filter:drop-shadow(0 2px 3px rgba(0,0,0,.65));');
+ cursor.innerHTML='<svg width="32" height="32" viewBox="0 0 24 24"><path d="M4 2 L20 12 L13 13 L17 20 L14 21.5 L10 14.5 L4 19 Z" fill="#fff" stroke="#0f172a" stroke-width="2.2"/></svg>';
+ (doc.documentElement||doc.body||doc).appendChild(cursor);
  // Let it mount at the target before any transition kicks in.
- cur.getBoundingClientRect();
+ cursor.getBoundingClientRect();
 }
-cur.style.left=(cx-5)+'px';cur.style.top=(cy-3)+'px';
-if(click){
- var old2=doc.getElementById('__aq_pulse');if(old2)old2.remove();
+cursor.style.left=(cx-5)+'px';cursor.style.top=(cy-3)+'px';
+if(click && !st){
  var p=doc.createElement('div');p.id='__aq_pulse';
  p.setAttribute('style','position:fixed;z-index:2147483646;left:'+(cx-48)+'px;top:'+(cy-48)+'px;width:96px;height:96px;border:4px solid rgba(244,63,94,.95);border-radius:50%;background:radial-gradient(circle,rgba(244,63,94,.85) 0%,rgba(244,63,94,.4) 38%,rgba(244,63,94,0) 68%);pointer-events:none;animation:__aq_glow .8s ease-out forwards;');
  if(!doc.getElementById('__aq_style')){
@@ -226,62 +300,472 @@ if(click){
 }
 }catch(e){}"##;
 
-/// (labels, cur, outcomes) → paints the step rail. cur is 1-based.
-const OVERLAY_FN: &str = r#"function(labels,cur,outcomes){
-var doc=document;try{
-var rail=doc.getElementById('__aq_rail');
-if(!rail){
- rail=doc.createElement('div');rail.id='__aq_rail';
- rail.setAttribute('style','position:fixed;left:0;top:0;bottom:0;z-index:2147483647;width:196px;background:linear-gradient(180deg,rgba(9,13,20,.94),rgba(9,13,20,.88));backdrop-filter:blur(8px);color:#cbd5e1;font:500 10.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;padding:10px 8px;pointer-events:none;overflow:hidden;border-right:1px solid rgba(148,163,184,.14);box-shadow:2px 0 16px rgba(0,0,0,.3);');
- (doc.documentElement||doc.body||doc).appendChild(rail);
+/// How one row in the step log reads. Finished steps are quiet, the
+/// running step is the one at full strength, and steps not reached yet
+/// stay faded.
+pub(crate) fn row_state(index: usize, cur: u32, outcome: Option<&str>) -> &'static str {
+    match outcome {
+        Some("fail") => "fail",
+        Some("skip") => "skip",
+        Some("pass") => "done",
+        _ => {
+            let n = u32::try_from(index).unwrap_or(u32::MAX).saturating_add(1);
+            if n == cur {
+                "now"
+            } else if n > cur {
+                "wait"
+            } else {
+                "done"
+            }
+        }
+    }
 }
-var html='<div style="font:700 9px/1 ui-monospace,monospace;letter-spacing:.16em;color:#5b6a82;text-transform:uppercase;padding:1px 6px 8px;border-bottom:1px solid rgba(148,163,184,.12);margin-bottom:6px">replay</div>';
-for(var i=0;i<labels.length;i++){
- var st=outcomes[i]||'',glyph='·',col='#64748b',op=.38,bg='transparent',edge='';
- var n=i+1;
- if(st==='pass'){glyph='✓';col='#34d399';op=.7}
- else if(st==='fail'){glyph='✗';col='#fb7185';op=1;bg='rgba(251,113,133,.1)'}
- else if(st==='skip'){glyph='–';col='#94a3b8';op=.5}
- else if(n===cur){glyph='▸';col='#f8fafc';op=1;bg='rgba(244,63,94,.16)';edge='box-shadow:inset 2px 0 0 #f43f5e;'}
- html+='<div style="opacity:'+op+';background:'+bg+';'+edge+'border-radius:5px;padding:2px 6px;margin:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:'+col+'"><span style="display:inline-block;width:19px;color:#4b586e;font-size:9.5px">'+(n<10?'0'+n:n)+'</span> '+glyph+' <span style="color:'+(n===cur||st?col:'#8b98ab')+'">'+labels[i]+'</span></div>';
+
+/// Paint the step dock before the cursor. The dock shifts the page, so
+/// the ring has to be measured after that move. A recording paints the
+/// cursor; a visible window also refreshes the dock.
+#[allow(clippy::too_many_arguments)]
+pub fn paint(
+    session: &str,
+    show_log: bool,
+    record_on: bool,
+    cur: u32,
+    captions: &[String],
+    outcomes: &[Option<&str>],
+    step: &Step,
+    scope: &mut ValueScope,
+) {
+    if show_log {
+        sync_step_log(session, cur, captions, outcomes);
+    }
+    if record_on {
+        annotate(session, cur, outcomes, step, scope);
+    }
 }
-rail.innerHTML=html;
-var rows=rail.children;var at=cur-1;
-if(rows[at]&&rail.scrollHeight>rail.clientHeight)rail.scrollTop=Math.max(0,at*20-rail.clientHeight/3);
-}catch(e){}}"#;
+
+/// Reserve a strip on the left and move the page — including its
+/// `position:fixed` UI — into the rest of the window. Inline styles, not
+/// a `<style>` tag, so a page content-security policy cannot block it.
+/// The saved inline values go back when the strip is released for a
+/// screenshot.
+const SHIFT_FN: &str = r#"function aqShift(on){
+ var b=document.body;if(!b)return;
+ var props=['margin-left','width','max-width','transform','min-height','box-sizing'];
+ if(on){
+  if(!b.getAttribute('data-aq-shift')){
+   var saved={};
+   props.forEach(function(p){saved[p]={v:b.style.getPropertyValue(p),i:b.style.getPropertyPriority(p)}});
+   b.setAttribute('data-aq-shift',JSON.stringify(saved));
+  }
+  b.classList.add('__aq_shifted');
+  b.style.setProperty('margin-left','320px','important');
+  b.style.setProperty('width','calc(100vw - 320px)','important');
+  b.style.setProperty('max-width','calc(100vw - 320px)','important');
+  b.style.setProperty('transform','translateZ(0)','important');
+  b.style.setProperty('min-height','100vh','important');
+  b.style.setProperty('box-sizing','border-box','important');
+ }else{
+  b.classList.remove('__aq_shifted');
+  var saved={};
+  try{saved=JSON.parse(b.getAttribute('data-aq-shift')||'{}')}catch(e){}
+  props.forEach(function(p){
+   var prev=saved[p];
+   if(prev&&prev.v)b.style.setProperty(p,prev.v,prev.i||'');
+   else b.style.removeProperty(p);
+  });
+  b.removeAttribute('data-aq-shift');
+ }
+}"#;
+
+/// Rows live in a shadow root on `documentElement` (not inside the shifted
+/// body) so the cursor's viewport coordinates still match the target.
+const DOCK_BODY: &str = r#"var doc=document;
+var oldRail=doc.getElementById('__aq_rail');if(oldRail)oldRail.remove();
+var oldStep=doc.getElementById('__aq_step');if(oldStep)oldStep.remove();
+var host=doc.getElementById('__aq_log');
+if(!host){
+ host=doc.createElement('div');
+ host.id='__aq_log';
+ host.setAttribute('aria-hidden','true');
+ host.style.cssText='all:initial;position:fixed;z-index:2147483647;left:0;top:0;bottom:0;width:320px;overflow:auto;background:#f4f4f5;border-right:1px solid #e4e4e7;box-sizing:border-box;pointer-events:auto;';
+ (doc.documentElement||doc.body).appendChild(host);
+ host.attachShadow({mode:'open'});
+}
+var root=host.shadowRoot;if(!root)return;
+var ol=root.getElementById('rows');
+if(!ol){
+ var header=doc.createElement('div');
+ header.textContent='Steps';
+ header.style.cssText='position:sticky;top:0;padding:14px 16px 10px;font:11px/1.3 ui-sans-serif,system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:#71717a;background:#f4f4f5;border-bottom:1px solid #e4e4e7;';
+ ol=doc.createElement('ol');
+ ol.id='rows';
+ ol.style.cssText='list-style:none;margin:0;padding:8px;';
+ root.appendChild(header);
+ root.appendChild(ol);
+}
+ol.textContent='';
+var focus=null;
+var base='display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border-radius:8px;border-left:3px solid transparent;font:13px/1.4 ui-sans-serif,system-ui,sans-serif;color:#18181b;';
+var look={done:'opacity:.55',skip:'opacity:.45',wait:'opacity:.38',now:'opacity:1;background:#fff;font-weight:650;border-left-color:#4f46e5;box-shadow:0 1px 2px rgba(0,0,0,.06)',fail:'opacity:1;background:#fef2f2;border-left-color:#dc2626;color:#991b1b'};
+for(var i=0;i<rows.length;i++){
+ var s=rows[i];
+ var li=doc.createElement('li');
+ li.style.cssText=base+(look[s.state]||'');
+ var m=doc.createElement('span');
+ m.style.cssText='width:1em;flex:none;text-align:center;color:#71717a;';
+ m.textContent=s.state==='fail'?'!':(s.state==='now'?'\u203a':(s.state==='wait'?'\u00b7':'\u2713'));
+ var n=doc.createElement('span');
+ n.style.cssText='width:1.6em;flex:none;font-variant-numeric:tabular-nums;color:#71717a;';
+ n.textContent=String(i+1);
+ var t=doc.createElement('span');
+ t.style.cssText='min-width:0;';
+ t.textContent=s.label||'';
+ li.appendChild(m);li.appendChild(n);li.appendChild(t);
+ ol.appendChild(li);
+ if(s.state==='now'||s.state==='fail')focus=li;
+}
+if(focus){
+ var top=focus.offsetTop-(host.clientHeight/2)+(focus.offsetHeight/2);
+ host.scrollTop=top<0?0:top;
+}
+host.style.display='';
+aqShift(true);"#;
+
+fn dock_expr(payload: &str) -> String {
+    format!(
+        "(function(rows){{{shift}\n{body}}})({payload})",
+        shift = SHIFT_FN,
+        body = DOCK_BODY,
+        payload = payload,
+    )
+}
+
+/// Paint the step dock into the app page. Best-effort: a missing page
+/// must not fail the step. One process-wide pass closes a step-log
+/// window left by an older build so it cannot steal the next click.
+pub fn sync_step_log(session: &str, cur: u32, captions: &[String], outcomes: &[Option<&str>]) {
+    close_leftover_log_windows(session);
+    let rows: Vec<Json> = captions
+        .iter()
+        .enumerate()
+        .map(|(i, label)| {
+            let outcome = outcomes.get(i).copied().flatten();
+            json!({ "label": label, "state": row_state(i, cur, outcome) })
+        })
+        .collect();
+    let payload = serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into());
+    let _ = browser::eval_expression(session, &dock_expr(&payload));
+    note_dock_span(session);
+}
+
+/// Drop a dock left on a reused page. Headless replays call this before
+/// filming so the preview is the page. Body styles are restored only
+/// when this dock saved them.
+pub fn clear_step_log(session: &str) {
+    if let Ok(mut span) = DOCK_SPAN.lock() {
+        *span = None;
+    }
+    let _ = browser::eval_expression(session, &clear_expr());
+}
+
+/// CSS px of the dock's right edge over the layout width. The recording
+/// is device pixels, so the crop is this fraction of the file's width.
+static DOCK_SPAN: Mutex<Option<(f64, f64)>> = Mutex::new(None);
+
+const DOCK_SPAN_EXPR: &str = r#"(function(){
+ var d=document.getElementById('__aq_log');
+ if(!d||!d.getBoundingClientRect||!(window.innerWidth>0)) return '';
+ var r=d.getBoundingClientRect();
+ if(!(r.right>1)) return '';
+ return r.right+'/'+window.innerWidth;
+})()"#;
+
+fn clear_expr() -> String {
+    format!(
+        "(function(){{{shift}\nvar d=document.getElementById('__aq_log');if(d)d.remove();\nvar rail=document.getElementById('__aq_rail');if(rail)rail.remove();\nvar stepEl=document.getElementById('__aq_step');if(stepEl)stepEl.remove();\nvar b=document.body;if(b&&(b.getAttribute('data-aq-shift')||b.classList.contains('__aq_shifted')))aqShift(false);}})()",
+        shift = SHIFT_FN
+    )
+}
+
+fn parse_span(out: &str) -> Option<(f64, f64)> {
+    let t = out.trim().trim_matches('"');
+    let (right, inner) = t.split_once('/')?;
+    let right: f64 = right.trim().parse().ok()?;
+    let inner: f64 = inner.trim().parse().ok()?;
+    if right > 1.0 && inner > right {
+        Some((right, inner))
+    } else {
+        None
+    }
+}
+
+/// Remember how wide the dock is relative to the page. A missing dock
+/// keeps the last good measurement so a later navigation cannot make
+/// the crop guess.
+pub fn note_dock_span(session: &str) {
+    let Ok(out) = browser::eval_expression(session, DOCK_SPAN_EXPR) else {
+        return;
+    };
+    let Some(span) = parse_span(&out) else {
+        return;
+    };
+    if let Ok(mut slot) = DOCK_SPAN.lock() {
+        *slot = Some(span);
+    }
+}
+
+/// Device-pixel column where the page starts in a recording of `video_w`.
+/// `None` when there is no dock to remove. The column is rounded up to
+/// an even x so the cropped frame stays yuv420-friendly, which drops at
+/// most one pixel of the page.
+pub(crate) fn dock_crop_x(dock_right: f64, inner_width: f64, video_w: u32) -> Option<u32> {
+    if !(dock_right > 1.0 && inner_width > dock_right && video_w >= 4) {
+        return None;
+    }
+    let frac = dock_right / inner_width;
+    if !(0.02..=0.6).contains(&frac) {
+        return None;
+    }
+    let mut x = (frac * f64::from(video_w)).round().max(0.0) as u32;
+    if x % 2 == 1 {
+        x = x.saturating_add(1);
+    }
+    if x >= video_w || video_w - x < 2 {
+        return None;
+    }
+    if (video_w - x) % 2 == 1 {
+        x = x.saturating_add(1);
+    }
+    if x >= video_w || video_w - x < 2 {
+        return None;
+    }
+    Some(x)
+}
+
+fn video_width(path: &Path) -> Option<u32> {
+    let out = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8(out.stdout)
+        .ok()?
+        .trim()
+        .parse::<u32>()
+        .ok()
+}
+
+/// Cut the step list off a finished recording. The live window is left
+/// as it is. A failed encode keeps the original file.
+pub fn crop_dock_from_video(path: &Path) {
+    let Some((right, inner)) = DOCK_SPAN.lock().ok().and_then(|slot| *slot) else {
+        eprintln!("[v2-replay] recording still shows the step list — its width was not measured");
+        return;
+    };
+    let Some(width) = video_width(path) else {
+        eprintln!(
+            "[v2-replay] recording still shows the step list — could not read the video width"
+        );
+        return;
+    };
+    let Some(x) = dock_crop_x(right, inner, width) else {
+        return;
+    };
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("mp4");
+    let tmp = path.with_extension(format!("crop.{ext}"));
+    let webm = ext.eq_ignore_ascii_case("webm");
+    let filter = format!("crop=iw-{x}:ih:{x}:0");
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args(["-y", "-i"]).arg(path).args(["-vf", &filter]);
+    if webm {
+        cmd.args(["-c:v", "libvpx", "-crf", "18", "-b:v", "2M", "-an"]);
+    } else {
+        cmd.args([
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-crf",
+            "18",
+            "-preset",
+            "veryfast",
+            "-movflags",
+            "+faststart",
+            "-an",
+        ]);
+    }
+    let encoded = cmd.arg(&tmp).output();
+    let output = match encoded {
+        Ok(output) => output,
+        Err(e) => {
+            eprintln!("[v2-replay] recording crop skipped: {e}");
+            let _ = std::fs::remove_file(&tmp);
+            return;
+        }
+    };
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        let tail = err
+            .chars()
+            .rev()
+            .take(400)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>();
+        eprintln!("[v2-replay] recording crop skipped: {tail}");
+        let _ = std::fs::remove_file(&tmp);
+        return;
+    }
+    if std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0) == 0 {
+        eprintln!("[v2-replay] recording crop skipped: empty file");
+        let _ = std::fs::remove_file(&tmp);
+        return;
+    }
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        eprintln!("[v2-replay] recording crop skipped: {e}");
+        let _ = std::fs::remove_file(&tmp);
+        return;
+    }
+    eprintln!("[v2-replay] recording cropped the step list out of the preview");
+}
+
+fn close_leftover_log_windows(session: &str) {
+    static CLOSED: AtomicBool = AtomicBool::new(false);
+    if CLOSED.load(Ordering::Relaxed) {
+        return;
+    }
+    let closed = crate::cdp::with_connection(session, |conn| {
+        let targets = conn.call("Target.getTargets", json!({}))?;
+        let infos = targets
+            .get("targetInfos")
+            .and_then(|t| t.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let mut app_id = None;
+        let mut dropped = false;
+        for t in &infos {
+            if t.get("type").and_then(|v| v.as_str()) != Some("page") {
+                continue;
+            }
+            let url = t.get("url").and_then(|v| v.as_str()).unwrap_or("");
+            let id = t.get("targetId").and_then(|v| v.as_str());
+            if url.contains("aq-step-log") {
+                if let Some(id) = id {
+                    let _ = conn.call("Target.closeTarget", json!({ "targetId": id }));
+                    dropped = true;
+                }
+            } else if crate::cdp::is_app_page(url) {
+                if let Some(id) = id {
+                    app_id = Some(id.to_string());
+                }
+            }
+        }
+        Ok((dropped, app_id))
+    });
+    match closed {
+        Ok((dropped, app_id)) => {
+            if dropped {
+                if let Some(app_id) = app_id {
+                    let _ = browser::run(
+                        session,
+                        ["tab", &app_id],
+                        browser::RunOpts::new().capture().lenient(),
+                    );
+                }
+            }
+            CLOSED.store(true, Ordering::Relaxed);
+        }
+        Err(e) if crate::cdp::is_unavailable(&e) => {}
+        Err(e) => eprintln!("[v2-replay] step log: {e:#}"),
+    }
+}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use serde_json::json;
+    use super::{
+        dock_expr, row_state, visibility_expr, CURSOR_HIDE, CURSOR_SHOW, DOCK_BODY,
+        DOCK_WIDTH_EXPR, POINTER_BODY,
+    };
 
     #[test]
-    fn rail_label_prefers_intent_for_raw_locators() {
-        let step: Step = serde_json::from_value(json!({
-            "kind": "do", "id": "s", "intent": "add the todo",
-            "verb": "click", "on": {"raw": {"kind": "css", "value": "#add"}, "reason": "r"}
-        }))
-        .unwrap();
-        assert_eq!(rail_label(&step), "click \"add the todo\"");
+    fn overlay_paints_the_action_and_not_a_step_list() {
+        assert!(POINTER_BODY.contains("__aq_cursor"));
+        assert!(POINTER_BODY.contains("__aq_ring"));
+        assert!(super::RESOLVE.contains("paragraph:'p"));
+        assert!(super::RESOLVE.contains("querySelectorAll('label')"));
+        assert!(POINTER_BODY.contains("if(click && !st)"));
+        assert!(POINTER_BODY.contains("if(!(click && !st) && oldPulse)oldPulse.remove()"));
+        assert!(POINTER_BODY.contains("if(rail)rail.remove()"));
+        assert!(POINTER_BODY.contains("if(stepEl)stepEl.remove()"));
+        assert!(!POINTER_BODY.contains("pinRight"));
+        assert!(!POINTER_BODY.contains("id='__aq_rail'"));
     }
 
     #[test]
-    fn rail_label_uses_role_name() {
-        let step: Step = serde_json::from_value(json!({
-            "kind": "do", "id": "s", "intent": "x",
-            "verb": "click", "on": {"role": "button", "name": "Submit"}
-        }))
-        .unwrap();
-        assert_eq!(rail_label(&step), "click \"Submit\"");
-    }
-
-    #[test]
-    fn rail_label_for_check_uses_intent() {
-        let step: Step = serde_json::from_value(json!({
-            "kind": "check", "id": "c", "intent": "page rendered",
-            "claim": {"subject": {"url": true}, "predicate": "exists"}
-        }))
-        .unwrap();
-        assert_eq!(rail_label(&step), "check — page rendered");
+    fn step_log_docks_in_the_same_window() {
+        assert_eq!(row_state(0, 2, Some("pass")), "done");
+        assert_eq!(row_state(1, 2, None), "now");
+        assert_eq!(row_state(2, 2, None), "wait");
+        assert_eq!(row_state(1, 2, Some("fail")), "fail");
+        assert_eq!(row_state(0, 1, None), "now");
+        assert!(DOCK_BODY.contains("id='__aq_log'"));
+        assert!(DOCK_BODY.contains("aria-hidden"));
+        assert!(DOCK_BODY.contains("attachShadow"));
+        assert!(DOCK_BODY.contains("done:'opacity:.55'"));
+        assert!(DOCK_BODY.contains("wait:'opacity:.38'"));
+        assert!(DOCK_BODY.contains("now:'opacity:1"));
+        assert!(DOCK_BODY.contains("aqShift(true)"));
+        let expr = dock_expr("[]");
+        assert!(expr.contains("translateZ(0)"));
+        assert!(expr.contains("margin-left"));
+        assert!(!expr.contains("createTarget"));
+        assert!(!expr.contains("newWindow"));
+        let hidden = visibility_expr(false);
+        assert!(hidden.contains("#__aq_cursor"));
+        assert!(!hidden.contains("#__aq_log"));
+        assert!(!hidden.contains("aqShift"));
+        assert!(DOCK_WIDTH_EXPR.contains("__aq_log"));
+        assert!(DOCK_WIDTH_EXPR.contains("r.right"));
+        assert!(!DOCK_WIDTH_EXPR.contains("aqShift"));
+        assert!(!CURSOR_HIDE.contains("__aq_log"));
+        assert!(!CURSOR_SHOW.contains("__aq_log"));
+        assert!(crate::cdp::is_app_page("http://127.0.0.1:8765/"));
+        assert!(!crate::cdp::is_app_page("about:blank"));
+        assert!(!crate::cdp::is_app_page("data:text/html,aq-step-log"));
+        // 320 CSS px on a 1790 CSS px viewport, filmed 1764 px wide.
+        // 315.35 rounds to 315, then up to an even column.
+        assert_eq!(super::dock_crop_x(320.0, 1790.0, 1764), Some(316));
+        assert_eq!(super::dock_crop_x(0.0, 1790.0, 1764), None);
+        assert_eq!(super::parse_span("\"320/1790\"\n"), Some((320.0, 1790.0)));
+        assert_eq!(super::parse_span("nope"), None);
+        let clear = super::clear_expr();
+        assert!(clear.contains("getElementById('__aq_log')"));
+        assert!(clear.contains("data-aq-shift"));
+        assert!(clear.contains("__aq_shifted"));
+        assert!(!clear.contains("attachToTarget"));
+        assert!(!clear.contains("addScriptToEvaluateOnNewDocument"));
+        let dir = std::env::temp_dir();
+        let shot = dir.join(format!("aq-dock-crop-{}.png", std::process::id()));
+        image::RgbImage::from_pixel(10, 4, image::Rgb([10, 20, 30]))
+            .save(&shot)
+            .unwrap();
+        assert!(super::crop_dock(&shot, 4));
+        let cropped = image::open(&shot).unwrap();
+        assert_eq!(cropped.width(), 6);
+        assert_eq!(cropped.height(), 4);
+        let _ = std::fs::remove_file(&shot);
     }
 }

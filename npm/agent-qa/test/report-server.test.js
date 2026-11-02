@@ -101,6 +101,16 @@ function makeFixture() {
   // A real PNG byte payload (1x1) and a snapshot text file.
   fs.writeFileSync(path.join(runDir, 'screenshots', 'navHome.png'), Buffer.from('PNGDATA-navHome'));
   fs.writeFileSync(path.join(runDir, 'run.webm'), Buffer.from('WEBMDATA'));
+  fs.writeFileSync(
+    path.join(runDir, 'video-cues.json'),
+    JSON.stringify({
+      cues: [
+        { id: 'navHome', idx: 1, tMs: 400 },
+        { id: 'clickMissingLogin', idx: 2, tMs: 1800 },
+        { idx: 'nope', tMs: 'late' },
+      ],
+    })
+  );
   fs.writeFileSync(path.join(runDir, 'snapshots', 'navHome.txt'), 'heading "Example Domain"\n');
 
   // A secret OUTSIDE the run dir that a path-escape attempt would target.
@@ -202,11 +212,13 @@ test('workbench run options default headless and replay args pin the CLI mode', 
     '--session',
     'replay-s-demo',
     '--headless',
+    '--record-video',
   ]);
   assert.deepEqual(srv._test.replayArgs('s-demo', null, { headed: true, params: { baseUrl: 'https://example.com' } }), [
     'replay',
     's-demo',
     '--headed',
+    '--record-video',
     '--param',
     'baseUrl=https://example.com',
   ]);
@@ -506,6 +518,24 @@ test('report viewer endpoints', async (t) => {
     const res = await fetch(`${base}/api/scenarios/${fx.sid}/runs/${fx.runId}`);
     const body = await res.json();
     assert.equal(body.video, true);
+    assert.equal(body.videoFile, 'run.webm');
+    assert.deepEqual(body.cues, [
+      { id: 'navHome', idx: 1, tMs: 400 },
+      { id: 'clickMissingLogin', idx: 2, tMs: 1800 },
+    ]);
+  });
+
+  await t.test('GET /runs/:runId prefers run.mp4 over run.webm', async () => {
+    const mp4 = path.join(fx.root, fx.sid, 'replays', fx.runId, 'run.mp4');
+    fs.writeFileSync(mp4, Buffer.from('MP4DATA'));
+    try {
+      const res = await fetch(`${base}/api/scenarios/${fx.sid}/runs/${fx.runId}`);
+      const body = await res.json();
+      assert.equal(body.video, true);
+      assert.equal(body.videoFile, 'run.mp4');
+    } finally {
+      fs.unlinkSync(mp4);
+    }
   });
 
   await t.test('GET run file streams run.webm as video/webm', async () => {
@@ -514,7 +544,18 @@ test('report viewer endpoints', async (t) => {
     );
     assert.equal(res.status, 200);
     assert.equal(res.headers.get('content-type'), 'video/webm');
+    assert.equal(res.headers.get('accept-ranges'), 'bytes');
     assert.equal(await res.text(), 'WEBMDATA');
+  });
+
+  await t.test('GET run file honors a byte range so the scrubber can seek', async () => {
+    const url = `${base}/api/scenarios/${fx.sid}/runs/${fx.runId}/file/run.webm`;
+    const res = await fetch(url, { headers: { range: 'bytes=0-3' } });
+    assert.equal(res.status, 206);
+    assert.equal(res.headers.get('content-range'), 'bytes 0-3/8');
+    assert.equal(await res.text(), 'WEBM');
+    const bad = await fetch(url, { headers: { range: 'bytes=40-50' } });
+    assert.equal(bad.status, 416);
   });
 
   await t.test('GET run file rejects names outside the allowlist + traversal', async () => {
@@ -942,6 +983,83 @@ test('POST /replay threads headed mode through session preparation and deps.repl
   assert.equal(calls[1].opts.headed, true);
 });
 
+test('cdp-url resolver does not launch a browser when the session is down', async () => {
+  const { cdpUrlResolver } = srv._test;
+  let calls = 0;
+  const get = cdpUrlResolver(async () => {
+    calls += 1;
+    return { code: 0, stdout: '{"url":"ws://127.0.0.1:1/devtools/browser/x"}\n' };
+  }, 'no-such-session-aq');
+  await assert.rejects(() => get(), /no live browser/);
+  assert.equal(calls, 0);
+});
+
+test('cdp-url resolver reads Chrome directly and does not queue on the CLI', async () => {
+  const { cdpUrlResolver, readLiveCdpUrl, cdpUrlFromActivePort } = srv._test;
+  assert.equal(
+    cdpUrlFromActivePort('38063\n/devtools/browser/abc\n'),
+    'ws://127.0.0.1:38063/devtools/browser/abc',
+  );
+  assert.equal(cdpUrlFromActivePort('nope\n'), null);
+  const files = {
+    '/home/ab/demo.pid': '4242\n',
+    '/proc/4242/task/4242/children': '99\n',
+    '/proc/99/cmdline': '--user-data-dir=/tmp/chrome-profile\0--headless=new\0',
+    '/tmp/chrome-profile/DevToolsActivePort': '38063\n/devtools/browser/abc\n',
+  };
+  const io = {
+    home: '/home/ab',
+    kill: () => {},
+    readFileSync: (p) => {
+      if (!Object.prototype.hasOwnProperty.call(files, p)) {
+        const err = new Error('missing ' + p);
+        err.code = 'ENOENT';
+        throw err;
+      }
+      return files[p];
+    },
+  };
+  assert.equal(readLiveCdpUrl('demo', io), 'ws://127.0.0.1:38063/devtools/browser/abc');
+  let calls = 0;
+  const get = cdpUrlResolver(
+    async () => {
+      calls += 1;
+      return { code: 0, stdout: '' };
+    },
+    'demo',
+    io,
+  );
+  assert.equal(await get(), 'ws://127.0.0.1:38063/devtools/browser/abc');
+  assert.equal(calls, 0, 'a running replay must not wait on cdp-url');
+
+  // Chrome forked by a worker thread is invisible on the leader's children
+  // list. The preview still has to find that browser.
+  const workerFiles = {
+    '/home/ab/demo.pid': '4242\n',
+    '/proc/4242/task/4242/children': '\n',
+    '/proc/4242/task/777/children': '99\n',
+    '/proc/99/cmdline': '--user-data-dir=/home/ubuntu/.config/google-chrome\0--user-data-dir=/tmp/chrome-profile\0',
+    '/tmp/chrome-profile/DevToolsActivePort': '37001\n/devtools/browser/live\n',
+  };
+  const workerIo = {
+    home: '/home/ab',
+    kill: () => {},
+    readdirSync: (p) => {
+      if (p === '/proc/4242/task') return ['4242', '777'];
+      throw new Error('unexpected readdir ' + p);
+    },
+    readFileSync: (p) => {
+      if (!Object.prototype.hasOwnProperty.call(workerFiles, p)) {
+        const err = new Error('missing ' + p);
+        err.code = 'ENOENT';
+        throw err;
+      }
+      return workerFiles[p];
+    },
+  };
+  assert.equal(readLiveCdpUrl('demo', workerIo), 'ws://127.0.0.1:37001/devtools/browser/live');
+});
+
 test('GET /replay-stream subscribes the per-session screencast bridge', async (t) => {
   const fx = makeFixture();
   const seen = [];
@@ -1008,6 +1126,23 @@ test('GET /replay-stream prefers audit.sessionName over the derived session', as
   ac2.abort();
 
   assert.deepEqual(seen, ['chat-c0ffee11', 'admin-user-session']);
+
+  // An in-flight run wins over latest.txt, which still names the previous run.
+  const activeRun = '2026-06-24T16-00-00-000Z__feedface';
+  const activeDir = path.join(fx.root, fx.sid, 'replays', activeRun);
+  fs.mkdirSync(activeDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(activeDir, 'audit.json'),
+    JSON.stringify({ schema: 'scenario-replay-audit/v1', sessionName: 'replay-live-now' }),
+  );
+  fs.writeFileSync(
+    path.join(activeDir, 'status.json'),
+    JSON.stringify({ state: 'running', currentIdx: 1, total: 3, ok: null }),
+  );
+  const ac3 = new AbortController();
+  assert.equal((await fetch(`${base}/api/scenarios/${fx.sid}/replay-stream`, { signal: ac3.signal })).status, 200);
+  ac3.abort();
+  assert.equal(seen[2], 'replay-live-now');
 });
 
 test('GET /replay-stream without a CLI runner → 503', async (t) => {

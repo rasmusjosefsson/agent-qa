@@ -8,6 +8,33 @@ All notable changes to agent-qa are documented here. This project follows
 
 ### Added
 
+- The Headless switch keeps that label. On means the replay has no
+  browser window; off means the window is shown. It sits next to Replay.
+
+- Workbench replay passes `--record-video`, so a headless run films the
+  cursor, the click ripple, and a border around the step's target. The
+  border is back on action steps (click, type, and the rest); checks
+  still recolor it green or red with the outcome. A headed replay keeps
+  a step list in that same window, docked on the left. The page shifts
+  right so the list does not cover the UI. Finished steps stay quiet,
+  the running step is highlighted, and later steps stay faded. The
+  click ripple plays once, on a click, and does not replay on the
+  following steps. Step screenshots are the page beside that list, so the list stays up for
+  the whole replay. The cursor is left out of the shot.
+
+- The replay player follows the workbench theme. In light mode the
+  stage, timeline, and controls are light; in dark mode they stay dark.
+
+- Replay scrubber in the workbench. A recorded run shows the video with a
+  marker per step, the step caption under the playhead, and a Frames /
+  Video switch. Playback speed goes to 8×: Video asks the browser for
+  that rate (and says so if the browser caps it); Frames steps the
+  captured screenshots on a timer, so 8× still moves. `--record-video`
+  writes `video-cues.json` next to the recording so the markers line up
+  with the moment each step started. The run detail reports `run.mp4`
+  as well as older `run.webm` files, and the file endpoint accepts byte
+  ranges so the playhead can seek.
+
 - Structural golden diffs open as a side-by-side line comparison.
   `diff-viewer.html?dom=1` diffs the baseline snapshot against the
   current one (unified and changed-only views). The workbench run card

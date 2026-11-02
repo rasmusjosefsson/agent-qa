@@ -100,6 +100,7 @@ mod value;
 mod verb_shape;
 mod verbs;
 mod verify;
+mod video_cues;
 mod video_overlay;
 
 fn main() -> ExitCode {

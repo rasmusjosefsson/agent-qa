@@ -1,5 +1,3 @@
-import { MonitorIcon } from 'lucide-react'
-
 export function BrowserModeToggle({
   headed,
   onChange,
@@ -9,30 +7,34 @@ export function BrowserModeToggle({
   onChange: (headed: boolean) => void
   disabled?: boolean
 }) {
+  const headless = !headed
   return (
     <button
       type="button"
       role="switch"
-      aria-label="Show browser window"
-      aria-checked={headed}
+      aria-label="Headless"
+      aria-checked={headless}
       disabled={disabled}
       onClick={() => onChange(!headed)}
-      title="Headless by default. Changing mode restarts the selected browser session."
-      className="flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-card px-2 text-xs font-medium text-foreground shadow-xs transition-colors hover:border-primary/30 disabled:cursor-not-allowed disabled:opacity-50"
+      title={
+        headless
+          ? 'Headless is on. The replay runs without a browser window.'
+          : 'Headless is off. The replay opens a visible browser window.'
+      }
+      className="flex h-8 shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border border-border bg-card px-2.5 text-xs font-medium text-foreground shadow-xs transition-colors hover:border-primary/30 disabled:cursor-not-allowed disabled:opacity-50"
     >
-      <MonitorIcon className="size-3.5" />
-      <span>{headed ? 'Browser visible' : 'Headless'}</span>
+      <span>Headless</span>
       <span
         aria-hidden="true"
         className={
           'relative h-4 w-7 shrink-0 rounded-full transition-colors ' +
-          (headed ? 'bg-primary' : 'bg-muted-foreground/30')
+          (headless ? 'bg-primary' : 'bg-muted-foreground/30')
         }
       >
         <span
           className={
             'absolute left-0.5 top-0.5 size-3 rounded-full bg-primary-foreground transition-transform ' +
-            (headed ? 'translate-x-3' : 'translate-x-0')
+            (headless ? 'translate-x-3' : 'translate-x-0')
           }
         />
       </span>

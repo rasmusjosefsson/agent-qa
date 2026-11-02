@@ -851,6 +851,14 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         quarantined,
     };
     let mut first_failure: Option<String> = None;
+    // Set only when `record start` succeeds, so a missing ffmpeg does not
+    // invent a cue file for a recording that was never opened.
+    let mut video_origin: Option<Instant> = None;
+    let mut video_path: Option<PathBuf> = None;
+    // Headed recordings film the dock, then the file is cropped to the
+    // page so the preview does not show the list.
+    let mut crop_video_dock = false;
+    let mut video_cues: Vec<crate::video_cues::VideoCue> = Vec::new();
 
     if opts.dry_run {
         summary.total = scenario.steps.len() as u32;
@@ -887,21 +895,6 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 Vec::new()
             }
         };
-        // `--record-video`: start filming before the first step so the
-        // whole interaction lands in <run>/run.mp4 (mp4 renders inline
-        // in GitHub comments; webm does not). Best-effort — a missing
-        // ffmpeg is a warning, not a failed run.
-        if let Some(vid) = &opts.record_video {
-            let dest = if vid.as_os_str().is_empty() {
-                run.run_root.join("run.mp4")
-            } else {
-                vid.clone()
-            };
-            match browser::record_video_start(&opts.session_name, &dest) {
-                Ok(()) => eprintln!("[v2-replay] recording → {}", dest.display()),
-                Err(e) => eprintln!("[v2-replay] record start skipped: {e}"),
-            }
-        }
         // `--from`/`--until` narrow the dispatch window. Steps outside
         // the window never dispatch — no events, no summary rows — but
         // their ids are remembered so `--junit` can emit <skipped/>.
@@ -936,16 +929,50 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         // live status file and the events stream both key off it. All of
         // this is additive — the per-step stderr trace below is unchanged.
         let total = flat.len() as u32;
-        // Video overlay state: one rail row per step (post-window), painted
-        // before each dispatch and re-painted with the outcome after.
-        // Only touched when --record-video is on.
+        // Cursor and target ring while a recording is on. A visible window
+        // also docks a step list on the left of that same window and shifts
+        // the page so the list does not cover it. The saved recording is
+        // cropped back to the page; a headless run clears a dock a previous
+        // window left on the reused page.
         let record_on = opts.record_video.is_some() && !opts.dry_run;
-        let rail_labels: Vec<String> = if record_on {
-            flat.iter().map(crate::video_overlay::rail_label).collect()
+        let show_steps = opts.headed && !opts.dry_run;
+        let step_captions: Vec<String> = if show_steps {
+            flat.iter()
+                .map(crate::video_overlay::step_caption)
+                .collect()
         } else {
             Vec::new()
         };
         let mut rail_outcomes: Vec<Option<&'static str>> = vec![None; flat.len()];
+        if show_steps {
+            crate::video_overlay::sync_step_log(
+                &opts.session_name,
+                1,
+                &step_captions,
+                &rail_outcomes,
+            );
+        } else if record_on {
+            crate::video_overlay::clear_step_log(&opts.session_name);
+        }
+        // `--record-video`: start filming once the dock is either up
+        // (headed) or gone (headless), so the first frame matches the
+        // crop applied when the file is saved.
+        if let Some(vid) = &opts.record_video {
+            let dest = if vid.as_os_str().is_empty() {
+                run.run_root.join("run.mp4")
+            } else {
+                vid.clone()
+            };
+            match browser::record_video_start(&opts.session_name, &dest) {
+                Ok(()) => {
+                    video_origin = Some(Instant::now());
+                    video_path = Some(dest.clone());
+                    crop_video_dock = show_steps;
+                    eprintln!("[v2-replay] recording → {}", dest.display());
+                }
+                Err(e) => eprintln!("[v2-replay] record start skipped: {e}"),
+            }
+        }
         // Resolve once how per-step progress is rendered (quiet /
         // plain-or-piped / pretty-TTY). Pure formatting; no behaviour change.
         let progress_mode = resolve_progress_mode(opts);
@@ -988,6 +1015,14 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             };
             // A concise, vendor-neutral label for the progress line.
             let label = progress_label(step);
+            if let Some(origin) = video_origin {
+                let t_ms = u64::try_from(origin.elapsed().as_millis()).unwrap_or(u64::MAX);
+                video_cues.push(crate::video_cues::VideoCue {
+                    id: id.to_string(),
+                    idx,
+                    t_ms,
+                });
+            }
             // Disabled check (`enabled: false` — e.g. a golden turned off in
             // the workbench): no dispatch, a terminal `skip` event, and a
             // <skipped/> junit case so the step is visible, not silently gone.
@@ -996,12 +1031,14 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 ..
             } = step
             {
-                if record_on {
+                if record_on || show_steps {
                     rail_outcomes[(idx - 1) as usize] = Some("skip");
-                    crate::video_overlay::annotate(
+                    crate::video_overlay::paint(
                         &opts.session_name,
-                        &rail_labels,
+                        show_steps,
+                        record_on,
                         idx,
+                        &step_captions,
                         &rail_outcomes,
                         step,
                         &mut scope,
@@ -1092,12 +1129,14 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                     }
                 }
                 if let Some(reason) = gate {
-                    if record_on {
+                    if record_on || show_steps {
                         rail_outcomes[(idx - 1) as usize] = Some("skip");
-                        crate::video_overlay::annotate(
+                        crate::video_overlay::paint(
                             &opts.session_name,
-                            &rail_labels,
+                            show_steps,
+                            record_on,
                             idx,
+                            &step_captions,
                             &rail_outcomes,
                             step,
                             &mut scope,
@@ -1172,14 +1211,15 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             } else {
                 step.clone()
             };
-            // Video overlay: while recording, repaint the step rail (this
-            // step running, prior outcomes colored) + ring the target
-            // element so the video shows what replay does.
-            if record_on {
-                crate::video_overlay::annotate(
+            // While recording, ring the target. When the window is visible,
+            // refresh the step list docked in that same window.
+            if record_on || show_steps {
+                crate::video_overlay::paint(
                     &opts.session_name,
-                    &rail_labels,
+                    show_steps,
+                    record_on,
                     idx,
+                    &step_captions,
                     &rail_outcomes,
                     &patched_step,
                     &mut scope,
@@ -1367,7 +1407,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             };
             match result {
                 Ok(()) => {
-                    if record_on {
+                    if record_on || show_steps {
                         rail_outcomes[(idx - 1) as usize] = Some("pass");
                     }
                     if !opts.no_sidecars {
@@ -1377,17 +1417,19 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                             &opts.session_name,
                             stabilize_shots,
                             &shot_masks,
-                            record_on,
+                            record_on || show_steps,
                             capture_layouts,
                         );
                     }
-                    if record_on {
-                        // Show the just-landed outcome on the rail before
-                        // the next step repaints it as running.
-                        crate::video_overlay::annotate(
+                    if record_on || show_steps {
+                        // Recolor the target ring with the outcome before
+                        // the next step paints the next target.
+                        crate::video_overlay::paint(
                             &opts.session_name,
-                            &rail_labels,
+                            show_steps,
+                            record_on,
                             idx,
+                            &step_captions,
                             &rail_outcomes,
                             &patched_step,
                             &mut scope,
@@ -1423,12 +1465,14 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                             !tags.is_empty() && tags.iter().any(|t| run_tags.contains(t))
                         });
                     if expected_fail {
-                        if record_on {
+                        if record_on || show_steps {
                             rail_outcomes[(idx - 1) as usize] = Some("skip");
-                            crate::video_overlay::annotate(
+                            crate::video_overlay::paint(
                                 &opts.session_name,
-                                &rail_labels,
+                                show_steps,
+                                record_on,
                                 idx,
+                                &step_captions,
                                 &rail_outcomes,
                                 &patched_step,
                                 &mut scope,
@@ -1503,7 +1547,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                     }
                     let step_continues =
                         matches!(on_failure, Some(crate::scenario::OnFailure::Continue));
-                    if record_on {
+                    if record_on || show_steps {
                         rail_outcomes[(idx - 1) as usize] = Some("fail");
                     }
                     if !opts.no_sidecars {
@@ -1513,15 +1557,17 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                             &opts.session_name,
                             stabilize_shots,
                             &shot_masks,
-                            record_on,
+                            record_on || show_steps,
                             capture_layouts,
                         );
                     }
-                    if record_on {
-                        crate::video_overlay::annotate(
+                    if record_on || show_steps {
+                        crate::video_overlay::paint(
                             &opts.session_name,
-                            &rail_labels,
+                            show_steps,
+                            record_on,
                             idx,
+                            &step_captions,
                             &rail_outcomes,
                             &patched_step,
                             &mut scope,
@@ -1767,11 +1813,27 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     }
 
     // 8.5. Stop the video recording (started under `--record-video`).
-    // Runs before audit finalize so the artifact exists even on FAIL.
+    // Cue file lands first so a failed `record stop` still leaves the
+    // scrubber something to align against. Runs before audit finalize
+    // so the artifact exists even on FAIL.
+    if video_origin.is_some() {
+        let cues_path = run.run_root.join("video-cues.json");
+        if let Err(e) = crate::video_cues::write(&cues_path, &video_cues) {
+            eprintln!("[v2-replay] video-cues.json write failed: {e}");
+        }
+    }
+    if crop_video_dock {
+        crate::video_overlay::note_dock_span(&opts.session_name);
+    }
     if opts.record_video.is_some() && !opts.dry_run {
         match browser::record_video_stop(&opts.session_name) {
             Ok(()) => {}
             Err(e) => eprintln!("[v2-replay] record stop skipped: {e}"),
+        }
+    }
+    if crop_video_dock {
+        if let Some(path) = &video_path {
+            crate::video_overlay::crop_dock_from_video(path);
         }
     }
 
@@ -2503,21 +2565,26 @@ fn capture_step_sidecars(
     }
     if let Ok(path) = step_sidecar_path(run, SidecarKind::Screenshots, step_id) {
         let masked = !shot_masks.is_empty() && apply_shot_mask(session, shot_masks);
-        // The replay-video overlay (step rail + target ring) is page DOM —
-        // hide it for the saved capture or `shot` claims diff our own
-        // chrome as page drift. Next step's annotate repaints it.
-        if record_overlay {
-            crate::video_overlay::set_visible(session, false);
-        }
-        match browser::screenshot(session, &path, true, Some(cap_ms)) {
-            Ok(true) => {}
-            Ok(false) => eprintln!(
-                "[v2-replay] screenshot {step_id} exited non-zero within the {cap_ms}ms cap (lenient — artifact may be missing or partial)"
-            ),
-            Err(e) => eprintln!("[v2-replay] screenshot {step_id} failed: {e}"),
-        }
-        if record_overlay {
-            crate::video_overlay::set_visible(session, true);
+        // The cursor and target ring are page DOM. Hide them for the saved
+        // capture, and when the step dock is up photograph only the page
+        // beside it. Taking the dock down shifts the page back, and the
+        // recording holds that frame until the dock returns.
+        let cleaned = record_overlay
+            && crate::video_overlay::capture_clean_screenshot(session, &path, cap_ms);
+        if !cleaned {
+            if record_overlay {
+                crate::video_overlay::set_visible(session, false);
+            }
+            match browser::screenshot(session, &path, true, Some(cap_ms)) {
+                Ok(true) => {}
+                Ok(false) => eprintln!(
+                    "[v2-replay] screenshot {step_id} exited non-zero within the {cap_ms}ms cap (lenient — artifact may be missing or partial)"
+                ),
+                Err(e) => eprintln!("[v2-replay] screenshot {step_id} failed: {e}"),
+            }
+            if record_overlay {
+                crate::video_overlay::set_visible(session, true);
+            }
         }
         if masked {
             clear_shot_mask(session);

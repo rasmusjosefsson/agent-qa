@@ -405,6 +405,7 @@ export function PlanDetail({ id }: { id: string }) {
             <UploadIcon /> Export to Xray
           </Button>
         )}
+        <BrowserModeToggle headed={headed} onChange={setHeaded} disabled={busy} />
         <Button size="sm" onClick={() => void run()} disabled={busy || !runnable}>
           <PlayIcon /> Run plan
         </Button>
@@ -426,7 +427,6 @@ export function PlanDetail({ id }: { id: string }) {
           placeholder="default environment"
           options={environments.map((e) => ({ value: e.id, label: e.name }))}
         />
-        <BrowserModeToggle headed={headed} onChange={setHeaded} disabled={busy} />
         <label className="flex items-center gap-1.5 text-xs text-muted-foreground" title="After the run settles, spawn a repair chat for each failed member (audit digest → classify → fix → re-replay)">
           <Checkbox checked={autoRepair} onCheckedChange={(v) => setAutoRepair(v === true)} />
           Auto-repair

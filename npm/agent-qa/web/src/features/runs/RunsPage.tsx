@@ -196,11 +196,17 @@ export function RunsPage() {
         className="min-h-0 flex-1"
       >
         <Panel defaultSize={showRight ? "22" : "26"} minSize="14%" className="min-h-0">
-          <ScenarioSidebar runs={runs} />
+          <ScenarioSidebar
+            runs={runs}
+            onReplay={(sid) => void onReplay(sid)}
+            busySid={busy ? runs.sel.sid : replayingSid}
+            headed={headed}
+            onHeadedChange={setHeaded}
+          />
         </Panel>
         <ResizeHandle />
         <Panel defaultSize={showRight ? "56" : "74"} minSize="30%" className="min-h-0">
-          <CenterPane runs={runs} onReplay={(sid) => void onReplay(sid)} busy={busy} runConfig={runConfig} />
+          <CenterPane runs={runs} busy={busy} runConfig={runConfig} />
         </Panel>
         {showRight && (
           <>

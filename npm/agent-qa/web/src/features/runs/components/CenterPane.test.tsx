@@ -39,19 +39,20 @@ describe('CenterPane scenario controls', () => {
       scenarios: [],
     } as unknown as RunsApi
     const html = renderToStaticMarkup(
-      <CenterPane runs={runs} onReplay={() => {}} runConfig={runConfig} />
+      <CenterPane runs={runs} runConfig={runConfig} />
     )
     expect(html).toContain('Record your first scenario')
     expect(html).toContain('href="/chat"')
     expect(html).toContain('Open Chat')
   })
 
-  it('puts replay settings in their own wrapping row under the title', () => {
+  it('keeps run settings under the title and leaves Replay on the scenario card', () => {
     const html = renderToStaticMarkup(
-      <CenterPane runs={scenarioRuns()} onReplay={() => {}} runConfig={runConfig} />
+      <CenterPane runs={scenarioRuns()} runConfig={runConfig} />
     )
 
-    expect(html).toContain('Replay</button>')
+    expect(html).not.toContain('>Replay</button>')
+    expect(html).not.toContain('aria-label="Headless"')
     // Settings row wraps instead of overflowing a narrow pane, and its
     // selects can shrink below their content width.
     expect(html).toContain('flex flex-wrap items-center gap-x-2')
@@ -79,7 +80,6 @@ describe('CenterPane scenario controls', () => {
     const html = renderToStaticMarkup(
       <CenterPane
         runs={runs}
-        onReplay={() => {}}
         runConfig={{
           ...runConfig,
           inputs: [{ name: 'flow', value: '', description: 'Empty is classic' }],
@@ -108,39 +108,57 @@ describe('CenterPane scenario controls', () => {
     } as unknown as RunsApi
 
     const html = renderToStaticMarkup(
-      <CenterPane runs={runs} onReplay={() => {}} runConfig={runConfig} />
+      <CenterPane runs={runs} runConfig={runConfig} />
     )
 
     expect(html).toContain('No replay progress for over a minute')
     expect(html).toContain('host watchdog')
   })
 
-  it('shows a video chip when the run was recorded (--record-video)', () => {
+  it('shows the replay scrubber when the run was recorded', () => {
     const base = {
       detail: {
         sid: 's-vid',
         runId: '2026-08-13T15-00-00-000Z__beefcafe',
         audit: { summary: 'PASS 2/2', exitCode: 0 },
         status: { state: 'done', ok: true },
-        events: [],
+        events: [
+          { idx: 1, id: 'open', intent: 'Navigated to the homepage', kind: 'do:goto', status: 'pass', ms: 400 },
+          { idx: 2, id: 'check', intent: 'Verified', kind: 'check', status: 'pass', ms: 200 },
+        ],
         video: true,
+        videoFile: 'run.mp4',
+        cues: [
+          { id: 'open', idx: 1, tMs: 400 },
+          { id: 'check', idx: 2, tMs: 1800 },
+        ],
       },
       scenarioDef: null,
       sel: { sid: 's-vid', runId: '2026-08-13T15-00-00-000Z__beefcafe', stepIdx: null },
       runDefSteps: { sid: 's-vid', steps: [] },
       runsBySid: {},
+      selectStep() {},
     } as unknown as RunsApi
 
     const html = renderToStaticMarkup(
-      <CenterPane runs={base} onReplay={() => {}} runConfig={runConfig} />
+      <CenterPane runs={base} runConfig={runConfig} />
     )
-    expect(html).toContain('>video</button>')
-    expect(html).not.toContain('<video')
+    expect(html).toContain('aria-label="Replay timeline"')
+    expect(html).toContain('aria-label="Playback speed"')
+    expect(html).toContain('>8x</option>')
+    expect(html).toContain('>Frames</button>')
+    expect(html).toContain('>Video</button>')
+    expect(html).toContain('<video')
+    expect(html).toContain('Navigated to the homepage')
 
     const noVid = { ...base, detail: { ...base.detail, video: false } } as RunsApi
     const html2 = renderToStaticMarkup(
-      <CenterPane runs={noVid} onReplay={() => {}} runConfig={runConfig} />
+      <CenterPane runs={noVid} runConfig={runConfig} />
     )
-    expect(html2).not.toContain('>video</button>')
+    expect(html2).not.toContain('aria-label="Replay timeline"')
+    expect(html2).not.toContain('<video')
+    // Replay belongs to the scenario card. A past run does not grow its own.
+    expect(html).not.toContain('>Replay</button>')
+    expect(html2).not.toContain('>Replay</button>')
   })
 })

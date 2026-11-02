@@ -62,6 +62,26 @@ describe('ScenarioSidebar health badges', () => {
     ).toBe('To Account — the option “High-Yield Savings — $12,800.00” was not in the list')
   })
 
+  it('puts Replay on the scenario card, not on each past run', () => {
+    const runs = runsApi({})
+    runs.expanded = new Set(['s-login'])
+    runs.sel = { sid: 's-login', runId: '2026-08-13T16-00-00-000Z__bbbb2222', stepIdx: null, tab: 'step' }
+    runs.runsBySid = {
+      's-login': [
+        { runId: '2026-08-13T15-00-00-000Z__aaaa1111', state: 'done', summary: 'PASS 1/1' },
+        { runId: '2026-08-13T16-00-00-000Z__bbbb2222', state: 'done', summary: 'PASS 1/1' },
+      ],
+    } as RunsApi['runsBySid']
+    const html = renderToStaticMarkup(
+      <ScenarioSidebar runs={runs} onReplay={() => {}} headed={false} onHeadedChange={() => {}} />
+    )
+    const buttons = html.match(/aria-label="Replay scenario"/g) || []
+    expect(buttons).toHaveLength(2)
+    const headless = html.match(/aria-label="Headless"/g) || []
+    expect(headless).toHaveLength(1)
+    expect(html).not.toContain('aria-label="Replay run"')
+  })
+
   it('omits detectors with no flagged steps and scenarios with no flags', () => {
     const html = renderToStaticMarkup(
       <ScenarioSidebar
