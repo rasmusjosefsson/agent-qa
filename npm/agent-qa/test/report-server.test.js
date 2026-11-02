@@ -994,6 +994,72 @@ test('cdp-url resolver does not launch a browser when the session is down', asyn
   assert.equal(calls, 0);
 });
 
+test('cdp-url resolver reads Chrome directly and does not queue on the CLI', async () => {
+  const { cdpUrlResolver, readLiveCdpUrl, cdpUrlFromActivePort } = srv._test;
+  assert.equal(
+    cdpUrlFromActivePort('38063\n/devtools/browser/abc\n'),
+    'ws://127.0.0.1:38063/devtools/browser/abc',
+  );
+  assert.equal(cdpUrlFromActivePort('nope\n'), null);
+  const files = {
+    '/home/ab/demo.pid': '4242\n',
+    '/proc/4242/task/4242/children': '99\n',
+    '/proc/99/cmdline': '--user-data-dir=/tmp/chrome-profile\0--headless=new\0',
+    '/tmp/chrome-profile/DevToolsActivePort': '38063\n/devtools/browser/abc\n',
+  };
+  const io = {
+    home: '/home/ab',
+    kill: () => {},
+    readFileSync: (p) => {
+      if (!Object.prototype.hasOwnProperty.call(files, p)) {
+        const err = new Error('missing ' + p);
+        err.code = 'ENOENT';
+        throw err;
+      }
+      return files[p];
+    },
+  };
+  assert.equal(readLiveCdpUrl('demo', io), 'ws://127.0.0.1:38063/devtools/browser/abc');
+  let calls = 0;
+  const get = cdpUrlResolver(
+    async () => {
+      calls += 1;
+      return { code: 0, stdout: '' };
+    },
+    'demo',
+    io,
+  );
+  assert.equal(await get(), 'ws://127.0.0.1:38063/devtools/browser/abc');
+  assert.equal(calls, 0, 'a running replay must not wait on cdp-url');
+
+  // Chrome forked by a worker thread is invisible on the leader's children
+  // list. The preview still has to find that browser.
+  const workerFiles = {
+    '/home/ab/demo.pid': '4242\n',
+    '/proc/4242/task/4242/children': '\n',
+    '/proc/4242/task/777/children': '99\n',
+    '/proc/99/cmdline': '--user-data-dir=/home/ubuntu/.config/google-chrome\0--user-data-dir=/tmp/chrome-profile\0',
+    '/tmp/chrome-profile/DevToolsActivePort': '37001\n/devtools/browser/live\n',
+  };
+  const workerIo = {
+    home: '/home/ab',
+    kill: () => {},
+    readdirSync: (p) => {
+      if (p === '/proc/4242/task') return ['4242', '777'];
+      throw new Error('unexpected readdir ' + p);
+    },
+    readFileSync: (p) => {
+      if (!Object.prototype.hasOwnProperty.call(workerFiles, p)) {
+        const err = new Error('missing ' + p);
+        err.code = 'ENOENT';
+        throw err;
+      }
+      return workerFiles[p];
+    },
+  };
+  assert.equal(readLiveCdpUrl('demo', workerIo), 'ws://127.0.0.1:37001/devtools/browser/live');
+});
+
 test('GET /replay-stream subscribes the per-session screencast bridge', async (t) => {
   const fx = makeFixture();
   const seen = [];
@@ -1060,6 +1126,23 @@ test('GET /replay-stream prefers audit.sessionName over the derived session', as
   ac2.abort();
 
   assert.deepEqual(seen, ['chat-c0ffee11', 'admin-user-session']);
+
+  // An in-flight run wins over latest.txt, which still names the previous run.
+  const activeRun = '2026-06-24T16-00-00-000Z__feedface';
+  const activeDir = path.join(fx.root, fx.sid, 'replays', activeRun);
+  fs.mkdirSync(activeDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(activeDir, 'audit.json'),
+    JSON.stringify({ schema: 'scenario-replay-audit/v1', sessionName: 'replay-live-now' }),
+  );
+  fs.writeFileSync(
+    path.join(activeDir, 'status.json'),
+    JSON.stringify({ state: 'running', currentIdx: 1, total: 3, ok: null }),
+  );
+  const ac3 = new AbortController();
+  assert.equal((await fetch(`${base}/api/scenarios/${fx.sid}/replay-stream`, { signal: ac3.signal })).status, 200);
+  ac3.abort();
+  assert.equal(seen[2], 'replay-live-now');
 });
 
 test('GET /replay-stream without a CLI runner → 503', async (t) => {

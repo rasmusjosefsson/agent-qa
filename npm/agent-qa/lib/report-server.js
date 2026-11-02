@@ -2953,16 +2953,25 @@ function sessionForReplay(sid, profile) {
 // The runner records the actual session in audit.sessionName — deriving it
 // from audit.profile instead can point the bridge at a browser nobody is
 // using (black pane). Fall back to the profile-derived name, then per-sid.
-async function replayStreamSession(root, sid) {
-  const latest = await latestRunId(path.join(root, sid));
-  if (latest) {
-    const audit = await readJson(path.join(root, sid, 'replays', latest, 'audit.json'));
-    if (audit && typeof audit.sessionName === 'string' && isSafeSegment(audit.sessionName)) {
-      return audit.sessionName;
-    }
-    if (audit && audit.profile) return sessionForReplay(sid, audit.profile);
+async function sessionFromRunAudit(scenarioDir, sid, runId) {
+  if (!runId) return null;
+  const audit = await readJson(path.join(scenarioDir, 'replays', runId, 'audit.json'));
+  if (audit && typeof audit.sessionName === 'string' && isSafeSegment(audit.sessionName)) {
+    return audit.sessionName;
   }
-  return replaySessionFor(sid);
+  if (audit && audit.profile) return sessionForReplay(sid, audit.profile);
+  return null;
+}
+
+async function replayStreamSession(root, sid) {
+  const scenarioDir = path.join(root, sid);
+  // latest.txt flips when a run finishes, so a live replay must be read
+  // from the in-flight run. Watching the previous audit attaches the
+  // screencast to a browser this run is not driving.
+  const active = await sessionFromRunAudit(scenarioDir, sid, await findActiveRunId(scenarioDir));
+  if (active) return active;
+  const latest = await sessionFromRunAudit(scenarioDir, sid, await latestRunId(scenarioDir));
+  return latest || replaySessionFor(sid);
 }
 
 // List live agent-browser session names by reading the per-session unix
@@ -3135,49 +3144,120 @@ async function launchReplay(deps, sid, session, opts) {
   }
 }
 
-// True when this session's agent-browser daemon is alive AND still has a
-// browser process. `get cdp-url` launches a browser when the window is
-// gone, and the new one opens on about:blank. The preview polls that
-// command, so a closed window would come straight back.
-function browserDaemonHasBrowser(session) {
-  const name = session ? String(session) : 'default';
-  if (!name || name.includes('/') || name.includes('..')) return false;
-  const pidFile = path.join(os.homedir(), '.agent-browser', `${name}.pid`);
-  let daemonPid;
-  try {
-    daemonPid = Number(fs.readFileSync(pidFile, 'utf8').trim());
-  } catch {
-    return false;
-  }
-  if (!Number.isInteger(daemonPid) || daemonPid <= 0) return false;
-  try {
-    process.kill(daemonPid, 0);
-  } catch {
-    return false;
-  }
-  try {
-    const kids = fs.readFileSync(`/proc/${daemonPid}/task/${daemonPid}/children`, 'utf8');
-    return kids.trim().length > 0;
-  } catch {
-    return false;
-  }
+// Chrome writes its DevTools port beside the profile:
+//   <port>\n/devtools/browser/<id>\n
+function cdpUrlFromActivePort(text) {
+  const lines = String(text).split(/\r?\n/);
+  const port = (lines[0] || '').trim();
+  const wsPath = (lines[1] || '').trim();
+  if (!/^\d+$/.test(port) || !wsPath.startsWith('/devtools/')) return null;
+  return `ws://127.0.0.1:${port}${wsPath}`;
 }
 
-// Build a getCdpUrl() that resolves a session's CDP WebSocket endpoint via
-// the Rust `cdp-url` verb. session=null → the recorder's env session.
-// Refuses to ask when no browser is running, because that ask launches one.
-function cdpUrlResolver(runCli, session) {
-  return async () => {
-    if (!browserDaemonHasBrowser(session)) {
-      throw new Error('no live browser');
+// The debugger URL of a session whose Chrome is already running, read from
+// the daemon's child and DevToolsActivePort. Never asks agent-browser:
+// `get cdp-url` both launches a fresh about:blank when the window is gone
+// and waits behind whatever command the replay is currently driving, so the
+// preview stays on "Connecting…" until that step returns.
+// `io` is a test seam (home, readFileSync, kill).
+function readLiveCdpUrl(session, io) {
+  const name = session ? String(session) : '';
+  if (!name || !isSafeSegment(name)) return null;
+  const readFileSync = (io && io.readFileSync) || fs.readFileSync.bind(fs);
+  const kill = (io && io.kill) || ((pid, sig) => process.kill(pid, sig));
+  const home =
+    (io && io.home) ||
+    process.env.AGENT_BROWSER_HOME ||
+    path.join(os.homedir(), '.agent-browser');
+  let daemonPid;
+  try {
+    daemonPid = Number(String(readFileSync(path.join(home, `${name}.pid`), 'utf8')).trim());
+  } catch {
+    return null;
+  }
+  if (!Number.isInteger(daemonPid) || daemonPid <= 0) return null;
+  try {
+    kill(daemonPid, 0);
+  } catch {
+    return null;
+  }
+  // Chrome is often a child of a worker thread, not the thread-group
+  // leader. /proc/<pid>/task/<pid>/children stays empty in that case, so
+  // the preview would sit on "Connecting…" for the whole run.
+  const readdirSync = (io && io.readdirSync) || fs.readdirSync.bind(fs);
+  let tids = [String(daemonPid)];
+  try {
+    const listed = readdirSync(`/proc/${daemonPid}/task`);
+    if (listed && listed.length) tids = listed.map(String);
+  } catch {
+    /* fall back to the leader thread */
+  }
+  const kids = new Set();
+  for (const tid of tids) {
+    try {
+      for (const kid of String(readFileSync(`/proc/${daemonPid}/task/${tid}/children`, 'utf8'))
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)) {
+        kids.add(kid);
+      }
+    } catch {
+      /* thread exited between readdir and read */
     }
-    const args = ['cdp-url', ...(session ? ['--session', session] : []), '--json'];
-    const r = await runCli(args);
-    if (r.spawnError) throw new Error(String(r.spawnError.message || r.spawnError));
-    if (r.code !== 0) throw new Error((r.stderr || 'cdp-url failed').trim());
-    const j = lastJsonLine(r.stdout) || {};
-    if (!j.url) throw new Error('cdp-url returned no url (no live session?)');
-    return j.url;
+  }
+  for (const kid of kids) {
+    let args;
+    try {
+      args = String(readFileSync(`/proc/${kid}/cmdline`)).split('\0');
+    } catch {
+      continue;
+    }
+    let dir = null;
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      if (a.startsWith('--user-data-dir=')) dir = a.slice('--user-data-dir='.length);
+      else if (a === '--user-data-dir') dir = args[i + 1] || null;
+    }
+    if (!dir || !dir.startsWith('/')) continue;
+    let portFile;
+    try {
+      portFile = readFileSync(path.join(dir, 'DevToolsActivePort'), 'utf8');
+    } catch {
+      continue;
+    }
+    const url = cdpUrlFromActivePort(portFile);
+    if (url) return url;
+  }
+  return null;
+}
+
+// Session the authoring editor is recording into, if a recorder state file
+// is present. Otherwise the editor's live pane watches the "default" session.
+function readRecorderSession(io) {
+  try {
+    const readFileSync = (io && io.readFileSync) || fs.readFileSync.bind(fs);
+    const dir = resolveRecordRoot({
+      env: (io && io.env) || process.env,
+      cwd: (io && io.cwd) || process.cwd(),
+    });
+    const state = JSON.parse(String(readFileSync(path.join(dir, 'recorder-state.json'), 'utf8')));
+    if (state && typeof state.session === 'string' && isSafeSegment(state.session)) return state.session;
+  } catch {
+    /* no active recording */
+  }
+  return null;
+}
+
+// Build a getCdpUrl() for the live preview. session=null → the recorder's
+// session, else "default". Reads Chrome's port off disk. Does not call the
+// CLI: that call launches a browser when none is running, and while a replay
+// is mid-step it sits in the daemon queue so the pane stays blank.
+function cdpUrlResolver(_runCli, session, io) {
+  return async () => {
+    const name = session || readRecorderSession(io) || 'default';
+    const direct = readLiveCdpUrl(name, io);
+    if (direct) return direct;
+    throw new Error('no live browser');
   };
 }
 
@@ -6316,5 +6396,7 @@ module.exports = {
     makeReplaySpawner,
     replaySetupTimeoutMs,
     cdpUrlResolver,
+    readLiveCdpUrl,
+    cdpUrlFromActivePort,
   },
 };
