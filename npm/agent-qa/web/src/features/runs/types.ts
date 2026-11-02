@@ -159,9 +159,13 @@ export interface RunDetail {
   // StepIds whose {"domshot"} claim missed — each has a
   // domshots-diff/<stepId>.diff.txt unified diff servable via artifactUrl.
   domshotDiffs?: string[]
-  // run.webm exists in the run dir (replay ran with --record-video) —
-  // servable via runFileUrl(sid, runId, 'run.webm').
+  // A recording exists (run.mp4, or run.webm from older runs).
   video?: boolean
+  // Which allowlisted file to load. Absent when `video` is false.
+  videoFile?: 'run.mp4' | 'run.webm' | null
+  // Step offsets written beside the recording, milliseconds from the
+  // moment recording started. Absent on runs that predate the cue file.
+  cues?: { id?: string; idx: number; tMs: number }[] | null
   // The run's captured request log (network.json): every fetch/XHR/etc the
   // browser made during replay. Absent on runs that predate the artifact.
   network?: { requestCount?: number; requests?: RunNetworkRequest[] } | null
