@@ -4,6 +4,7 @@ import {
   clampedRate,
   formatClock,
   frameStepMs,
+  beyondRecording,
   markerAtTime,
   trackDuration,
   type TimelineStep,
@@ -124,5 +125,31 @@ describe('clock and speed', () => {
     const markers = buildMarkers(steps, [{ idx: 1, tMs: 9000 }], 0)
     expect(trackDuration(markers, 0)).toBeGreaterThanOrEqual(9)
     expect(trackDuration([], 3)).toBe(3)
+  })
+
+  it('keeps a step that starts after the file on the track', () => {
+    const markers = buildMarkers(
+      [
+        { idx: 3, id: 'mail', intent: 'Fill the email field', kind: 'do:type', status: 'pass', ms: 705 },
+        { idx: 4, id: 'key', intent: 'Press Enter', kind: 'do:press', status: 'pass', ms: 604 },
+        { idx: 5, id: 'see', intent: 'Verify the inbox', kind: 'check', status: 'fail', ms: 6535, screenshot: 'screenshots/see.png' },
+      ],
+      [
+        { idx: 3, tMs: 7457 },
+        { idx: 4, tMs: 11237 },
+        { idx: 5, tMs: 14917 },
+      ],
+      10.067
+    )
+    expect(markers.map((m) => Number(m.at.toFixed(3)))).toEqual([7.457, 11.237, 14.917])
+    const end = trackDuration(markers, 10.067)
+    expect(end).toBeCloseTo(14.917)
+    // The file runs out during the email step. Finishing the track lands on the failure.
+    expect(markerAtTime(markers, 10.067)?.idx).toBe(3)
+    expect(markerAtTime(markers, end)?.idx).toBe(5)
+    expect(beyondRecording(10.067, 10.067)).toBe(false)
+    expect(beyondRecording(11.237, 10.067)).toBe(true)
+    expect(beyondRecording(14.917, 10.067)).toBe(true)
+    expect(beyondRecording(4, 0)).toBe(false)
   })
 })

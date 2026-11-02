@@ -4,6 +4,10 @@
 // Video mode asks the browser for that rate. Some engines clamp it; the
 // control says so. Frames mode steps the captured screenshots on our own
 // timer, so 8× still moves even when the video decoder will not.
+//
+// A short file does not end the run. Cues past the media stay on the
+// track, and once the file ends playback keeps walking them — showing
+// each step's screenshot — until the playhead reaches the last step.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -21,6 +25,7 @@ import { artifactUrl, runFileUrl } from '@/lib/runs-api'
 import { cn } from '@/lib/utils'
 import {
   PLAYBACK_RATES,
+  beyondRecording,
   buildMarkers,
   clampedRate,
   formatClock,
@@ -83,6 +88,10 @@ export function ReplayScrubber({
   const videoRef = useRef<HTMLVideoElement>(null)
   const trackRef = useRef<HTMLDivElement>(null)
   const fromPlayer = useRef(false)
+  // Timeline time past the end of the file. The media element clamps there,
+  // so its timeupdate must not drag the playhead back onto an earlier step.
+  const tailRef = useRef(false)
+  const [tail, setTail] = useState(false)
   const [mode, setMode] = useState<'video' | 'frames'>('video')
   const [rate, setRate] = useState<number>(1)
   const [capped, setCapped] = useState<number | null>(null)
@@ -102,6 +111,10 @@ export function ReplayScrubber({
 
   useEffect(() => {
     setFile(videoFile || 'run.mp4')
+    tailRef.current = false
+    setTail(false)
+    setTime(0)
+    setPlaying(false)
   }, [videoFile, runId])
 
   useEffect(() => {
@@ -120,8 +133,46 @@ export function ReplayScrubber({
   markersRef.current = markers
   const onSelectRef = useRef(onSelect)
   onSelectRef.current = onSelect
+  const timeRef = useRef(time)
+  timeRef.current = time
+  const rateRef = useRef(rate)
+  rateRef.current = rate
+  const durRef = useRef(dur)
+  durRef.current = dur
+  const playingRef = useRef(playing)
+  playingRef.current = playing
   // Stable across parent re-renders that rebuild the same marker list.
   const markerKey = markers.map((m) => `${m.idx}@${m.at.toFixed(3)}`).join('|')
+
+  function enterTail() {
+    tailRef.current = true
+    setTail(true)
+  }
+
+  function leaveTail() {
+    tailRef.current = false
+    setTail(false)
+  }
+
+  // Park the media element. Times past the file stay on the timeline and
+  // show the step screenshot; the element itself cannot seek there.
+  function pinVideo(el: HTMLVideoElement, timelineSec: number) {
+    const media = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : 0
+    if (media > 0 && beyondRecording(timelineSec, media)) {
+      enterTail()
+      const at = Math.max(0, media - 0.001)
+      if (Math.abs(el.currentTime - at) > 0.02) el.currentTime = at
+      el.pause()
+      return
+    }
+    leaveTail()
+    const seek = () => {
+      const live = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : 0
+      el.currentTime = live > 0 ? Math.min(timelineSec, Math.max(0, live - 0.001)) : timelineSec
+    }
+    if (el.readyState >= 1) seek()
+    else el.addEventListener('loadedmetadata', seek, { once: true })
+  }
 
   // A click in the step list seeks the recording. Selection that the
   // playhead itself just reported must not yank the playhead backwards
@@ -137,21 +188,44 @@ export function ReplayScrubber({
     if (i < 0) return
     const start = list[i].at
     const end = list[i + 1]?.at ?? Number.POSITIVE_INFINITY
-    const now = videoRef.current?.currentTime ?? 0
+    const now = tailRef.current ? timeRef.current : (videoRef.current?.currentTime ?? timeRef.current)
     if (now >= start - 0.05 && now < end - 0.05) return
     setTime(start)
     const el = videoRef.current
     if (!el || mode !== 'video') return
-    const seek = () => {
-      if (Number.isFinite(el.duration) && el.duration > 0) {
-        el.currentTime = Math.min(start, Math.max(0, el.duration - 0.001))
-      } else {
-        el.currentTime = start
-      }
-    }
-    if (el.readyState >= 1) seek()
-    else el.addEventListener('loadedmetadata', seek, { once: true })
+    const wasPlaying = playingRef.current
+    pinVideo(el, start)
+    if (!tailRef.current && wasPlaying) void el.play()
   }, [selectedIdx, markerKey, mode])
+
+  // After the file ends, keep the playhead moving along the cue clock
+  // until it reaches the last step. 8× still applies here.
+  useEffect(() => {
+    if (mode !== 'video' || !playing || !tail) return
+    let raf = 0
+    let last = performance.now()
+    const tick = (now: number) => {
+      const dt = ((now - last) / 1000) * (rateRef.current > 0 ? rateRef.current : 1)
+      last = now
+      const end = durRef.current
+      const next = Math.min(end, timeRef.current + dt)
+      timeRef.current = next
+      setTime(next)
+      const hit = markerAtTime(markersRef.current, next)
+      if (hit && hit.idx !== idxRef.current) {
+        fromPlayer.current = true
+        onSelectRef.current(hit.idx)
+      }
+      if (next >= end - 0.001) {
+        leaveTail()
+        setPlaying(false)
+        return
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [mode, playing, tail])
 
   useEffect(() => {
     if (mode !== 'frames' || !playing) return
@@ -189,8 +263,9 @@ export function ReplayScrubber({
     setTime(next)
     const el = videoRef.current
     if (el && mode === 'video') {
-      const cap = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : next
-      el.currentTime = Math.min(next, cap)
+      const wasPlaying = playingRef.current
+      pinVideo(el, next)
+      if (!tailRef.current && wasPlaying) void el.play()
     }
     const hit = markerAtTime(markers, next)
     if (hit) choose(hit.idx)
@@ -204,13 +279,23 @@ export function ReplayScrubber({
   }
 
   async function toggle() {
-    if (mode === 'frames') {
+    if (mode === 'frames' || tailRef.current) {
       setPlaying((p) => !p)
       return
     }
     const el = videoRef.current
     if (!el) return
     if (el.paused) {
+      const media = Number.isFinite(el.duration) ? el.duration : 0
+      const end = trackDuration(markersRef.current, media)
+      // Finished already: play again from the start. Ended just now, with
+      // steps still ahead of the file: walk those before stopping.
+      if (el.ended && end > media + 0.05 && timeRef.current < end - 0.05) {
+        enterTail()
+        setTime(media)
+        setPlaying(true)
+        return
+      }
       setCapped(applyRate(el, rate))
       try {
         await el.play()
@@ -223,6 +308,9 @@ export function ReplayScrubber({
   }
 
   const frame = shown?.shot && shown.id ? artifactUrl(sid, runId, 'screenshots', shown.id) : null
+  const pastFile = mode === 'video' && shown != null && beyondRecording(shown.at, duration)
+  const showFrame = mode === 'frames' || (pastFile && !!frame)
+  const clockTotal = mode === 'video' && duration > 0 && dur <= duration + 0.05 ? duration : dur
 
   return (
     <div className="shrink-0 border-b border-border bg-card text-foreground">
@@ -232,27 +320,52 @@ export function ReplayScrubber({
           src={runFileUrl(sid, runId, file)}
           preload="metadata"
           playsInline
-          className={cn('mx-auto max-h-[min(42vh,360px)] w-full bg-muted', mode !== 'video' && 'hidden')}
+          className={cn('mx-auto max-h-[min(42vh,360px)] w-full bg-muted', showFrame && 'hidden')}
           onLoadedMetadata={(e) => {
             const el = e.currentTarget
             setDuration(Number.isFinite(el.duration) ? el.duration : 0)
             setCapped(applyRate(el, rate))
           }}
           onTimeUpdate={(e) => {
-            if (mode !== 'video') return
+            if (mode !== 'video' || tailRef.current) return
             const t = e.currentTarget.currentTime
             setTime(t)
             const hit = markerAtTime(markersRef.current, t)
             if (hit && hit.idx !== idxRef.current) choose(hit.idx)
           }}
-          onPlay={() => setPlaying(true)}
-          onPause={() => setPlaying(false)}
-          onEnded={() => setPlaying(false)}
+          onPlay={() => {
+            if (tailRef.current) return
+            setPlaying(true)
+          }}
+          onPause={(e) => {
+            if (tailRef.current) return
+            const media = e.currentTarget.duration
+            if (
+              e.currentTarget.ended &&
+              Number.isFinite(media) &&
+              trackDuration(markersRef.current, media) > media + 0.05
+            ) {
+              enterTail()
+              setTime((t) => (t < media - 0.001 ? media : t))
+              return
+            }
+            setPlaying(false)
+          }}
+          onEnded={(e) => {
+            const media = e.currentTarget.duration
+            if (Number.isFinite(media) && trackDuration(markersRef.current, media) > media + 0.05) {
+              enterTail()
+              setTime((t) => (t < media - 0.001 ? media : t))
+              setPlaying(true)
+              return
+            }
+            setPlaying(false)
+          }}
           onError={() => {
             if (file !== 'run.webm') setFile('run.webm')
           }}
         />
-        {mode === 'frames' &&
+        {showFrame &&
           (frame ? (
             <img
               src={frame}
@@ -331,7 +444,7 @@ export function ReplayScrubber({
           })}
         </div>
         <div className="tnum pb-1 text-right font-mono text-[11px] text-muted-foreground">
-          {formatClock(head)} / {formatClock(mode === 'video' && duration > 0 ? duration : dur)}
+          {formatClock(head)} / {formatClock(clockTotal)}
         </div>
       </div>
 

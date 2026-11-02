@@ -5,6 +5,10 @@
 // length: slack before the first step is treated as lead-in (setup runs
 // before dispatch), and a recording shorter than the steps is scaled so
 // every marker still fits.
+//
+// Cues stay on the recording clock even when the file stops early. The
+// track still runs out to the last cue, and playback is allowed to leave
+// the file so the playhead can finish on a step the video never reached.
 
 import { verbCat, type VerbCat } from './rows'
 
@@ -108,6 +112,15 @@ export function trackDuration(markers: Marker[], mediaDurationSec: number): numb
   const last = markers.length ? markers[markers.length - 1].at : 0
   const media = Number.isFinite(mediaDurationSec) && mediaDurationSec > 0 ? mediaDurationSec : 0
   return Math.max(media, last, 0.001)
+}
+
+/**
+ * The playhead has moved past the recorded file onto steps whose cues
+ * sit later on the recording clock. Callers keep that timeline time;
+ * the media element cannot represent it and must not snap the playhead back.
+ */
+export function beyondRecording(timeSec: number, mediaDurationSec: number): boolean {
+  return Number.isFinite(mediaDurationSec) && mediaDurationSec > 0 && timeSec > mediaDurationSec + 0.02
 }
 
 /** `0:48` — minutes are unpadded, seconds are always two digits. */
