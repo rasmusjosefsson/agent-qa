@@ -14,9 +14,16 @@
 //! The dock is `aria-hidden` and its rows sit in an open shadow root, so
 //! a locator cannot match a step label. Screenshots are cropped to the
 //! page beside the dock after the shot, so the list is not taken down.
-//! Headless replays skip it; the workbench already lists the steps.
+//!
+//! The saved recording is cropped the same way. The live window keeps
+//! the list; the preview plays the page. Headless replays remove a dock
+//! left on a reused page and never paint one — the workbench already
+//! lists the steps.
 
+use std::path::Path;
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use serde_json::{json, Value as Json};
 
@@ -433,6 +440,9 @@ fn dock_expr(payload: &str) -> String {
 /// Paint the step dock into the app page. Best-effort: a missing page
 /// must not fail the step. One process-wide pass closes a step-log
 /// window left by an older build so it cannot steal the next click.
+/// The same paint is installed for the next document, so a navigation
+/// does not film a frame of the page without the list (the saved
+/// recording is cropped by that list's width).
 pub fn sync_step_log(session: &str, cur: u32, captions: &[String], outcomes: &[Option<&str>]) {
     close_leftover_log_windows(session);
     let rows: Vec<Json> = captions
@@ -444,7 +454,238 @@ pub fn sync_step_log(session: &str, cur: u32, captions: &[String], outcomes: &[O
         })
         .collect();
     let payload = serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into());
-    let _ = browser::eval_expression(session, &dock_expr(&payload));
+    let expr = dock_expr(&payload);
+    let _ = browser::eval_expression(session, &expr);
+    persist_document_script(session, &expr);
+    note_dock_span(session);
+}
+
+/// Drop a dock left on a reused page. Headless replays call this before
+/// filming so the preview is the page. Body styles are restored only
+/// when this dock saved them. The same clear runs on the next document,
+/// after any dock script a previous window installed.
+pub fn clear_step_log(session: &str) {
+    if let Ok(mut span) = DOCK_SPAN.lock() {
+        *span = None;
+    }
+    persist_document_script(session, &clear_expr());
+    let _ = browser::eval_expression(session, &clear_expr());
+}
+
+/// CSS px of the dock's right edge over the layout width. The recording
+/// is device pixels, so the crop is this fraction of the file's width.
+static DOCK_SPAN: Mutex<Option<(f64, f64)>> = Mutex::new(None);
+static DOCK_SCRIPT_ID: Mutex<Option<String>> = Mutex::new(None);
+static SCRIPT_WARNED: AtomicBool = AtomicBool::new(false);
+
+const DOCK_SPAN_EXPR: &str = r#"(function(){
+ var d=document.getElementById('__aq_log');
+ if(!d||!d.getBoundingClientRect||!(window.innerWidth>0)) return '';
+ var r=d.getBoundingClientRect();
+ if(!(r.right>1)) return '';
+ return r.right+'/'+window.innerWidth;
+})()"#;
+
+fn clear_expr() -> String {
+    format!(
+        "(function(){{{shift}\nvar d=document.getElementById('__aq_log');if(d)d.remove();\nvar rail=document.getElementById('__aq_rail');if(rail)rail.remove();\nvar stepEl=document.getElementById('__aq_step');if(stepEl)stepEl.remove();\nvar b=document.body;if(b&&(b.getAttribute('data-aq-shift')||b.classList.contains('__aq_shifted')))aqShift(false);}})()",
+        shift = SHIFT_FN
+    )
+}
+
+/// Run `inner` on the top document once it has a body. Child frames
+/// skip it, so a dock is not painted inside an iframe.
+fn document_script(inner: &str) -> String {
+    format!(
+        "(function(){{if(window.top!==window)return;var go=function(){{{inner}}};if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',go,{{once:true}});else go();}})()"
+    )
+}
+
+fn persist_document_script(session: &str, inner: &str) {
+    let source = document_script(inner);
+    // The first CDP socket of a just-launched browser sometimes resets.
+    // The pool drops that socket; one retry connects cleanly.
+    for attempt in 0..2 {
+        let previous = DOCK_SCRIPT_ID.lock().ok().and_then(|slot| slot.clone());
+        match crate::cdp::replace_new_document_script(session, &source, previous.as_deref()) {
+            Ok(Some(id)) => {
+                if let Ok(mut slot) = DOCK_SCRIPT_ID.lock() {
+                    *slot = Some(id);
+                }
+                return;
+            }
+            Ok(None) => return,
+            Err(e) => {
+                if let Ok(mut slot) = DOCK_SCRIPT_ID.lock() {
+                    *slot = None;
+                }
+                if attempt == 0 {
+                    continue;
+                }
+                if SCRIPT_WARNED
+                    .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    eprintln!("[v2-replay] step list script: {e:#}");
+                }
+            }
+        }
+    }
+}
+
+fn parse_span(out: &str) -> Option<(f64, f64)> {
+    let t = out.trim().trim_matches('"');
+    let (right, inner) = t.split_once('/')?;
+    let right: f64 = right.trim().parse().ok()?;
+    let inner: f64 = inner.trim().parse().ok()?;
+    if right > 1.0 && inner > right {
+        Some((right, inner))
+    } else {
+        None
+    }
+}
+
+/// Remember how wide the dock is relative to the page. A missing dock
+/// keeps the last good measurement so a later navigation cannot make
+/// the crop guess.
+pub fn note_dock_span(session: &str) {
+    let Ok(out) = browser::eval_expression(session, DOCK_SPAN_EXPR) else {
+        return;
+    };
+    let Some(span) = parse_span(&out) else {
+        return;
+    };
+    if let Ok(mut slot) = DOCK_SPAN.lock() {
+        *slot = Some(span);
+    }
+}
+
+/// Device-pixel column where the page starts in a recording of `video_w`.
+/// `None` when there is no dock to remove. The column is rounded up to
+/// an even x so the cropped frame stays yuv420-friendly, which drops at
+/// most one pixel of the page.
+pub(crate) fn dock_crop_x(dock_right: f64, inner_width: f64, video_w: u32) -> Option<u32> {
+    if !(dock_right > 1.0 && inner_width > dock_right && video_w >= 4) {
+        return None;
+    }
+    let frac = dock_right / inner_width;
+    if !(0.02..=0.6).contains(&frac) {
+        return None;
+    }
+    let mut x = (frac * f64::from(video_w)).round().max(0.0) as u32;
+    if x % 2 == 1 {
+        x = x.saturating_add(1);
+    }
+    if x >= video_w || video_w - x < 2 {
+        return None;
+    }
+    if (video_w - x) % 2 == 1 {
+        x = x.saturating_add(1);
+    }
+    if x >= video_w || video_w - x < 2 {
+        return None;
+    }
+    Some(x)
+}
+
+fn video_width(path: &Path) -> Option<u32> {
+    let out = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width",
+            "-of",
+            "csv=p=0",
+        ])
+        .arg(path)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8(out.stdout)
+        .ok()?
+        .trim()
+        .parse::<u32>()
+        .ok()
+}
+
+/// Cut the step list off a finished recording. The live window is left
+/// as it is. A failed encode keeps the original file.
+pub fn crop_dock_from_video(path: &Path) {
+    let Some((right, inner)) = DOCK_SPAN.lock().ok().and_then(|slot| *slot) else {
+        eprintln!("[v2-replay] recording still shows the step list — its width was not measured");
+        return;
+    };
+    let Some(width) = video_width(path) else {
+        eprintln!(
+            "[v2-replay] recording still shows the step list — could not read the video width"
+        );
+        return;
+    };
+    let Some(x) = dock_crop_x(right, inner, width) else {
+        return;
+    };
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("mp4");
+    let tmp = path.with_extension(format!("crop.{ext}"));
+    let webm = ext.eq_ignore_ascii_case("webm");
+    let filter = format!("crop=iw-{x}:ih:{x}:0");
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args(["-y", "-i"]).arg(path).args(["-vf", &filter]);
+    if webm {
+        cmd.args(["-c:v", "libvpx", "-crf", "18", "-b:v", "2M", "-an"]);
+    } else {
+        cmd.args([
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-crf",
+            "18",
+            "-preset",
+            "veryfast",
+            "-movflags",
+            "+faststart",
+            "-an",
+        ]);
+    }
+    let encoded = cmd.arg(&tmp).output();
+    let output = match encoded {
+        Ok(output) => output,
+        Err(e) => {
+            eprintln!("[v2-replay] recording crop skipped: {e}");
+            let _ = std::fs::remove_file(&tmp);
+            return;
+        }
+    };
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        let tail = err
+            .chars()
+            .rev()
+            .take(400)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>();
+        eprintln!("[v2-replay] recording crop skipped: {tail}");
+        let _ = std::fs::remove_file(&tmp);
+        return;
+    }
+    if std::fs::metadata(&tmp).map(|m| m.len()).unwrap_or(0) == 0 {
+        eprintln!("[v2-replay] recording crop skipped: empty file");
+        let _ = std::fs::remove_file(&tmp);
+        return;
+    }
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        eprintln!("[v2-replay] recording crop skipped: {e}");
+        let _ = std::fs::remove_file(&tmp);
+        return;
+    }
+    eprintln!("[v2-replay] recording cropped the step list out of the preview");
 }
 
 fn close_leftover_log_windows(session: &str) {
@@ -549,6 +790,21 @@ mod tests {
         assert!(!CURSOR_SHOW.contains("__aq_log"));
         assert!(crate::cdp::is_app_page("http://127.0.0.1:8765/"));
         assert!(!crate::cdp::is_app_page("data:text/html,aq-step-log"));
+        // 320 CSS px on a 1790 CSS px viewport, filmed 1764 px wide.
+        // 315.35 rounds to 315, then up to an even column.
+        assert_eq!(super::dock_crop_x(320.0, 1790.0, 1764), Some(316));
+        assert_eq!(super::dock_crop_x(0.0, 1790.0, 1764), None);
+        assert_eq!(super::parse_span("\"320/1790\"\n"), Some((320.0, 1790.0)));
+        assert_eq!(super::parse_span("nope"), None);
+        let clear = super::clear_expr();
+        assert!(clear.contains("getElementById('__aq_log')"));
+        assert!(clear.contains("data-aq-shift"));
+        assert!(clear.contains("__aq_shifted"));
+        let wrapped = super::document_script("INNER");
+        assert!(wrapped.contains("window.top!==window"));
+        assert!(wrapped.contains("DOMContentLoaded"));
+        assert!(wrapped.contains("INNER"));
+        assert!(!wrapped.contains("runImmediately"));
         let dir = std::env::temp_dir();
         let shot = dir.join(format!("aq-dock-crop-{}.png", std::process::id()));
         image::RgbImage::from_pixel(10, 4, image::Rgb([10, 20, 30]))

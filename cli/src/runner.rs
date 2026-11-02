@@ -851,6 +851,10 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
     // Set only when `record start` succeeds, so a missing ffmpeg does not
     // invent a cue file for a recording that was never opened.
     let mut video_origin: Option<Instant> = None;
+    let mut video_path: Option<PathBuf> = None;
+    // Headed recordings film the dock, then the file is cropped to the
+    // page so the preview does not show the list.
+    let mut crop_video_dock = false;
     let mut video_cues: Vec<crate::video_cues::VideoCue> = Vec::new();
 
     if opts.dry_run {
@@ -888,24 +892,6 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                 Vec::new()
             }
         };
-        // `--record-video`: start filming before the first step so the
-        // whole interaction lands in <run>/run.mp4 (mp4 renders inline
-        // in GitHub comments; webm does not). Best-effort — a missing
-        // ffmpeg is a warning, not a failed run.
-        if let Some(vid) = &opts.record_video {
-            let dest = if vid.as_os_str().is_empty() {
-                run.run_root.join("run.mp4")
-            } else {
-                vid.clone()
-            };
-            match browser::record_video_start(&opts.session_name, &dest) {
-                Ok(()) => {
-                    video_origin = Some(Instant::now());
-                    eprintln!("[v2-replay] recording → {}", dest.display());
-                }
-                Err(e) => eprintln!("[v2-replay] record start skipped: {e}"),
-            }
-        }
         // `--from`/`--until` narrow the dispatch window. Steps outside
         // the window never dispatch — no events, no summary rows — but
         // their ids are remembered so `--junit` can emit <skipped/>.
@@ -942,7 +928,9 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         let total = flat.len() as u32;
         // Cursor and target ring while a recording is on. A visible window
         // also docks a step list on the left of that same window and shifts
-        // the page so the list does not cover it.
+        // the page so the list does not cover it. The saved recording is
+        // cropped back to the page; a headless run clears a dock a previous
+        // window left on the reused page.
         let record_on = opts.record_video.is_some() && !opts.dry_run;
         let show_steps = opts.headed && !opts.dry_run;
         let step_captions: Vec<String> = if show_steps {
@@ -953,6 +941,35 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             Vec::new()
         };
         let mut rail_outcomes: Vec<Option<&'static str>> = vec![None; flat.len()];
+        if show_steps {
+            crate::video_overlay::sync_step_log(
+                &opts.session_name,
+                1,
+                &step_captions,
+                &rail_outcomes,
+            );
+        } else if record_on {
+            crate::video_overlay::clear_step_log(&opts.session_name);
+        }
+        // `--record-video`: start filming once the dock is either up
+        // (headed) or gone (headless), so the first frame matches the
+        // crop applied when the file is saved.
+        if let Some(vid) = &opts.record_video {
+            let dest = if vid.as_os_str().is_empty() {
+                run.run_root.join("run.mp4")
+            } else {
+                vid.clone()
+            };
+            match browser::record_video_start(&opts.session_name, &dest) {
+                Ok(()) => {
+                    video_origin = Some(Instant::now());
+                    video_path = Some(dest.clone());
+                    crop_video_dock = show_steps;
+                    eprintln!("[v2-replay] recording → {}", dest.display());
+                }
+                Err(e) => eprintln!("[v2-replay] record start skipped: {e}"),
+            }
+        }
         // Resolve once how per-step progress is rendered (quiet /
         // plain-or-piped / pretty-TTY). Pure formatting; no behaviour change.
         let progress_mode = resolve_progress_mode(opts);
@@ -1802,10 +1819,18 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             eprintln!("[v2-replay] video-cues.json write failed: {e}");
         }
     }
+    if crop_video_dock {
+        crate::video_overlay::note_dock_span(&opts.session_name);
+    }
     if opts.record_video.is_some() && !opts.dry_run {
         match browser::record_video_stop(&opts.session_name) {
             Ok(()) => {}
             Err(e) => eprintln!("[v2-replay] record stop skipped: {e}"),
+        }
+    }
+    if crop_video_dock {
+        if let Some(path) = &video_path {
+            crate::video_overlay::crop_dock_from_video(path);
         }
     }
 
