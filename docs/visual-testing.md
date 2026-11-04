@@ -119,6 +119,8 @@ clips are cropped from that full-page image, so they follow the same re-mint.
 
 ## In the workbench
 
+Runs and the Goldens page are part of the [workbench](workbench.md).
+
 - The Runs pane renders the red diff map inline on a failed shot claim and
   offers **Re-mint baseline** (one step) or **Accept shots** (every capture in
   the run) — both hit `shot-accept` under the hood.

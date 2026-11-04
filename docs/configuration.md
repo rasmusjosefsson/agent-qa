@@ -205,7 +205,7 @@ credentials. With `--persona` and no `--environment` the
 
 ## Chats
 
-The workbench persists each chat as a record under the scenarios root:
+The [workbench](workbench.md) persists each chat as a record under the scenarios root:
 
 ```
 <scenarios>/_chats/<id>.json
