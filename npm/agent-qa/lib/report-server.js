@@ -4808,16 +4808,10 @@ async function handleChat(req, res, manager, deps, seg, scenariosRoot) {
     }
     try {
       const r = await deps.runCli(
-        [
-          'replay',
-          sid,
-          '--session',
-          entry.browser.name,
-          headed ? '--headed' : '--headless',
-          '--record-video',
-          '--profile',
-          resolved.profile || profile,
-        ],
+        replayArgs(sid, entry.browser.name, {
+          headed,
+          profile: resolved.profile || profile,
+        }),
         extraEnv,
       );
       const tail = (s) =>

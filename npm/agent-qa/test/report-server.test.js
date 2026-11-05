@@ -2292,6 +2292,7 @@ test('POST /api/chat/c/:id/replay re-auths via the connected persona, in its ses
     '--session',
     created.session,
     '--headed',
+    '--record-video',
     '--profile',
     'admin-user',
   ]);
