@@ -165,7 +165,8 @@ and adapts to any compatible choice-question endpoint via env config.
 
 ### Enable in the workbench
 
-The `jev-resolve` binary ships inside the `agent-qa` npm package, so the
+The rest of that UI is in [`workbench.md`](workbench.md). The
+`jev-resolve` binary ships inside the `agent-qa` npm package, so the
 workbench can wire it up with zero config editing:
 
 1. Open **Extensions** in the workbench (`agent-qa web` → `/plugins`).

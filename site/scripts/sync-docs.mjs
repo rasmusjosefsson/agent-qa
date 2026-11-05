@@ -18,6 +18,7 @@ const GITHUB = "https://github.com/rasmusjosefsson/agent-qa/blob/main"
 // repo-only.
 const DOCS = {
   overview: { file: "index.md", description: "The whole system in one read: record, replay, compare, heal." },
+  workbench: { file: "workbench.md", description: "Local UI: chat, editor, cases, sets, plans, runs, and goldens." },
   architecture: { file: "architecture.md", description: "Codemap and runtime flows of the agent-qa binary." },
   configuration: { file: "configuration.md", description: "agent-qa.toml, environment variables, and precedence." },
   plugins: { file: "plugins.md", description: "The plugin contract: JSON over stdio, any language." },

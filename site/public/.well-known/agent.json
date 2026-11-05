@@ -24,6 +24,11 @@
       "transport": "stdio",
       "command": "agent-qa mcp",
       "tools": ["record", "replay", "lint", "audit"]
+    },
+    "workbench": {
+      "command": "agent-qa web",
+      "url": "http://127.0.0.1:7878",
+      "docs": "https://rasmusjosefsson.github.io/agent-qa/docs/workbench.md"
     }
   },
   "capabilities": [
@@ -36,6 +41,7 @@
     "self-heal with audit trail (auto_heal, heal-*)",
     "Playwright/Cypress spec import (migrate)",
     "test-inbox reads for OTP/verification links (mail)",
-    "change-scoped scenario drafting (discover)"
+    "change-scoped scenario drafting (discover)",
+    "localhost workbench (agent-qa web): chat, editor, cases, sets, plans, runs, goldens"
   ]
 }

@@ -34,6 +34,7 @@ export default defineConfig({
           items: [
             { label: "Quickstart", slug: "docs/quickstart" },
             { label: "How it works", slug: "docs/overview" },
+            { label: "Workbench", slug: "docs/workbench" },
           ],
         },
         {

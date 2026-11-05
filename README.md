@@ -195,7 +195,7 @@ cargo test       # 911 tests, zero warnings
 ```
 
 The workbench UI is a generated bundle — a fresh checkout needs one build
-before `agent-qa serve` has a frontend (publishing/`npm pack` rebuilds it
+before `agent-qa web` has a frontend (publishing/`npm pack` rebuilds it
 automatically via `prepack`):
 
 ```bash

@@ -26,7 +26,8 @@ the download automatically, so the button behaves the same either way.
 Get the zip:
 
 - **Workbench** → Extensions → Browser extension → **Download .zip**
-  (served by your installed agent-qa at `/api/extension.zip`).
+  (served by your installed agent-qa at `/api/extension.zip`). The rest of
+  that UI is in [`workbench.md`](workbench.md).
 - **GitHub** →
   [latest release](https://github.com/rasmusjosefsson/agent-qa/releases/latest/download/agent-qa-extension.zip).
 - **Repo checkout** → the `extension/` directory directly (no download

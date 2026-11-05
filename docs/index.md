@@ -139,6 +139,7 @@ Never heal an explicit assertion to hide a regression. If the contract failed, r
 
 ## Read next
 
+- [`workbench.md`](workbench.md) — the local UI: chat, editor, cases, sets, plans, runs.
 - [`architecture.md`](architecture.md) — codemap and runtime flows.
 - [`surfaces.md`](surfaces.md) — desktop, iOS, and Android replay. The web path does not start a provider.
 - [`verbs.md`](verbs.md) — complete CLI verb reference.
