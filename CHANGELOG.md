@@ -6,6 +6,7 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-05
 ### Added
 
 - The Headless switch keeps that label. On means the replay has no
