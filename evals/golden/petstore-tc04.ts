@@ -17,7 +17,11 @@ await runEdgeGolden(
     await b.openPage();
     await b.fillSelector("input[name=username]", "j2ee", "fill username");
     await b.fillSelector("input[name=password]", "j2ee", "fill password");
-    await b.clickSelector("input[value=Login]", "submit the signon form");
+    // A coordinate click on this submit input reports success without
+    // posting the form. el.click() activates the submit control. Later
+    // clicks stay on clickSelectorForce because the input channel goes
+    // stale after the signon redirect.
+    await b.clickSelectorForce("input[value=Login]", "submit the signon form");
     await b.waitSelector('a[href*="signoff"]', "signed in — Sign Out link visible");
 
     await b.gotoUrl("https://petstore.octoperf.com/catalog/viewItem?itemId=EST-2", "open a second item");

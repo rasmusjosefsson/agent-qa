@@ -6,6 +6,13 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+### Fixed
+
+- A right-click that opens a native dialog counts as the click landing,
+  so the next step can accept or dismiss the dialog.
+- Text visibility checks walk open shadow roots. A paragraph rendered
+  inside one matches a text claim.
+
 ## [0.9.0] - 2026-11-05
 ### Added
 

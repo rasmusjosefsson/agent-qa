@@ -16,6 +16,10 @@ await runEdgeGolden(
     await b.clickSelector("#input-example button", "disable the input again");
     await b.waitSelectorText("#message", "It's disabled!", "disable finished");
     await b.clickSelector("#checkbox-example button", "remove the checkbox");
+    // The click disables the button immediately and re-enables it 3s later,
+    // in the same turn that removes the checkbox. Wait until it is enabled
+    // before the add-back click; a click on the disabled button is refused.
+    await b.waitSelector("#checkbox-example button:not([disabled])", "remove finished and the button is clickable");
     await b.waitSelectorAbsent("#checkbox", "checkbox removed from DOM");
     await b.assertElementText("#message", "It's gone!", "removal banner shown");
     await b.clickSelector("#checkbox-example button", "add the checkbox back");

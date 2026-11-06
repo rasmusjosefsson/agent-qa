@@ -2620,19 +2620,82 @@ fn rightclick_via_mouse(
     ) else {
         return Ok(MousePoint::Unsupported);
     };
-    let opts = || browser::RunOpts::new();
+    // Capture stderr: a dialog-blocked mouse command prints "dialog is
+    // blocking" and exits. Inherited stderr never lands in the error, so
+    // the dialog check below would miss it. The per-call cap sits above
+    // the golden's 10s default so agent-browser can report the dialog
+    // itself instead of being killed first.
+    let opts = || browser::RunOpts::new().capture().timeout_ms(45_000);
     let ax = format!("{x:.0}");
     let ay = format!("{y:.0}");
     if browser::run(session, ["mouse", "move", ax.as_str(), ay.as_str()], opts()).is_err() {
         return Ok(MousePoint::Unsupported);
     }
     if let Err(e) = browser::run(session, ["mouse", "down", "right"], opts()) {
+        // A contextmenu handler that opens a native dialog blocks the
+        // daemon's mouse command. The click landed; the next step accepts
+        // the dialog. Skip the mouse-up, which would block the same way.
+        if mouse_blocked_by_dialog(session, &e) {
+            eprintln!("[v2-replay] rightclick tolerated — dialog pending");
+            return Ok(MousePoint::Done);
+        }
         let _ = browser::run(session, ["mouse", "up", "right"], opts());
         return Err(anyhow!("mouse down right: {e}"));
     }
-    browser::run(session, ["mouse", "up", "right"], opts())
-        .map_err(|e| anyhow!("mouse up right: {e}"))?;
-    Ok(MousePoint::Done)
+    match browser::run(session, ["mouse", "up", "right"], opts()) {
+        Ok(_) => Ok(MousePoint::Done),
+        Err(e) if mouse_blocked_by_dialog(session, &e) => {
+            eprintln!("[v2-replay] rightclick tolerated — dialog pending");
+            Ok(MousePoint::Done)
+        }
+        Err(e) => Err(anyhow!("mouse up right: {e}")),
+    }
+}
+
+/// True when a mouse command failed because a native dialog is holding the
+/// page. `browser::run` returns its own error type; the click path checks
+/// the same two phrases on an anyhow error.
+fn mouse_blocked_by_dialog(session: &str, e: &browser::AgentBrowserError) -> bool {
+    let msg = e.to_string();
+    // The daemon already named the dialog. Probing `dialog status` here
+    // queues behind the blocked mouse command and times out too.
+    if msg.contains("dialog is blocking") {
+        return true;
+    }
+    // Our own kill only says "timed out". Confirm a dialog is actually
+    // pending, with a short probe so a wedged status call cannot add
+    // another full command budget.
+    msg.contains("timed out") && dialog_pending_soon(session)
+}
+
+fn dialog_pending_soon(session: &str) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(4000);
+    loop {
+        match browser::run(
+            session,
+            ["--json", "dialog", "status"],
+            browser::RunOpts::new().capture().timeout_ms(1500),
+        ) {
+            Ok(r) => {
+                if let Ok(parsed) = serde_json::from_str::<Json>(r.stdout.trim()) {
+                    if parsed
+                        .get("data")
+                        .and_then(|d| d.get("hasDialog"))
+                        .and_then(|v| v.as_bool())
+                        == Some(true)
+                    {
+                        return true;
+                    }
+                }
+            }
+            Err(err) if err.to_string().contains("dialog is blocking") => return true,
+            Err(_) => {}
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
 }
 
 /// Outcome of the trusted-input drag attempt.
@@ -3407,6 +3470,47 @@ mod tests {
         assert!(
             !out.contains("__aqCtx"),
             "synthetic fallback must not run: {out}"
+        );
+    }
+
+    #[test]
+    fn rightclick_tolerates_dialog_opened_by_contextmenu() {
+        let _g = lock_env();
+        let tmp = TempDir::new().unwrap();
+        let log = tmp.path().join("ab.log");
+        let body = format!(
+            "#!/bin/sh\necho \"$@\" >> '{}'\n\
+            if [ \"$3\" = eval ]; then printf '%s' '{{\"x\":8,\"y\":9}}'; exit 0; fi\n\
+            if [ \"$3\" = mouse ] && [ \"$4\" = down ]; then echo 'dialog is blocking the page' >&2; exit 1; fi\n\
+            if [ \"$3\" = --json ] && [ \"$4\" = dialog ]; then printf '%s' '{{\"data\":{{\"hasDialog\":true}}}}'; exit 0; fi\n\
+            exit 0\n",
+            log.display()
+        );
+        let bin = write_exec(tmp.path(), "agent-browser", &body);
+        std::env::set_var(ab::BIN_ENV, &bin);
+        ab::_reset_bin_cache_for_tests();
+        let s = parse(json!({
+            "id": "s1", "intent": "x", "kind": "do", "verb": "rightclick",
+            "on": { "raw": { "kind": "css", "value": "#alert-btn" }, "reason": "menu" }
+        }));
+        let ctx = DoContext {
+            session: "sess",
+            scenario_dir: tmp.path(),
+            visual_checks: false,
+            uses_dialog: true,
+        };
+        let mut scope = ValueScope::default();
+        dispatch_do(&s, &ctx, &mut scope).unwrap();
+        let out = fs::read_to_string(&log).unwrap();
+        clear_fake();
+        assert!(out.contains("mouse down right"), "got: {out}");
+        assert!(
+            !out.contains("mouse up right"),
+            "mouseup would block on the same dialog: {out}"
+        );
+        assert!(
+            !out.contains("__aqCtx"),
+            "synthetic fallback must not run over an open dialog: {out}"
         );
     }
 

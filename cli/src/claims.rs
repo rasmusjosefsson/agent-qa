@@ -2709,10 +2709,25 @@ fn probe_text(session: &str, want: &str) -> Result<()> {
 /// because the other label is still in the bundle.
 fn visible_text_probe_expr(want: &str) -> String {
     let q = serde_json::to_string(want).expect("string serializes");
+    // querySelectorAll stays in the light DOM, and a host's innerText does
+    // not include its shadow tree. Walk open shadow roots so a paragraph
+    // rendered inside one still matches a text claim.
     format!(
         "(() => {{ const want = {q}; const skip = new Set(['SCRIPT','STYLE','NOSCRIPT','TEMPLATE']); \
-          const hit = [...document.querySelectorAll('*')].find(el => !skip.has(el.tagName) && (el.innerText || el.textContent || '').includes(want)); \
-          if (!hit) throw new Error('text not found: ' + want); }})()"
+          const seen = new Set(); \
+          const visit = (root) => {{ \
+            if (!root || seen.has(root)) return false; \
+            seen.add(root); \
+            const nodes = root.querySelectorAll ? root.querySelectorAll('*') : []; \
+            for (const el of nodes) {{ \
+              if (skip.has(el.tagName)) continue; \
+              if (String(el.innerText || el.textContent || '').includes(want)) return true; \
+              if (el.shadowRoot && visit(el.shadowRoot)) return true; \
+            }} \
+            return false; \
+          }}; \
+          if (!visit(document)) throw new Error('text not found: ' + want); \
+        }})()"
     )
 }
 
@@ -2921,6 +2936,18 @@ mod tests {
 
     fn pred_from_json(j: serde_json::Value) -> Predicate {
         serde_json::from_value(j).unwrap()
+    }
+
+    #[test]
+    fn visible_text_probe_walks_open_shadow_roots() {
+        let expr = visible_text_probe_expr("Hello Shadow DOM");
+        assert!(expr.contains("shadowRoot"), "expr={expr}");
+        assert!(expr.contains("text not found: "), "expr={expr}");
+        assert!(expr.contains("Hello Shadow DOM"), "expr={expr}");
+        assert!(
+            expr.contains("SCRIPT"),
+            "script source stays excluded: {expr}"
+        );
     }
 
     #[test]
