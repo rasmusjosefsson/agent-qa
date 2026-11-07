@@ -92,7 +92,7 @@ if (!existsSync(latestPath)) {
   ];
 } else {
   const data = JSON.parse(readFileSync(latestPath, "utf8"));
-  const rows: { sid: string; ok: boolean; error?: string }[] = data.rows || [];
+  const rows: { sid: string; ok: boolean; error?: string; refreshed?: string[] }[] = data.rows || [];
   const failed = rows.filter((r) => !r.ok);
   lines = ["### agent-qa docs goldens", ""];
   lines.push(
@@ -104,6 +104,13 @@ if (!existsSync(latestPath)) {
   lines.push("| scenario | result |");
   lines.push("| --- | --- |");
   for (const r of rows) lines.push(`| \`${r.sid}\` | ${r.ok ? "PASS" : "FAIL"} |`);
+  const refreshed = rows.flatMap((r) => (r.ok && Array.isArray(r.refreshed) ? r.refreshed : []));
+  if (refreshed.length && failed.length === 0) {
+    lines.push("");
+    lines.push(
+      `Re-minted ${refreshed.length} baseline(s) from this run because the file was missing or the page source changed: ${refreshed.map((id) => `\`${id}\``).join(", ")}. Pages whose source did not change were still compared.`,
+    );
+  }
   if (failed.length) {
     lines.push("");
     if (diffBase) {

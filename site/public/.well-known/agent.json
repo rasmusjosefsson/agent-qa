@@ -16,7 +16,7 @@
       "verbs": [
         "init", "start", "record", "flush", "replay", "crawl", "discover",
         "shot-accept", "domshot-accept", "layout-accept", "baselines",
-        "audit", "compare", "migrate", "mail", "mcp", "doctor", "list",
+        "audit", "compare", "migrate", "mail", "mcp", "doctor", "list", "timings",
         "verify", "plan", "design", "ingest"
       ]
     },
@@ -42,6 +42,7 @@
     "Playwright/Cypress spec import (migrate)",
     "test-inbox reads for OTP/verification links (mail)",
     "change-scoped scenario drafting (discover)",
-    "localhost workbench (agent-qa web): chat, editor, cases, sets, plans, runs, goldens"
+    "localhost workbench (agent-qa web): chat, editor, cases, sets, plans, runs, goldens",
+    "duration baseline compared on each pull request (timings check)"
   ]
 }

@@ -106,6 +106,21 @@ describe("pr-comment", () => {
     expect(body).not.toContain("failure digest");
   });
 
+  test("appends a timing report when one is passed", async () => {
+    const root = fixture();
+    const timings = join(root, "timings.md");
+    writeFileSync(
+      timings,
+      ["#### Timing — 1 slowed", "", "| name | now | baseline | |", "| --- | ---: | ---: | --- |", "| `alerts-dialogs:tc01` | 2.0m | 23.2s | **slow** · 5.2× |", ""].join("\n"),
+    );
+    const body =
+      await $`bun ${new URL("./pr-comment.ts", import.meta.url).pathname} --results-dir ${root} --timings-file ${timings}`.text();
+    expect(body).toContain("<!-- qa-gate -->");
+    expect(body).toContain("#### Timing — 1 slowed");
+    expect(body).toContain("**slow** · 5.2×");
+    expect(body.indexOf("| Case | Result | Time |")).toBeLessThan(body.indexOf("#### Timing — 1 slowed"));
+  });
+
   test("exits non-zero when no rollup exists", async () => {
     const root = mkdtempSync(join(tmpdir(), "aq-prc-empty-"));
     const r = await $`bun ${new URL("./pr-comment.ts", import.meta.url).pathname} --results-dir ${root}`

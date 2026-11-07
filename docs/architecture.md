@@ -178,6 +178,10 @@ Two consumer paths for the heal-response file:
 └── perf/<TS>.json               optional perf snapshot
 ```
 
+`<scenarios_root>/_timings/baseline.json` is the committed duration
+baseline `timings check` compares against. It is not a scenario. See
+[`verbs.md`](verbs.md).
+
 Default root: `<cwd>/tmp/agent-qa-scenarios/`. Override with
 `AGENT_QA_SCENARIOS_DIR`. The recorder's workfiles live separately at
 `<cwd>/tmp/agent-qa-record/` (override: `AGENT_QA_RECORD_DIR`).
@@ -208,7 +212,7 @@ Default root: `<cwd>/tmp/agent-qa-scenarios/`. Override with
 | Compare              | `compare/mod.rs`, `compare/screenshots.rs`             |
 | Heal                 | `heal_respond.rs`, `heal_promote.rs`, `heal_apply.rs`, `heal_list.rs`, `heal_chronic.rs`, `auto_heal.rs`, `runner.rs` (`--heal-from-run`) |
 | Profiles             | `profile_add.rs`, `profile_status.rs`, `profile_bootstrap.rs` |
-| Diagnostics          | `doctor.rs`, `byo_doctor.rs`, `perf_snapshot.rs`       |
+| Diagnostics          | `doctor.rs`, `byo_doctor.rs`, `perf_snapshot.rs`, `timings.rs` |
 | Browser client       | `browser.rs`                                           |
 | Plugin host          | `plugin/protocol.rs`, `plugin/discovery.rs`, `plugin/host.rs`, `plugin/cli.rs` |
 | Surface providers    | `surface/` — desktop, ios, android. Not on the web replay path. See [`surfaces.md`](surfaces.md). |

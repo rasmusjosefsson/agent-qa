@@ -4,7 +4,9 @@
  * evals/docsite/scenarios against the rendered pages, so the docs site's own
  * UI is covered by the same shot-claim golden loop as the workbench.
  *
- *   bun evals/docsite/run.ts            — verify: replay every scenario
+ *   bun evals/docsite/run.ts            — verify: replay every scenario.
+ *     A missing baseline, or a page whose source changed, is re-minted
+ *     from that replay. Other shots still gate.
  *   bun evals/docsite/accept.ts         — re-mint baselines (after an
  *                                          intentional UI change; commit the
  *                                          updated scenarios/<sid>/baselines/)
@@ -13,8 +15,8 @@
  *
  * The committed scenario dirs hold scenario.json + baselines/<step>.png;
  * replays/ output under them is gitignored. Baselines are environment-bound —
- * mint them in CI (`/docs-goldens accept` or the workflow_dispatch job), not
- * on a dev machine.
+ * mint them in CI (the verify job, `/docs-goldens accept`, or the
+ * workflow_dispatch job), not on a dev machine.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
@@ -46,7 +48,12 @@ export function env(extra: Record<string, string> = {}): Record<string, string> 
   };
 }
 
-async function sh(cmd: string[], e: Record<string, string>, name: string, cwd = repoRoot): Promise<string> {
+async function capture(
+  cmd: string[],
+  e: Record<string, string>,
+  name: string,
+  cwd = repoRoot,
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   console.error(`[docsite] ${name}`);
   const proc = Bun.spawn(cmd, { cwd, env: e, stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, exitCode] = await Promise.all([
@@ -54,10 +61,34 @@ async function sh(cmd: string[], e: Record<string, string>, name: string, cwd = 
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
-  if (exitCode !== 0) {
-    throw new Error(`${name} failed (${exitCode})\n${cmd.join(" ")}\n${stdout}\n${stderr}`);
+  return { exitCode, stdout, stderr };
+}
+
+async function sh(cmd: string[], e: Record<string, string>, name: string, cwd = repoRoot): Promise<string> {
+  const result = await capture(cmd, e, name, cwd);
+  if (result.exitCode !== 0) {
+    throw new Error(`${name} failed (${result.exitCode})\n${cmd.join(" ")}\n${result.stdout}\n${result.stderr}`);
   }
-  return stdout;
+  return result.stdout;
+}
+
+export type LintFinding = { severity: string; code: string; message: string };
+
+/** `scenario lint --json`. A non-zero exit still returns parsed findings so
+ *  the caller can ignore `shot-missing-baseline` and replay anyway. */
+export async function lintFindings(
+  sid: string,
+  e: Record<string, string>,
+): Promise<{ exitCode: number; findings: LintFinding[]; raw: string; parsed: boolean }> {
+  const scenarioPath = resolve(scenariosRoot, sid, "scenario.json");
+  const result = await capture([agentQa, "scenario", "lint", scenarioPath, "--json"], e, `lint ${sid}`);
+  const raw = `${result.stdout}\n${result.stderr}`;
+  try {
+    const parsed = JSON.parse(result.stdout) as { findings?: LintFinding[] };
+    return { exitCode: result.exitCode, findings: parsed.findings ?? [], raw, parsed: true };
+  } catch {
+    return { exitCode: result.exitCode, findings: [], raw, parsed: false };
+  }
 }
 
 /** Install site deps if needed and (re)build dist/ — the goldens gate on the
@@ -150,20 +181,12 @@ export async function replay(sid: string, e: Record<string, string>): Promise<vo
   );
 }
 
-/** Lint a scenario (schema + rules). Returns the failure output or null. */
-export async function lint(sid: string, e: Record<string, string>): Promise<string | null> {
-  const scenarioPath = resolve(scenariosRoot, sid, "scenario.json");
-  try {
-    await sh([agentQa, "scenario", "check", scenarioPath], e, `lint ${sid}`);
-    return null;
-  } catch (err) {
-    return String(err);
-  }
-}
-
-/** Re-mint every golden baseline for a scenario from its latest run. */
-export async function accept(sid: string, e: Record<string, string>): Promise<void> {
-  await sh([agentQa, "shot-accept", sid, "--json"], e, `shot-accept ${sid}`);
+/** Re-mint golden baselines for a scenario from its latest run.
+ *  `steps` limits the mint to those screenshot ids; omit it to mint every capture. */
+export async function accept(sid: string, e: Record<string, string>, steps?: string[]): Promise<void> {
+  const cmd = [agentQa, "shot-accept", sid, "--json"];
+  if (steps && steps.length > 0) cmd.push("--steps", steps.join(","));
+  await sh(cmd, e, `shot-accept ${sid}`);
 }
 
 export function scenarioIds(): string[] {
@@ -174,7 +197,7 @@ export function scenarioIds(): string[] {
     .sort();
 }
 
-export function report(name: string, rows: { sid: string; ok: boolean; error?: string }[]): void {
+export function report(name: string, rows: { sid: string; ok: boolean; error?: string; refreshed?: string[] }[]): void {
   const resultsDir = resolve(docsiteRoot, "results");
   mkdirSync(resultsDir, { recursive: true });
   const stamped = { name, at: new Date().toISOString(), rows };

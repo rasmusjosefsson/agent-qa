@@ -1,0 +1,100 @@
+{
+  "schema": "agent-qa-timings/v1",
+  "entries": {
+    "case:alerts-dialogs:tc01": {
+      "kind": "case",
+      "ms": 23200,
+      "budgetMs": 60000
+    },
+    "case:alerts-dialogs:tc02": {
+      "kind": "case",
+      "ms": 20600,
+      "budgetMs": 60000
+    },
+    "case:alerts-dialogs:tc03": {
+      "kind": "case",
+      "ms": 21900,
+      "budgetMs": 60000
+    },
+    "case:alerts-dialogs:tc04": {
+      "kind": "case",
+      "ms": 22000,
+      "budgetMs": 60000
+    },
+    "case:alerts-dialogs:tc05": {
+      "kind": "case",
+      "ms": 21800,
+      "budgetMs": 60000
+    },
+    "case:alerts-dialogs:tc06": {
+      "kind": "case",
+      "ms": 24500,
+      "budgetMs": 60000
+    },
+    "case:file-upload:download:tc01": {
+      "kind": "case",
+      "ms": 21200,
+      "budgetMs": 60000
+    },
+    "case:file-upload:download:tc02": {
+      "kind": "case",
+      "ms": 17500,
+      "budgetMs": 60000
+    },
+    "case:file-upload:download:tc03": {
+      "kind": "case",
+      "ms": 18900,
+      "budgetMs": 60000
+    },
+    "case:file-upload:download:tc04": {
+      "kind": "case",
+      "ms": 17800,
+      "budgetMs": 60000
+    },
+    "case:file-upload:download:tc05": {
+      "kind": "case",
+      "ms": 18500,
+      "budgetMs": 60000
+    },
+    "case:file-upload:download:tc06": {
+      "kind": "case",
+      "ms": 18300,
+      "budgetMs": 60000
+    },
+    "case:file-upload:download:tc07": {
+      "kind": "case",
+      "ms": 18000,
+      "budgetMs": 60000
+    },
+    "case:file-upload:download:tc09": {
+      "kind": "case",
+      "ms": 23400,
+      "budgetMs": 60000
+    },
+    "case:file-upload:download:tc10": {
+      "kind": "case",
+      "ms": 23300,
+      "budgetMs": 60000
+    },
+    "case:file-upload:download:tc11": {
+      "kind": "case",
+      "ms": 18000,
+      "budgetMs": 60000
+    },
+    "case:file-upload:download:tc12": {
+      "kind": "case",
+      "ms": 24300,
+      "budgetMs": 60000
+    },
+    "case:file-upload:download:tc13": {
+      "kind": "case",
+      "ms": 17900,
+      "budgetMs": 60000
+    },
+    "case:file-upload:download:tc14": {
+      "kind": "case",
+      "ms": 17700,
+      "budgetMs": 60000
+    }
+  }
+}

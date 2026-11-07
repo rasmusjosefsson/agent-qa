@@ -93,6 +93,7 @@ mod surface;
 mod telemetry;
 mod test_util;
 mod time;
+mod timings;
 mod totp;
 mod triage;
 mod truncate;
@@ -163,6 +164,7 @@ fn main() -> ExitCode {
         "profile-list" => profile_list::run(rest),
         "byo-doctor" => byo_doctor::run(rest),
         "perf-snapshot" => perf_snapshot::run(rest),
+        "timings" => timings::run(rest),
         "fill-unique" => fill_unique::run(rest),
         "smart-click" => smart_click::run(rest),
         "smart-fill" => smart_fill::run(rest),
@@ -193,7 +195,7 @@ fn main() -> ExitCode {
         "notify" => notify::run(rest),
         _ => {
             eprintln!(
-                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, ps, cleanup, info, config, list, compare, diff, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, smart-fill, smart-assert, smart-hover, smart-select, resolve, triage, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, known-drift, shot-accept, domshot-accept, layout-accept, baselines, run-report, init, ingest, mcp, migrate, compile, describe, mail, discover, creds-resolve, totp, notify."
+                "agent-qa: unknown verb {verb:?}. Implemented: skills, plugins, scenario, replay, doctor, ps, cleanup, info, config, list, compare, diff, crawl, design, audit, plan, start, browser, record, record-step, record-setup, run-step, aria-snapshot, cdp-url, buffer, flush, verify, truncate, profile-add, profile-status, profile-bootstrap, profile-list, byo-doctor, perf-snapshot, fill-unique, smart-click, smart-fill, smart-assert, smart-hover, smart-select, resolve, triage, heal-respond, heal-promote, heal-apply, heal-list, heal-chronic, known-drift, shot-accept, domshot-accept, layout-accept, baselines, run-report, init, ingest, mcp, migrate, compile, describe, mail, discover, creds-resolve, totp, notify, timings."
             );
             eprintln!("Run `agent-qa --help` for usage.");
             Ok(2)
@@ -347,6 +349,10 @@ Verbs:
   profile-bootstrap <id> [flags] Drive plugin auth login for a profile
   byo-doctor [--json]           Read-only enumeration of attachable CDP browsers
   perf-snapshot [--sid <sid>]   Capture navigation + paint timings
+  timings check|accept          Compare passing-run durations to a committed
+                                baseline (2× and +5s, or a budgetMs ceiling).
+                                --format markdown is the pull-request table;
+                                --report prints it and still exits 0
   fill-unique <Label> --template <…>   Fill a unique-token field + record
   smart-click \"<name>\" [--role <r>] [--scope <role> <name>]   Click by accessible name + auto-record
   smart-fill \"<name>\" <value> [--role <r>]  Fill a field by accessible name + auto-record

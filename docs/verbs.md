@@ -64,8 +64,24 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `audit cluster` | Group step failures across every scenario's runs by normalized error signature (quoted literals + digit runs stripped) — one root cause across N runs reads as one cluster with its member list. `--min-size N` (default 2) hides lone failures; `--json` for the structured list. |
 | `audit verdict <sid> <runId \| latest>` | One-word triage for the run: `PASS` (exit 0) green and clean, `FIX` (exit 2) green but self-corrected (locator auto-heals, an in-run option-label correction, or value-rejections — review `heal.jsonl`). `heal-promote` writes locator patches back. An option-label correction stays in the log, because the next run's label would be stale. `BLOCK` (exit 1) failed. `--json` for the structured verdict incl. the offending stepIds. |
 | `audit explain <sid> [runId \| latest]` | One-block failure digest for a run: verdict + failing steps (error + screenshot pointer) + heal trail + console errors + failed/pending requests, plus a `next:` list of the follow-up commands that fit the evidence. Exit code mirrors `audit verdict` (0/1/2). `--json` prints the same digest structurally — the single read an agent needs to repair a broken run. |
+| `timings check` | Compare the latest passing durations to `<scenarios>/_timings/baseline.json`. A row is slow when it is more than `--pct` over the baseline (default 100, so more than 2×) and at least `--min-delta-ms` slower (default 5000), or when it crosses that entry's `budgetMs`. Exit 1 when anything is slow; `--report` prints the same table and exits 0. `--format markdown` is the pull-request body. `--samples <file>` compares an explicit list instead of walking replay dirs. `--no-steps` skips per-step rows. |
+| `timings accept` | Write the baseline from the current passing runs. An existing `budgetMs` on the same id is kept. Entries that did not run stay unless `--prune`. |
 
+`audit slow` needs several replay directories on the same disk. `timings` is the check a fresh CI checkout can run, because the baseline is a file you commit. Failed runs are left out: a timeout is not the step's cost. Directories whose names start with `_` are reserved and are not scenarios.
 
+The baseline is `agent-qa-timings/v1`:
+
+```json
+{
+  "schema": "agent-qa-timings/v1",
+  "entries": {
+    "scenario:checkout": { "kind": "scenario", "ms": 10200, "budgetMs": 60000 },
+    "step:checkout/s3": { "kind": "step", "ms": 1800, "budgetMs": 15000 }
+  }
+}
+```
+
+`budgetMs` is a hard ceiling. The ratio rule still applies when the run is under the ceiling but more than twice as slow. A samples file (`agent-qa-timing-samples/v1`) is a flat list of `{id, kind, ms}` — the shape a suite rollup writes before `timings check --samples`.
 
 ## Plans
 

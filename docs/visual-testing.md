@@ -140,6 +140,14 @@ re-mints off main and opens a PR; on a feature PR a maintainer comments
 `/qa accept` and the `qa-accept` workflow re-mints *on the PR's own head*,
 pushing the new goldens to the branch so the gate goes green.
 
+The docs site uses the same loop (`.github/workflows/docs-goldens.yml`). On a
+pull request the verify job replays every built page in light and dark. It
+re-mints a shot whose baseline file is missing, and a shot whose page source
+changed in the pull request, so those two cases do not fail the job. A page
+whose source did not change still fails the job when its pixels drift. A
+change to shared chrome (styles, layout, the sidebar) is not a single page
+edit — comment `/docs-goldens accept` to re-mint the suite on that branch.
+
 ## Authoring tips
 
 - Pin `do/viewport` early; baselines record whatever the viewport was at mint.
