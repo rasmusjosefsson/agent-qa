@@ -48,6 +48,10 @@ than twice the baseline and at least 5s slower, or when it crosses that
 entry's `budgetMs`. A 10s case that starts taking 2min is slow. A case that
 moves by a couple of seconds is not. Failed runs are left out.
 
+A `build` sample on that table is compared to its `budgetMs` only. A warm
+cache and a cold compile of the same sources both stay green under the
+ceiling, and the row still shows how long this run took.
+
 With no baseline file the comment says so and the job stays green. Record
 one from a passing suite and commit it:
 

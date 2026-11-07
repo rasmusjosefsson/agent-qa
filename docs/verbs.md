@@ -81,7 +81,7 @@ The baseline is `agent-qa-timings/v1`:
 }
 ```
 
-`budgetMs` is a hard ceiling. The ratio rule still applies when the run is under the ceiling but more than twice as slow. A samples file (`agent-qa-timing-samples/v1`) is a flat list of `{id, kind, ms}` — the shape a suite rollup writes before `timings check --samples`.
+`budgetMs` is a hard ceiling. The ratio rule still applies when the run is under the ceiling but more than twice as slow. A `build` row is the exception: it is slow only when it crosses `budgetMs`. A warm cache and a cold compile of the same sources already differ by more than 2×, so the ratio would flag a healthy build. A samples file (`agent-qa-timing-samples/v1`) is a flat list of `{id, kind, ms}` — the shape a suite rollup writes before `timings check --samples`. Add `build:cli=12345` lines with `--builds` when the rollup is cases and the compile was timed separately.
 
 ## Plans
 

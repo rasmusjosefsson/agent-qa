@@ -4,7 +4,9 @@ name: qa-gate
 # post a per-case verdict table as a sticky PR comment. The same comment
 # compares each passing case to evals/timings/qa-gate.json and the job fails
 # when one takes more than twice its baseline and at least 5s longer, or
-# crosses its budget. The full live-site suite stays on the nightly schedule;
+# crosses its budget. The debug CLI build is on that same table and fails
+# only when it crosses its budget — a warm cache and a cold compile are both
+# healthy under the ceiling. The full live-site suite stays on the nightly schedule;
 # this gate answers "did my change break replay, or make it much slower?"
 on:
   pull_request:
@@ -26,7 +28,14 @@ jobs:
           workspaces: cli
       - name: build cli
         working-directory: cli
-        run: cargo build --locked
+        run: |
+          start=$(date +%s%3N)
+          cargo build --locked
+          code=$?
+          if [ "$code" = 0 ]; then
+            echo "build:cli=$(( $(date +%s%3N) - start ))" >> "$RUNNER_TEMP/timing-builds.txt"
+          fi
+          exit "$code"
       - name: lint committed goldens
         env:
           AGENT_QA_SCENARIOS_DIR: ${{ github.workspace }}/evals/selftest/scenarios
@@ -91,7 +100,7 @@ jobs:
           REPORT: ${{ runner.temp }}/timings.md
         run: |
           set +e
-          bun evals/golden/timing-samples.ts --results-dir evals/results --out "$SAMPLES"
+          bun evals/golden/timing-samples.ts --results-dir evals/results --out "$SAMPLES" --builds "$RUNNER_TEMP/timing-builds.txt"
           sample_code=$?
           if [ "$sample_code" = "2" ]; then
             printf '%s\n' '#### Timing — no samples' '' 'The golden rollup was not written, so durations were not compared.' > "$REPORT"
@@ -149,5 +158,5 @@ jobs:
       - name: fail when a case slowed past its baseline
         if: always() && steps.timings.outputs.code != '0' && steps.timings.outputs.code != ''
         run: |
-          echo "::error::A fixture case took more than twice its baseline and at least 5s longer, or crossed its 60s budget. The QA gate comment lists it."
+          echo "::error::A fixture case took more than twice its baseline and at least 5s longer, or a measured build crossed its budget. The QA gate comment lists it."
           exit 1
