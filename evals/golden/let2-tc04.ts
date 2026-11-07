@@ -17,6 +17,12 @@ await runEdgeGolden(
     await b.dismissBySelector(".fc-monetization-dialog-container, .fc-dialog-overlay, .fc-message-root", "dismiss the consent wall if mounted");
     await b.upload("input#resume", "evals/fixtures/upload-valid.txt", "upload the txt fixture");
     await b.assertElementAttribute("input#resume", "value", "contains", "upload-valid.txt", "file input holds the chosen file");
+    // Ads mount after the first dismiss. Drop them again immediately
+    // before the download so the sample link is the hit target.
+    await b.dismissBySelector(
+      "div[id^='aswift_'], iframe#aswift_1, iframe[id^='aswift_'], iframe[id^='google_ads_iframe'], .fc-monetization-dialog-container, .fc-dialog-overlay, .fc-message-root",
+      "drop ad frames and the consent wall before download",
+    );
     await b.downloadBySelector("a[href*='sample.txt']", "sample.txt", "download the sample text file");
     await b.assertFileExists("sample.txt", "download landed on disk");
     await b.assertFileContent("sample.txt", "Lorem ipsum", "downloaded content is intact");

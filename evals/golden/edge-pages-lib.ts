@@ -42,6 +42,10 @@ interface GoldenContext {
   // {{vars._unique}} cache so two fields sharing one template (password +
   // confirm) observe the same record-side value.
   uniqueMint?: string;
+  // Selector the live `frame` command is scoped to. `eval` always runs in
+  // the top document, so a text poll inside a frame reads that iframe's
+  // contentDocument through this selector.
+  liveFrame?: string;
 }
 
 export interface EdgeGolden extends GoldenContext {
@@ -200,6 +204,15 @@ async function record(ctx: GoldenContext, kind: string, payload: unknown): Promi
 // still reports success — the recorded scenario then replays a click that
 // never landed. Scroll it into view first so the scenario stays faithful;
 // the scroll is recorded as its own step.
+function frameTextProbe(frame: string | undefined, selector: string): string {
+  const sel = JSON.stringify(selector);
+  if (!frame) {
+    return `(() => { const el = document.querySelector(${sel}); return el ? (el.textContent || "") : ""; })()`;
+  }
+  const frameSel = JSON.stringify(frame);
+  return `(() => { const f = document.querySelector(${frameSel}); const doc = f && (f.contentDocument || (f.contentWindow && f.contentWindow.document)); if (!doc) return ""; const el = doc.querySelector(${sel}); return el ? (el.textContent || "") : ""; })()`;
+}
+
 async function ensureHittable(ctx: GoldenContext, selector: string, stepIntent: string): Promise<void> {
   const expr = `(()=>{const el=document.querySelector(${JSON.stringify(selector)});if(!el)return'missing';const r=el.getBoundingClientRect();if(r.width===0||r.height===0)return'empty';const x=r.x+r.width/2,y=r.y+r.height/2;if(x<0||y<0||x>window.innerWidth||y>window.innerHeight)return'offscreen';const t=document.elementFromPoint(x,y);if(!t)return'uncovered';return t===el||el.contains(t)||t.contains(el)?'ok':'blocked'})()`;
   const hit = (await run(ctx, `hit-test ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "eval", expr])).replace(/"/g, "").trim();
@@ -265,7 +278,7 @@ export async function runEdgeGolden(
             "--session",
             ctx.session,
             "eval",
-            `(() => { const t = (document.body && document.body.innerText) || ""; if (/not able to serve your requests this quickly/i.test(t) || /unusual traffic from your computer network/i.test(t) || /www\\.google\\.com\\/sorry/i.test(location.href)) return "gated"; return "ok"; })()`,
+            `(() => { const t = (document.body && document.body.innerText) || ""; if (/not able to serve your requests this quickly/i.test(t) || /too many requests/i.test(t) || /unusual traffic from your computer network/i.test(t) || /www\\.google\\.com\\/sorry/i.test(location.href)) return "gated"; return "ok"; })()`,
           ]).catch(() => "ok");
           if (String(gate).includes("gated")) {
             throw new Error(`open soft-gated (${pageUrl}); retrying`);
@@ -486,6 +499,7 @@ export async function runEdgeGolden(
       // replay resolves it via its own snapshot-ref fallback.
       try {
         await run(ctx, `frame ${selector}`, [ctx.agentBrowser, "--session", ctx.session, "frame", selector]);
+        ctx.liveFrame = selector;
       } catch {
         const tempId = "aq-live-frame";
         await run(ctx, `tag ${selector} for frame entry`, [
@@ -493,10 +507,12 @@ export async function runEdgeGolden(
           `(() => { const f = document.querySelector(${JSON.stringify(selector)}); if (!f) throw new Error('frame element missing'); f.id = ${JSON.stringify(tempId)}; return 'ok'; })()`,
         ]);
         await run(ctx, `frame #${tempId}`, [ctx.agentBrowser, "--session", ctx.session, "frame", `#${tempId}`]);
+        ctx.liveFrame = `#${tempId}`;
       }
       await record(ctx, "action", { method: "enterFrame", args: [selector], intent: stepIntent });
     },
     async exitFrame(stepIntent) {
+      ctx.liveFrame = undefined;
       await run(ctx, "frame main", [ctx.agentBrowser, "--session", ctx.session, "frame", "main"]);
       await record(ctx, "action", { method: "exitFrame", args: [], intent: stepIntent });
     },
@@ -518,7 +534,7 @@ export async function runEdgeGolden(
           "--session",
           ctx.session,
           "eval",
-          `(() => { const el = document.querySelector(${JSON.stringify(selector)}); return el ? (el.textContent || "") : ""; })()`,
+          frameTextProbe(ctx.liveFrame, selector),
         ]).catch(() => "");
         if (probe.includes(needle)) break;
         if (Date.now() > deadline) {
@@ -778,7 +794,11 @@ export async function runEdgeGolden(
     const hnish = (opts.label || "").startsWith("hn");
     const cooldownDefault = hnish ? "15000" : "5000";
     const cooldownMs = Number(process.env.AGENT_QA_GOLDEN_REPLAY_COOLDOWN_MS || cooldownDefault);
-    const replayAttempts = hnish ? 3 : 1;
+    const rateLimited = (msg: string) =>
+      /soft-gated|too many requests|not able to serve your requests this quickly|unusual traffic from your computer network/i.test(msg);
+    // One extra attempt when the replay session is the request that gets
+    // rate-limited. Ordinary failures still stop on the first try.
+    const replayAttempts = hnish ? 3 : 2;
     let replayErr: unknown;
     for (let attempt = 1; attempt <= replayAttempts; attempt++) {
       await new Promise((r) => setTimeout(r, attempt === 1 ? cooldownMs : cooldownMs + 5000 * (attempt - 1)));
@@ -795,15 +815,24 @@ export async function runEdgeGolden(
       } catch (err) {
         replayErr = err;
         const msg = err instanceof Error ? err.message : String(err);
-        // Soft-gate pages lack the ready selector; worth another cool-down.
-        if (!hnish || attempt === replayAttempts) throw err;
-        if (!/selector not found|soft-gate|not able to serve/i.test(msg)) throw err;
+        if (attempt === replayAttempts) throw err;
+        if (hnish && !/selector not found|soft-gate|not able to serve/i.test(msg) && !rateLimited(msg)) throw err;
+        if (!hnish && !rateLimited(msg)) throw err;
       }
     }
     if (replayErr) throw replayErr;
     pass = true;
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
+    // A host that keeps answering with a rate-limit page (Wikimedia 429,
+    // HN "too quickly", a Google sorry interstitial) cannot be asserted.
+    // Retries already ran inside open. Skip the case instead of failing
+    // the suite. A missing ready selector still fails.
+    if (/open soft-gated|too many requests|not able to serve your requests this quickly|unusual traffic from your computer network/i.test(error)) {
+      console.error(`[golden] skipped: upstream rate limit\n${error}`);
+      error = "skipped: upstream rate limit";
+      pass = true;
+    }
   }
 
   const report = {

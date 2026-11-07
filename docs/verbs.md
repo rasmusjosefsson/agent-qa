@@ -257,3 +257,8 @@ reload with `params.reload: true`.
   errors only).
 - Exit code 0 on success, 1 on failure, 2 on usage error, 3 on
   rebase-guard mismatch (only `heal-promote`).
+- A `rightclick` whose contextmenu handler opens a native dialog
+  (`alert`, `confirm`, `prompt`) succeeds. The dialog stays pending so
+  the next `dialog` step can accept or dismiss it.
+- A text visibility check walks open shadow roots. Text rendered inside
+  an open root matches; a closed root stays unreachable.

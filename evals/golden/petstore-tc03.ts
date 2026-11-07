@@ -13,7 +13,9 @@ await runEdgeGolden(
     await b.openPage();
     await b.fillSelector("input[name=username]", "j2ee", "fill username");
     await b.fillSelector("input[name=password]", "j2ee", "fill password");
-    await b.clickSelector("input[value=Login]", "submit the signon form");
+    // A coordinate click on this submit input reports success without
+    // posting the form. el.click() activates the submit control.
+    await b.clickSelectorForce("input[value=Login]", "submit the signon form");
     await b.waitSelector('a[href*="signoff"]', "Sign Out link appeared");
     await b.assertElementAttribute("body", "text", "contains", "Welcome", "welcome banner shown");
     await b.assertNetworkFired({ urlMatches: "/account/signon", method: "POST" }, true, "signon POST sent");
