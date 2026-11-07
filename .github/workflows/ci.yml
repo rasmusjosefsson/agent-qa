@@ -5,12 +5,30 @@ on:
   pull_request:
 
 jobs:
-  # No macOS job on this workflow. Hosted macos-14 runners in this org are
-  # cancelled while still queued (empty runner_name). continue-on-error does
-  # not apply to a cancellation, so the check was reported as a failure and
-  # the workflow concluded cancelled — every pull request looked red even
-  # when linux, windows, and smoke had passed. Darwin binaries still build
-  # on the release workflow.
+  test-macos:
+    name: test (macos-15)
+    runs-on: macos-15
+    # macos-14 was retired on 2026-11-02. A job on that label is cancelled
+    # before a runner starts ("macos-14-arm64-us-default" is not supported),
+    # and continue-on-error does not turn that cancellation into a pass.
+    # macos-15 is the numbered arm64 image that replaced it.
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli
+      - run: cd cli && cargo build --locked
+      - name: test
+        working-directory: cli
+        run: cargo test --locked
+      - name: clippy
+        working-directory: cli
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: rustfmt
+        working-directory: cli
+        run: cargo fmt --check
+
   test-linux:
     name: test (ubuntu-latest)
     runs-on: ubuntu-latest

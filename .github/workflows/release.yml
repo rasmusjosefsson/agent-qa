@@ -19,11 +19,11 @@ jobs:
       matrix:
         include:
           - platform: darwin-arm64
-            runner: macos-14
+            runner: macos-15
             target: aarch64-apple-darwin
             ext: ""
           - platform: darwin-x64
-            runner: macos-14
+            runner: macos-15
             target: x86_64-apple-darwin
             ext: ""
           - platform: linux-x64
