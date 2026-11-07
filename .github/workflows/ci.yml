@@ -5,30 +5,12 @@ on:
   pull_request:
 
 jobs:
-  test:
-    name: test (macos-14)
-    runs-on: macos-14
-    # macos runners have been cancelling while still queued (no runner_name),
-    # which marked the whole ci run cancelled and skipped smoke. Keep the
-    # coverage when a runner is available; don't block linux smoke/merge.
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: cli
-      - run: cd cli && cargo build --locked
-      - name: test
-        working-directory: cli
-        run: cargo test --locked
-      - name: clippy
-        working-directory: cli
-        run: cargo clippy --all-targets --locked -- -D warnings
-      - name: rustfmt
-        working-directory: cli
-        run: cargo fmt --check
-
+  # No macOS job on this workflow. Hosted macos-14 runners in this org are
+  # cancelled while still queued (empty runner_name). continue-on-error does
+  # not apply to a cancellation, so the check was reported as a failure and
+  # the workflow concluded cancelled — every pull request looked red even
+  # when linux, windows, and smoke had passed. Darwin binaries still build
+  # on the release workflow.
   test-linux:
     name: test (ubuntu-latest)
     runs-on: ubuntu-latest
@@ -112,11 +94,6 @@ jobs:
 
   smoke-install:
     name: smoke (npm install local, ${{ matrix.platform }})
-    # Only wait on linux unit tests. macos-14 has been cancelling while
-    # still queued (no runner_name) in this org; a cancelled darwin matrix
-    # leg makes the whole smoke-install job `cancelled`, which the gate
-    # then reports as failure even when linux smoke passed. Keep linux
-    # only until macos runners are reliable again.
     needs: [test-linux]
     strategy:
       fail-fast: false
@@ -172,10 +149,8 @@ jobs:
           path: ${{ runner.temp }}/agent-qa-browser-contract
           retention-days: 14
 
-  # Reports the pre-matrix check context that branch protection requires;
-  # fails when any required smoke leg fails instead of skipping.
-  # Skip when the whole workflow was cancelled so a queued macos cancel
-  # doesn't invent a smoke failure after linux already passed.
+  # Reports the pre-matrix check context. Fails when linux smoke fails
+  # instead of skipping. Skip when the workflow itself was cancelled.
   smoke-install-gate:
     name: smoke (npm install local)
     needs: [smoke-install]
@@ -185,6 +160,5 @@ jobs:
       - run: |
           result="${{ needs.smoke-install.result }}"
           echo "smoke-install=$result"
-          # success: every required leg passed (optional darwin may have
-          # continue-on-error'd). failure: linux smoke broke.
+          # success: the linux smoke leg passed. failure: it broke.
           test "$result" = "success"
