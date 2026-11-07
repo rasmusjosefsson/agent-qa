@@ -5,9 +5,11 @@ name: docs-goldens
 # screenshots for before/after review.
 #
 # Baselines are environment-bound: mint them with CI rendering, not on a dev
-# machine — comment `/docs-goldens accept` on the PR (mint + push to the head
-# branch) or dispatch this workflow with update_goldens (mint on main, opens a
-# PR). Same loop as ui-goldens / `/qa accept`.
+# machine. The verify job re-mints a shot whose baseline file is missing and a
+# shot whose page source changed in the pull request, then still fails when any
+# other page drifts. Shared chrome (styles, layout, sidebar) is not re-minted
+# here — comment `/docs-goldens accept` (mint + push to the head branch) or
+# dispatch this workflow with update_goldens (mint on main, opens a PR).
 on:
   pull_request:
     paths:
@@ -56,10 +58,16 @@ jobs:
             echo "only=" >> "$GITHUB_OUTPUT"
             echo "[pick] shared inputs changed — full replay"
           else
-            SLUGS=$(echo "$CHANGED" | grep -oE '^M\s+docs/[a-zA-Z0-9/._-]+\.md$' | awk '{print $2}' | sed 's/\.md$//' | paste -sd, -)
+            SLUGS=$(echo "$CHANGED" | grep -oE '^M\s+docs/[a-zA-Z0-9/._-]+\.md$' | awk '{print $2}' | sed -e 's/\.md$//' -e 's#^docs/index$#docs/overview#' | paste -sd, -)
             echo "only=$SLUGS" >> "$GITHUB_OUTPUT"
             echo "[pick] replaying only: ${SLUGS:-<all>}"
           fi
+          DELIM="DOCS_FILES_$(date +%s)"
+          {
+            echo "files<<$DELIM"
+            git diff --name-only "$BASE" HEAD
+            echo "$DELIM"
+          } >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -95,6 +103,7 @@ jobs:
           AGENT_BROWSER_BIN: ${{ github.workspace }}/npm/agent-qa/node_modules/.bin/agent-browser
           AGENT_BROWSER_HOME: ${{ runner.temp }}/agent-browser-home
           DOCS_ONLY: ${{ steps.pick.outputs.only }}
+          DOCS_CHANGED_FILES: ${{ steps.pick.outputs.files }}
         run: bun docsite/run.ts
       - name: upload goldens evidence
         if: always()

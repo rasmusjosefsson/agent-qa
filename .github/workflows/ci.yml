@@ -96,7 +96,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - name: evals parity tests
         working-directory: evals
-        run: bun test golden/
+        run: bun test golden/ docsite/
 
   audit:
     name: cargo audit
