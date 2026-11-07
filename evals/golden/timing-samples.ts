@@ -5,6 +5,11 @@
  * a failure's duration is the timeout, not the cost.
  *
  *   bun golden/timing-samples.ts --results-dir evals/results --out /tmp/samples.json
+ *   [--builds /tmp/timing-builds.txt]
+ *
+ * `--builds` is optional lines of `id=ms` (kind `build`), for example
+ * `build:cli=96000`. A missing file is ignored. A failed build is simply
+ * absent: its wall clock is not a duration.
  *
  * Exit 0 when a rollup was read (even if every case failed). Exit 2 when
  * no golden-all-*.json rollup exists.
@@ -22,6 +27,7 @@ const flag = (name: string): string | undefined => {
 };
 
 const resultsRoot = flag("--results-dir") || resolve(__dirname, "..", "results");
+const buildsFile = flag("--builds");
 const out = flag("--out");
 if (!out) {
   console.error("usage: timing-samples.ts --out <file> [--results-dir <dir>]");
@@ -58,6 +64,25 @@ const entries = (latest.results ?? [])
     kind: "case",
     ms: Math.round(r.durMs),
   }));
+
+if (buildsFile) {
+  let text = "";
+  try {
+    text = readFileSync(buildsFile, "utf8");
+  } catch {
+    text = "";
+  }
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) continue;
+    const id = trimmed.slice(0, eq).trim();
+    const ms = Number(trimmed.slice(eq + 1).trim());
+    if (!id || !Number.isFinite(ms) || ms < 0) continue;
+    entries.push({ id, kind: "build", ms: Math.round(ms) });
+  }
+}
 
 writeFileSync(
   out,

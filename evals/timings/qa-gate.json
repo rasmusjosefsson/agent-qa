@@ -1,6 +1,11 @@
 {
   "schema": "agent-qa-timings/v1",
   "entries": {
+    "build:cli": {
+      "kind": "build",
+      "ms": 96000,
+      "budgetMs": 300000
+    },
     "case:alerts-dialogs:tc01": {
       "kind": "case",
       "ms": 23200,

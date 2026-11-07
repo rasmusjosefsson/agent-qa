@@ -633,7 +633,14 @@ fn row_for_observation(
     let (status, baseline_ms, budget_ms, ratio) = match entry {
         None => (Status::New, None, None, None),
         Some(entry) => {
-            let status = judge(obs.ms, entry.ms, entry.budget_ms, pct, min_delta_ms);
+            // A build's wall clock swings with the compile cache. Warm and
+            // cold runs of the same sources are both fine; only the ceiling
+            // means the build actually got slower.
+            let status = if obs.kind == "build" {
+                judge_budget_only(obs.ms, entry.budget_ms)
+            } else {
+                judge(obs.ms, entry.ms, entry.budget_ms, pct, min_delta_ms)
+            };
             let ratio = if entry.ms == 0 {
                 None
             } else {
@@ -651,6 +658,15 @@ fn row_for_observation(
         budget_ms,
         status,
         ratio,
+    }
+}
+
+/// A `build` row ignores the ratio. Slow only when a ceiling is set and crossed.
+fn judge_budget_only(current: u64, budget_ms: Option<u64>) -> Status {
+    if budget_ms.is_some_and(|budget| current > budget) {
+        Status::Slow
+    } else {
+        Status::Ok
     }
 }
 
@@ -723,6 +739,9 @@ fn label_of(id: &str, kind: &str) -> String {
         return "suite".to_string();
     }
     let rest = id.split_once(':').map(|(_, r)| r).unwrap_or(id);
+    if kind == "build" {
+        return format!("{rest} build");
+    }
     if kind == "step" {
         if let Some((sid, step)) = rest.split_once('/') {
             return format!("{sid} / {step}");
@@ -883,9 +902,15 @@ fn rule_sentence(report: &Report) -> String {
     }
     let pct = report.pct;
     let floor = fmt_ms(report.min_delta_ms);
-    format!(
+    let mut sentence = format!(
         "A row is slow when it is more than {pct:.0}% over its baseline and at least {floor} slower, or when it crosses that entry's budget."
-    )
+    );
+    if report.rows.iter().any(|r| r.kind == "build") {
+        sentence.push_str(
+            " A build is slow only when it crosses its budget; a warm cache and a cold compile are not a ratio.",
+        );
+    }
+    sentence
 }
 
 fn footer_plain(report: &Report) -> String {
@@ -953,6 +978,75 @@ mod tests {
         assert_eq!(limits_default(3_000, 1_000, None), Status::Ok);
         // A 1s step that becomes 8s is both over 2× and over the floor.
         assert_eq!(limits_default(8_000, 1_000, None), Status::Slow);
+    }
+
+    #[test]
+    fn a_build_ignores_cache_swing_and_fails_only_past_its_budget() {
+        let mut baseline = BTreeMap::new();
+        baseline.insert(
+            "build:cli".to_string(),
+            BaselineEntry {
+                kind: "build".to_string(),
+                ms: 96_000,
+                budget_ms: Some(300_000),
+            },
+        );
+        baseline.insert(
+            "case:login".to_string(),
+            BaselineEntry {
+                kind: "case".to_string(),
+                ms: 10_000,
+                budget_ms: Some(60_000),
+            },
+        );
+        let under = build_report(
+            &[
+                Observation {
+                    id: "build:cli".into(),
+                    kind: "build".into(),
+                    ms: 200_000,
+                },
+                Observation {
+                    id: "case:login".into(),
+                    kind: "case".into(),
+                    ms: 10_000,
+                },
+            ],
+            &baseline,
+            true,
+            DEFAULT_PCT,
+            DEFAULT_MIN_DELTA_MS,
+        );
+        assert!(under.healthy);
+        let build = under.rows.iter().find(|r| r.id == "build:cli").unwrap();
+        assert_eq!(build.status, Status::Ok);
+        assert_eq!(build.label, "cli build");
+        let md = render_markdown(&under);
+        assert!(md.contains("`cli build`"));
+        assert!(md.contains("A build is slow only when it crosses its budget"));
+        // The suite total is the case only, so one case does not invent a suite row.
+        assert!(under.rows.iter().all(|r| r.kind != "suite"));
+
+        let over = build_report(
+            &[Observation {
+                id: "build:cli".into(),
+                kind: "build".into(),
+                ms: 300_001,
+            }],
+            &baseline,
+            true,
+            DEFAULT_PCT,
+            DEFAULT_MIN_DELTA_MS,
+        );
+        assert!(!over.healthy);
+        assert_eq!(
+            over.rows
+                .iter()
+                .find(|r| r.id == "build:cli")
+                .unwrap()
+                .status,
+            Status::Slow
+        );
     }
 
     #[test]

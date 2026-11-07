@@ -179,7 +179,8 @@ Two consumer paths for the heal-response file:
 ```
 
 `<scenarios_root>/_timings/baseline.json` is the committed duration
-baseline `timings check` compares against. It is not a scenario. See
+baseline `timings check` compares against. Case and scenario rows use the
+ratio; a `build` row is a budget ceiling. It is not a scenario. See
 [`verbs.md`](verbs.md).
 
 Default root: `<cwd>/tmp/agent-qa-scenarios/`. Override with

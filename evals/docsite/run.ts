@@ -36,6 +36,7 @@ import {
   shotSlugs,
   slugsForChangedFiles,
   terminalFailures,
+  unexpectedFailures,
   type ShotStep,
   type StepEvent,
 } from "./refresh.ts";
