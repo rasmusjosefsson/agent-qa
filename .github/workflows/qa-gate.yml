@@ -1,9 +1,11 @@
 name: qa-gate
 # The PR validation loop: replay the fixture-backed golden cases (downloads +
 # dialogs — deterministic, no live-site flake) against the PR's own build and
-# post a per-case verdict table as a sticky PR comment. The full live-site
-# suite stays on the nightly schedule; this gate answers "did my change break
-# replay?" in a few minutes.
+# post a per-case verdict table as a sticky PR comment. The same comment
+# compares each passing case to evals/timings/qa-gate.json and the job fails
+# when one takes more than twice its baseline and at least 5s longer, or
+# crosses its budget. The full live-site suite stays on the nightly schedule;
+# this gate answers "did my change break replay, or make it much slower?"
 on:
   pull_request:
 
@@ -81,16 +83,44 @@ jobs:
           name: qa-gate-reports
           path: evals/results/*/scenarios/*/replays/*/report.html
           retention-days: 30
+      - name: timing health
+        id: timings
+        if: always()
+        env:
+          SAMPLES: ${{ runner.temp }}/timing-samples.json
+          REPORT: ${{ runner.temp }}/timings.md
+        run: |
+          set +e
+          bun evals/golden/timing-samples.ts --results-dir evals/results --out "$SAMPLES"
+          sample_code=$?
+          if [ "$sample_code" = "2" ]; then
+            printf '%s\n' '#### Timing — no samples' '' 'The golden rollup was not written, so durations were not compared.' > "$REPORT"
+            echo "code=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$sample_code" != "0" ]; then
+            echo "code=$sample_code" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ./cli/target/debug/agent-qa timings check \
+            --samples "$SAMPLES" \
+            --baseline "$GITHUB_WORKSPACE/evals/timings/qa-gate.json" \
+            --format markdown \
+            --out "$REPORT"
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+          exit 0
       - name: post sticky verdict comment
         if: always()
         uses: actions/github-script@v9
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TIMINGS_FILE: ${{ runner.temp }}/timings.md
         with:
           script: |
             const { execSync } = require("child_process");
+            const timings = process.env.TIMINGS_FILE ? ` --timings-file "${process.env.TIMINGS_FILE}"` : "";
             const body = execSync(
-              `bun golden/pr-comment.ts --run-url "${process.env.RUN_URL}"`,
+              `bun golden/pr-comment.ts --run-url "${process.env.RUN_URL}"${timings}`,
               { cwd: "evals", encoding: "utf8" },
             );
             const marker = "<!-- qa-gate -->";
@@ -116,3 +146,8 @@ jobs:
                 body,
               });
             }
+      - name: fail when a case slowed past its baseline
+        if: always() && steps.timings.outputs.code != '0' && steps.timings.outputs.code != ''
+        run: |
+          echo "::error::A fixture case took more than twice its baseline and at least 5s longer, or crossed its 60s budget. The QA gate comment lists it."
+          exit 1

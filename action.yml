@@ -48,9 +48,22 @@ inputs:
   comment:
     description: >-
       Post/update a sticky <!-- agent-qa --> verdict comment on the
-      triggering pull_request (per-scenario verdict + duration). Needs
-      the calling job to grant `pull-requests: write`. No-op outside PRs.
+      triggering pull_request (per-scenario verdict + duration, plus the
+      timing table when `timings` is not off). Needs the calling job to
+      grant `pull-requests: write`. No-op outside PRs.
     default: "true"
+  timings:
+    description: >-
+      Compare passing-run durations to the timing baseline and append the
+      table to the verdict comment. "report" (default) never fails the job.
+      "strict" fails the job when a duration is more than 2× its baseline
+      and at least 5s slower, or over that entry's budgetMs. "off" skips it.
+    default: "report"
+  timings-baseline:
+    description: >-
+      Workspace-relative path to an agent-qa-timings/v1 baseline. Empty
+      uses <scenarios>/_timings/baseline.json.
+    default: ""
   reports:
     description: Render <run>/report.html per scenario (requires a cli build containing run-report).
     default: "true"
@@ -168,6 +181,27 @@ runs:
           sid="$(basename "$(dirname "$(dirname "$d")")")"
           "$BIN" run-report "$sid" || echo "::warning::run-report failed for $sid"
         done
+    - name: timing health
+      id: timings
+      if: always() && inputs.timings != 'off'
+      shell: bash
+      env:
+        AGENT_QA_SCENARIOS_DIR: ${{ github.workspace }}/${{ inputs.scenarios }}
+        TIMINGS_MODE: ${{ inputs.timings }}
+        TIMINGS_BASELINE: ${{ inputs.timings-baseline }}
+        QA: ${{ steps.bin.outputs.qa }}
+      run: |
+        set +e
+        args=(timings check --format markdown --out "$RUNNER_TEMP/agent-qa-timings.md")
+        if [ "$TIMINGS_MODE" != "strict" ]; then
+          args+=(--report)
+        fi
+        if [ -n "$TIMINGS_BASELINE" ]; then
+          args+=(--baseline "$GITHUB_WORKSPACE/$TIMINGS_BASELINE")
+        fi
+        "$QA" "${args[@]}"
+        echo "code=$?" >> "$GITHUB_OUTPUT"
+        exit 0
     - name: PR verdict comment
       if: >-
         always() && inputs.comment == 'true' &&
@@ -187,6 +221,9 @@ runs:
           echo '| --- | --- | --- |'
           for sid_dir in "$AGENT_QA_SCENARIOS_DIR"/*/; do
             sid="$(basename "$sid_dir")"
+            case "$sid" in
+              _*) continue ;;
+            esac
             v="$("$BIN" audit verdict "$sid" latest 2>/dev/null | tail -1 | awk '{print $1}' || true)"
             d="$("$BIN" audit duration "$sid" latest 2>/dev/null | tail -1 | awk '{print $1}' || true)"
             echo "| $sid | ${v:-no run} | ${d:--} |"
@@ -194,6 +231,10 @@ runs:
           echo
           echo "Evidence: artifact \`${{ inputs.artifact-name }}\` (replays + report.html per scenario)."
         } > "$RUNNER_TEMP/agent-qa-comment.md"
+        if [ -s "$RUNNER_TEMP/agent-qa-timings.md" ]; then
+          echo >> "$RUNNER_TEMP/agent-qa-comment.md"
+          cat "$RUNNER_TEMP/agent-qa-timings.md" >> "$RUNNER_TEMP/agent-qa-comment.md"
+        fi
         REPO="${{ github.repository }}"
         PR="${{ github.event.pull_request.number }}"
         existing="$(gh api "repos/$REPO/issues/$PR/comments" \
@@ -212,3 +253,9 @@ runs:
         name: ${{ inputs.artifact-name }}
         path: ${{ github.workspace }}/${{ inputs.scenarios }}/*/replays/
         retention-days: ${{ inputs.retention-days }}
+    - name: fail on timing regression
+      if: always() && inputs.timings == 'strict' && steps.timings.outputs.code != '0'
+      shell: bash
+      run: |
+        echo "::error::A tracked duration is more than twice its baseline and at least 5s slower, or over its budget. The verdict comment has the table."
+        exit 1

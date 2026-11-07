@@ -19,6 +19,7 @@ const flag = (name: string): string | undefined => {
 };
 const runUrl = flag("--run-url") || "";
 const out = flag("--out");
+const timingsFile = flag("--timings-file");
 // Overridable for tests — production reads evals/results.
 const resultsRoot = flag("--results-dir") || resultsDir;
 
@@ -69,6 +70,17 @@ for (const r of latest.results) {
   );
 }
 lines.push("");
+if (timingsFile) {
+  try {
+    const timing = readFileSync(timingsFile, "utf8").trim();
+    if (timing) {
+      lines.push(timing);
+      lines.push("");
+    }
+  } catch {
+    // A missing timings file still leaves the verdict table.
+  }
+}
 // For a failed case, walk its newest results dir and build a mini digest of
 // the run: failing steps (sid · step id · intent · error) from events.jsonl,
 // page console errors from console.json, failed/pending requests from

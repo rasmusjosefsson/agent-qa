@@ -57,6 +57,7 @@ without a `heal-promote` step.
 | `scenario coverage <file>` / `scenario coverage-all` | Per-scenario and whole-suite do→check coverage rolls. |
 | `scenario lint <file> [--strict]` / `scenario lint-all [--root <dir>]` | Common lints (duplicate ids, bare do, …); `--format github` emits CI annotations. |
 | `audit health` | Suite rollup: flaky + slow + heal-chronic step ids per scenario. |
+| `timings check` / `timings accept` | Compare passing-run durations to `<scenarios>/_timings/baseline.json`. Slow means more than 2× and at least 5s over, or past `budgetMs`. `--format markdown` is the PR table. |
 | `audit flaky <sid> [--min-runs N]` / `audit slow <sid>` | Steps whose pass/fail interleaves (a step that passed its last two runs has settled); steps whose duration regressed. |
 | `audit show <sid> <runId\|latest>` / `audit list <sid>` | One run's audit.json; every recorded run. |
 | `audit explain <sid> [runId\|latest]` | Failure digest for a run: verdict + failed steps + heals + console errors + bad requests + next commands. Exit mirrors `audit verdict`. |
