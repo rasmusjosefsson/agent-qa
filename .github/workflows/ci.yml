@@ -6,12 +6,12 @@ on:
 
 jobs:
   test-macos:
-    name: test (macos-15)
-    runs-on: macos-15
+    name: test (macos-latest)
+    runs-on: macos-latest
     # macos-14 was retired on 2026-11-02. A job on that label is cancelled
     # before a runner starts ("macos-14-arm64-us-default" is not supported),
     # and continue-on-error does not turn that cancellation into a pass.
-    # macos-15 is the numbered arm64 image that replaced it.
+    # macos-latest is the current arm64 image (macOS 26).
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
