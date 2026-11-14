@@ -14,6 +14,9 @@ All notable changes to agent-qa are documented here. This project follows
   now writes those routes into `crawl-report.json`.
 - `aria-snapshot --depth N` drops accessibility-tree nodes deeper than
   indent level N. It combines with `--interactive`.
+- Perf claims accept `inp` (Interaction to Next Paint, milliseconds)
+  next to `fcp`, `lcp`, `cls`, `tbt`, `ttfb`, and `load`. The value is
+  the web-vitals Event Timing estimate. No interaction yet is absent.
 
 ### Fixed
 

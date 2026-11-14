@@ -681,13 +681,20 @@ buffered observers) — a perf budget as a gateable claim:
 }
 ```
 
-Metrics: `fcp`, `lcp`, `cls`, `tbt`, `ttfb`, `load` (values in ms; `cls` is
-the unitless score). `exists`/`notExists` test whether the metric was
-recorded — `lcp` before any paint is absent; `cls`/`tbt` with no offending
-entries report `0`. `maxDwellMs` bounds how long observer-buffered metrics
-wait for entries (default 1500). `"trace": true` on the matcher records a
-DevTools trace for the claim window to `<run>/perf/<metric>.trace.json` —
-RCA material for a budget miss (DevTools/Perfetto-compatible).
+Metrics: `fcp`, `lcp`, `cls`, `tbt`, `ttfb`, `load`, `inp` (values in ms;
+`cls` is the unitless score). `inp` is Interaction to Next Paint: Event
+Timing entries (`PerformanceObserver` type `event`, `durationThreshold`
+16) grouped by `interactionId`. Under 50 interactions the value is the
+longest duration; otherwise it is the web-vitals high percentile
+(`floor(n / 50)` on the descending list). `exists`/`notExists` test
+whether the metric was recorded — `lcp` before any paint is absent, and
+`inp` with no interaction yet is absent; `cls`/`tbt` with no offending
+entries report `0`. An unknown metric name fails schema validation
+(`scenario check`) and the runtime metric list. `maxDwellMs` bounds how
+long observer-buffered metrics wait for entries (default 1500; that
+includes `inp`). `"trace": true` on the matcher records a DevTools trace
+for the claim window to `<run>/perf/<metric>.trace.json` — RCA material
+for a budget miss (DevTools/Perfetto-compatible).
 
 ### Quarantine (opt-in containment)
 
