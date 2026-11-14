@@ -1,5 +1,6 @@
 import { ChevronRightIcon, CirclePlayIcon, ClipboardListIcon, FolderTreeIcon, LayersIcon } from "lucide-react"
 import { SpaLink } from "@/components/spa-link"
+import { withBase } from "@/router"
 import { cn } from "@/lib/utils"
 
 export type FlowStep = "cases" | "sets" | "plans" | "runs"
@@ -22,7 +23,7 @@ export function TestFlow({ current, className }: { current: FlowStep; className?
         return (
           <li key={s.key} className="flex shrink-0 items-center gap-1">
             <SpaLink
-              href={s.href}
+              href={withBase(s.href)}
               aria-current={active ? "step" : undefined}
               className={cn(
                 "group flex items-center gap-2.5 rounded-lg border px-2.5 py-1.5 transition-all",

@@ -89,6 +89,11 @@ export function ThemeProvider({
     if (isTheme(storedTheme)) {
       return storedTheme
     }
+    // The published demo follows the docs theme until someone toggles it here.
+    if (import.meta.env.VITE_AQA_SOURCE === "fixture") {
+      const siteTheme = localStorage.getItem("starlight-theme")
+      if (siteTheme === "dark" || siteTheme === "light") return siteTheme
+    }
 
     return defaultTheme
   })

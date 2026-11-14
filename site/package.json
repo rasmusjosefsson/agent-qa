@@ -4,7 +4,7 @@
   "scripts": {
     "sync": "node scripts/sync-docs.mjs",
     "dev": "npm run sync && astro dev",
-    "build": "npm run sync && astro build",
+    "build": "npm run sync && node ../scripts/build-play.mjs && astro build",
     "preview": "astro preview"
   },
   "type": "module",

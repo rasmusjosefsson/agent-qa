@@ -7,9 +7,31 @@ import { defineConfig, type Plugin } from "vite"
 // doesn't flash light (the ThemeProvider only applies after React mounts).
 // Mirrors the provider's key ('agentqa-theme') + default ('light') + system
 // resolution.
+function playHtml(): Plugin {
+  return {
+    name: "aqa-play-html",
+    transformIndexHtml(html) {
+      if (process.env.VITE_AQA_SOURCE !== "fixture") return html
+      return html
+        .replace("<div id=\"root\"></div>", "<main id=\"root\"></main>")
+        .replace(
+          "</head>",
+          '<meta name="aqa-golden-ready" content="[data-demo-ready]" />\n  </head>'
+        )
+    },
+  }
+}
+
 function themeInit(): Plugin {
+  // The docs demo follows the site theme until the workbench toggle is used.
+  // The local app keeps its own key and does not read the docs theme.
+  const read =
+    process.env.VITE_AQA_SOURCE === "fixture"
+      ? "var k='agentqa-theme',t=localStorage.getItem(k)||localStorage.getItem('starlight-theme')||'light';"
+      : "var k='agentqa-theme',t=localStorage.getItem(k)||'light';"
   const body =
-    "(function(){try{var k='agentqa-theme',t=localStorage.getItem(k)||'light';" +
+    "(function(){try{" +
+    read +
     "if(t==='system'){t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}" +
     "var r=document.documentElement;r.classList.remove('light','dark');r.classList.add(t);}catch(e){}})();"
   return {
@@ -24,7 +46,7 @@ function themeInit(): Plugin {
 // Built into lib/public/ and served by the report-server at / + every tab
 // route (assets under /assets/*).
 export default defineConfig({
-  plugins: [react(), tailwindcss(), themeInit()],
+  plugins: [react(), tailwindcss(), themeInit(), playHtml()],
   resolve: { alias: { "@": path.resolve(__dirname, "./src") } },
   base: "/", // hashed assets resolve under /assets/*
   build: {

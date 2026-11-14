@@ -39,6 +39,8 @@ describe("docs golden refresh", () => {
     expect(slugsForChangedFiles(["docs/index.md"])).toEqual(["docs/overview"]);
     expect(slugsForChangedFiles(["site/src/pages/index.astro"])).toEqual(["index"]);
     expect(slugsForChangedFiles(["docs/gap-map.md", "docs/specs/notes.md"])).toEqual([]);
+    expect(slugsForChangedFiles(["npm/agent-qa/web/src/features/runs/RunsPage.tsx"])).toEqual(["play"]);
+    expect(slugsForChangedFiles(["scripts/build-play.mjs"])).toEqual(["play"]);
   });
 
   test("refreshes a changed page in both themes and a missing baseline", () => {

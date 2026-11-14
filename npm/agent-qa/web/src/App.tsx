@@ -1,5 +1,5 @@
 import { AppShell, type Tab } from "./AppShell"
-import { useRoute } from "./router"
+import { useRoute, withoutBase } from "./router"
 import RunsPage from "./features/runs/RunsPage"
 import CasesPage from "./features/cases/CasesPage"
 import SetsPage from "./features/sets/SetsPage"
@@ -61,7 +61,7 @@ function tabForPath(pathname: string): Tab {
 // so list ↔ detail still gets a soft enter transition instead of a flash.
 export function App() {
   const route = useRoute()
-  const tab = tabForPath(route.pathname)
+  const tab = tabForPath(withoutBase(route.pathname))
 
   return (
     <AppShell tab={tab}>

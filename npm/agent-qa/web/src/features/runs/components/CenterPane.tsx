@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils'
 import { CameraIcon, GitCompareIcon, Loader2Icon, PlayIcon, PlusIcon, WrenchIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { SpaLink } from '@/components/spa-link'
+import { withBase } from '@/router'
 import { acceptAllDomshots, acceptAllShots } from '@/lib/runs-api'
 import { canWrite } from '@/lib/source'
 import { CompareView } from './CompareView'
@@ -569,7 +570,7 @@ export function CenterPane({
         </div>
         {!hasAnyScenario && (
           <Button asChild size="sm">
-            <SpaLink href="/chat">Open Chat</SpaLink>
+            <SpaLink href={withBase('/chat')}>Open Chat</SpaLink>
           </Button>
         )}
       </div>

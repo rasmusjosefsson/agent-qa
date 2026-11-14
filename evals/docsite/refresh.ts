@@ -57,6 +57,11 @@ export function slugsForChangedFiles(files: readonly string[]): string[] {
   for (const file of files) {
     const slug = DOC_FILE_SLUGS[file];
     if (slug) slugs.add(slug);
+    // The /play/ page is a build of the workbench. A change there can move
+    // its pixels, so that shot may refresh. Other docs pages stay gated.
+    if (file.startsWith("npm/agent-qa/web/") || file === "scripts/build-play.mjs" || file.startsWith("npm/agent-qa/web/fixtures/")) {
+      slugs.add("play");
+    }
   }
   return [...slugs].sort();
 }

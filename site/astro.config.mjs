@@ -33,6 +33,7 @@ export default defineConfig({
           label: "Start here",
           items: [
             { label: "Quickstart", slug: "docs/quickstart" },
+            { label: "Demo", link: "/play/" },
             { label: "How it works", slug: "docs/overview" },
             { label: "Workbench", slug: "docs/workbench" },
           ],

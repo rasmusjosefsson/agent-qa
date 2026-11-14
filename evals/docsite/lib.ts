@@ -212,10 +212,10 @@ export function report(name: string, rows: { sid: string; ok: boolean; error?: s
 /** Pages the committed scenario covers — every *.html page under dist/
  *  (except the error page), as an absolute preview URL. The generator and the
  *  drift check share this list. */
-export function previewPages(): { slug: string; url: string; mermaid: boolean }[] {
+export function previewPages(): { slug: string; url: string; mermaid: boolean; ready?: string }[] {
   const { readdirSync, readFileSync: rf } = require("fs");
   const dist = resolve(siteRoot, "dist");
-  const pages: { slug: string; url: string; mermaid: boolean }[] = [];
+  const pages: { slug: string; url: string; mermaid: boolean; ready?: string }[] = [];
   const walk = (dir: string) => {
     for (const d of readdirSync(dir, { withFileTypes: true })) {
       const p = resolve(dir, d.name);
@@ -224,10 +224,12 @@ export function previewPages(): { slug: string; url: string; mermaid: boolean }[
         const rel = p.slice(dist.length).replace(/\/index\.html$/, "/") || "/";
         if (rel === "/404/") continue;
         const html = rf(p, "utf8");
+        const ready = html.match(/<meta name="aqa-golden-ready" content="([^"]+)"/)?.[1];
         pages.push({
           slug: rel === "/" ? "index" : rel.replace(/^\//, "").replace(/\/$/, ""),
           url: previewBase + rel,
           mermaid: /class="mermaid"/.test(html),
+          ...(ready ? { ready } : {}),
         });
       }
     }
