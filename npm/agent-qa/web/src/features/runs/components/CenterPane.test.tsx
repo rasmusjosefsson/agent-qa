@@ -1,5 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { createFixtureSource } from '@/lib/source/fixture-source'
+import { setScenarioSourceForTests } from '@/lib/source'
 import type { RunsApi } from '../useRuns'
 import { CenterPane, type RunConfig } from './CenterPane'
 
@@ -156,9 +158,43 @@ describe('CenterPane scenario controls', () => {
       <CenterPane runs={noVid} runConfig={runConfig} />
     )
     expect(html2).not.toContain('aria-label="Replay timeline"')
+    expect(html2).not.toContain('aria-label="Event timeline"')
     expect(html2).not.toContain('<video')
     // Replay belongs to the scenario card. A past run does not grow its own.
     expect(html).not.toContain('>Replay</button>')
     expect(html2).not.toContain('>Replay</button>')
   })
+
+  it('plays events.jsonl when the source cannot write and there is no video', () => {
+    setScenarioSourceForTests(createFixtureSource('/demo'))
+    const runs = {
+      detail: {
+        sid: 's-1',
+        runId: 'r-1',
+        audit: { summary: 'SUMMARY: 2/2 (PASS)', exitCode: 0 },
+        status: { state: 'done', ok: true },
+        events: [
+          { idx: 1, id: 'open', intent: 'Open the directory', kind: 'do:goto', status: 'pass', ms: 400, screenshot: 'screenshots/open.png' },
+          { idx: 2, id: 'save', intent: 'Save the name', kind: 'do:click', status: 'pass', ms: 200, screenshot: 'screenshots/save.png' },
+        ],
+        video: false,
+      },
+      scenarioDef: null,
+      sel: { sid: 's-1', runId: 'r-1', stepIdx: null },
+      runDefSteps: { sid: 's-1', steps: [] },
+      runsBySid: {},
+      selectStep() {},
+    } as unknown as RunsApi
+    const html = renderToStaticMarkup(<CenterPane runs={runs} runConfig={runConfig} />)
+    expect(html).toContain('data-testid="event-playback"')
+    expect(html).toContain('aria-label="Event timeline"')
+    expect(html).toContain('aria-label="Play"')
+    expect(html).toContain('aria-label="Playback speed"')
+    expect(html).toContain('>8x</option>')
+    expect(html).toContain('Open the directory')
+    expect(html).toContain('/demo/s-1/replays/r-1/screenshots/open.png')
+    expect(html).not.toContain('<video')
+  })
 })
+
+afterEach(() => setScenarioSourceForTests(null))
