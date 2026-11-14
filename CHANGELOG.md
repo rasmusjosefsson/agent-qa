@@ -6,6 +6,20 @@ All notable changes to agent-qa are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+
+- `scenario coverage --routes` joins routes from `plan.md`,
+  `discover-report.json`, and `crawl-report.json` against scenario
+  `goto` steps and exits 1 when any route has no scenario. `crawl`
+  now writes those routes into `crawl-report.json`.
+- `aria-snapshot --depth N` drops accessibility-tree nodes deeper than
+  indent level N. It combines with `--interactive`.
+- Perf claims accept `inp` (Interaction to Next Paint, milliseconds)
+  next to `fcp`, `lcp`, `cls`, `tbt`, `ttfb`, and `load`. The value is
+  the web-vitals Event Timing estimate. No interaction yet is absent.
+- The sticky pull-request verdict table includes each scenario's flake
+  score. Quarantine stays an authored scenario field.
+
 ### Fixed
 
 - A right-click that opens a native dialog counts as the click landing,

@@ -253,6 +253,7 @@ Verbs:
   scenario step-ids <file>       Print every step id, one per line
   scenario field    <file> <n>   Print any top-level scenario field
   scenario coverage <file>       Per-step check coverage report
+  scenario coverage --routes     Discovered routes with no scenario goto (exit 1)
   scenario lint     <file>       Lint a scenario (duplicate ids, bare do, etc.)
   scenario lint-all              Lint every scenario under the scenarios root
   scenario rename   <sid> <new>  Rename a scenario directory + id field
@@ -289,8 +290,9 @@ Verbs:
   crawl <url> [--session <n>] [--out <dir>] [--max N] [--sid <name>]
                                 Draft a coverage scenario from a live page —
                                 one goto + shot claim per same-origin route
-                                found, plus a crawl-report.json inventory of
-                                interactive elements for authoring input
+                                found, plus a crawl-report.json inventory
+                                (routes + interactive elements) for authoring
+                                and `scenario coverage --routes`
   design review <sid> [--run <id>] [--json]   Pair <sid>/designs/<stepId>.png with
                                 the run's screenshots; exits 2 unless every design
                                 is ok or accepted against current design bytes
@@ -337,7 +339,9 @@ Verbs:
   record-step <do|check> <json> Append a step to the in-flight buffer
   record-setup <env-op-json>       Append one generic env.open operation
   run-step <do|check> <draft-json> Dispatch one direct step against the live session
-  aria-snapshot [--json]        Dump the live ARIA tree (element picker data)
+  aria-snapshot [--interactive] [--depth N]
+                                Dump the live ARIA tree (element picker data).
+                                --depth drops nodes deeper than indent level N
   cdp-url [--json]              Print the live session's CDP WebSocket endpoint
   buffer list|delete|move|edit|clear|discard
                                 Inspect, edit, or discard the active recording

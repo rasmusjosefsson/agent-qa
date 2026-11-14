@@ -537,6 +537,30 @@ fn flake_score(outcomes: &[bool], healed_runs: usize, total_runs: usize) -> Opti
     Some(s.clamp(0.0, 100.0))
 }
 
+/// Text line `audit stats` prints. The GitHub Action comment reads this
+/// exact prefix and keeps the integer before `/`.
+fn flake_stats_line(score: Option<f64>) -> String {
+    match score {
+        Some(s) => format!("  flake score   : {s:.0}/100"),
+        None => "  flake score   : n/a (<2 scored runs)".to_string(),
+    }
+}
+
+/// Cell for the sticky verdict table. `-` when the score is not yet defined.
+/// The action's bash does this strip; the helper locks that contract.
+#[cfg(test)]
+fn flake_comment_cell(line: &str) -> String {
+    let Some(rest) = line.trim().strip_prefix("flake score") else {
+        return "-".to_string();
+    };
+    let rest = rest.trim().trim_start_matches(':').trim();
+    if rest.is_empty() || rest.starts_with("n/a") {
+        "-".to_string()
+    } else {
+        rest.split('/').next().unwrap_or("-").trim().to_string()
+    }
+}
+
 fn stats(
     positionals: &[String],
     json_out: bool,
@@ -685,10 +709,10 @@ fn stats(
     println!("  failures      : {failures}");
     println!("  unknown       : {unknown}");
     println!("  pass rate     : {:.0}%", pass_rate * 100.0);
-    match flake_score(&outcomes, healed_runs, total as usize) {
-        Some(s) => println!("  flake score   : {:.0}/100", s),
-        None => println!("  flake score   : n/a (<2 scored runs)"),
-    }
+    println!(
+        "{}",
+        flake_stats_line(flake_score(&outcomes, healed_runs, total as usize))
+    );
     if duration_ms_count > 0 {
         println!("  avg duration  : {avg_duration_secs:.3}s");
     }
@@ -2953,6 +2977,35 @@ mod tests {
         // Never below zero.
         let s = flake_score(&[false, false], 2, 2).unwrap();
         assert!((0.0..=100.0).contains(&s));
+    }
+
+    #[test]
+    fn flake_comment_cell_reads_the_stats_line() {
+        assert_eq!(flake_comment_cell(&flake_stats_line(Some(80.0))), "80");
+        assert_eq!(flake_comment_cell(&flake_stats_line(Some(35.0))), "35");
+        assert_eq!(flake_comment_cell(&flake_stats_line(Some(35.6))), "36");
+        assert_eq!(flake_comment_cell(&flake_stats_line(None)), "-");
+        assert_eq!(flake_stats_line(Some(80.0)), "  flake score   : 80/100");
+        assert_eq!(
+            flake_stats_line(None),
+            "  flake score   : n/a (<2 scored runs)"
+        );
+    }
+
+    #[test]
+    fn sticky_comment_table_includes_the_flake_score() {
+        let yml = include_str!("../../action.yml");
+        assert!(yml.contains("| scenario | verdict | duration | flake |"));
+        assert!(yml.contains("s/^  flake score   : //p"));
+        assert!(yml.contains("n/a*) flake=\"-\""));
+        assert!(
+            !yml.contains("quarantineAt"),
+            "the comment must leave quarantine opt-in"
+        );
+        assert!(
+            !yml.contains("auto-quarantine") && !yml.contains("autoQuarantine"),
+            "the comment must not assign quarantine"
+        );
     }
 
     #[test]

@@ -508,6 +508,47 @@ fn perf_metric_js(metric: &str, dwell_ms: u64) -> String {
       setTimeout(tick, 100);
     }});
   }}
+  // INP (web-vitals): Event Timing entries with an interactionId, grouped
+  // by that id (duration is input delay + processing + presentation).
+  // Fewer than 50 interactions → the longest. Otherwise the high
+  // percentile at index floor(n / 50) of the descending durations.
+  // durationThreshold 16 is Chrome's minimum, so sub-16ms interactions
+  // are not observed. No interaction before the dwell → null (absent).
+  if (metric === 'inp') {{
+    return await new Promise((resolve) => {{
+      const byId = new Map();
+      const po = new PerformanceObserver((list) => {{
+        for (const e of list.getEntries()) {{
+          const id = e.interactionId;
+          if (!id) continue;
+          const prev = byId.get(id) || 0;
+          if (e.duration >= prev) byId.set(id, e.duration);
+        }}
+      }});
+      try {{
+        po.observe({{ type: 'event', buffered: true, durationThreshold: 16 }});
+      }} catch (e) {{
+        return resolve('null');
+      }}
+      const inpOf = () => {{
+        const durations = [...byId.values()];
+        if (!durations.length) return null;
+        durations.sort((a, b) => b - a);
+        const index = Math.min(durations.length - 1, Math.floor(durations.length / 50));
+        return durations[index];
+      }};
+      const deadline = performance.now() + dwell;
+      const tick = () => {{
+        const value = inpOf();
+        if (value != null || performance.now() >= deadline) {{
+          try {{ po.disconnect(); }} catch (e) {{}}
+          return resolve(JSON.stringify(value));
+        }}
+        setTimeout(tick, 100);
+      }};
+      setTimeout(tick, 100);
+    }});
+  }}
   return JSON.stringify('__aq_unknown__');
 }})()"#
     )
@@ -538,7 +579,7 @@ fn check_perf(
             m.trace.unwrap_or(false),
         ),
     };
-    const METRICS: &[&str] = &["fcp", "lcp", "cls", "tbt", "ttfb", "load"];
+    const METRICS: &[&str] = &["fcp", "lcp", "cls", "tbt", "ttfb", "load", "inp"];
     if !METRICS.contains(&metric.as_str()) {
         bail!(
             "perf metric {metric:?} unknown — expected one of {}",
@@ -4949,5 +4990,90 @@ mod tests {
         .unwrap();
         let err = dispatch_check(&claim, &ctx, &mut scope, None).unwrap_err();
         assert!(err.to_string().contains("requires 'value'"), "got: {err}");
+    }
+}
+
+/// Perf-metric checks that do not need a browser or a Unix permission bit.
+#[cfg(test)]
+mod perf_metric_tests {
+    use super::*;
+
+    /// web-vitals INP estimate over per-interaction durations (already the
+    /// max duration for each interactionId). Kept next to the JS in
+    /// `perf_metric_js` — that script uses the same index.
+    fn inp_high_percentile(durations: &[f64]) -> Option<f64> {
+        if durations.is_empty() {
+            return None;
+        }
+        let mut sorted = durations.to_vec();
+        sorted.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+        let index = (sorted.len() - 1).min(sorted.len() / 50);
+        Some(sorted[index])
+    }
+
+    #[test]
+    fn inp_high_percentile_matches_web_vitals() {
+        assert_eq!(inp_high_percentile(&[]), None);
+        assert_eq!(inp_high_percentile(&[80.0]), Some(80.0));
+        assert_eq!(inp_high_percentile(&[10.0, 200.0, 40.0]), Some(200.0));
+        // 50 durations: index floor(50/50) = 1, second-longest is 49.
+        let fifty: Vec<f64> = (1..=50).map(|n| n as f64).collect();
+        assert_eq!(inp_high_percentile(&fifty), Some(49.0));
+        // 100 durations: index 2, value 98.
+        let hundred: Vec<f64> = (1..=100).map(|n| n as f64).collect();
+        assert_eq!(inp_high_percentile(&hundred), Some(98.0));
+    }
+
+    #[test]
+    fn inp_js_observes_event_timing_like_web_vitals() {
+        let js = perf_metric_js("inp", 1500);
+        assert!(js.contains("metric === 'inp'"), "{js}");
+        assert!(js.contains("type: 'event'"), "{js}");
+        assert!(js.contains("durationThreshold: 16"), "{js}");
+        assert!(js.contains("buffered: true"), "{js}");
+        assert!(js.contains("interactionId"), "{js}");
+        assert!(
+            js.contains("Math.floor(durations.length / 50)"),
+            "high-percentile index missing: {js}"
+        );
+        assert!(js.contains("1500"), "{js}");
+        let fcp = perf_metric_js("fcp", 40);
+        assert!(fcp.contains("first-contentful-paint"), "{fcp}");
+        assert!(fcp.contains("const dwell = 40;"), "{fcp}");
+    }
+
+    fn perf_scenario(metric: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "schema": "scenario/2",
+            "id": "perf",
+            "intent": "budget",
+            "steps": [{
+                "id": "s0",
+                "intent": "metric budget",
+                "kind": "check",
+                "claim": {
+                    "subject": { "perf": metric },
+                    "predicate": "lt",
+                    "value": 200
+                }
+            }]
+        })
+    }
+
+    #[test]
+    fn schema_accepts_inp_and_rejects_an_unknown_metric() {
+        crate::schema::validate_value(&perf_scenario(serde_json::json!("inp"))).unwrap();
+        crate::schema::validate_value(&perf_scenario(serde_json::json!({
+            "metric": "inp",
+            "maxDwellMs": 800
+        })))
+        .unwrap();
+        let err = crate::schema::validate_value(&perf_scenario(serde_json::json!("fid")))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("schema error") || err.contains("fid") || err.contains("enum"),
+            "{err}"
+        );
     }
 }
