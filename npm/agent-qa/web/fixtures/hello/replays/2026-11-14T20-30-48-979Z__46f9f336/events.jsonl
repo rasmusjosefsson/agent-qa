@@ -1,0 +1,4 @@
+{"idx":1,"total":2,"id":"s0","intent":"Open the example page","kind":"do:goto","status":"running"}
+{"idx":1,"total":2,"id":"s0","intent":"Open the example page","kind":"do:goto","status":"pass","ms":1504,"screenshot":"screenshots/s0.png","snapshot":"snapshots/s0.txt"}
+{"idx":2,"total":2,"id":"s1","intent":"URL is the example page","kind":"check","status":"running"}
+{"idx":2,"total":2,"id":"s1","intent":"URL is the example page","kind":"check","status":"pass","ms":201,"screenshot":"screenshots/s1.png","snapshot":"snapshots/s1.txt"}
