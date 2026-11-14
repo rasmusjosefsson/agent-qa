@@ -18,7 +18,7 @@
 | `flush [--auto-shots] [--auto-network] [--no-auto-url] [--no-auto-secrets]` | Validates and writes `scenario.json`; `--auto-shots` appends a `{"shot"}` visual claim after every do-step, `--auto-network` opts into `fired` claims for the recording window's API calls. A `url matches <final page>` claim and a `pageError` notExists gate are appended by default, as are password-literal sweeps into gitignored `inputs.local.json`. |
 | `shot-accept <sid> [--run <id>] [--steps s3,s5]` | Mint/re-mint shot baselines from a run's screenshots — see `visual.md`. |
 | `browser <args...>` | Passthrough exec of the pinned `agent-browser` binary. Use for gestures (`open`, `click`, `type`, `snapshot`, ...) instead of a bare `agent-browser` shell command — see `gotchas.md`. |
-| `aria-snapshot [--session <name>] [--interactive]` | agent-qa's own read-only ARIA dump verb. Not a `browser` sub-verb — run it as `agent-qa aria-snapshot`, not `agent-qa browser aria-snapshot` (that's `Unknown command`). |
+| `aria-snapshot [--session <name>] [--interactive] [--depth N]` | agent-qa's own read-only ARIA dump verb. `--depth N` drops nodes deeper than indent level N (0 is the top row) and combines with `--interactive`. Not a `browser` sub-verb — run it as `agent-qa aria-snapshot`, not `agent-qa browser aria-snapshot` (that's `Unknown command`). |
 | `cdp-url [--json]` | agent-qa's own verb for the live session's CDP WebSocket endpoint. Also not a `browser` sub-verb. |
 | `record-setup '<env-op-json>'` | Appends one schema-valid generic `env.open` operation. |
 | `record-step do '<draft-json>'` | Appends a scenario do draft without `id` or `kind`. |

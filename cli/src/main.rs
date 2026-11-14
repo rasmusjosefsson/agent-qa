@@ -339,7 +339,9 @@ Verbs:
   record-step <do|check> <json> Append a step to the in-flight buffer
   record-setup <env-op-json>       Append one generic env.open operation
   run-step <do|check> <draft-json> Dispatch one direct step against the live session
-  aria-snapshot [--json]        Dump the live ARIA tree (element picker data)
+  aria-snapshot [--interactive] [--depth N]
+                                Dump the live ARIA tree (element picker data).
+                                --depth drops nodes deeper than indent level N
   cdp-url [--json]              Print the live session's CDP WebSocket endpoint
   buffer list|delete|move|edit|clear|discard
                                 Inspect, edit, or discard the active recording

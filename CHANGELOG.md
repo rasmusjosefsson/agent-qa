@@ -12,6 +12,8 @@ All notable changes to agent-qa are documented here. This project follows
   `discover-report.json`, and `crawl-report.json` against scenario
   `goto` steps and exits 1 when any route has no scenario. `crawl`
   now writes those routes into `crawl-report.json`.
+- `aria-snapshot --depth N` drops accessibility-tree nodes deeper than
+  indent level N. It combines with `--interactive`.
 
 ### Fixed
 
