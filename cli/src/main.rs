@@ -253,6 +253,7 @@ Verbs:
   scenario step-ids <file>       Print every step id, one per line
   scenario field    <file> <n>   Print any top-level scenario field
   scenario coverage <file>       Per-step check coverage report
+  scenario coverage --routes     Discovered routes with no scenario goto (exit 1)
   scenario lint     <file>       Lint a scenario (duplicate ids, bare do, etc.)
   scenario lint-all              Lint every scenario under the scenarios root
   scenario rename   <sid> <new>  Rename a scenario directory + id field
@@ -289,8 +290,9 @@ Verbs:
   crawl <url> [--session <n>] [--out <dir>] [--max N] [--sid <name>]
                                 Draft a coverage scenario from a live page —
                                 one goto + shot claim per same-origin route
-                                found, plus a crawl-report.json inventory of
-                                interactive elements for authoring input
+                                found, plus a crawl-report.json inventory
+                                (routes + interactive elements) for authoring
+                                and `scenario coverage --routes`
   design review <sid> [--run <id>] [--json]   Pair <sid>/designs/<stepId>.png with
                                 the run's screenshots; exits 2 unless every design
                                 is ok or accepted against current design bytes

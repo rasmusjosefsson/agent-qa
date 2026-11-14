@@ -55,6 +55,7 @@ without a `heal-promote` step.
 | `scenario insert <sid> --step '<json>' [--after <stepId> \| --at <index>]` | Splice a validated step into a saved scenario. |
 | `scenario extract <sid> [--run <id>] [--through <stepId>] [--to <new>]` | Clone a scenario truncated at the run's first failing step — the repro unit. |
 | `scenario coverage <file>` / `scenario coverage-all` | Per-scenario and whole-suite do→check coverage rolls. |
+| `scenario coverage --routes [--from <path>]` | Join `plan.md` / `discover-report.json` / `crawl-report.json` routes against scenario `goto` steps. Exit 1 when a discovered route has no literal goto. |
 | `scenario lint <file> [--strict]` / `scenario lint-all [--root <dir>]` | Common lints (duplicate ids, bare do, …); `--format github` emits CI annotations. |
 | `audit health` | Suite rollup: flaky + slow + heal-chronic step ids per scenario. |
 | `timings check` / `timings accept` | Compare passing-run durations to `<scenarios>/_timings/baseline.json`. Slow means more than 2× and at least 5s over, or past `budgetMs`. A `build` row uses `budgetMs` only. `--format markdown` is the PR table. |
