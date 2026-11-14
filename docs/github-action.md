@@ -21,7 +21,7 @@ jobs:
 ```
 
 Each PR then replays the whole scenario suite headlessly, posts a sticky
-comment with the verdict and a timing table, and uploads
+comment with the verdict, a flake score, and a timing table, and uploads
 `<scenario>/replays/` as the `agent-qa-evidence` artifact — events, audit,
 screenshots, snapshots, heal trail, network/console logs, and a
 per-run `report.html` you can open straight from the artifact. The comment
@@ -34,7 +34,7 @@ needs `pull-requests: write` on the job.
 | `scenarios` | `scenarios` | Becomes `AGENT_QA_SCENARIOS_DIR`. |
 | `args` | `""` | Appended to `agent-qa replay --all` — `--shard 1/3`, `--filter`, `--tags`, `--retry`, `--junit`, `--offline`, `--mock-from`, etc. |
 | `reports` | `"true"` | Renders `run-report` per scenario into each run dir before upload. Set `"false"` on a pinned ref that predates `run-report`. |
-| `comment` | `"true"` | Post or update the sticky `<!-- agent-qa -->` comment. `"false"` skips it. No-op outside a pull request. |
+| `comment` | `"true"` | Post or update the sticky `<!-- agent-qa -->` comment. The table is scenario, verdict, duration, and flake score. `"false"` skips it. No-op outside a pull request. |
 | `timings` | `"report"` | Append a duration table to that comment. `"strict"` also fails the job when a row is slow. `"off"` skips the check. |
 | `timings-baseline` | `""` | Workspace-relative `agent-qa-timings/v1` file. Empty uses `<scenarios>/_timings/baseline.json`. |
 | `artifact-name` | `agent-qa-evidence` | Uploaded artifact name. |
@@ -61,6 +61,14 @@ agent-qa timings accept
 
 `timings: strict` is the same table, and the job fails when anything is
 slow. Details and the file shape are in [verbs](verbs.md).
+
+## Flake score
+
+The verdict table's `flake` column is the score `audit stats` already
+computes: 0–100, higher when the scenario's runs stay green and unhealed.
+Fewer than two scored runs print `-`. Quarantine stays an authored
+`quarantine` field on the scenario. The column is a signal, and the job's
+exit code stays the replay result.
 
 ## Growing coverage from the same loop
 

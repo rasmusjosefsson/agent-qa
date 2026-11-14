@@ -48,7 +48,7 @@ The full set of CLI verbs at a glance. Every verb also responds to
 | `notify test` | POST a sample verdict payload to the `[notify]`-configured webhook — proves the alert sink end-to-end before a run depends on it. |
 | `audit show <sid> <runId \| latest>` | Pretty-print one replay's audit.json. `--json` for raw. |
 | `audit list <sid>` | Table of every run (incl. \`dur(s)\` column). Flags: `--json`, `--passed` / `--failed`, `--tag <substr>`, `--profile <substr>`, `--limit <N>`, `--slow <secs>`, `--sort duration\|runId-desc`, `--since <iso-ts>`, `--until <iso-ts>` |
-| `audit stats <sid>` | Pass/fail/tag rollup for one scenario, incl. avg duration. Flags: `--json`, `--since`, `--until`. |
+| `audit stats <sid>` | Pass/fail/tag rollup for one scenario, incl. avg duration and the flake score (0–100, or n/a below two scored runs). That score is the `flake` column on the GitHub Action verdict comment. Flags: `--json`, `--since`, `--until`. |
 | `audit stats-all` | Per-scenario + overall pass/fail rollup across the root, incl. avg duration. Flags: `--json`, `--since`, `--until`. |
 | `audit count <sid>` | Number of runs under \`<sid>\` (one integer line). |
 | `audit duration <sid> <runId \| latest>` | Run duration in seconds (3 decimals). |

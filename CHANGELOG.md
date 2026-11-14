@@ -17,6 +17,8 @@ All notable changes to agent-qa are documented here. This project follows
 - Perf claims accept `inp` (Interaction to Next Paint, milliseconds)
   next to `fcp`, `lcp`, `cls`, `tbt`, `ttfb`, and `load`. The value is
   the web-vitals Event Timing estimate. No interaction yet is absent.
+- The sticky pull-request verdict table includes each scenario's flake
+  score. Quarantine stays an authored scenario field.
 
 ### Fixed
 
