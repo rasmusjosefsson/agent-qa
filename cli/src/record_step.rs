@@ -351,7 +351,7 @@ fn capture_recording_sidecars(
     let run = crate::sidecar::RunPaths {
         scenario_dir: scenario_dir.to_path_buf(),
         run_id: "recording".into(),
-        run_root: scenario_dir.join("recording"),
+        run_root: crate::paths::recording_dir(scenario_dir),
     };
     fs::create_dir_all(&run.run_root).ok();
     // A pending native dialog blocks the page: skip BOTH sidecars so

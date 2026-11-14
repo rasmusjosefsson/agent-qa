@@ -182,7 +182,7 @@ pub(crate) fn collect_dir(
     min_runs: usize,
     sid: &str,
 ) -> Vec<Chronic> {
-    let replays = scenario_dir.join("replays");
+    let replays = crate::paths::replays_dir(scenario_dir);
     let mut by_step: BTreeMap<String, Acc> = BTreeMap::new();
     let runs = match fs::read_dir(&replays) {
         Ok(it) => it,
@@ -194,7 +194,7 @@ pub(crate) fn collect_dir(
             continue;
         }
         let run_id = entry.file_name().to_string_lossy().into_owned();
-        let heal_file = run_dir.join("heal.jsonl");
+        let heal_file = crate::paths::heal_jsonl(&(run_dir));
         let body = match fs::read_to_string(&heal_file) {
             Ok(b) => b,
             Err(_) => continue,

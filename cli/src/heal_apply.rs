@@ -107,18 +107,17 @@ fn apply(opts: &Opts) -> Result<Summary> {
     let scenario_dir = crate::paths::scenario_dir(&opts.sid)?;
     let run_id = match &opts.run_id {
         Some(run_id) => run_id.clone(),
-        None => fs::read_to_string(scenario_dir.join("replays/latest.txt"))?
+        None => fs::read_to_string(crate::paths::latest_replay_file(&(scenario_dir)))?
             .trim()
             .to_string(),
     };
     if !is_safe_segment(&run_id) || !is_safe_segment(&opts.step_id) {
         bail!("unsafe run or step id");
     }
-    let response_file = scenario_dir
-        .join("replays")
-        .join(&run_id)
-        .join("heal-responses")
-        .join(format!("{}.json", opts.step_id));
+    let response_file = crate::paths::heal_responses_dir(
+        &(crate::paths::replays_dir(&(scenario_dir)).join(&run_id)),
+    )
+    .join(format!("{}.json", opts.step_id));
     let response: HealResponse = serde_json::from_slice(&fs::read(&response_file)?)
         .with_context(|| format!("parse {}", response_file.display()))?;
     if response.mode != "value-correction" {
@@ -142,7 +141,7 @@ fn apply(opts: &Opts) -> Result<Summary> {
             &response_file,
             response_file.with_file_name(format!("{}.applied.json", opts.step_id)),
         )?;
-        let audit_path = scenario_dir.join("recording/heal.jsonl");
+        let audit_path = crate::paths::recording_heal_jsonl(&(scenario_dir));
         fs::create_dir_all(audit_path.parent().unwrap())?;
         let mut audit = fs::OpenOptions::new()
             .create(true)

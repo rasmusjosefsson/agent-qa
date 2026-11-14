@@ -1586,10 +1586,12 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
                     } else {
                         (
                             Some(abs_display(
-                                &run.run_root.join("screenshots").join(format!("{id}.png")),
+                                &crate::paths::screenshots_dir(&(run.run_root))
+                                    .join(format!("{id}.png")),
                             )),
                             Some(abs_display(
-                                &run.run_root.join("snapshots").join(format!("{id}.txt")),
+                                &crate::paths::snapshots_dir(&(run.run_root))
+                                    .join(format!("{id}.txt")),
                             )),
                         )
                     };
@@ -1688,7 +1690,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
         // profile saves, cleanup navigations — isn't part of the scenario's
         // network evidence).
         if opts.har {
-            let dest = run.run_root.join("network.har");
+            let dest = crate::paths::network_har(&(run.run_root));
             if let Err(e) = crate::browser::network_har_stop(&opts.session_name, &dest) {
                 eprintln!("[v2-replay] har stop skipped: {e}");
             }
@@ -1733,7 +1735,7 @@ pub fn run(opts: &RunOptions) -> Result<RunSummary> {
             "[v2-replay] auto-heal applied to {} step(s) ({}); review {} then promote with: agent-qa heal-promote {} --run {}",
             healed_steps.len(),
             healed_steps.join(", "),
-            run.run_root.join("diffs").display(),
+            crate::paths::diffs_dir(&(run.run_root)).display(),
             scenario.id,
             run.run_id,
         );
@@ -2267,10 +2269,8 @@ fn load_heal_overrides(
     scenario_dir: &std::path::Path,
     run_id: &str,
 ) -> Result<std::collections::HashMap<String, String>> {
-    let dir = scenario_dir
-        .join("replays")
-        .join(run_id)
-        .join("heal-responses");
+    let dir =
+        crate::paths::heal_responses_dir(&(crate::paths::replays_dir(scenario_dir).join(run_id)));
     let mut out: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let entries = match std::fs::read_dir(&dir) {
         Ok(it) => it,

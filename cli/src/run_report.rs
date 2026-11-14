@@ -27,7 +27,7 @@ pub fn run(args: &[String]) -> Result<u8> {
     // report still works when latest.txt is absent.
     let run_id =
         crate::audit::resolve_run_id(&scenario_dir, opts.run.as_deref().unwrap_or("latest"))?;
-    let run_dir = scenario_dir.join("replays").join(&run_id);
+    let run_dir = crate::paths::replays_dir(&(scenario_dir)).join(&run_id);
     if !run_dir.is_dir() {
         bail!("run {run_id:?} not found under {}", run_dir.display());
     }
@@ -201,8 +201,8 @@ fn esc(s: &str) -> String {
 }
 
 fn render_report(run_dir: &Path, sid: &str, run_id: &str) -> Result<String> {
-    let body = fs::read_to_string(run_dir.join("events.jsonl"))
-        .with_context(|| format!("read {}", run_dir.join("events.jsonl").display()))?;
+    let body = fs::read_to_string(crate::paths::events_file(run_dir))
+        .with_context(|| format!("read {}", crate::paths::events_file(run_dir).display()))?;
     let events: Vec<Json> = body
         .lines()
         .filter(|l| !l.trim().is_empty())
@@ -210,7 +210,7 @@ fn render_report(run_dir: &Path, sid: &str, run_id: &str) -> Result<String> {
         .collect();
     let steps = collect_steps(&events);
 
-    let audit = fs::read_to_string(run_dir.join("audit.json"))
+    let audit = fs::read_to_string(crate::paths::audit_file(run_dir))
         .ok()
         .and_then(|b| serde_json::from_str::<Json>(&b).ok());
 

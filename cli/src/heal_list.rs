@@ -113,7 +113,7 @@ fn parse_args(args: &[String]) -> Result<Opts> {
 
 fn collect(opts: &Opts) -> Result<Vec<Entry>> {
     let scenario_dir = paths::scenario_dir(&opts.sid)?;
-    let replays = scenario_dir.join("replays");
+    let replays = crate::paths::replays_dir(&(scenario_dir));
     let mut out: Vec<Entry> = Vec::new();
     let runs = match fs::read_dir(&replays) {
         Ok(it) => it,
@@ -130,7 +130,7 @@ fn collect(opts: &Opts) -> Result<Vec<Entry>> {
                 continue;
             }
         }
-        let hr_dir = path.join("heal-responses");
+        let hr_dir = crate::paths::heal_responses_dir(&(path));
         if !hr_dir.is_dir() {
             continue;
         }

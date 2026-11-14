@@ -57,7 +57,7 @@ pub(super) struct NetReport {
 type RequestMap = BTreeMap<String, Vec<i64>>;
 
 fn read_requests(run_dir: &Path) -> Result<Option<RequestMap>> {
-    let path = run_dir.join("network.json");
+    let path = crate::paths::network_json(run_dir);
     if !path.is_file() {
         return Ok(None);
     }
@@ -92,8 +92,8 @@ fn fmt_statuses(v: &[i64]) -> String {
 }
 
 pub(super) fn build(scenario_dir: &Path, run_a: &str, run_b: &str) -> Result<NetReport> {
-    let dir_a = scenario_dir.join("replays").join(run_a);
-    let dir_b = scenario_dir.join("replays").join(run_b);
+    let dir_a = crate::paths::replays_dir(scenario_dir).join(run_a);
+    let dir_b = crate::paths::replays_dir(scenario_dir).join(run_b);
     let map_a = read_requests(&dir_a)?;
     let map_b = read_requests(&dir_b)?;
     if map_a.is_none() && map_b.is_none() {

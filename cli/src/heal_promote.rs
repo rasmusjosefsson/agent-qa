@@ -244,7 +244,8 @@ fn build_plan_at(
     let run_id = match &run_id_arg {
         Some(r) => r.clone(),
         None => {
-            let latest = scenario_dir.join("replays").join("latest.txt");
+            let latest =
+                crate::paths::latest_pointer(&(crate::paths::replays_dir(&(scenario_dir))));
             fs::read_to_string(&latest)
                 .map(|s| s.trim().to_string())
                 .map_err(|_| anyhow!("--run not given and no {} pointer found", latest.display()))?
@@ -254,7 +255,8 @@ fn build_plan_at(
         bail!("unsafe runId: {run_id:?}");
     }
 
-    let diffs_dir = scenario_dir.join("replays").join(&run_id).join("diffs");
+    let diffs_dir =
+        crate::paths::diffs_dir(&(crate::paths::replays_dir(&(scenario_dir)).join(&run_id)));
     let mut patches: Vec<Patch> = Vec::new();
     if diffs_dir.is_dir() {
         for entry in fs::read_dir(&diffs_dir)? {

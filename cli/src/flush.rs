@@ -740,10 +740,9 @@ fn flush(
     // Stop the HAR recording `start` opened and keep it next to the
     // scenario: `replay <sid> --mock-from recorded` then replays
     // hermetically from the recorded responses.
-    let har_dest = scenario_dir
-        .join("replays")
-        .join("recorded")
-        .join("network.har");
+    let har_dest = crate::paths::network_har(
+        &(crate::paths::recorded_dir(&(crate::paths::replays_dir(&(scenario_dir))))),
+    );
     if let Some(parent) = har_dest.parent() {
         if let Err(e) = fs::create_dir_all(parent) {
             eprintln!("[v2-record] mkdir {}: {e}", parent.display());

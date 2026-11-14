@@ -118,7 +118,7 @@ fn pick_runs(scenario_dir: &Path, args: &[String]) -> Result<(String, String)> {
             if runs.len() < 2 {
                 bail!(
                     "need at least 2 runs under {} to compare (got {})",
-                    scenario_dir.join("replays").display(),
+                    crate::paths::replays_dir(scenario_dir).display(),
                     runs.len()
                 );
             }
@@ -165,10 +165,12 @@ fn resolve_run_id(runs: &[String], arg: &str) -> String {
 }
 
 fn list_run_ids(scenario_dir: &Path) -> Result<Vec<String>> {
-    Ok(crate::paths::run_dirs(&scenario_dir.join("replays"))
-        .iter()
-        .filter_map(|p| p.file_name().map(|s| s.to_string_lossy().into_owned()))
-        .collect())
+    Ok(
+        crate::paths::run_dirs(&crate::paths::replays_dir(scenario_dir))
+            .iter()
+            .filter_map(|p| p.file_name().map(|s| s.to_string_lossy().into_owned()))
+            .collect(),
+    )
 }
 
 // ---------- compare result ----------
@@ -208,8 +210,8 @@ struct ReportData {
 }
 
 fn build_compare(scenario_dir: &Path, run_a: &str, run_b: &str) -> Result<ReportData> {
-    let dir_a = scenario_dir.join("replays").join(run_a).join("snapshots");
-    let dir_b = scenario_dir.join("replays").join(run_b).join("snapshots");
+    let dir_a = crate::paths::snapshots_dir(&(crate::paths::replays_dir(scenario_dir).join(run_a)));
+    let dir_b = crate::paths::snapshots_dir(&(crate::paths::replays_dir(scenario_dir).join(run_b)));
 
     let mut ids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     if dir_a.is_dir() {
@@ -270,7 +272,7 @@ fn build_compare(scenario_dir: &Path, run_a: &str, run_b: &str) -> Result<Report
         .format("%Y-%m-%dT%H-%M-%S-%3fZ")
         .to_string();
     let folder = format!("{ts}__{run_a}-vs-{run_b}");
-    let out_dir = scenario_dir.join("compare").join(folder);
+    let out_dir = crate::paths::compare_dir(scenario_dir).join(folder);
 
     Ok(ReportData {
         run_a: run_a.to_string(),
@@ -299,7 +301,7 @@ fn write_outputs(
     fs::create_dir_all(&r.out_dir).with_context(|| format!("mkdir -p {}", r.out_dir.display()))?;
 
     // Per-step snapshot diffs.
-    let snap_dir = r.out_dir.join("snapshots");
+    let snap_dir = crate::paths::snapshots_dir(&(r.out_dir));
     if r.entries.iter().any(|e| e.diff_text.is_some()) {
         fs::create_dir_all(&snap_dir)?;
     }
@@ -368,7 +370,7 @@ fn write_outputs(
             ));
         }
     }
-    let md_path = r.out_dir.join("compare.md");
+    let md_path = crate::paths::compare_report(&(r.out_dir));
     let mut f =
         fs::File::create(&md_path).with_context(|| format!("create {}", md_path.display()))?;
     f.write_all(md.as_bytes())?;

@@ -61,10 +61,12 @@ pub fn run(args: &[String]) -> Result<u8> {
     let sdir = paths::scenarios_root().join(&sid);
     let rid = match run_id {
         Some(r) => r,
-        None => fs::read_to_string(sdir.join("replays").join("latest.txt"))
-            .context("no --run and replays/latest.txt is missing — replay first")?
-            .trim()
-            .to_string(),
+        None => fs::read_to_string(crate::paths::latest_pointer(
+            &(crate::paths::replays_dir(&(sdir))),
+        ))
+        .context("no --run and replays/latest.txt is missing — replay first")?
+        .trim()
+        .to_string(),
     };
     let minted = mint_layout_baselines(&sdir, &rid, steps, dry_run, json)?;
     if dry_run {
@@ -86,7 +88,7 @@ pub fn run(args: &[String]) -> Result<u8> {
         println!(
             "minted {} layout baseline(s) under {} from run {rid}: {}",
             minted.len(),
-            sdir.join("baselines").display(),
+            crate::paths::baselines_dir(&(sdir)).display(),
             minted.join(", ")
         );
     }
@@ -102,7 +104,8 @@ pub(crate) fn mint_layout_baselines(
     dry_run: bool,
     json: bool,
 ) -> Result<Vec<String>> {
-    let layouts_dir = scenario_dir.join("replays").join(rid).join("layouts");
+    let layouts_dir =
+        crate::paths::layouts_dir(&(crate::paths::replays_dir(scenario_dir).join(rid)));
     if !layouts_dir.is_dir() {
         bail!(
             "no layouts dir at {} — the run needs sidecars on and the scenario needs layout claims",
@@ -113,8 +116,8 @@ pub(crate) fn mint_layout_baselines(
     // Stale-run guard (same convention as domshot-accept): the audit
     // records the scenario's content hash; a scenario.json edit since
     // means the captures describe a different scenario.
-    let run_dir = scenario_dir.join("replays").join(rid);
-    if let Ok(audit_bytes) = fs::read(run_dir.join("audit.json")) {
+    let run_dir = crate::paths::replays_dir(scenario_dir).join(rid);
+    if let Ok(audit_bytes) = fs::read(crate::paths::audit_file(&(run_dir))) {
         if let Ok(audit) = serde_json::from_slice::<serde_json::Value>(&audit_bytes) {
             if let Some(recorded) = audit.get("scenarioContentHash").and_then(|v| v.as_str()) {
                 if let Ok(current) = fs::read(scenario_dir.join("scenario.json")) {
@@ -143,7 +146,7 @@ pub(crate) fn mint_layout_baselines(
         );
     }
 
-    let base_dir = scenario_dir.join("baselines");
+    let base_dir = crate::paths::baselines_dir(scenario_dir);
 
     if dry_run {
         #[derive(serde::Serialize)]

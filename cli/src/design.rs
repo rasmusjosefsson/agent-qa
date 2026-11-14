@@ -258,8 +258,8 @@ fn review(args: &[String]) -> Result<u8> {
         bail!("no scenario at {}", scenario_dir.display());
     }
     let run_id = crate::audit::resolve_run_id(&scenario_dir, &run_ref)?;
-    let run_dir = scenario_dir.join("replays").join(&run_id);
-    let rows = build_rows(&scenario_dir, &run_dir.join("screenshots"))?;
+    let run_dir = crate::paths::replays_dir(&(scenario_dir)).join(&run_id);
+    let rows = build_rows(&scenario_dir, &crate::paths::screenshots_dir(&(run_dir)))?;
 
     let total_steps = scenario_step_ids(&scenario_dir).map(|v| v.len());
     let report = render_markdown(&sid, &run_id, &rows, total_steps);

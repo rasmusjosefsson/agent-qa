@@ -50,9 +50,9 @@ pub enum SidecarKind {
 impl SidecarKind {
     pub fn dir_name(self) -> &'static str {
         match self {
-            SidecarKind::Snapshots => "snapshots",
-            SidecarKind::Screenshots => "screenshots",
-            SidecarKind::Layouts => "layouts",
+            SidecarKind::Snapshots => crate::paths::SNAPSHOTS,
+            SidecarKind::Screenshots => crate::paths::SCREENSHOTS,
+            SidecarKind::Layouts => crate::paths::LAYOUTS,
         }
     }
     pub fn extension(self) -> &'static str {
@@ -204,7 +204,7 @@ pub fn prepare_run_root(scenario_dir: &Path, run_id: &str) -> Result<RunPaths> {
     if !is_safe_segment(run_id) {
         bail!("unsafe runId for sidecar path: {run_id:?}");
     }
-    let run_root = scenario_dir.join("replays").join(run_id);
+    let run_root = crate::paths::replays_dir(scenario_dir).join(run_id);
     fs::create_dir_all(&run_root).with_context(|| format!("mkdir -p {}", run_root.display()))?;
     Ok(RunPaths {
         scenario_dir: scenario_dir.to_path_buf(),
@@ -276,7 +276,7 @@ pub fn write_run_audit(run: &RunPaths, audit: &RunAudit) -> Result<()> {
     let body = serde_json::to_string_pretty(audit)?;
     let mut body = body;
     body.push('\n');
-    atomic_write_file(&run.run_root.join("audit.json"), body.as_bytes())
+    atomic_write_file(&crate::paths::audit_file(&(run.run_root)), body.as_bytes())
 }
 
 // ---------- event stream (events.jsonl + status.json) ----------
@@ -326,7 +326,7 @@ pub struct StepEvent {
 /// object per line. Opened in append mode so the stream is durable while
 /// the run is in flight (a tailer can read completed rows immediately).
 pub fn append_event(run: &RunPaths, ev: &StepEvent) -> Result<()> {
-    let path = run.run_root.join("events.jsonl");
+    let path = crate::paths::events_file(&(run.run_root));
     use std::fs::OpenOptions;
     let mut f = OpenOptions::new()
         .create(true)
@@ -361,7 +361,7 @@ pub struct RunStatus {
 pub fn write_run_status(run: &RunPaths, status: &RunStatus) -> Result<()> {
     let mut body = serde_json::to_string_pretty(status)?;
     body.push('\n');
-    atomic_write_file(&run.run_root.join("status.json"), body.as_bytes())
+    atomic_write_file(&crate::paths::status_file(&(run.run_root)), body.as_bytes())
 }
 
 // ---------- latest pointer ----------
@@ -371,9 +371,12 @@ pub fn update_latest_pointer(scenario_dir: &Path, run_id: &str) -> Result<()> {
     if !is_safe_segment(run_id) {
         bail!("unsafe runId for latest pointer: {run_id:?}");
     }
-    let dir = scenario_dir.join("replays");
+    let dir = crate::paths::replays_dir(scenario_dir);
     fs::create_dir_all(&dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
-    atomic_write_file(&dir.join("latest.txt"), format!("{run_id}\n").as_bytes())
+    atomic_write_file(
+        &crate::paths::latest_pointer(&(dir)),
+        format!("{run_id}\n").as_bytes(),
+    )
 }
 
 // ---------- hash ----------

@@ -1,5 +1,9 @@
 //! Shared path helpers for the scenarios root, a scenario directory,
-//! replay run listing, the perf directory, recorder workfiles, and profiles.
+//! the artefact tree (`replays/`, `recording/`, `baselines/`, `compare/`,
+//! `perf/`), recorder workfiles, and profiles.
+//!
+//! Production code appends those segments through the helpers below.
+//! The layout test locks the segment names.
 //!
 //! ## Configuration
 //!
@@ -178,6 +182,147 @@ pub fn scenario_dir(sid: &str) -> Result<PathBuf> {
     Ok(scenarios_root().join(safe_segment(sid, "sid")?))
 }
 
+// ---------- artefact tree ----------
+//
+// One function per on-disk segment. Callers pass the directory they
+// already have; these helpers only append the segment.
+
+/// `screenshots/` — sidecar kind and shot baselines.
+pub(crate) const SCREENSHOTS: &str = "screenshots";
+/// `snapshots/` — sidecar kind and domshot baselines.
+pub(crate) const SNAPSHOTS: &str = "snapshots";
+/// `layouts/` — sidecar kind.
+pub(crate) const LAYOUTS: &str = "layouts";
+/// `probes/` — recording sidecar `truncate` archives.
+pub(crate) const PROBES: &str = "probes";
+/// `network/` — recording sidecar `truncate` archives.
+pub(crate) const NETWORK: &str = "network";
+
+/// `<scenario>/replays`
+pub(crate) fn replays_dir(scenario_dir: &Path) -> PathBuf {
+    scenario_dir.join("replays")
+}
+
+/// `<scenario>/replays/latest.txt`
+pub(crate) fn latest_replay_file(scenario_dir: &Path) -> PathBuf {
+    replays_dir(scenario_dir).join("latest.txt")
+}
+
+/// `<replays>/latest.txt` when the caller already has the replays directory.
+pub(crate) fn latest_pointer(replays_dir: &Path) -> PathBuf {
+    replays_dir.join("latest.txt")
+}
+
+/// `<replays>/recorded` — the session HAR `flush` keeps.
+pub(crate) fn recorded_dir(replays_dir: &Path) -> PathBuf {
+    replays_dir.join("recorded")
+}
+
+/// `<scenario>/recording`
+pub(crate) fn recording_dir(scenario_dir: &Path) -> PathBuf {
+    scenario_dir.join("recording")
+}
+
+/// `<scenario>/recording/failed`
+pub(crate) fn recording_failed_dir(scenario_dir: &Path) -> PathBuf {
+    recording_dir(scenario_dir).join("failed")
+}
+
+/// `<scenario>/recording/heal.jsonl`
+pub(crate) fn recording_heal_jsonl(scenario_dir: &Path) -> PathBuf {
+    recording_dir(scenario_dir).join("heal.jsonl")
+}
+
+/// `<scenario>/compare`
+pub(crate) fn compare_dir(scenario_dir: &Path) -> PathBuf {
+    scenario_dir.join("compare")
+}
+
+/// `<scenario>/baselines`
+pub(crate) fn baselines_dir(scenario_dir: &Path) -> PathBuf {
+    scenario_dir.join("baselines")
+}
+
+/// `<parent>/screenshots` — a replay run, or a compare folder.
+pub(crate) fn screenshots_dir(parent: &Path) -> PathBuf {
+    parent.join(SCREENSHOTS)
+}
+
+/// `<parent>/snapshots`
+pub(crate) fn snapshots_dir(parent: &Path) -> PathBuf {
+    parent.join(SNAPSHOTS)
+}
+
+/// `<parent>/layouts`
+pub(crate) fn layouts_dir(parent: &Path) -> PathBuf {
+    parent.join(LAYOUTS)
+}
+
+/// `<run>/layouts-diff`
+pub(crate) fn layouts_diff_dir(run_dir: &Path) -> PathBuf {
+    run_dir.join("layouts-diff")
+}
+
+/// `<run>/shots-diff`
+pub(crate) fn shots_diff_dir(run_dir: &Path) -> PathBuf {
+    run_dir.join("shots-diff")
+}
+
+/// `<run>/domshot-diff`
+pub(crate) fn domshot_diff_dir(run_dir: &Path) -> PathBuf {
+    run_dir.join("domshot-diff")
+}
+
+/// `<run>/diffs` — auto-heal patch files. Also the compare output's sibling name.
+pub(crate) fn diffs_dir(parent: &Path) -> PathBuf {
+    parent.join("diffs")
+}
+
+/// `<run>/heal-responses`
+pub(crate) fn heal_responses_dir(run_dir: &Path) -> PathBuf {
+    run_dir.join("heal-responses")
+}
+
+/// `<parent>/perf` — scenario perf snapshots, or a run's trace directory.
+pub(crate) fn perf_subdir(parent: &Path) -> PathBuf {
+    parent.join("perf")
+}
+
+/// `<run>/audit.json`
+pub(crate) fn audit_file(run_dir: &Path) -> PathBuf {
+    run_dir.join("audit.json")
+}
+
+/// `<run>/events.jsonl`
+pub(crate) fn events_file(run_dir: &Path) -> PathBuf {
+    run_dir.join("events.jsonl")
+}
+
+/// `<run>/heal.jsonl` or `<recording>/heal.jsonl`
+pub(crate) fn heal_jsonl(dir: &Path) -> PathBuf {
+    dir.join("heal.jsonl")
+}
+
+/// `<run>/network.json`
+pub(crate) fn network_json(run_dir: &Path) -> PathBuf {
+    run_dir.join("network.json")
+}
+
+/// `<dir>/network.har`
+pub(crate) fn network_har(dir: &Path) -> PathBuf {
+    dir.join("network.har")
+}
+
+/// `<compare-folder>/compare.md`
+pub(crate) fn compare_report(compare_folder: &Path) -> PathBuf {
+    compare_folder.join("compare.md")
+}
+
+/// `<run>/status.json`
+pub(crate) fn status_file(run_dir: &Path) -> PathBuf {
+    run_dir.join("status.json")
+}
+
 /// Directories under `<sid>/replays/` that are actual replay runs —
 /// i.e. they carry `audit.json` (finished) or `events.jsonl`
 /// (in-flight / crashed before the audit write). Anything else —
@@ -190,9 +335,7 @@ pub fn run_dirs(replays_dir: &Path) -> Vec<PathBuf> {
         Ok(it) => it
             .flatten()
             .map(|e| e.path())
-            .filter(|p| {
-                p.is_dir() && (p.join("audit.json").is_file() || p.join("events.jsonl").is_file())
-            })
+            .filter(|p| p.is_dir() && (audit_file(p).is_file() || events_file(p).is_file()))
             .collect(),
         Err(_) => Vec::new(),
     };
@@ -203,7 +346,7 @@ pub fn run_dirs(replays_dir: &Path) -> Vec<PathBuf> {
 // ---------- perf ----------
 
 pub fn perf_dir(sid: &str) -> Result<PathBuf> {
-    Ok(scenario_dir(sid)?.join("perf"))
+    Ok(perf_subdir(&scenario_dir(sid)?))
 }
 
 // ---------- recorder workfiles ----------
@@ -281,6 +424,65 @@ fn safe_segment<'a>(value: &'a str, label: &str) -> Result<&'a str> {
 pub(crate) fn is_safe(s: &str) -> bool {
     s.chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+}
+
+#[cfg(test)]
+mod layout {
+    use std::path::Path;
+
+    use super::*;
+
+    #[test]
+    fn helpers_match_the_on_disk_segments() {
+        let sid = Path::new("sid");
+        let run = Path::new("run");
+        let cmp = Path::new("cmp");
+        assert_eq!(replays_dir(sid), sid.join("replays"));
+        assert_eq!(
+            latest_replay_file(sid),
+            sid.join("replays").join("latest.txt")
+        );
+        assert_eq!(
+            latest_pointer(&replays_dir(sid)),
+            replays_dir(sid).join("latest.txt")
+        );
+        assert_eq!(
+            recorded_dir(&replays_dir(sid)),
+            replays_dir(sid).join("recorded")
+        );
+        assert_eq!(recording_dir(sid), sid.join("recording"));
+        assert_eq!(
+            recording_failed_dir(sid),
+            sid.join("recording").join("failed")
+        );
+        assert_eq!(
+            recording_heal_jsonl(sid),
+            sid.join("recording").join("heal.jsonl")
+        );
+        assert_eq!(compare_dir(sid), sid.join("compare"));
+        assert_eq!(baselines_dir(sid), sid.join("baselines"));
+        assert_eq!(screenshots_dir(run), run.join(SCREENSHOTS));
+        assert_eq!(snapshots_dir(run), run.join(SNAPSHOTS));
+        assert_eq!(layouts_dir(run), run.join(LAYOUTS));
+        assert_eq!(layouts_diff_dir(run), run.join("layouts-diff"));
+        assert_eq!(shots_diff_dir(run), run.join("shots-diff"));
+        assert_eq!(domshot_diff_dir(run), run.join("domshot-diff"));
+        assert_eq!(diffs_dir(run), run.join("diffs"));
+        assert_eq!(heal_responses_dir(run), run.join("heal-responses"));
+        assert_eq!(perf_subdir(sid), sid.join("perf"));
+        assert_eq!(audit_file(run), run.join("audit.json"));
+        assert_eq!(events_file(run), run.join("events.jsonl"));
+        assert_eq!(heal_jsonl(run), run.join("heal.jsonl"));
+        assert_eq!(network_json(run), run.join("network.json"));
+        assert_eq!(network_har(run), run.join("network.har"));
+        assert_eq!(compare_report(cmp), cmp.join("compare.md"));
+        assert_eq!(status_file(run), run.join("status.json"));
+        assert_eq!(SCREENSHOTS, "screenshots");
+        assert_eq!(SNAPSHOTS, "snapshots");
+        assert_eq!(LAYOUTS, "layouts");
+        assert_eq!(PROBES, "probes");
+        assert_eq!(NETWORK, "network");
+    }
 }
 
 #[cfg(all(test, unix))]

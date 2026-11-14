@@ -95,12 +95,12 @@ fn list_files(dir: &Path, prefix: &str) -> Vec<String> {
 /// Assemble the triage payload from a run dir. All artifact reads are
 /// best-effort — a partial run still produces a triage-able payload.
 fn build_payload(sid: &str, run_id: &str, run_dir: &Path) -> Value {
-    let audit: Value = fs::read(run_dir.join("audit.json"))
+    let audit: Value = fs::read(crate::paths::audit_file(run_dir))
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or(Value::Null);
 
-    let failures: Vec<Value> = read_jsonl_tail(&run_dir.join("events.jsonl"))
+    let failures: Vec<Value> = read_jsonl_tail(&crate::paths::events_file(run_dir))
         .into_iter()
         .filter(|e| e.get("status").and_then(|s| s.as_str()) == Some("fail"))
         .map(|e| {
@@ -113,9 +113,12 @@ fn build_payload(sid: &str, run_id: &str, run_dir: &Path) -> Value {
         })
         .collect();
 
-    let mut diffs = list_files(&run_dir.join("shots-diff"), "shots-diff");
-    diffs.extend(list_files(&run_dir.join("domshot-diff"), "domshot-diff"));
-    diffs.extend(list_files(&run_dir.join("diffs"), "diffs"));
+    let mut diffs = list_files(&crate::paths::shots_diff_dir(run_dir), "shots-diff");
+    diffs.extend(list_files(
+        &crate::paths::domshot_diff_dir(run_dir),
+        "domshot-diff",
+    ));
+    diffs.extend(list_files(&crate::paths::diffs_dir(run_dir), "diffs"));
 
     json!({
         "scenarioId": sid,
@@ -125,7 +128,7 @@ fn build_payload(sid: &str, run_id: &str, run_dir: &Path) -> Value {
         "quarantined": audit.get("quarantined").and_then(|v| v.as_bool()).unwrap_or(false),
         "autoHealed": audit.get("autoHealed").cloned().unwrap_or(json!([])),
         "failures": failures,
-        "heals": read_jsonl_tail(&run_dir.join("heal.jsonl")),
+        "heals": read_jsonl_tail(&crate::paths::heal_jsonl(run_dir)),
         "diffs": diffs,
         "runDir": run_dir.display().to_string(),
     })
@@ -174,7 +177,7 @@ pub fn run(args: &[String]) -> Result<u8> {
     let run_ref = positionals.get(1).map(|s| s.as_str()).unwrap_or("latest");
     let dir = paths::scenario_dir(sid)?;
     let run_id = crate::audit::resolve_run_id(&dir, run_ref)?;
-    let run_dir = dir.join("replays").join(&run_id);
+    let run_dir = crate::paths::replays_dir(&(dir)).join(&run_id);
     if !run_dir.is_dir() {
         anyhow::bail!("triage: no replay {run_id:?} under {}", dir.display());
     }

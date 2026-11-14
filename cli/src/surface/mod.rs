@@ -593,14 +593,14 @@ fn check_shot(
         .and_then(|t| t.get("pixels"))
         .and_then(Json::as_f64)
         .unwrap_or(0.01);
-    let baseline = scenario_dir.join("baselines").join(format!("{shot}.png"));
+    let baseline = crate::paths::baselines_dir(scenario_dir).join(format!("{shot}.png"));
     if !baseline.is_file() {
         bail!(
             "no baseline for shot '{shot}' at {} — mint one with: agent-qa shot-accept <sid> --steps {shot}",
             baseline.display()
         );
     }
-    let current = run.run_root.join("screenshots").join(format!("{shot}.png"));
+    let current = crate::paths::screenshots_dir(&(run.run_root)).join(format!("{shot}.png"));
     if !current.is_file() {
         bail!("no screenshot for step '{shot}' in this run");
     }
@@ -617,7 +617,7 @@ fn check_shot(
     }
     let (frac, diff) = crate::compare::screenshots::pixel_diff(&a, &b);
     if frac > tol {
-        let dir = run.run_root.join("shots-diff");
+        let dir = crate::paths::shots_diff_dir(&(run.run_root));
         fs::create_dir_all(&dir)?;
         diff.save(dir.join(format!("{shot}.diff.png")))
             .context("write shot diff")?;
@@ -632,19 +632,14 @@ fn check_domshot(
     run: &RunPaths,
     scenario_dir: &Path,
 ) -> Result<()> {
-    let baseline = scenario_dir
-        .join("baselines")
-        .join(format!("{step_id}.snap.txt"));
+    let baseline = crate::paths::baselines_dir(scenario_dir).join(format!("{step_id}.snap.txt"));
     if !baseline.is_file() {
         bail!(
             "no baseline for domshot '{step_id}' at {} — mint one with: agent-qa domshot-accept <sid> --steps {step_id}",
             baseline.display()
         );
     }
-    let current = run
-        .run_root
-        .join("snapshots")
-        .join(format!("{step_id}.txt"));
+    let current = crate::paths::snapshots_dir(&(run.run_root)).join(format!("{step_id}.txt"));
     if !current.is_file() {
         bail!("no snapshot for step '{step_id}' in this run");
     }

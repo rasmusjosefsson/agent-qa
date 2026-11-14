@@ -64,8 +64,10 @@ pub(super) fn build(
     out_dir: &Path,
     threshold: f64,
 ) -> Result<ShotReport> {
-    let dir_a = scenario_dir.join("replays").join(run_a).join("screenshots");
-    let dir_b = scenario_dir.join("replays").join(run_b).join("screenshots");
+    let dir_a =
+        crate::paths::screenshots_dir(&(crate::paths::replays_dir(scenario_dir).join(run_a)));
+    let dir_b =
+        crate::paths::screenshots_dir(&(crate::paths::replays_dir(scenario_dir).join(run_b)));
 
     let mut ids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     if dir_a.is_dir() {
@@ -112,7 +114,7 @@ pub(super) fn build(
                 } else {
                     // Write the diff PNG.
                     let dod = diff_out_dir.get_or_insert_with(|| {
-                        let p = out_dir.join("screenshots");
+                        let p = crate::paths::screenshots_dir(out_dir);
                         let _ = fs::create_dir_all(&p);
                         p
                     });

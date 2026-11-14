@@ -224,13 +224,13 @@ fn build_view(scenario_dir: &Path, scenario_file: &Path) -> Result<ScenarioView>
 
 fn collect_replays(scenario_dir: &Path) -> Vec<ReplayView> {
     let mut out = Vec::new();
-    let replays_dir = scenario_dir.join("replays");
+    let replays_dir = crate::paths::replays_dir(scenario_dir);
     for run_dir in crate::paths::run_dirs(&replays_dir) {
         let run_id = run_dir
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let audit_path = run_dir.join("audit.json");
+        let audit_path = crate::paths::audit_file(&(run_dir));
         let audit: Option<Json> = fs::read(&audit_path)
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok());
