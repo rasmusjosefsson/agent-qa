@@ -1,0 +1,29 @@
+{
+  "sid": "fixture",
+  "replays": [
+    {
+      "runId": "2026-11-14T20-31-24-037Z__2e6c899e",
+      "startedAt": "2026-11-14T20:31:24.037Z",
+      "finishedAt": "2026-11-14T20:31:50.144Z",
+      "summary": "SUMMARY: 6/6 (PASS)",
+      "exitCode": 0,
+      "profile": null,
+      "tag": null,
+      "state": "done",
+      "ok": true,
+      "healed": 0
+    },
+    {
+      "runId": "2026-11-14T20-31-51-384Z__a521cd3f",
+      "startedAt": "2026-11-14T20:31:51.384Z",
+      "finishedAt": "2026-11-14T20:32:17.711Z",
+      "summary": "SUMMARY: 5/6 (FAIL)",
+      "exitCode": 1,
+      "profile": null,
+      "tag": null,
+      "state": "done",
+      "ok": false,
+      "healed": 0
+    }
+  ]
+}

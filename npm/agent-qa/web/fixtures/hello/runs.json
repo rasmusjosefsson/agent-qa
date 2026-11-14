@@ -1,0 +1,17 @@
+{
+  "sid": "hello",
+  "replays": [
+    {
+      "runId": "2026-11-14T20-30-48-979Z__46f9f336",
+      "startedAt": "2026-11-14T20:30:48.979Z",
+      "finishedAt": "2026-11-14T20:30:55.688Z",
+      "summary": "SUMMARY: 2/2 (PASS)",
+      "exitCode": 0,
+      "profile": null,
+      "tag": null,
+      "state": "done",
+      "ok": true,
+      "healed": 0
+    }
+  ]
+}

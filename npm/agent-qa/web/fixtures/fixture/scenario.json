@@ -1,0 +1,89 @@
+{
+  "schema": "scenario/2",
+  "id": "fixture",
+  "intent": "Save a name on the directory page and confirm the status",
+  "env": {
+    "open": [
+      {
+        "kind": "fresh"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "id": "s0",
+      "intent": "Use a compact viewport",
+      "kind": "do",
+      "verb": "viewport",
+      "params": {
+        "width": 960,
+        "height": 640
+      }
+    },
+    {
+      "id": "s1",
+      "intent": "Open the directory",
+      "kind": "do",
+      "verb": "goto",
+      "value": {
+        "from": "literal",
+        "literal": "http://127.0.0.1:8765/"
+      }
+    },
+    {
+      "id": "s2",
+      "intent": "Enter a name",
+      "kind": "do",
+      "verb": "type",
+      "on": {
+        "role": "textbox",
+        "name": "Name"
+      },
+      "value": {
+        "from": "literal",
+        "literal": "Ada"
+      }
+    },
+    {
+      "id": "s3",
+      "intent": "Save the name",
+      "kind": "do",
+      "verb": "click",
+      "on": {
+        "role": "button",
+        "name": "Save"
+      }
+    },
+    {
+      "id": "s4",
+      "intent": "Status says the name was saved",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "element": {
+            "raw": {
+              "kind": "text",
+              "value": "Saved Ada"
+            },
+            "reason": "status text"
+          }
+        },
+        "predicate": "isVisible"
+      }
+    },
+    {
+      "id": "s5",
+      "intent": "The directory screenshot matches the baseline",
+      "kind": "check",
+      "claim": {
+        "subject": {
+          "shot": "s1"
+        },
+        "predicate": "matches",
+        "tolerance": {
+          "pixels": 0.02
+        }
+      }
+    }
+  ]
+}
