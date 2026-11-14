@@ -242,10 +242,8 @@ pub(crate) fn reapply_if_any(session: &str) -> Result<()> {
 /// network); a URL requested several times replays the FIRST recorded
 /// response (the stub has no per-call sequence).
 pub(crate) fn seed_from_har(session: &str, scenario_dir: &Path, run_id: &str) -> Result<usize> {
-    let har_path = scenario_dir
-        .join("replays")
-        .join(run_id)
-        .join("network.har");
+    let har_path =
+        crate::paths::network_har(&(crate::paths::replays_dir(scenario_dir).join(run_id)));
     if har_is_stale(&har_path, &scenario_dir.join("scenario.json")) {
         eprintln!(
             "[v2-replay] --mock-from {run_id:?}: scenario.json is newer than the recording — re-record with `replay --har` if steps changed"

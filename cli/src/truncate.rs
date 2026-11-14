@@ -10,10 +10,10 @@ use crate::recorder_state::RecorderState;
 use crate::sidecar::atomic_write_file;
 
 const ARCHIVE_EXTENSIONS: &[(&str, &str)] = &[
-    ("snapshots", "txt"),
-    ("screenshots", "png"),
-    ("probes", "json"),
-    ("network", "json"),
+    (crate::paths::SNAPSHOTS, "txt"),
+    (crate::paths::SCREENSHOTS, "png"),
+    (crate::paths::PROBES, "json"),
+    (crate::paths::NETWORK, "json"),
 ];
 
 pub fn run(args: &[String]) -> Result<u8> {
@@ -124,14 +124,12 @@ fn truncate(opts: &Opts) -> Result<Summary> {
         .as_deref()
         .map(|tag| format!("-{tag}"))
         .unwrap_or_default();
-    let archive_dir = scenario_dir
-        .join("recording/failed")
+    let archive_dir = crate::paths::recording_failed_dir(&(scenario_dir))
         .join(format!("truncate-{timestamp}{suffix}"));
     let mut moved_files = Vec::new();
     for step_id in &dropped_step_ids {
         for (kind, ext) in ARCHIVE_EXTENSIONS {
-            let source = scenario_dir
-                .join("recording")
+            let source = crate::paths::recording_dir(&(scenario_dir))
                 .join(kind)
                 .join(format!("{step_id}.{ext}"));
             if source.is_file() {

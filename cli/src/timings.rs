@@ -498,7 +498,7 @@ fn collect_scenarios(root: &Path, steps: bool, step_floor_ms: u64) -> Vec<Observ
 /// so the last dir is the newest. A run that cannot be read is skipped so an
 /// older passing run still counts.
 fn latest_comparable_run(scenario_dir: &Path) -> Option<(u64, PathBuf)> {
-    let runs = crate::paths::run_dirs(&scenario_dir.join("replays"));
+    let runs = crate::paths::run_dirs(&crate::paths::replays_dir(scenario_dir));
     for run in runs.iter().rev() {
         if let Some(ms) = comparable_ms(run) {
             return Some((ms, run.clone()));
@@ -508,7 +508,7 @@ fn latest_comparable_run(scenario_dir: &Path) -> Option<(u64, PathBuf)> {
 }
 
 fn comparable_ms(run: &Path) -> Option<u64> {
-    let bytes = fs::read(run.join("audit.json")).ok()?;
+    let bytes = fs::read(crate::paths::audit_file(run)).ok()?;
     let v: Value = serde_json::from_slice(&bytes).ok()?;
     if v.get("quarantined").and_then(|x| x.as_bool()) == Some(true) {
         return None;
@@ -535,7 +535,7 @@ fn comparable_ms(run: &Path) -> Option<u64> {
 }
 
 fn step_observations(sid: &str, run: &Path, floor: u64) -> Vec<Observation> {
-    let Ok(body) = fs::read_to_string(run.join("events.jsonl")) else {
+    let Ok(body) = fs::read_to_string(crate::paths::events_file(run)) else {
         return Vec::new();
     };
     let mut terminal: BTreeMap<String, (bool, Option<u64>)> = BTreeMap::new();

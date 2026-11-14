@@ -62,7 +62,10 @@ pub(crate) fn write_network_log(run: &RunPaths, session: &str) -> Result<()> {
         request_count: requests.len(),
         requests,
     })? + "\n";
-    crate::sidecar::atomic_write_file(&run.run_root.join("network.json"), body.as_bytes())
+    crate::sidecar::atomic_write_file(
+        &crate::paths::network_json(&(run.run_root)),
+        body.as_bytes(),
+    )
 }
 
 /// Best-effort wrapper: warn and continue on failure.

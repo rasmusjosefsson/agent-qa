@@ -219,7 +219,7 @@ pub fn run(args: &[String]) -> Result<u8> {
     // the draft — a step that cannot replay is worse than no step.
     let mut minted = 0usize;
     if mint_baselines {
-        let baselines = dir.join("baselines");
+        let baselines = crate::paths::baselines_dir(&(dir));
         fs::create_dir_all(&baselines).ok();
         let mut failed: std::collections::BTreeSet<String> = Default::default();
         for (link, shot_id) in &shot_targets {

@@ -604,7 +604,7 @@ fn check_perf(
     if let Some(guard) = trace_guard {
         match guard.stop() {
             Ok(events) => {
-                let dir = ctx.run_dir.expect("checked above").join("perf");
+                let dir = crate::paths::perf_subdir(ctx.run_dir.expect("checked above"));
                 if let Err(e) = std::fs::create_dir_all(&dir).and_then(|_| {
                     std::fs::write(
                         dir.join(format!("{metric}.trace.json")),
@@ -1142,7 +1142,7 @@ fn check_timing(
     let run_dir = ctx
         .run_dir
         .ok_or_else(|| anyhow!("timing claims require a replay run directory"))?;
-    let body = std::fs::read_to_string(run_dir.join("events.jsonl")).unwrap_or_default();
+    let body = std::fs::read_to_string(crate::paths::events_file(run_dir)).unwrap_or_default();
     // Latest terminal row for the step wins — an earlier `running` row for
     // the same id carries no `ms`.
     let mut actual: Option<u64> = None;
@@ -1214,17 +1214,14 @@ fn check_shot(
     let run_dir = ctx
         .run_dir
         .ok_or_else(|| anyhow!("shot claim needs a replay run (not available via run-step)"))?;
-    let baseline = ctx
-        .scenario_dir
-        .join("baselines")
-        .join(format!("{shot}.png"));
+    let baseline = crate::paths::baselines_dir(ctx.scenario_dir).join(format!("{shot}.png"));
     if !baseline.is_file() {
         bail!(
             "no baseline for shot '{shot}' at {} — mint one with: agent-qa shot-accept <sid> --steps {shot}",
             baseline.display()
         );
     }
-    let current = run_dir.join("screenshots").join(format!("{shot}.png"));
+    let current = crate::paths::screenshots_dir(run_dir).join(format!("{shot}.png"));
     if !current.is_file() {
         bail!(
             "no screenshot for step '{shot}' in this run ({}) — check the step id and that sidecars are on",
@@ -1297,7 +1294,7 @@ fn check_shot(
         let a_pad = pad(&a);
         let b_pad = pad(&b);
         let (_, diff_img) = crate::compare::screenshots::pixel_diff_with(&a_pad, &b_pad, aa);
-        let diff_dir = run_dir.join("shots-diff");
+        let diff_dir = crate::paths::shots_diff_dir(run_dir);
         std::fs::create_dir_all(&diff_dir).ok();
         let diff_path = diff_dir.join(format!("{shot}.diff.png"));
         let _ = diff_img.save(&diff_path);
@@ -1312,7 +1309,7 @@ fn check_shot(
     if frac <= tol {
         return Ok(());
     }
-    let diff_dir = run_dir.join("shots-diff");
+    let diff_dir = crate::paths::shots_diff_dir(run_dir);
     std::fs::create_dir_all(&diff_dir).ok();
     let diff_path = diff_dir.join(format!("{shot}.diff.png"));
     let _ = diff_img.save(&diff_path);
@@ -1400,7 +1397,7 @@ fn check_shot(
 /// for the error line. Cheap (one small JSON per run dir that has one);
 /// skips runs that predate sidecars or never diffed this step.
 fn same_drift_seen_before(scenario_dir: &Path, run_dir: &Path, step: &str, fp: &str) -> String {
-    let runs_dir = scenario_dir.join("replays");
+    let runs_dir = crate::paths::replays_dir(scenario_dir);
     let Ok(entries) = std::fs::read_dir(&runs_dir) else {
         return String::new();
     };
@@ -1410,7 +1407,7 @@ fn same_drift_seen_before(scenario_dir: &Path, run_dir: &Path, step: &str, fp: &
         if d == run_dir {
             continue;
         }
-        let sidecar = d.join("shots-diff").join(format!("{step}.diff.json"));
+        let sidecar = crate::paths::shots_diff_dir(&(d)).join(format!("{step}.diff.json"));
         let Ok(body) = std::fs::read_to_string(&sidecar) else {
             continue;
         };
@@ -1580,17 +1577,15 @@ fn check_domshot(
     let run_dir = ctx
         .run_dir
         .ok_or_else(|| anyhow!("domshot claim needs a replay run (not available via run-step)"))?;
-    let baseline = ctx
-        .scenario_dir
-        .join("baselines")
-        .join(format!("{domshot}.snap.txt"));
+    let baseline =
+        crate::paths::baselines_dir(ctx.scenario_dir).join(format!("{domshot}.snap.txt"));
     if !baseline.is_file() {
         bail!(
             "no baseline for domshot '{domshot}' at {} — mint one with: agent-qa domshot-accept <sid> --steps {domshot}",
             baseline.display()
         );
     }
-    let current = run_dir.join("snapshots").join(format!("{domshot}.txt"));
+    let current = crate::paths::snapshots_dir(run_dir).join(format!("{domshot}.txt"));
     if !current.is_file() {
         bail!(
             "no snapshot for step '{domshot}' in this run ({}) — check the step id and that sidecars are on",
@@ -1648,17 +1643,15 @@ fn check_layout(
     let run_dir = ctx
         .run_dir
         .ok_or_else(|| anyhow!("layout claim needs a replay run (not available via run-step)"))?;
-    let baseline = ctx
-        .scenario_dir
-        .join("baselines")
-        .join(format!("{layout}.layout.json"));
+    let baseline =
+        crate::paths::baselines_dir(ctx.scenario_dir).join(format!("{layout}.layout.json"));
     if !baseline.is_file() {
         bail!(
             "no baseline for layout '{layout}' at {} — mint one with: agent-qa layout-accept <sid> --steps {layout}",
             baseline.display()
         );
     }
-    let current = run_dir.join("layouts").join(format!("{layout}.json"));
+    let current = crate::paths::layouts_dir(run_dir).join(format!("{layout}.json"));
     if !current.is_file() {
         bail!(
             "no layout capture for step '{layout}' in this run ({}) — check the step id and that sidecars are on",
@@ -1729,7 +1722,7 @@ fn check_layout(
     if moved.len() <= allow_moved && added.len() <= allow_added && removed.len() <= allow_removed {
         return Ok(());
     }
-    let diff_dir = run_dir.join("layouts-diff");
+    let diff_dir = crate::paths::layouts_diff_dir(run_dir);
     std::fs::create_dir_all(&diff_dir).ok();
     let diff_path = diff_dir.join(format!("{layout}.diff.json"));
     let _ = std::fs::write(

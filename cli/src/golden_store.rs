@@ -164,7 +164,7 @@ fn sha256(bytes: &[u8]) -> String {
 }
 
 fn baselines_dir(scenario_dir: &Path) -> PathBuf {
-    scenario_dir.join("baselines")
+    crate::paths::baselines_dir(scenario_dir)
 }
 
 fn read_manifest(bdir: &Path) -> Manifest {

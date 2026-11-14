@@ -164,7 +164,8 @@ fn respond(opts: &Opts) -> Result<Summary> {
     let run_id = match &opts.run_id {
         Some(r) => r.clone(),
         None => {
-            let latest = scenario_dir.join("replays").join("latest.txt");
+            let latest =
+                crate::paths::latest_pointer(&(crate::paths::replays_dir(&(scenario_dir))));
             fs::read_to_string(&latest)
                 .map(|s| s.trim().to_string())
                 .map_err(|_| anyhow!("--run not given and no {} pointer found", latest.display()))?
@@ -204,10 +205,9 @@ fn respond(opts: &Opts) -> Result<Summary> {
     };
 
     // Write the per-step heal-response file.
-    let dir = scenario_dir
-        .join("replays")
-        .join(&run_id)
-        .join("heal-responses");
+    let dir = crate::paths::heal_responses_dir(
+        &(crate::paths::replays_dir(&(scenario_dir)).join(&run_id)),
+    );
     fs::create_dir_all(&dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
     let response_file = dir.join(format!("{}.json", opts.step_id));
     let mut bytes = serde_json::to_string_pretty(&response)?.into_bytes();
@@ -215,9 +215,9 @@ fn respond(opts: &Opts) -> Result<Summary> {
     atomic_write_file(&response_file, &bytes)?;
 
     // Append an audit row to <sid>/recording/heal.jsonl.
-    let recording = scenario_dir.join("recording");
+    let recording = crate::paths::recording_dir(&(scenario_dir));
     fs::create_dir_all(&recording).ok();
-    let audit_path = recording.join("heal.jsonl");
+    let audit_path = crate::paths::heal_jsonl(&(recording));
     let row = serde_json::json!({
         "schema": "heal-row/v1",
         "ts": now,

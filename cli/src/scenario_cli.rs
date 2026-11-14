@@ -1438,16 +1438,16 @@ fn extract(
             scenario_file.display()
         );
     }
-    let replays = from_dir.join("replays");
+    let replays = crate::paths::replays_dir(&(from_dir));
     let run_id = match run {
         Some(r) if r != "latest" => r.to_string(),
-        _ => fs::read_to_string(replays.join("latest.txt"))
+        _ => fs::read_to_string(crate::paths::latest_pointer(&(replays)))
             .map(|s| s.trim().to_string())
             .ok()
             .filter(|s| !s.is_empty())
             .ok_or_else(|| anyhow!("scenario extract: no runs for {sid:?} — replay it first"))?,
     };
-    let events_path = replays.join(&run_id).join("events.jsonl");
+    let events_path = crate::paths::events_file(&(replays.join(&run_id)));
     if !events_path.is_file() {
         bail!(
             "scenario extract: no events.jsonl for run {run_id:?} at {}",
@@ -1773,10 +1773,10 @@ fn active_runs(sid: &str) -> Vec<PathBuf> {
     let Ok(dir) = crate::paths::scenario_dir(sid) else {
         return Vec::new();
     };
-    crate::paths::run_dirs(&dir.join("replays"))
+    crate::paths::run_dirs(&crate::paths::replays_dir(&(dir)))
         .into_iter()
         .filter(|run_dir| {
-            let unfinished = std::fs::read(run_dir.join("audit.json"))
+            let unfinished = std::fs::read(crate::paths::audit_file(run_dir))
                 .ok()
                 .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
                 .map(|v| v.get("finishedAt").map(|f| f.is_null()).unwrap_or(true))
@@ -1864,7 +1864,7 @@ fn delete(sid: &str, confirmed: bool) -> Result<u8> {
         );
     }
     refuse_if_in_flight("delete", sid)?;
-    let replays = crate::paths::run_dirs(&dir.join("replays")).len();
+    let replays = crate::paths::run_dirs(&crate::paths::replays_dir(&(dir))).len();
     if !confirmed {
         println!(
             "would delete: {}\n  ({} replay(s) under replays/)\nre-run with --yes / -y to confirm.",
@@ -1915,7 +1915,7 @@ fn prune_all(
         // it would re-resolve <sid> via paths::scenario_dir (cheap, but
         // also prints its own per-sid header line which would be very
         // noisy across N scenarios).
-        let replays_dir = dir.join("replays");
+        let replays_dir = crate::paths::replays_dir(&(dir));
         let mut runs = crate::paths::run_dirs(&replays_dir);
         // Never prune a run that is still writing — its audit has no
         // finishedAt yet (a crashed run's debris looks the same; leaving
@@ -1929,7 +1929,7 @@ fn prune_all(
         let mut victims: Vec<std::path::PathBuf> = runs[..candidate_drop].to_vec();
         if keep_failed {
             victims.retain(|v| {
-                let bytes = match std::fs::read(v.join("audit.json")) {
+                let bytes = match std::fs::read(crate::paths::audit_file(v)) {
                     Ok(b) => b,
                     Err(_) => return true,
                 };
@@ -1985,7 +1985,7 @@ fn prune_replays(sid: &str, keep: usize, confirmed: bool, keep_failed: bool) -> 
     if !dir.is_dir() {
         bail!("scenario prune-replays: not found at {}", dir.display());
     }
-    let replays_dir = dir.join("replays");
+    let replays_dir = crate::paths::replays_dir(&(dir));
     // Runs still writing (unfinished audit) are not prunable — the
     // newest live run can be older than a finished newer one and
     // dropping it pulls the ground out from under its artifact writes.
@@ -1995,7 +1995,7 @@ fn prune_replays(sid: &str, keep: usize, confirmed: bool, keep_failed: bool) -> 
         .filter(|d| !live.contains(d))
         .collect::<Vec<_>>();
     let is_failed = |run_dir: &std::path::Path| -> bool {
-        let audit_path = run_dir.join("audit.json");
+        let audit_path = crate::paths::audit_file(run_dir);
         let bytes = match std::fs::read(&audit_path) {
             Ok(b) => b,
             Err(_) => return false,
@@ -2466,7 +2466,7 @@ fn lint_findings(path: &Path) -> Result<(Vec<Finding>, Scenario)> {
     if path.file_name().is_some_and(|n| n == "scenario.json") {
         let baselines = path
             .parent()
-            .map(|d| d.join("baselines"))
+            .map(crate::paths::baselines_dir)
             .unwrap_or_default();
         for step in &j.steps {
             if let Step::Check { id, claim, .. } = step {
@@ -2918,7 +2918,7 @@ fn lint_findings(path: &Path) -> Result<(Vec<Finding>, Scenario)> {
             if let Some(steps) = raw.get("steps") {
                 collect_shots(steps, &mut shot_ids, &mut domshot_ids);
             }
-            let baselines = scenario_dir.join("baselines");
+            let baselines = crate::paths::baselines_dir(scenario_dir);
             for sid in &shot_ids {
                 if !baselines.join(format!("{sid}.png")).is_file() {
                     findings.push(Finding {

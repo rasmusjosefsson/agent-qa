@@ -64,17 +64,18 @@ pub fn run(args: &[String]) -> Result<u8> {
             let step = args.get(3).context("missing stepId")?;
             let scenario_dir = crate::paths::scenario_dir(sid)?;
             let (run_dir, resolved_id) = crate::audit::resolve_run_id(&scenario_dir, run_id)
-                .map(|id| (scenario_dir.join("replays").join(&id), id))
+                .map(|id| (crate::paths::replays_dir(&(scenario_dir)).join(&id), id))
                 .or_else(|_| {
                     // runId may already be a dir name under replays/
-                    let d = scenario_dir.join("replays").join(run_id);
+                    let d = crate::paths::replays_dir(&(scenario_dir)).join(run_id);
                     if d.is_dir() {
                         Ok((d, run_id.clone()))
                     } else {
                         Err(anyhow::anyhow!("run {run_id:?} not found"))
                     }
                 })?;
-            let diff_path = run_dir.join("shots-diff").join(format!("{step}.diff.png"));
+            let diff_path =
+                crate::paths::shots_diff_dir(&(run_dir)).join(format!("{step}.diff.png"));
             if !diff_path.is_file() {
                 anyhow::bail!(
                     "no diff for step {step:?} in run {run_id:?} ({})",

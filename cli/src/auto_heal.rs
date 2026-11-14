@@ -256,7 +256,7 @@ pub fn persist_correction(
     step_id: &str,
     heal: &Heal,
 ) -> Result<()> {
-    let diffs = run.run_root.join("diffs");
+    let diffs = crate::paths::diffs_dir(&(run.run_root));
     fs::create_dir_all(&diffs).with_context(|| format!("mkdir {}", diffs.display()))?;
     let file = diffs.join(format!("{step_id}.patch.json"));
     let body = json!({
@@ -503,7 +503,7 @@ pub fn ladder(want: &str, candidates: &[String]) -> Option<(&'static str, String
 /// audit trail the sidecar spec reserves for replay-time heal events.
 fn append_row(run_dir: &Path, row: &serde_json::Value) -> Result<()> {
     fs::create_dir_all(run_dir).ok();
-    let path = run_dir.join("heal.jsonl");
+    let path = crate::paths::heal_jsonl(run_dir);
     let mut f = fs::OpenOptions::new()
         .create(true)
         .append(true)

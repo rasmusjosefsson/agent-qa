@@ -160,10 +160,10 @@ fn ingest_bundle(bundle: &Json, sid: Option<String>, source_ref: &str) -> Result
     let step_count = scenario.steps.len();
     let mut requests = 0usize;
     if let Some(network) = bundle["network"].as_array().filter(|n| !n.is_empty()) {
-        let har_dir = dir.join("replays").join("recorded");
+        let har_dir = crate::paths::recorded_dir(&(crate::paths::replays_dir(&(dir))));
         fs::create_dir_all(&har_dir)
             .with_context(|| format!("ingest: create {}", har_dir.display()))?;
-        let har_path = har_dir.join("network.har");
+        let har_path = crate::paths::network_har(&(har_dir));
         atomic_write_file(
             &har_path,
             (serde_json::to_string_pretty(&build_har(network, url.as_deref()))? + "\n").as_bytes(),

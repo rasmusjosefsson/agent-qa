@@ -40,7 +40,7 @@ struct Case {
 /// window) — emitted as `<skipped/>` cases so CI sees the whole scenario.
 /// Returns (tests, failures).
 pub fn write(run_dir: &Path, sid: &str, dest: &Path, skipped: &[String]) -> Result<(usize, usize)> {
-    let body = fs::read_to_string(run_dir.join("events.jsonl")).unwrap_or_default();
+    let body = fs::read_to_string(crate::paths::events_file(run_dir)).unwrap_or_default();
     // Last terminal row per step id, in first-seen order.
     let mut order: Vec<String> = Vec::new();
     let mut cases: std::collections::BTreeMap<String, Case> = std::collections::BTreeMap::new();

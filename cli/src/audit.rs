@@ -319,7 +319,7 @@ fn show(positionals: &[String], json_out: bool, github_format: bool) -> Result<u
     let run_ref = positionals.get(2).map(|s| s.as_str()).unwrap_or("latest");
     let dir = paths::scenario_dir(sid)?;
     let run_id = resolve_run_id(&dir, run_ref)?;
-    let audit_path = dir.join("replays").join(&run_id).join("audit.json");
+    let audit_path = crate::paths::audit_file(&(crate::paths::replays_dir(&(dir)).join(&run_id)));
     if !audit_path.is_file() {
         bail!("audit show: no audit.json at {}", audit_path.display());
     }
@@ -356,7 +356,7 @@ fn list(
         .get(1)
         .ok_or_else(|| anyhow!("usage: audit list <sid>"))?;
     let dir = paths::scenario_dir(sid)?;
-    let replays_dir = dir.join("replays");
+    let replays_dir = crate::paths::replays_dir(&(dir));
     let runs = crate::paths::run_dirs(&replays_dir);
 
     #[derive(serde::Serialize)]
@@ -372,7 +372,7 @@ fn list(
     }
     let mut rows: Vec<Row> = Vec::with_capacity(runs.len());
     for run in &runs {
-        let audit_path = run.join("audit.json");
+        let audit_path = crate::paths::audit_file(run);
         let audit: Option<Value> = fs::read(&audit_path)
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok());
@@ -571,7 +571,7 @@ fn stats(
         .get(1)
         .ok_or_else(|| anyhow!("usage: audit stats <sid>"))?;
     let dir = paths::scenario_dir(sid)?;
-    let replays_dir = dir.join("replays");
+    let replays_dir = crate::paths::replays_dir(&(dir));
     let runs = crate::paths::run_dirs(&replays_dir);
 
     let mut total = 0u32;
@@ -593,7 +593,7 @@ fn stats(
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let audit: Option<Value> = fs::read(run.join("audit.json"))
+        let audit: Option<Value> = fs::read(crate::paths::audit_file(run))
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok());
         // Date range filter: skip runs whose startedAt is outside
@@ -744,7 +744,7 @@ fn duration(positionals: &[String]) -> Result<u8> {
     let run_ref = positionals.get(2).map(|s| s.as_str()).unwrap_or("latest");
     let dir = paths::scenario_dir(sid)?;
     let run_id = resolve_run_id(&dir, run_ref)?;
-    let audit_path = dir.join("replays").join(&run_id).join("audit.json");
+    let audit_path = crate::paths::audit_file(&(crate::paths::replays_dir(&(dir)).join(&run_id)));
     if !audit_path.is_file() {
         bail!("audit duration: no audit.json at {}", audit_path.display());
     }
@@ -781,7 +781,7 @@ fn count(positionals: &[String]) -> Result<u8> {
         .get(1)
         .ok_or_else(|| anyhow!("usage: audit count <sid>"))?;
     let dir = paths::scenario_dir(sid)?;
-    let replays_dir = dir.join("replays");
+    let replays_dir = crate::paths::replays_dir(&(dir));
     let n = crate::paths::run_dirs(&replays_dir).len();
     println!("{n}");
     Ok(0)
@@ -799,7 +799,7 @@ fn field(positionals: &[String]) -> Result<u8> {
         .ok_or_else(|| anyhow!("usage: audit field <sid> <runId | latest> <fieldName>"))?;
     let dir = paths::scenario_dir(sid)?;
     let run_id = resolve_run_id(&dir, run_ref)?;
-    let audit_path = dir.join("replays").join(&run_id).join("audit.json");
+    let audit_path = crate::paths::audit_file(&(crate::paths::replays_dir(&(dir)).join(&run_id)));
     if !audit_path.is_file() {
         bail!("audit field: no audit.json at {}", audit_path.display());
     }
@@ -830,7 +830,7 @@ fn exit_code(positionals: &[String]) -> Result<u8> {
     let run_ref = positionals.get(2).map(|s| s.as_str()).unwrap_or("latest");
     let dir = paths::scenario_dir(sid)?;
     let run_id = resolve_run_id(&dir, run_ref)?;
-    let audit_path = dir.join("replays").join(&run_id).join("audit.json");
+    let audit_path = crate::paths::audit_file(&(crate::paths::replays_dir(&(dir)).join(&run_id)));
     if !audit_path.is_file() {
         bail!("audit exit-code: no audit.json at {}", audit_path.display());
     }
@@ -860,8 +860,8 @@ fn verdict(positionals: &[String], json_out: bool) -> Result<u8> {
     let run_ref = positionals.get(2).map(|s| s.as_str()).unwrap_or("latest");
     let dir = paths::scenario_dir(sid)?;
     let run_id = resolve_run_id(&dir, run_ref)?;
-    let run_dir = dir.join("replays").join(&run_id);
-    let audit_path = run_dir.join("audit.json");
+    let run_dir = crate::paths::replays_dir(&(dir)).join(&run_id);
+    let audit_path = crate::paths::audit_file(&(run_dir));
     if !audit_path.is_file() {
         bail!("audit verdict: no audit.json at {}", audit_path.display());
     }
@@ -900,7 +900,7 @@ fn verdict(positionals: &[String], json_out: bool) -> Result<u8> {
 type VerdictInfo = (&'static str, u8, Vec<String>, Vec<String>, String, i64);
 
 fn verdict_for(run_dir: &std::path::Path) -> Result<VerdictInfo> {
-    let bytes = fs::read(run_dir.join("audit.json"))?;
+    let bytes = fs::read(crate::paths::audit_file(run_dir))?;
     let audit: Value = serde_json::from_slice(&bytes)?;
     let exit = audit.get("exitCode").and_then(|v| v.as_i64()).unwrap_or(-1);
     let summary_line = audit
@@ -922,7 +922,7 @@ fn verdict_for(run_dir: &std::path::Path) -> Result<VerdictInfo> {
     // heal.jsonl rows carry the evidence classes that don't surface in
     // audit.autoHealed (value rejections land there, not as locator heals).
     let mut rejection_steps: Vec<String> = Vec::new();
-    let heal_path = run_dir.join("heal.jsonl");
+    let heal_path = crate::paths::heal_jsonl(run_dir);
     if let Ok(body) = fs::read_to_string(&heal_path) {
         for line in body.lines() {
             let Ok(row) = serde_json::from_str::<Value>(line) else {
@@ -991,7 +991,7 @@ fn verdict_all(json_out: bool) -> Result<u8> {
                 continue;
             }
         };
-        let run_dir = dir.join("replays").join(&run_id);
+        let run_dir = crate::paths::replays_dir(&(dir)).join(&run_id);
         match verdict_for(&run_dir) {
             Ok((name, _, healed, rejected, _summary, _exit)) => {
                 if name == "BLOCK" {
@@ -1060,7 +1060,7 @@ fn summary(positionals: &[String]) -> Result<u8> {
     let run_ref = positionals.get(2).map(|s| s.as_str()).unwrap_or("latest");
     let dir = paths::scenario_dir(sid)?;
     let run_id = resolve_run_id(&dir, run_ref)?;
-    let audit_path = dir.join("replays").join(&run_id).join("audit.json");
+    let audit_path = crate::paths::audit_file(&(crate::paths::replays_dir(&(dir)).join(&run_id)));
     if !audit_path.is_file() {
         bail!("audit summary: no audit.json at {}", audit_path.display());
     }
@@ -1087,12 +1087,12 @@ fn explain(positionals: &[String], json_out: bool) -> Result<u8> {
     let run_ref = positionals.get(2).map(|s| s.as_str()).unwrap_or("latest");
     let dir = paths::scenario_dir(sid)?;
     let run_id = resolve_run_id(&dir, run_ref)?;
-    let run_dir = dir.join("replays").join(&run_id);
+    let run_dir = crate::paths::replays_dir(&(dir)).join(&run_id);
 
     let (verdict, code, healed_steps, rejected_steps, summary_line, exit) = verdict_for(&run_dir)?;
 
     let mut failed: Vec<Value> = Vec::new();
-    if let Ok(body) = fs::read_to_string(run_dir.join("events.jsonl")) {
+    if let Ok(body) = fs::read_to_string(crate::paths::events_file(&(run_dir))) {
         for line in body.lines() {
             let Ok(row) = serde_json::from_str::<Value>(line) else {
                 continue;
@@ -1120,7 +1120,7 @@ fn explain(positionals: &[String], json_out: bool) -> Result<u8> {
     }
 
     let mut heals: Vec<Value> = Vec::new();
-    if let Ok(body) = fs::read_to_string(run_dir.join("heal.jsonl")) {
+    if let Ok(body) = fs::read_to_string(crate::paths::heal_jsonl(&(run_dir))) {
         for line in body.lines() {
             let Ok(row) = serde_json::from_str::<Value>(line) else {
                 continue;
@@ -1147,7 +1147,7 @@ fn explain(positionals: &[String], json_out: bool) -> Result<u8> {
     }
 
     let mut network_failures: Vec<Value> = Vec::new();
-    if let Ok(bytes) = fs::read(run_dir.join("network.json")) {
+    if let Ok(bytes) = fs::read(crate::paths::network_json(&(run_dir))) {
         if let Ok(n) = serde_json::from_slice::<Value>(&bytes) {
             if let Some(reqs) = n.get("requests").and_then(|r| r.as_array()) {
                 for r in reqs.iter() {
@@ -1170,7 +1170,7 @@ fn explain(positionals: &[String], json_out: bool) -> Result<u8> {
         }
     }
 
-    let has_shot_diff = run_dir.join("shots-diff").is_dir()
+    let has_shot_diff = crate::paths::shots_diff_dir(&(run_dir)).is_dir()
         || failed.iter().any(|f| {
             f.get("error")
                 .and_then(|e| e.as_str())
@@ -1283,8 +1283,8 @@ fn diff(positionals: &[String]) -> Result<u8> {
     let dir = paths::scenario_dir(sid)?;
     let a_id = resolve_run_id(&dir, a_ref)?;
     let b_id = resolve_run_id(&dir, b_ref)?;
-    let a_path = dir.join("replays").join(&a_id).join("audit.json");
-    let b_path = dir.join("replays").join(&b_id).join("audit.json");
+    let a_path = crate::paths::audit_file(&(crate::paths::replays_dir(&(dir)).join(&a_id)));
+    let b_path = crate::paths::audit_file(&(crate::paths::replays_dir(&(dir)).join(&b_id)));
     if !a_path.is_file() {
         bail!("audit diff: no audit.json at {}", a_path.display());
     }
@@ -1349,7 +1349,7 @@ fn stats_all(json_out: bool, since_ms: Option<u64>, until_ms: Option<u64>) -> Re
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let replays_dir = jdir.join("replays");
+        let replays_dir = crate::paths::replays_dir(jdir);
         let runs = crate::paths::run_dirs(&replays_dir);
         let (mut total, mut passes, mut failures, mut unknown) = (0u32, 0u32, 0u32, 0u32);
         let mut last_pass: Option<String> = None;
@@ -1363,7 +1363,7 @@ fn stats_all(json_out: bool, since_ms: Option<u64>, until_ms: Option<u64>) -> Re
                 .file_name()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let audit: Option<Value> = fs::read(run.join("audit.json"))
+            let audit: Option<Value> = fs::read(crate::paths::audit_file(run))
                 .ok()
                 .and_then(|b| serde_json::from_slice(&b).ok());
             if since_ms.is_some() || until_ms.is_some() {
@@ -1542,7 +1542,7 @@ struct FlakyStep {
 }
 
 fn collect_flaky(dir: &std::path::Path, min_flips: usize, min_runs: usize) -> Vec<FlakyStep> {
-    let replays_dir = dir.join("replays");
+    let replays_dir = crate::paths::replays_dir(dir);
     let runs = crate::paths::run_dirs(&replays_dir);
 
     // Per step: ordered outcome observations + which runs failed + heal rows.
@@ -1568,7 +1568,7 @@ fn collect_flaky(dir: &std::path::Path, min_flips: usize, min_runs: usize) -> Ve
             String,
             (char, Option<String>, Option<String>),
         > = Default::default();
-        if let Ok(body) = fs::read_to_string(run.join("events.jsonl")) {
+        if let Ok(body) = fs::read_to_string(crate::paths::events_file(run)) {
             for line in body.lines() {
                 let v: Value = match serde_json::from_str(line.trim()) {
                     Ok(v) => v,
@@ -1594,7 +1594,7 @@ fn collect_flaky(dir: &std::path::Path, min_flips: usize, min_runs: usize) -> Ve
             }
         }
         let mut heal_steps: std::collections::BTreeSet<String> = Default::default();
-        if let Ok(body) = fs::read_to_string(run.join("heal.jsonl")) {
+        if let Ok(body) = fs::read_to_string(crate::paths::heal_jsonl(run)) {
             for line in body.lines() {
                 if let Ok(v) = serde_json::from_str::<Value>(line.trim()) {
                     if let Some(id) = v.get("stepId").and_then(|s| s.as_str()) {
@@ -1690,7 +1690,7 @@ fn collect_slow(
     recent_n: usize,
     min_runs: usize,
 ) -> Vec<SlowStep> {
-    let replays_dir = dir.join("replays");
+    let replays_dir = crate::paths::replays_dir(dir);
     let runs = crate::paths::run_dirs(&replays_dir);
 
     // Per step: chronological pass-ms observations + a fail count for context.
@@ -1704,7 +1704,7 @@ fn collect_slow(
     for run in &runs {
         let mut terminal: std::collections::BTreeMap<String, (bool, Option<u64>)> =
             Default::default();
-        if let Ok(body) = fs::read_to_string(run.join("events.jsonl")) {
+        if let Ok(body) = fs::read_to_string(crate::paths::events_file(run)) {
             for line in body.lines() {
                 let v: Value = match serde_json::from_str(line.trim()) {
                     Ok(v) => v,
@@ -1847,7 +1847,7 @@ fn collect_health(root: &std::path::Path) -> Vec<HealthRow> {
             .filter(|p| p.is_dir())
             .filter_map(|p| {
                 let sid = p.file_name()?.to_string_lossy().into_owned();
-                p.join("replays").is_dir().then_some((sid, p))
+                crate::paths::replays_dir(&(p)).is_dir().then_some((sid, p))
             })
             .collect(),
         Err(_) => Vec::new(),
@@ -1935,7 +1935,7 @@ fn sparkline(values: &[Option<f64>]) -> String {
 }
 
 fn collect_trend(dir: &std::path::Path, sid: &str, limit: Option<usize>) -> TrendOut {
-    let replays_dir = dir.join("replays");
+    let replays_dir = crate::paths::replays_dir(dir);
     let mut runs = crate::paths::run_dirs(&replays_dir);
     if let Some(n) = limit {
         runs.drain(..runs.len().saturating_sub(n));
@@ -1943,7 +1943,7 @@ fn collect_trend(dir: &std::path::Path, sid: &str, limit: Option<usize>) -> Tren
 
     let mut trend_runs: Vec<TrendRun> = Vec::with_capacity(runs.len());
     for run in &runs {
-        let audit: Option<Value> = fs::read(run.join("audit.json"))
+        let audit: Option<Value> = fs::read(crate::paths::audit_file(run))
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok());
         let duration_secs = match (
@@ -2011,7 +2011,7 @@ fn collect_trend_all(root: &std::path::Path, limit: Option<usize>) -> Vec<TrendO
             .filter(|p| p.is_dir())
             .filter_map(|p| {
                 let sid = p.file_name()?.to_string_lossy().into_owned();
-                p.join("replays").is_dir().then_some((sid, p))
+                crate::paths::replays_dir(&(p)).is_dir().then_some((sid, p))
             })
             .collect(),
         Err(_) => Vec::new(),
@@ -2196,13 +2196,13 @@ fn collect_clusters(root: &std::path::Path, min_size: usize) -> Vec<Cluster> {
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let replays = sid_dir.join("replays");
+        let replays = crate::paths::replays_dir(&(sid_dir));
         for run_dir in crate::paths::run_dirs(&replays) {
             let run_id = run_dir
                 .file_name()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let Ok(body) = fs::read_to_string(run_dir.join("events.jsonl")) else {
+            let Ok(body) = fs::read_to_string(crate::paths::events_file(&(run_dir))) else {
                 continue;
             };
             for line in body.lines() {
@@ -2327,7 +2327,7 @@ pub(crate) fn resolve_run_id(scenario_dir: &std::path::Path, run_ref: &str) -> R
         return Ok(run_ref.to_string());
     }
     // 1) Prefer replays/latest.txt (written by the runner on each finish).
-    let latest_txt = scenario_dir.join("replays").join("latest.txt");
+    let latest_txt = crate::paths::latest_pointer(&(crate::paths::replays_dir(scenario_dir)));
     if let Ok(body) = fs::read_to_string(&latest_txt) {
         let trimmed = body.trim();
         if !trimmed.is_empty() {
@@ -2335,7 +2335,7 @@ pub(crate) fn resolve_run_id(scenario_dir: &std::path::Path, run_ref: &str) -> R
         }
     }
     // 2) Fall back to the highest lex-sorted run dir.
-    let last = crate::paths::run_dirs(&scenario_dir.join("replays"))
+    let last = crate::paths::run_dirs(&crate::paths::replays_dir(scenario_dir))
         .pop()
         .ok_or_else(|| anyhow!("audit show: no replays under {}", scenario_dir.display()))?;
     Ok(last
