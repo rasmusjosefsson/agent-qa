@@ -1,15 +1,19 @@
 // web/src/features/runs/components/ReplayLive.tsx
 import { useEffect, useRef, useState } from 'react'
+import { replayStreamUrl } from '@/lib/runs-api'
 
 // Read-only CDP screencast of an in-flight replay's browser. Owns its own
 // EventSource keyed by sid (frames arrive as `message` events carrying
 // { data: <base64 jpeg> } — same shape as the editor/chat live panes).
+// Fixture mode has no live browser, so the source returns no stream URL.
 export function ReplayLive({ sid, onLightbox }: { sid: string; onLightbox: (url: string, caption: string) => void }) {
   const imgRef = useRef<HTMLImageElement | null>(null)
   const [src, setSrc] = useState('')
+  const streamUrl = replayStreamUrl(sid)
 
   useEffect(() => {
-    const es = new EventSource(`/api/scenarios/${encodeURIComponent(sid)}/replay-stream`)
+    if (!streamUrl) return
+    const es = new EventSource(streamUrl)
     es.onmessage = (ev) => {
       try {
         const f = JSON.parse(ev.data)
@@ -19,7 +23,7 @@ export function ReplayLive({ sid, onLightbox }: { sid: string; onLightbox: (url:
       }
     }
     return () => es.close()
-  }, [sid])
+  }, [streamUrl])
 
   return (
     <section className="flex h-full min-h-0 flex-col overflow-hidden bg-card">
