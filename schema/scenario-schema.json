@@ -501,7 +501,7 @@
           "properties": {
             "perf": {
               "oneOf": [
-                { "type": "string", "enum": ["fcp", "lcp", "cls", "tbt", "ttfb", "load"] },
+                { "type": "string", "enum": ["fcp", "lcp", "cls", "tbt", "ttfb", "load", "inp"] },
                 {
                   "type": "object",
                   "required": ["metric"],
@@ -509,7 +509,7 @@
                   "properties": {
                     "metric": {
                       "type": "string",
-                      "enum": ["fcp", "lcp", "cls", "tbt", "ttfb", "load"]
+                      "enum": ["fcp", "lcp", "cls", "tbt", "ttfb", "load", "inp"]
                     },
                     "maxDwellMs": { "type": "integer", "minimum": 0 },
                     "trace": { "type": "boolean" }
@@ -518,7 +518,7 @@
               ]
             }
           },
-          "$comment": "perf claim subject — read a Web Performance metric (Performance API + buffered observers). exists/notExists test presence (lcp with no paint is absent; cls/tbt report 0); numeric predicates compare the value (ms; cls is the unitless score). maxDwellMs bounds how long observer-buffered metrics wait for entries (default 1500). trace: true records a Chrome DevTools trace for the claim window to <run>/perf/<checkStepId>.trace.json — RCA material for a budget miss."
+          "$comment": "perf claim subject — read a Web Performance metric (Performance API + buffered observers). exists/notExists test presence (lcp with no paint is absent; inp with no interaction is absent; cls/tbt report 0); numeric predicates compare the value (ms; cls is the unitless score). inp is Interaction to Next Paint: Event Timing entries grouped by interactionId, longest duration under 50 interactions, otherwise the web-vitals high percentile. An unknown metric fails schema validation (scenario check) and the runtime metric list. maxDwellMs bounds how long observer-buffered metrics wait for entries (default 1500). trace: true records a Chrome DevTools trace for the claim window to <run>/perf/<checkStepId>.trace.json — RCA material for a budget miss."
         }
       ]
     },

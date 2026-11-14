@@ -48,9 +48,11 @@ inputs:
   comment:
     description: >-
       Post/update a sticky <!-- agent-qa --> verdict comment on the
-      triggering pull_request (per-scenario verdict + duration, plus the
-      timing table when `timings` is not off). Needs the calling job to
-      grant `pull-requests: write`. No-op outside PRs.
+      triggering pull_request (per-scenario verdict, duration, and flake
+      score, plus the timing table when `timings` is not off). The flake
+      column is the score from `audit stats` (0–100, or - below two
+      scored runs). Quarantine stays an authored scenario field. Needs
+      the calling job to grant `pull-requests: write`. No-op outside PRs.
     default: "true"
   timings:
     description: >-
@@ -217,8 +219,8 @@ runs:
           echo '<!-- agent-qa -->'
           echo '### agent-qa verdict'
           echo
-          echo '| scenario | verdict | duration |'
-          echo '| --- | --- | --- |'
+          echo '| scenario | verdict | duration | flake |'
+          echo '| --- | --- | --- | --- |'
           for sid_dir in "$AGENT_QA_SCENARIOS_DIR"/*/; do
             sid="$(basename "$sid_dir")"
             case "$sid" in
@@ -226,7 +228,13 @@ runs:
             esac
             v="$("$BIN" audit verdict "$sid" latest 2>/dev/null | tail -1 | awk '{print $1}' || true)"
             d="$("$BIN" audit duration "$sid" latest 2>/dev/null | tail -1 | awk '{print $1}' || true)"
-            echo "| $sid | ${v:-no run} | ${d:--} |"
+            # Same line `audit stats` prints. `-` until two scored runs exist.
+            raw="$("$BIN" audit stats "$sid" 2>/dev/null | sed -n 's/^  flake score   : //p' | head -n 1 || true)"
+            case "${raw:-}" in
+              ""|n/a*) flake="-" ;;
+              *) flake="${raw%%/*}" ;;
+            esac
+            echo "| $sid | ${v:-no run} | ${d:--} | ${flake} |"
           done
           echo
           echo "Evidence: artifact \`${{ inputs.artifact-name }}\` (replays + report.html per scenario)."

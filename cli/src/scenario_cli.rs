@@ -227,11 +227,17 @@ pub fn run(args: &[String]) -> Result<u8> {
             field(&scenario_file_arg(file), name)
         }
         Some("coverage") => {
-            let file = args
-                .get(1)
-                .ok_or_else(|| anyhow!("usage: scenario coverage <file|sid> [--json]"))?;
-            let json_out = args.iter().any(|a| a == "--json");
-            coverage(&scenario_file_arg(file), json_out)
+            if args.iter().any(|a| a == "--routes") {
+                coverage_routes_cli(&args[1..])
+            } else {
+                let file = args.get(1).ok_or_else(|| {
+                    anyhow!(
+                        "usage: scenario coverage <file|sid> [--json] | scenario coverage --routes [--from <path>] [--root <dir>] [--json]"
+                    )
+                })?;
+                let json_out = args.iter().any(|a| a == "--json");
+                coverage(&scenario_file_arg(file), json_out)
+            }
         }
         Some("coverage-all") => {
             let mut filter: Option<String> = None;
@@ -875,7 +881,7 @@ fn help() {
                                             commit. --value sweeps every step's strings; --selector /
                                             --step rewrite a do-step's value without the secret on
                                             the command line.
-  agent-qa scenario diff <a> <b>             Unified diff between two scenario.json files\n                                            (canonicalised JSON; exit 1 on difference)\n  agent-qa scenario hash <file>              SHA-256 of scenario.json bytes (same algorithm\n                                            replay + heal-promote use for the rebase guard)\n  agent-qa scenario id <file>                Print the scenario's id field (one line)\n  agent-qa scenario intent <file>            Print the scenario's intent field (one line)\n  agent-qa scenario step-ids <file>          Print every step id, one per line\n  agent-qa scenario field <file> <name>      Print any top-level scenario field (id, intent,\n                                            schema, etc.); object/array → compact JSON.\n  agent-qa scenario coverage <file> [--json] Per-step check coverage: how many do steps are\n                                            followed by a check claim, and how many are bare.\n  agent-qa scenario coverage-all [--filter <substr>] [--root <dir>] [--json]\n                                            The same ratio rolled up across every scenario under\n                                            the root (--root overrides it) — per-scenario rows sorted worst-first plus\n                                            an OVERALL rollup.\n  agent-qa scenario lint <file> [--json] [--strict] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run common lints (use '-' for stdin)\n                                            (duplicate ids, empty intent, bare do,\n                                            undeclared/unused inputs). Exit 1 iff\n                                            any errors are reported (--strict treats\n                                            warnings as errors). --rule narrows to specific\n                                            codes; --exclude-rule subtracts (both repeatable).\n                                            --format github emits GitHub Actions annotations.\n  agent-qa scenario lint --list-rules [--json]\n                                            Enumerate the lint rules + their severities.\n  agent-qa scenario lint-all [--json] [--strict] [--root <dir>] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run lints against every scenario under the\n                                            scenarios root (--root overrides it);\n                                            exit 1 iff any errors are reported\n                                            (--strict treats warnings as errors). --rule\n                                            narrows to specific codes; --exclude-rule\n                                            subtracts (both repeatable).\n  agent-qa scenario rename <sid> <new-sid>   Rename a scenario: patches scenario.json's id\n                                            field, then moves the directory under the\n                                            scenarios root. (refuses to overwrite).\n  agent-qa scenario copy <sid> <new-sid>     Copy a scenario (scenario.json with id patched +\n                                            baselines/, files/, inputs.local.json carried;\n                                            replays NOT copied). Refuses to overwrite.\n  agent-qa scenario delete <sid> [--yes/-y]  Remove a scenario directory + all its replays.\n                                            Dry-run by default; --yes confirms.\n  agent-qa scenario prune-replays <sid> --keep N [--yes] [--keep-failed]\n                                            Keep the N most recent replays under\n                                            <sid>/replays/; dry-run by default.\n                                            --keep-failed preserves all non-zero-exit\n                                            runs regardless of N.\n  agent-qa scenario prune-all --keep N [--yes] [--keep-failed] [--root <dir>]\n                                            Like prune-replays but across every scenario\n                                            under the scenarios root (--root overrides it). --keep-failed\n                                            preserves failed runs per scenario."
+  agent-qa scenario diff <a> <b>             Unified diff between two scenario.json files\n                                            (canonicalised JSON; exit 1 on difference)\n  agent-qa scenario hash <file>              SHA-256 of scenario.json bytes (same algorithm\n                                            replay + heal-promote use for the rebase guard)\n  agent-qa scenario id <file>                Print the scenario's id field (one line)\n  agent-qa scenario intent <file>            Print the scenario's intent field (one line)\n  agent-qa scenario step-ids <file>          Print every step id, one per line\n  agent-qa scenario field <file> <name>      Print any top-level scenario field (id, intent,\n                                            schema, etc.); object/array → compact JSON.\n  agent-qa scenario coverage <file> [--json] Per-step check coverage: how many do steps are\n                                            followed by a check claim, and how many are bare.\n  agent-qa scenario coverage --routes [--from <path>] [--root <dir>] [--json]\n                                            Join routes from plan.md, discover-report.json,\n                                            and crawl-report.json against scenario goto\n                                            steps. Exit 1 when any route has no goto.\n  agent-qa scenario coverage-all [--filter <substr>] [--root <dir>] [--json]\n                                            The same ratio rolled up across every scenario under\n                                            the root (--root overrides it) — per-scenario rows sorted worst-first plus\n                                            an OVERALL rollup.\n  agent-qa scenario lint <file> [--json] [--strict] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run common lints (use '-' for stdin)\n                                            (duplicate ids, empty intent, bare do,\n                                            undeclared/unused inputs). Exit 1 iff\n                                            any errors are reported (--strict treats\n                                            warnings as errors). --rule narrows to specific\n                                            codes; --exclude-rule subtracts (both repeatable).\n                                            --format github emits GitHub Actions annotations.\n  agent-qa scenario lint --list-rules [--json]\n                                            Enumerate the lint rules + their severities.\n  agent-qa scenario lint-all [--json] [--strict] [--root <dir>] [--rule <code>]* [--exclude-rule <code>]* [--format text|json|github]\n                                            Run lints against every scenario under the\n                                            scenarios root (--root overrides it);\n                                            exit 1 iff any errors are reported\n                                            (--strict treats warnings as errors). --rule\n                                            narrows to specific codes; --exclude-rule\n                                            subtracts (both repeatable).\n  agent-qa scenario rename <sid> <new-sid>   Rename a scenario: patches scenario.json's id\n                                            field, then moves the directory under the\n                                            scenarios root. (refuses to overwrite).\n  agent-qa scenario copy <sid> <new-sid>     Copy a scenario (scenario.json with id patched +\n                                            baselines/, files/, inputs.local.json carried;\n                                            replays NOT copied). Refuses to overwrite.\n  agent-qa scenario delete <sid> [--yes/-y]  Remove a scenario directory + all its replays.\n                                            Dry-run by default; --yes confirms.\n  agent-qa scenario prune-replays <sid> --keep N [--yes] [--keep-failed]\n                                            Keep the N most recent replays under\n                                            <sid>/replays/; dry-run by default.\n                                            --keep-failed preserves all non-zero-exit\n                                            runs regardless of N.\n  agent-qa scenario prune-all --keep N [--yes] [--keep-failed] [--root <dir>]\n                                            Like prune-replays but across every scenario\n                                            under the scenarios root (--root overrides it). --keep-failed\n                                            preserves failed runs per scenario."
     );
 }
 
@@ -3359,6 +3365,383 @@ fn coverage(path: &Path, json_out: bool) -> Result<u8> {
     Ok(0)
 }
 
+/// `scenario coverage --routes` — join routes written by `discover` and
+/// `crawl` against literal `goto` steps. A route with no goto exits 1.
+fn coverage_routes_cli(args: &[String]) -> Result<u8> {
+    let mut json_out = false;
+    let mut root: Option<PathBuf> = None;
+    let mut from: Option<PathBuf> = None;
+    let mut positional: Option<String> = None;
+    let mut it = args.iter().peekable();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--json" => json_out = true,
+            "--routes" => {}
+            "--root" => {
+                root = Some(PathBuf::from(
+                    it.next()
+                        .cloned()
+                        .ok_or_else(|| anyhow!("--root requires a directory"))?,
+                ));
+            }
+            s if s.starts_with("--root=") => root = Some(PathBuf::from(&s["--root=".len()..])),
+            "--from" => {
+                from = Some(PathBuf::from(
+                    it.next()
+                        .cloned()
+                        .ok_or_else(|| anyhow!("--from requires a path"))?,
+                ));
+            }
+            s if s.starts_with("--from=") => from = Some(PathBuf::from(&s["--from=".len()..])),
+            other if other.starts_with('-') => bail!("unknown flag {other:?}"),
+            other => {
+                if positional.is_some() {
+                    bail!(
+                        "usage: scenario coverage --routes [--from <path>] [--root <dir>] [--json]"
+                    );
+                }
+                positional = Some(other.to_string());
+            }
+        }
+    }
+    if let Some(p) = positional {
+        if from.is_some() {
+            bail!("pass the discovery source once, as --from or as a path");
+        }
+        from = Some(PathBuf::from(p));
+    }
+    coverage_routes(json_out, root.as_deref(), from.as_deref())
+}
+
+/// URL path used as the join key. Query, hash, and a trailing slash drop
+/// out; `https://host/users/` and `/users` are the same route. A value
+/// that is not a path or an absolute URL is not a route.
+fn route_key(raw: &str) -> Option<String> {
+    let raw = raw.trim().trim_matches('`').trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let raw = raw.split(['?', '#']).next().unwrap_or(raw).trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let path = if let Some((_, rest)) = raw.split_once("://") {
+        match rest.find('/') {
+            Some(i) => &rest[i..],
+            None => "/",
+        }
+    } else if raw.starts_with('/') {
+        raw
+    } else {
+        return None;
+    };
+    let path = path.trim_end_matches('/');
+    if path.is_empty() {
+        Some("/".to_string())
+    } else {
+        Some(path.to_string())
+    }
+}
+
+fn split_lines(text: &str) -> Vec<&str> {
+    text.split('\n')
+        .map(|line| line.trim_end_matches('\r'))
+        .collect()
+}
+
+/// Routes named by a discover `plan.md`: a heading that is a path or URL,
+/// and each `- open <url>` bullet.
+fn routes_in_plan(text: &str) -> std::collections::BTreeSet<String> {
+    let mut set = std::collections::BTreeSet::new();
+    for line in split_lines(text) {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix('-') {
+            let rest = rest.trim();
+            if let Some(url) = rest.strip_prefix("open ") {
+                if let Some(key) = route_key(url) {
+                    set.insert(key);
+                }
+            }
+            continue;
+        }
+        let Some(rest) = line.strip_prefix('#') else {
+            continue;
+        };
+        let rest = rest.trim_start_matches('#').trim();
+        if let Some(key) = route_key(rest) {
+            set.insert(key);
+        }
+    }
+    set
+}
+
+/// Routes from a discover or crawl report. `routes` and `links` are
+/// lists of paths or URLs. A crawl report's `url` is the entry page.
+fn routes_in_report(text: &str) -> Result<std::collections::BTreeSet<String>> {
+    let v: serde_json::Value = serde_json::from_str(text).context("parse discovery report")?;
+    let mut set = std::collections::BTreeSet::new();
+    for key in ["routes", "links"] {
+        let Some(arr) = v.get(key).and_then(|item| item.as_array()) else {
+            continue;
+        };
+        for item in arr {
+            let Some(raw) = item.as_str() else {
+                continue;
+            };
+            if let Some(route) = route_key(raw) {
+                set.insert(route);
+            }
+        }
+    }
+    if let Some(url) = v.get("url").and_then(|item| item.as_str()) {
+        if let Some(route) = route_key(url) {
+            set.insert(route);
+        }
+    }
+    Ok(set)
+}
+
+fn is_discovery_file(name: &str) -> bool {
+    name == "plan.md" || name == "discover-report.json" || name == "crawl-report.json"
+}
+
+fn find_discovery_files(dir: &Path) -> Vec<PathBuf> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
+        if depth > 4 {
+            return;
+        }
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if path.is_dir() {
+                if name == "replays"
+                    || name == "baselines"
+                    || name == "node_modules"
+                    || name.starts_with('.')
+                {
+                    continue;
+                }
+                walk(&path, out, depth + 1);
+                continue;
+            }
+            if is_discovery_file(&name) {
+                out.push(path);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, &mut out, 0);
+    out.sort();
+    out
+}
+
+fn discovery_paths(root: &Path, from: Option<&Path>) -> Result<Vec<PathBuf>> {
+    match from {
+        Some(path) if path.is_file() => {
+            let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if name == "scenario.json" {
+                bail!(
+                    "--routes reads discover/crawl output (plan.md, discover-report.json, crawl-report.json), not a scenario file"
+                );
+            }
+            Ok(vec![path.to_path_buf()])
+        }
+        Some(path) if path.is_dir() => Ok(find_discovery_files(path)),
+        Some(path) => bail!("--from {} is not a file or directory", path.display()),
+        None => Ok(find_discovery_files(root)),
+    }
+}
+
+fn routes_in_file(path: &Path) -> Result<std::collections::BTreeSet<String>> {
+    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    let text =
+        String::from_utf8(bytes).with_context(|| format!("{} is not UTF-8", path.display()))?;
+    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    if name == "plan.md" || path.extension().and_then(|ext| ext.to_str()) == Some("md") {
+        Ok(routes_in_plan(&text))
+    } else {
+        routes_in_report(&text).with_context(|| format!("parse {}", path.display()))
+    }
+}
+
+/// Literal goto targets in every scenario under `root`. Input-backed
+/// gotos are skipped: the path is not known until replay.
+fn goto_routes(root: &Path) -> std::collections::BTreeMap<String, Vec<String>> {
+    use crate::scenario::{Step, Value, Verb};
+    let mut covered: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    let Ok(entries) = fs::read_dir(root) else {
+        return covered;
+    };
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() || !dir.join("scenario.json").is_file() {
+            continue;
+        }
+        let sid = match dir.file_name().map(|s| s.to_string_lossy().into_owned()) {
+            Some(sid) => sid,
+            None => continue,
+        };
+        let scenario = match load_scenario(&dir.join("scenario.json")) {
+            Ok(scenario) => scenario,
+            Err(_) => continue,
+        };
+        for step in &scenario.steps {
+            let Step::Do {
+                verb: Verb::Goto,
+                value: Some(Value::Literal { literal }),
+                ..
+            } = step
+            else {
+                continue;
+            };
+            let Some(raw) = literal.as_str() else {
+                continue;
+            };
+            let Some(route) = route_key(raw) else {
+                continue;
+            };
+            let sids = covered.entry(route).or_default();
+            if !sids.contains(&sid) {
+                sids.push(sid.clone());
+            }
+        }
+    }
+    for sids in covered.values_mut() {
+        sids.sort();
+    }
+    covered
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RouteRow {
+    route: String,
+    scenarios: Vec<String>,
+}
+
+struct RouteReport {
+    sources: Vec<String>,
+    rows: Vec<RouteRow>,
+}
+
+impl RouteReport {
+    fn uncovered(&self) -> impl Iterator<Item = &RouteRow> {
+        self.rows.iter().filter(|row| row.scenarios.is_empty())
+    }
+    fn exit_code(&self) -> u8 {
+        if self.uncovered().next().is_some() {
+            1
+        } else {
+            0
+        }
+    }
+}
+
+fn join_routes(
+    discovered: &std::collections::BTreeSet<String>,
+    covered: &std::collections::BTreeMap<String, Vec<String>>,
+    sources: Vec<String>,
+) -> RouteReport {
+    let rows = discovered
+        .iter()
+        .map(|route| RouteRow {
+            route: route.clone(),
+            scenarios: covered.get(route).cloned().unwrap_or_default(),
+        })
+        .collect();
+    RouteReport { sources, rows }
+}
+
+fn coverage_routes(
+    json_out: bool,
+    root_override: Option<&Path>,
+    from: Option<&Path>,
+) -> Result<u8> {
+    let root = root_override
+        .map(|path| path.to_path_buf())
+        .unwrap_or_else(crate::paths::scenarios_root);
+    let sources = discovery_paths(&root, from)?;
+    let mut discovered = std::collections::BTreeSet::new();
+    let mut source_labels = Vec::with_capacity(sources.len());
+    for path in &sources {
+        let found = routes_in_file(path)?;
+        discovered.extend(found);
+        source_labels.push(path.display().to_string());
+    }
+    let covered = goto_routes(&root);
+    let report = join_routes(&discovered, &covered, source_labels);
+    let code = report.exit_code();
+    if json_out {
+        #[derive(serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Row<'a> {
+            route: &'a str,
+            covered: bool,
+            scenarios: &'a [String],
+        }
+        #[derive(serde::Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Out<'a> {
+            scenarios_root: String,
+            sources: &'a [String],
+            discovered: usize,
+            covered: usize,
+            uncovered: Vec<&'a str>,
+            routes: Vec<Row<'a>>,
+        }
+        let uncovered: Vec<&str> = report.uncovered().map(|row| row.route.as_str()).collect();
+        let covered_n = report.rows.len() - uncovered.len();
+        let out = Out {
+            scenarios_root: root.display().to_string(),
+            sources: &report.sources,
+            discovered: report.rows.len(),
+            covered: covered_n,
+            uncovered,
+            routes: report
+                .rows
+                .iter()
+                .map(|row| Row {
+                    route: &row.route,
+                    covered: !row.scenarios.is_empty(),
+                    scenarios: &row.scenarios,
+                })
+                .collect(),
+        };
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(code);
+    }
+    if report.rows.is_empty() {
+        println!(
+            "route coverage: no routes in plan.md, discover-report.json, or crawl-report.json"
+        );
+        if !report.sources.is_empty() {
+            println!("  sources: {}", report.sources.join(", "));
+        }
+        return Ok(0);
+    }
+    let uncovered_n = report.uncovered().count();
+    let covered_n = report.rows.len() - uncovered_n;
+    println!(
+        "route coverage: {covered_n}/{} routes have a scenario goto",
+        report.rows.len()
+    );
+    if !report.sources.is_empty() {
+        println!("  sources: {}", report.sources.join(", "));
+    }
+    for row in &report.rows {
+        if row.scenarios.is_empty() {
+            println!("  uncovered  {}", row.route);
+        } else {
+            println!("  covered    {}  ({})", row.route, row.scenarios.join(", "));
+        }
+    }
+    Ok(code)
+}
+
 /// `scenario coverage-all` — the same do→check ratio rolled up across every
 /// scenario under the root. Per-file `coverage` answers "is this scenario
 /// thin?"; this answers "where does the suite leave do steps unchecked" —
@@ -4875,6 +5258,155 @@ mod tests {
             Some(v) => std::env::set_var("AGENT_QA_SCENARIOS_DIR", v),
             None => std::env::remove_var("AGENT_QA_SCENARIOS_DIR"),
         }
+    }
+
+    #[test]
+    fn route_key_strips_origin_query_hash_and_slash() {
+        assert_eq!(
+            route_key("https://example.com/users").as_deref(),
+            Some("/users")
+        );
+        assert_eq!(
+            route_key("https://example.com/users/?x=1#top").as_deref(),
+            Some("/users")
+        );
+        assert_eq!(route_key("https://example.com").as_deref(), Some("/"));
+        assert_eq!(route_key("`/users/`").as_deref(), Some("/users"));
+        assert_eq!(
+            route_key("https://example.com:8443/a/b").as_deref(),
+            Some("/a/b")
+        );
+        assert_eq!(route_key("users"), None);
+        assert_eq!(route_key("mailto:a@example.com"), None);
+    }
+
+    #[test]
+    fn plan_routes_survive_crlf_and_ignore_prose_headings() {
+        let plan = "# Test plan — discover-example\r\n\r\nBase: https://example.com\r\n\r\n## Coverage\r\n\r\n### `/users`\r\n\r\n- open https://example.com/users?q=1\r\n- `/users` matches golden screenshot\r\n\r\n### `/admin`\r\n\r\n## Not covered\r\n\r\n- `src/pages/secret.tsx` — dynamic\r\n";
+        let got = routes_in_plan(plan);
+        assert_eq!(
+            got.into_iter().collect::<Vec<_>>(),
+            vec!["/admin".to_string(), "/users".to_string()]
+        );
+    }
+
+    #[test]
+    fn report_routes_union_links_and_entry_url() {
+        let discover = r#"{"baseUrl":"https://example.com","routes":["/users","/users/new"]}"#;
+        let got = routes_in_report(discover).unwrap();
+        assert!(got.contains("/users"));
+        assert!(got.contains("/users/new"));
+        assert!(!got.contains("/"));
+        let crawl = r#"{"url":"https://example.com/","routes":["https://example.com/","https://example.com/pricing/"],"links":["https://example.com/blog"]}"#;
+        let got = routes_in_report(crawl).unwrap();
+        assert_eq!(
+            got.into_iter().collect::<Vec<_>>(),
+            vec!["/".to_string(), "/blog".to_string(), "/pricing".to_string()]
+        );
+    }
+
+    fn write_goto_scenario(dir: &std::path::Path, sid: &str, url: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        let body = format!(
+            r#"{{
+              "schema": "scenario/2", "id": "{sid}", "intent": "open a page",
+              "steps": [
+                {{ "id": "s0", "intent": "open", "kind": "do", "verb": "goto",
+                   "value": {{ "from": "literal", "literal": "{url}" }} }}
+              ]
+            }}"#
+        );
+        fs::write(dir.join("scenario.json"), body).unwrap();
+    }
+
+    #[test]
+    fn route_coverage_exits_nonzero_when_a_route_has_no_goto() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_goto_scenario(
+            &root.join("users"),
+            "users",
+            "https://example.com/users?tab=1",
+        );
+        // An input-backed goto is not a concrete route.
+        let other = root.join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        fs::write(
+            other.join("scenario.json"),
+            r#"{
+              "schema": "scenario/2", "id": "other", "intent": "typed later",
+              "steps": [
+                { "id": "s0", "intent": "open", "kind": "do", "verb": "goto",
+                  "value": { "from": "input", "input": "startUrl" } },
+                { "id": "s1", "intent": "reload", "kind": "do", "verb": "reload" }
+              ],
+              "inputs": { "startUrl": { "type": "string" } }
+            }"#,
+        )
+        .unwrap();
+        let discover = root.join("discover-example");
+        std::fs::create_dir_all(&discover).unwrap();
+        fs::write(
+            discover.join("plan.md"),
+            "# Plan\n\n### `/users`\n\n- open https://example.com/users\n\n### `/admin`\n",
+        )
+        .unwrap();
+        fs::write(
+            discover.join("discover-report.json"),
+            r#"{"baseUrl":"https://example.com","routes":["/users","/admin"]}"#,
+        )
+        .unwrap();
+        fs::write(
+            discover.join("crawl-report.json"),
+            r#"{"url":"https://example.com/pricing","routes":["https://example.com/pricing"]}"#,
+        )
+        .unwrap();
+        // The draft scenario's own goto covers /pricing; /admin stays open.
+        write_goto_scenario(
+            &discover,
+            "discover-example",
+            "https://example.com/pricing/",
+        );
+
+        assert_eq!(coverage_routes(false, Some(root), None).unwrap(), 1);
+        assert_eq!(coverage_routes(true, Some(root), None).unwrap(), 1);
+
+        let only_plan = discover.join("plan.md");
+        assert_eq!(
+            coverage_routes(false, Some(root), Some(&only_plan)).unwrap(),
+            1
+        );
+        // A directory that lists only covered routes exits 0.
+        let covered_dir = tmp.path().join("only-covered");
+        std::fs::create_dir_all(&covered_dir).unwrap();
+        fs::write(
+            covered_dir.join("discover-report.json"),
+            r#"{"routes":["/users","/pricing"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            coverage_routes(false, Some(root), Some(&covered_dir)).unwrap(),
+            0
+        );
+        // No inventory is an empty gate, not a failure.
+        let empty = tmp.path().join("empty-root");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert_eq!(coverage_routes(true, Some(&empty), None).unwrap(), 0);
+        let err =
+            coverage_routes_cli(&["--from".into(), root.join("missing").display().to_string()])
+                .unwrap_err()
+                .to_string();
+        assert!(err.contains("not a file or directory"), "{err}");
+        let err = coverage_routes_cli(&[
+            "--from".into(),
+            root.join("users")
+                .join("scenario.json")
+                .display()
+                .to_string(),
+        ])
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("not a scenario file"), "{err}");
     }
 
     #[test]

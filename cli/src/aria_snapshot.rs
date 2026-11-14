@@ -12,12 +12,15 @@
 //!
 //! CLI shape:
 //!
-//!   agent-qa aria-snapshot [--session <name>] [--interactive]
+//!   agent-qa aria-snapshot [--session <name>] [--interactive] [--depth N]
 //!
 //! `--interactive` limits the tree to actionable elements (smaller, the
-//! default pick surface); without it the full tree is returned. Output is
-//! always `{ "session": "...", "interactive": bool,
-//!   "nodes": [ {depth, role, name, ref, pickable, attrs} ] }`.
+//! default pick surface); without it the full tree is returned. `--depth N`
+//! drops nodes deeper than indent level N (0 is the top row), the same cap
+//! as Playwright's snapshot `depth`. The two flags combine. Output is
+//! `{ "session": "...", "interactive": bool, "depth"?: N,
+//!   "nodes": [ {depth, role, name, ref, pickable, attrs} ] }`. `depth` is
+//! omitted when the flag is absent.
 
 use anyhow::{bail, Result};
 use serde::Serialize;
@@ -34,14 +37,14 @@ pub fn run(args: &[String]) -> Result<u8> {
     } else {
         browser::snapshot_full(&session)?
     };
-    let nodes = parse_snapshot(&snapshot);
     println!(
         "{}",
-        serde_json::to_string(&json!({
-            "session": session,
-            "interactive": opts.interactive,
-            "nodes": nodes,
-        }))?
+        serde_json::to_string(&snapshot_report(
+            &session,
+            opts.interactive,
+            opts.depth,
+            &snapshot,
+        ))?
     );
     Ok(0)
 }
@@ -51,19 +54,22 @@ fn print_help() {
         "agent-qa aria-snapshot — dump the live page's accessibility tree
 
 Usage:
-  agent-qa aria-snapshot [--session <name>] [--interactive]
+  agent-qa aria-snapshot [--session <name>] [--interactive] [--depth N]
 
 Reads the ARIA tree from the live agent-browser session. The authoring
 editor's element picker renders this so you can pick a node and capture
 its role + accessible name as a deterministic target.
 
 Always emits structured JSON rows (for raw text use `agent-browser snapshot`):
-  {{\"session\":\"…\",\"interactive\":false,\"nodes\":[
+  {{\"session\":\"…\",\"interactive\":false,\"depth\":1,\"nodes\":[
     {{\"depth\":0,\"role\":\"button\",\"name\":\"Login\",\"ref\":\"e5\",
      \"pickable\":true,\"attrs\":\"…\"}}]}}
 
 Flags:
   --interactive   Limit to actionable elements (smaller pick surface).
+  --depth <N>     Drop nodes deeper than indent level N (0 = top row).
+                  Combines with --interactive. Same cap as Playwright's
+                  snapshot depth (https://playwright.dev/mcp/snapshots).
 
 Read-only: aria-snapshot never drives the page or records anything."
     );
@@ -73,6 +79,8 @@ Read-only: aria-snapshot never drives the page or records anything."
 struct Opts {
     session: Option<String>,
     interactive: bool,
+    /// Keep nodes whose indent depth is `<= N`. `None` keeps the whole tree.
+    depth: Option<usize>,
 }
 
 fn parse_args(args: &[String]) -> Result<Opts> {
@@ -89,10 +97,48 @@ fn parse_args(args: &[String]) -> Result<Opts> {
                 opts.session = Some(s["--session=".len()..].to_string())
             }
             "--interactive" => opts.interactive = true,
+            "--depth" => {
+                let v = it
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--depth requires a non-negative integer"))?;
+                opts.depth = Some(parse_depth(v)?);
+            }
+            s if s.starts_with("--depth=") => {
+                opts.depth = Some(parse_depth(&s["--depth=".len()..])?);
+            }
             other => bail!("unknown flag {other:?}"),
         }
     }
     Ok(opts)
+}
+
+fn parse_depth(raw: &str) -> Result<usize> {
+    raw.parse::<usize>()
+        .map_err(|_| anyhow::anyhow!("--depth expects a non-negative integer, got {raw:?}"))
+}
+
+/// Structured picker payload. `depth` is present only when the caller capped
+/// the tree. Nodes deeper than that cap are dropped; `--interactive` is
+/// applied by the snapshot source before this filter.
+fn snapshot_report(
+    session: &str,
+    interactive: bool,
+    depth: Option<usize>,
+    snapshot: &str,
+) -> serde_json::Value {
+    let mut nodes = parse_snapshot(snapshot);
+    if let Some(max) = depth {
+        nodes.retain(|node| node.depth <= max);
+    }
+    let mut body = json!({
+        "session": session,
+        "interactive": interactive,
+        "nodes": nodes,
+    });
+    if let Some(max) = depth {
+        body["depth"] = json!(max);
+    }
+    body
 }
 
 fn resolve_session(explicit: Option<&str>) -> Result<String> {
@@ -224,9 +270,55 @@ mod tests {
 
     #[test]
     fn parse_args_flags() {
-        let o = parse_args(&["--session".into(), "sx".into(), "--interactive".into()]).unwrap();
+        let o = parse_args(&[
+            "--session".into(),
+            "sx".into(),
+            "--interactive".into(),
+            "--depth".into(),
+            "2".into(),
+        ])
+        .unwrap();
         assert_eq!(o.session.as_deref(), Some("sx"));
         assert!(o.interactive);
+        assert_eq!(o.depth, Some(2));
+        let eq = parse_args(&["--depth=0".into()]).unwrap();
+        assert_eq!(eq.depth, Some(0));
+        assert!(!eq.interactive);
+    }
+
+    #[test]
+    fn parse_args_rejects_bad_depth() {
+        parse_args(&["--depth".into()]).unwrap_err();
+        parse_args(&["--depth".into(), "-1".into()]).unwrap_err();
+        parse_args(&["--depth=nope".into()]).unwrap_err();
+    }
+
+    #[test]
+    fn depth_cap_drops_deeper_nodes_and_combines_with_interactive() {
+        let snap = "\
+- main \"App\" [ref=e1]
+  - navigation \"Primary\" [ref=e2]
+    - link \"Docs\" [ref=e3]
+      - text \"Docs\" [ref=e4]
+";
+        let full = snapshot_report("s", false, None, snap);
+        assert!(full.get("depth").is_none());
+        assert_eq!(full["nodes"].as_array().unwrap().len(), 4);
+        assert_eq!(full["interactive"], false);
+
+        let capped = snapshot_report("s", true, Some(1), snap);
+        assert_eq!(capped["depth"], 1);
+        assert_eq!(capped["interactive"], true);
+        let nodes = capped["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[0]["role"], "main");
+        assert_eq!(nodes[0]["depth"], 0);
+        assert_eq!(nodes[1]["role"], "navigation");
+        assert_eq!(nodes[1]["depth"], 1);
+
+        let roots = snapshot_report("s", false, Some(0), snap);
+        assert_eq!(roots["nodes"].as_array().unwrap().len(), 1);
+        assert_eq!(roots["nodes"][0]["role"], "main");
     }
 
     #[test]

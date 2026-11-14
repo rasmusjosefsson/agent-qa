@@ -34,7 +34,7 @@ For an already-running Chrome, set `AGENT_BROWSER_CDP` and `AGENT_BROWSER_PIN_TA
 
 | Verb | What it does |
 | --- | --- |
-| `agent-qa aria-snapshot --session <s>` | Structured picker rows for the live tree. `--interactive` limits the dump to controls. |
+| `agent-qa aria-snapshot --session <s>` | Structured picker rows for the live tree. `--interactive` limits the dump to controls. `--depth N` drops nodes deeper than indent level N (0 is the top row) and combines with `--interactive`. Same cap as Playwright's snapshot `depth` ([snapshots](https://playwright.dev/mcp/snapshots)). |
 | `agent-qa perf-snapshot --session <s>` | Navigation and paint timings from `window.performance`. See [`perf-snapshot.md`](perf-snapshot.md). |
 | `agent-qa byo-doctor` | Read-only list of attachable browsers. It does not drive one. |
 | `agent-qa cdp-url --session <s>` | WebSocket endpoint of the live session. |

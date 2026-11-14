@@ -2,8 +2,10 @@
 //! enumerate same-origin links + interactive elements, and write a DRAFT
 //! scenario.json that visits each discovered route and asserts a shot claim
 //! on each (instant visual-coverage skeleton a human or agent then refines
-//! into real flows). Also writes `crawl-report.json` — the interactive-element
-//! inventory — next to it, as authoring input; nothing consumes it.
+//! into real flows). Also writes `crawl-report.json` next to it: an
+//! interactive-element inventory plus a `routes` array (the entry URL and
+//! each covered link). `scenario coverage --routes` joins that array
+//! against scenario goto steps.
 //!
 //! Deliberately deterministic: no LLM call, no clicking (clicks mutate/navigate
 //! — a scaffold shouldn't do either). `--depth N` follows links BFS-style:
@@ -42,7 +44,7 @@ pub fn run(args: &[String]) -> Result<u8> {
                     "agent-qa crawl — draft a coverage scenario from a live page\n\nUsage:\n  agent-qa crawl <url> [options]\n\nOptions:\n  --session <name>   Browser session to drive (default: default)\n  --out <dir>        Output dir for scenario.json + crawl-report.json\n                     (default: <scenarios_root>/crawl-<host>)\n  --max <N>          Max same-origin links to cover (default {MAX_DEFAULT})
   --depth <N>        BFS depth — 1 (default) covers entry-page links only;
                      each level deeper opens discovered pages and merges
-                     their links (cap {DEPTH_MAX})\n  --sid <name>       Scenario id (default: crawl-<host>)\n  --no-console-checks\n                     Skip the per-page 'no console errors' claims\n                     (on by default — a page that crashes JS isn't green).\n  --no-network-checks\n                     Skip 'fired' claims for the API calls the entry page\n                     made (on by default — a draft that never asserts its\n                     network contract can pass while the data layer broke).\n\nThe draft is a goto + shot claim + console check per discovered route —\nrun `replay`, then `shot-accept` to mint baselines.\n\n  --mint-baselines\n                     After writing the draft, visit every covered route\n                     and capture baselines/<gotoStepId>.png — the draft\n                     replays green immediately, no shot-accept pass."
+                     their links (cap {DEPTH_MAX})\n  --sid <name>       Scenario id (default: crawl-<host>)\n  --no-console-checks\n                     Skip the per-page 'no console errors' claims\n                     (on by default — a page that crashes JS isn't green).\n  --no-network-checks\n                     Skip 'fired' claims for the API calls the entry page\n                     made (on by default — a draft that never asserts its\n                     network contract can pass while the data layer broke).\n\nThe draft is a goto + shot claim + console check per discovered route —\nrun `replay`, then `shot-accept` to mint baselines. crawl-report.json\nlists those routes for `scenario coverage --routes`.\n\n  --mint-baselines\n                     After writing the draft, visit every covered route\n                     and capture baselines/<gotoStepId>.png — the draft\n                     replays green immediately, no shot-accept pass."
                 );
                 return Ok(0);
             }
@@ -271,6 +273,18 @@ pub fn run(args: &[String]) -> Result<u8> {
         .with_context(|| format!("crawl: write {}", scenario_path.display()))?;
 
     let report_path = dir.join("crawl-report.json");
+    // Entry URL plus each goto the draft kept. `scenario coverage --routes`
+    // reads this list; a later scenario that drops a goto leaves the route
+    // uncovered.
+    let route_urls: Vec<String> = steps
+        .iter()
+        .filter(|st| st.get("verb").and_then(|v| v.as_str()) == Some("goto"))
+        .filter_map(|st| {
+            st.pointer("/value/literal")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+        .collect();
     fs::write(
         &report_path,
         serde_json::to_string_pretty(&json!({
@@ -279,6 +293,7 @@ pub fn run(args: &[String]) -> Result<u8> {
             "depth": depth,
             "linksFound": links.len(),
             "routesCovered": covered,
+            "routes": route_urls,
             "interactive": page.get("interactive").cloned().unwrap_or(json!([])),
         }))?,
     )

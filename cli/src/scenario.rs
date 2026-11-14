@@ -528,11 +528,14 @@ pub enum A11ySubject {
 /// compare the metric's value (ms for timings; unitless score for cls);
 /// `exists`/`notExists` test whether the metric was recorded at all
 /// (e.g. lcp before first paint).
-///   metrics: fcp | lcp | cls | tbt | ttfb | load
+///   metrics: fcp | lcp | cls | tbt | ttfb | load | inp
 ///   `{"maxDwellMs": 1500}` — how long to poll for observer-buffered
-///                          metrics (lcp/cls/tbt) before declaring
+///                          metrics (lcp/cls/tbt/inp) before declaring
 ///                          them absent (default 1500; the observer
-///                          flush is a task, not instant)
+///                          flush is a task, not instant). `inp` is
+///                          Interaction to Next Paint in ms (web-vitals
+///                          Event Timing estimate). No interaction yet
+///                          is absent, the way `lcp` is absent before paint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PerfMatcher {
@@ -753,7 +756,7 @@ pub enum ClaimSubject {
         a11y: A11ySubject,
     },
     /// `{"perf": "lcp"}` or `{"perf": {"metric": "lcp"}}` — a Web
-    /// Performance metric (fcp/lcp/cls/tbt/ttfb/load) read live via the
+    /// Performance metric (fcp/lcp/cls/tbt/ttfb/load/inp) read live via the
     /// Performance API. Numeric predicates (`gt`/`gte`/`lt`/`lte`/`equals`)
     /// compare the value — ms for timings, unitless score for cls — so a
     /// budget is `{"predicate": "lte", "value": 2500}`. `exists`/
