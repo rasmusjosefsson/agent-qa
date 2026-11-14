@@ -4,6 +4,8 @@ import { BugIcon, WrenchIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { TextLineDiff } from '@/components/text-line-diff'
 import { acceptDomshot, acceptShot, artifactUrl, baselineShotUrl, fetchArtifactText, getScenarioDef, promoteHeal } from '@/lib/runs-api'
+import { canWrite } from '@/lib/source'
+import { withBase } from '@/router'
 import { evidenceStepId, hasPageFrame, isShotMiss } from '../shot-evidence'
 import { BeforeAfterSlider } from './BeforeAfterSlider'
 import { collapseEvents, fmtMs, icon } from '../rows'
@@ -101,11 +103,11 @@ export function StepDetail({ runs, onLightbox }: { runs: Api; onLightbox: (url: 
     ]
       .filter(Boolean)
       .join('\n')
-    window.open(`/chat?ask=${encodeURIComponent(prompt)}`, '_blank')
+    window.open(withBase(`/chat?ask=${encodeURIComponent(prompt)}`), '_blank')
   }
 
   return (
-    <section className="flex h-full min-h-0 flex-col overflow-hidden">
+    <section className="flex h-full min-h-0 flex-col overflow-hidden" {...(canWrite() ? {} : { 'data-tour': 'evidence' })}>
       <div className="flex items-start justify-between gap-2 border-b border-border px-4 py-3">
         <div className="min-w-0">
           <h3 className="flex items-center gap-1.5 text-sm font-semibold">
@@ -460,7 +462,7 @@ function HealCard({
           </pre>
         </details>
       )}
-      {heal.patch && !isRejection && (
+      {canWrite() && heal.patch && !isRejection && (
         <div className="mt-1.5 flex items-center gap-2">
           {promote === 'done' ? (
             <span className="text-success">Promoted into scenario.json — re-run to confirm.</span>
@@ -564,6 +566,7 @@ export function ShotDiffCard({
           )}
         </div>
       </div>
+      {canWrite() && (
       <div className="mt-1.5 flex items-center gap-2 text-muted-foreground">
         {accept === 'done' ? (
           <span className="text-success">Baseline re-minted — re-run to confirm.</span>
@@ -584,6 +587,7 @@ export function ShotDiffCard({
           </>
         )}
       </div>
+      )}
     </div>
   )
 }
@@ -664,6 +668,7 @@ export function DomshotDiffCard({
           </pre>
         )
       )}
+      {canWrite() && (
       <div className="mt-1.5 flex items-center gap-2 text-muted-foreground">
         {accept === 'done' ? (
           <span className="text-success">Baseline re-minted — re-run to confirm.</span>
@@ -684,6 +689,7 @@ export function DomshotDiffCard({
           </>
         )}
       </div>
+      )}
     </div>
   )
 }

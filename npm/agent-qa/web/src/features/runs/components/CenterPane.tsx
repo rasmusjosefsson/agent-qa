@@ -194,7 +194,7 @@ export function CenterPane({
                 <span className="block truncate text-[13px]">{st.intent || stepText(st)}</span>
                 {st.branch && <span className="block truncate text-[11px] text-muted-foreground">{st.branch}</span>}
               </span>
-              {st.id && (
+              {canWrite() && st.id && (
                 <button
                   type="button"
                   title={`Insert a check after “${st.id}”`}
@@ -289,7 +289,7 @@ export function CenterPane({
 
     return (
       <Pane>
-        <div className="border-b border-border px-4 py-3" data-qa-volatile>
+        <div className="border-b border-border px-4 py-3" data-qa-volatile {...(canWrite() ? {} : { 'data-tour': 'run' })}>
           <div className="flex items-center gap-2">
             <span
               className={cn(
@@ -324,7 +324,7 @@ export function CenterPane({
                 {healedCount} healed
               </span>
             )}
-            {!live && (otherRuns.length > 0 || hasGoldenClaims) && (
+            {!live && canWrite() && (otherRuns.length > 0 || hasGoldenClaims) && (
               <span className="ml-auto flex items-center gap-1.5">
                 {hasGoldenClaims && (
                   <button
@@ -461,7 +461,7 @@ export function CenterPane({
         {runs.compare ? (
           <CompareView runs={runs} />
         ) : (
-        <ol className="min-h-0 flex-1 overflow-auto p-2">
+        <ol className="min-h-0 flex-1 overflow-auto p-2" {...(canWrite() ? {} : { 'data-tour': 'steps' })}>
           {rows.map((st) => {
             const selected = sel.stepIdx === st.idx
             const isCurrent = st.idx === liveCurrent
@@ -522,7 +522,7 @@ export function CenterPane({
                   {st.kind && <span className="shrink-0 text-xs text-muted-foreground">({st.kind})</span>}
                   <span data-qa-volatile className={cn('tnum ml-auto shrink-0 font-mono text-[11px] text-muted-foreground transition-[margin]', st.id && !live && 'group-hover:mr-7')}>{pending ? '' : fmtMs(st.ms)}</span>
                 </button>
-                {st.id && !live && (
+                {canWrite() && st.id && !live && (
                   <button
                     type="button"
                     title={`Insert a check after “${st.id}” in the saved scenario`}
@@ -565,7 +565,9 @@ export function CenterPane({
         </div>
         <div className="max-w-sm text-[13px] leading-relaxed text-muted-foreground">
           {hasAnyScenario
-            ? 'Pick a scenario on the left to preview its steps, then press Replay.'
+            ? canWrite()
+              ? 'Pick a scenario on the left to preview its steps, then press Replay.'
+              : 'Pick a scenario on the left to open a recorded run.'
             : 'Describe a flow in Chat. The agent records it, and the scenario shows up here ready to replay.'}
         </div>
         {!hasAnyScenario && (

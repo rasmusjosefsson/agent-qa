@@ -253,6 +253,42 @@ describe('CenterPane scenario controls', () => {
     expect(html).not.toContain('Baseline')
     expect(html).not.toContain('>Diff<')
   })
+
+  it('hides compare, accept, and insert when the source cannot write', () => {
+    setScenarioSourceForTests(createFixtureSource('/demo'))
+    const runs = {
+      detail: {
+        sid: 's-1',
+        runId: 'r-2',
+        audit: { summary: 'SUMMARY: 1/1 (PASS)', exitCode: 0 },
+        status: { state: 'done', ok: true },
+        events: [{ idx: 1, id: 'open', intent: 'Open', kind: 'do:goto', status: 'pass', ms: 100 }],
+        video: false,
+      },
+      scenarioDef: { id: 's-1', steps: [{ id: 'open', kind: 'do', verb: 'goto', intent: 'Open' }] },
+      sel: { sid: 's-1', runId: 'r-2', stepIdx: null },
+      runDefSteps: {
+        sid: 's-1',
+        steps: [
+          { id: 'open', kind: 'do', verb: 'goto' },
+          { id: 'shot', kind: 'check', claim: { subject: { shot: 'open' } } },
+        ],
+      },
+      runsBySid: {
+        's-1': [
+          { runId: 'r-1', state: 'done', summary: 'SUMMARY: 1/1 (PASS)' },
+          { runId: 'r-2', state: 'done', summary: 'SUMMARY: 1/1 (PASS)' },
+        ],
+      },
+      selectStep() {},
+    } as unknown as RunsApi
+    const html = renderToStaticMarkup(<CenterPane runs={runs} runConfig={runConfig} />)
+    expect(html).not.toContain('Compare</button>')
+    expect(html).not.toContain('Accept goldens')
+    expect(html).not.toContain('Insert a check')
+    expect(html).toContain('data-tour="run"')
+    expect(html).toContain('data-tour="steps"')
+  })
 })
 
 afterEach(() => setScenarioSourceForTests(null))

@@ -127,7 +127,7 @@ export function EventPlayback({
       : null
 
   return (
-    <div className="shrink-0 border-b border-border bg-card text-foreground" data-testid="event-playback">
+    <div className="shrink-0 border-b border-border bg-card text-foreground" data-testid="event-playback" data-tour="playback">
       <div className="relative bg-muted">
         {frame ? (
           <img

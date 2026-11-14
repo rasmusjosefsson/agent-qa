@@ -1,8 +1,12 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { createFixtureSource } from '@/lib/source/fixture-source'
+import { setScenarioSourceForTests } from '@/lib/source'
 import type { RunsApi } from '../useRuns'
 import type { ScenarioSummary } from '../types'
 import { flakyTitle, ScenarioSidebar } from './ScenarioSidebar'
+
+afterEach(() => setScenarioSourceForTests(null))
 
 function sc(sid: string, intent: string): ScenarioSummary {
   return {
@@ -80,6 +84,23 @@ describe('ScenarioSidebar health badges', () => {
     const headless = html.match(/aria-label="Headless"/g) || []
     expect(headless).toHaveLength(1)
     expect(html).not.toContain('aria-label="Replay run"')
+  })
+
+  it('hides Replay and delete when the source cannot write', () => {
+    setScenarioSourceForTests(createFixtureSource('/demo'))
+    const runs = runsApi({})
+    runs.expanded = new Set(['s-login'])
+    runs.sel = { sid: 's-login', runId: 'r-1', stepIdx: null, tab: 'step' }
+    runs.runsBySid = {
+      's-login': [{ runId: 'r-1', state: 'done', summary: 'PASS 1/1' }],
+    } as RunsApi['runsBySid']
+    const html = renderToStaticMarkup(
+      <ScenarioSidebar runs={runs} onReplay={() => {}} headed={false} onHeadedChange={() => {}} />
+    )
+    expect(html).not.toContain('aria-label="Replay scenario"')
+    expect(html).not.toContain('aria-label="Delete scenario"')
+    expect(html).not.toContain('aria-label="Delete run"')
+    expect(html).toContain('data-tour="runs"')
   })
 
   it('omits detectors with no flagged steps and scenarios with no flags', () => {

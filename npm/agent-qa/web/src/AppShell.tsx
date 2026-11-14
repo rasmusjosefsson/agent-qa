@@ -21,6 +21,8 @@ import {
 } from "@/components/ui/sidebar"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { ThemeToggle } from "@/components/theme-toggle"
+import { canWrite } from "@/lib/source"
+import { DemoBanner } from "@/features/runs/components/DemoBanner"
 
 export type Tab =
   | "cases"
@@ -91,6 +93,7 @@ export function AppShell({ tab, children }: { tab: Tab; children?: ReactNode }) 
       <SidebarProvider className="h-svh min-h-svh overflow-hidden bg-background text-foreground">
         <AppSidebar tab={tab} />
         <SidebarInset className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+        {!canWrite() && <DemoBanner />}
         <header className="relative z-20 flex h-12 shrink-0 items-center gap-2 border-b border-border bg-background/75 px-3 backdrop-blur-xl backdrop-saturate-150">
           <SidebarTrigger className="text-muted-foreground hover:text-foreground" />
           <div className="mx-1 h-4 w-px bg-border" />

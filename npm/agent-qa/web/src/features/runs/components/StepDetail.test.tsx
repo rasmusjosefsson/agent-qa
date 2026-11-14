@@ -1,7 +1,11 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { createFixtureSource } from '@/lib/source/fixture-source'
+import { setScenarioSourceForTests } from '@/lib/source'
 import type { RunsApi } from '../useRuns'
 import { DomshotDiffCard, RunTraffic, ShotDiffCard, StepDetail } from './StepDetail'
+
+afterEach(() => setScenarioSourceForTests(null))
 
 describe('ShotDiffCard', () => {
   it('defaults to the before/after slider (baseline vs run) with a diff-map toggle', () => {
@@ -14,6 +18,18 @@ describe('ShotDiffCard', () => {
     expect(html).toContain('diff map')
     expect(html).toContain('Visual diff')
     expect(html).toContain('Re-mint baseline')
+  })
+
+  it('hides re-mint when the source cannot write', () => {
+    setScenarioSourceForTests(createFixtureSource('/demo'))
+    const shot = renderToStaticMarkup(
+      <ShotDiffCard sid="s1" runId="r9" shotStep="openDialog" onLightbox={() => {}} />
+    )
+    const dom = renderToStaticMarkup(<DomshotDiffCard sid="s1" runId="r9" domshotStep="openDialog" />)
+    expect(shot).toContain('Visual diff')
+    expect(shot).not.toContain('Re-mint baseline')
+    expect(dom).toContain('Structural diff')
+    expect(dom).not.toContain('Re-mint baseline')
   })
 })
 
