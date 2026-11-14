@@ -23,9 +23,13 @@ use std::path::PathBuf;
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value as Json};
 
+use crate::host_slug::{sanitize_host, HostSlug};
 use crate::paths;
 
 const MAX_DEFAULT: usize = 20;
+
+/// Discover's scenario id keeps Unicode letters and dashes at either end.
+const HOST_SLUG: HostSlug = HostSlug::Unicode;
 
 /// Marker directories that can start a route path — order matters for
 /// app-router `page.*`/`route.*` leaves (checked per marker).
@@ -169,7 +173,8 @@ pub fn run(args: &[String]) -> Result<u8> {
     }
 
     let host = crate::crawl::url::host_of(&url);
-    let sid = sid_override.unwrap_or_else(|| format!("discover-{}", sanitize(&host)));
+    let sid =
+        sid_override.unwrap_or_else(|| format!("discover-{}", sanitize_host(&host, HOST_SLUG)));
     let dir = out_dir.unwrap_or_else(|| paths::scenarios_root().join(&sid));
     fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
 
@@ -321,18 +326,6 @@ pub(crate) fn path_to_route(path: &str) -> RouteHit {
     RouteHit::Route(route)
 }
 
-fn sanitize(host: &str) -> String {
-    host.chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,6 +371,17 @@ mod tests {
             Some("/users/[id]".into())
         );
         assert_eq!(dynamic("pages/$slug.tsx"), Some("/$slug".into()));
+    }
+
+    #[test]
+    fn host_slug_keeps_unicode_and_edge_dashes() {
+        assert_eq!(
+            sanitize_host("app.example.com", HOST_SLUG),
+            "app-example-com"
+        );
+        assert_eq!(sanitize_host("example.com.", HOST_SLUG), "example-com-");
+        assert_eq!(sanitize_host("-host-", HOST_SLUG), "-host-");
+        assert_eq!(sanitize_host("münchen.de", HOST_SLUG), "münchen-de");
     }
 
     #[test]

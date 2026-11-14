@@ -19,7 +19,11 @@ use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 
 use crate::browser;
+use crate::host_slug::{sanitize_host, HostSlug};
 use crate::paths;
+
+/// Crawl's scenario id keeps ASCII and drops dashes at either end.
+const HOST_SLUG: HostSlug = HostSlug::AsciiTrim;
 
 const MAX_DEFAULT: usize = 20;
 const DEPTH_MAX: usize = 4;
@@ -97,7 +101,7 @@ pub fn run(args: &[String]) -> Result<u8> {
         )
     })?;
     let host = self::url::host_of(&url);
-    let sid = sid_override.unwrap_or_else(|| format!("crawl-{}", sanitize(&host)));
+    let sid = sid_override.unwrap_or_else(|| format!("crawl-{}", sanitize_host(&host, HOST_SLUG)));
     let dir = out_dir.unwrap_or_else(|| paths::scenarios_root().join(&sid));
 
     // A crawl on a session mid-recording fights the recorder for the
@@ -490,20 +494,6 @@ fn network_claim_steps(reqs: &[crate::browser::CapturedRequest], idx: &mut usize
     out
 }
 
-fn sanitize(host: &str) -> String {
-    host.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>()
-        .trim_matches('-')
-        .to_string()
-}
-
 /// URL helpers kept local — the crate doesn't take a url dep for one host parse.
 pub(crate) mod url {
     pub fn host_of(url: &str) -> String {
@@ -558,8 +548,13 @@ mod tests {
         );
         assert_eq!(url::host_of("http://localhost:3000"), "localhost");
         assert_eq!(url::host_of("example.com/path"), "example.com");
-        assert_eq!(sanitize("app.example.com"), "app-example-com");
-        assert_eq!(sanitize("localhost"), "localhost");
+        assert_eq!(
+            sanitize_host("app.example.com", HOST_SLUG),
+            "app-example-com"
+        );
+        assert_eq!(sanitize_host("localhost", HOST_SLUG), "localhost");
+        assert_eq!(sanitize_host("example.com.", HOST_SLUG), "example-com");
+        assert_eq!(sanitize_host("münchen.de", HOST_SLUG), "m-nchen-de");
     }
 
     fn req(url: &str, method: &str, rt: Option<&str>) -> crate::browser::CapturedRequest {

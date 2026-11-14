@@ -42,6 +42,7 @@ mod heal_chronic;
 mod heal_list;
 mod heal_promote;
 mod heal_respond;
+mod host_slug;
 mod i18n;
 mod info;
 mod ingest;
