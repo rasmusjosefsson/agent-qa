@@ -1,5 +1,8 @@
 // web/src/features/runs/RunsPage.tsx
 import { useEffect, useRef, useState } from 'react'
+import { canWrite } from '@/lib/source'
+import { DemoTour } from './components/DemoTour'
+import { DEMO_TOUR_EVENT, DEMO_TOUR_KEY } from './components/DemoBanner'
 import { useRuns } from './useRuns'
 import { ScenarioSidebar } from './components/ScenarioSidebar'
 import { CenterPane } from './components/CenterPane'
@@ -36,6 +39,19 @@ export function RunsPage() {
   const narrowLayout = useDefaultLayout({ id: 'aqa-runs-rows' })
   const cols = wide ? wideLayout : narrowLayout
   const [lightbox, setLightbox] = useState<{ url: string; caption: string } | null>(null)
+  const [tourOpen, setTourOpen] = useState(false)
+  useEffect(() => {
+    if (canWrite()) return
+    const open = () => {
+      if (sessionStorage.getItem(DEMO_TOUR_KEY) === '1') {
+        sessionStorage.removeItem(DEMO_TOUR_KEY)
+        setTourOpen(true)
+      }
+    }
+    open()
+    window.addEventListener(DEMO_TOUR_EVENT, open)
+    return () => window.removeEventListener(DEMO_TOUR_EVENT, open)
+  }, [])
   const [replayErr, setReplayErr] = useState('')
 
   // Optional run config: which persona (login) / environment (target) a replay
@@ -251,6 +267,7 @@ export function RunsPage() {
       </div>
 
       {lightbox && <Lightbox url={lightbox.url} caption={lightbox.caption} onClose={() => setLightbox(null)} />}
+      {tourOpen && !canWrite() && <DemoTour runs={runs} onClose={() => setTourOpen(false)} />}
     </div>
   )
 }

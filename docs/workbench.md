@@ -2,7 +2,7 @@
 
 `agent-qa web` opens a localhost UI for the same scenarios root the CLI uses. You describe a test in Chat, hand-edit one in the Editor, or write a case in plain English and let the agent record it. Sets group cases, plans run a scope, and Runs shows each replay with its evidence.
 
-A read-only copy of Runs is published with the docs at <https://rasmusjosefsson.github.io/agent-qa/play/>. It replays two recorded scenarios (the `hello` smoke check and a small directory page, including one screenshot miss). Play, pause, and scrub follow `events.jsonl`. Recording stays on `agent-qa web`. Rebuild that bundle with `node scripts/build-play.mjs` after `node scripts/capture-demo-fixtures.mjs` refreshes the traces.
+A read-only copy of Runs is published with the docs at <https://rasmusjosefsson.github.io/agent-qa/play/>. It replays two recorded scenarios (the `hello` smoke check and a small directory page, including one screenshot miss). Play, pause, and scrub follow `events.jsonl`. A banner points at the quickstart, and a tour walks the list, a run, playback, screenshots, checks, heals, diffs, and recording locally. Replay, delete, accept, insert, and compare stay hidden there. Recording stays on `agent-qa web`. Rebuild that bundle with `node scripts/build-play.mjs` after `node scripts/capture-demo-fixtures.mjs` refreshes the traces.
 
 Every record, flush, and replay shells the `agent-qa` CLI, so a scenario written here is the same `scenario.json` a terminal run would produce.
 

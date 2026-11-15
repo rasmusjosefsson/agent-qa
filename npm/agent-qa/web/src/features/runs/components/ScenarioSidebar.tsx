@@ -1,6 +1,7 @@
 // web/src/features/runs/components/ScenarioSidebar.tsx
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
+import { canWrite } from '@/lib/source'
 import { BrowserModeToggle } from '@/components/browser-mode-toggle'
 import { GlobeIcon, Loader2Icon, PlayIcon, RefreshCwIcon, Trash2Icon } from 'lucide-react'
 import {
@@ -181,8 +182,9 @@ export function ScenarioSidebar({
   onHeadedChange?: (headed: boolean) => void
 }) {
   const { scenarios, expanded, runsBySid, sel } = runs
+  const writes = canWrite()
   return (
-    <nav className="flex h-full min-h-0 flex-col overflow-hidden bg-sidebar/60">
+    <nav className="flex h-full min-h-0 flex-col overflow-hidden bg-sidebar/60" {...(writes ? {} : { 'data-tour': 'runs' })}>
       <div className="flex h-11 items-center justify-between border-b border-border px-3">
         <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Scenarios</span>
         <div className="flex items-center gap-1">
@@ -251,6 +253,7 @@ export function ScenarioSidebar({
                     {relRunTime(sc.sid)}
                   </div>
                 </button>
+                {writes && (
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
                     <button
@@ -275,8 +278,9 @@ export function ScenarioSidebar({
                     </AlertDialogFooter>
                   </AlertDialogContent>
                 </AlertDialog>
+                )}
                 </div>
-                {onReplay && (
+                {writes && onReplay && (
                   <div className="flex flex-wrap items-center gap-1.5 px-2 pb-2">
                     {onHeadedChange && sel.sid === sc.sid && (
                       <BrowserModeToggle
@@ -342,6 +346,7 @@ export function ScenarioSidebar({
                               {relRunTime(r.runId)}
                             </span>
                           </button>
+                          {writes && (
                           <AlertDialog>
                             <AlertDialogTrigger asChild>
                               <button
@@ -366,6 +371,7 @@ export function ScenarioSidebar({
                               </AlertDialogFooter>
                             </AlertDialogContent>
                           </AlertDialog>
+                          )}
                         </div>
                       )
                     })}
