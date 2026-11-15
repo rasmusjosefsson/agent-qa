@@ -19,6 +19,15 @@ import type { EnvironmentRecord } from '@/features/environments/types'
 
 export function RunsPage() {
   const runs = useRuns()
+  // The docs golden waits for this after the fixture list has loaded.
+  useEffect(() => {
+    if (import.meta.env.VITE_AQA_SOURCE !== 'fixture') return
+    if (!runs.scenarios?.length) return
+    const mark = () => document.documentElement.setAttribute('data-demo-ready', '')
+    const fonts = document.fonts
+    if (fonts?.ready) void fonts.ready.then(mark)
+    else mark()
+  }, [runs.scenarios])
   // Phone widths can't hold the scenario list beside the run. Stack them;
   // keep a separate layout id so a narrow session doesn't overwrite the
   // desktop column widths.

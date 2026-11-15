@@ -18,6 +18,7 @@ import {
 import type { Tab } from "../AppShell"
 import { cn } from "@/lib/utils"
 import { SpaLink as SpaAnchor } from "@/components/spa-link"
+import { withBase } from "@/router"
 import {
   Sidebar,
   SidebarContent,
@@ -132,7 +133,7 @@ function NavRow({ item, tab, step }: { item: NavItem; tab: Tab; step?: number })
       >
         {/* SPA link: plain click pushes state (no document reload); modified
             clicks keep native new-tab behaviour. */}
-        <SpaAnchor href={item.href}>
+        <SpaAnchor href={withBase(item.href)}>
           <Icon />
           <span>{item.label}</span>
         </SpaAnchor>
@@ -167,7 +168,7 @@ export function AppSidebar({ tab, ...props }: { tab: Tab } & ComponentProps<type
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton asChild size="lg" tooltip={version ? `agent-qa v${version}` : 'agent-qa'}>
-              <SpaAnchor href="/">
+              <SpaAnchor href={withBase('/')}>
                 <AgentSparkMark className="size-11 shrink-0 rounded-lg" />
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-semibold tracking-tight text-foreground">agent-qa</span>
@@ -213,7 +214,7 @@ export function AppSidebar({ tab, ...props }: { tab: Tab } & ComponentProps<type
 
       <SidebarFooter>
         <SpaAnchor
-          href="/chat"
+          href={withBase('/chat')}
           className="group/tip mx-1 mb-1 block overflow-hidden rounded-xl border border-sidebar-border bg-card/60 p-3 transition-colors hover:border-primary/30 group-data-[collapsible=icon]:hidden"
         >
           <div className="-m-3 mb-0 p-3 pb-2">

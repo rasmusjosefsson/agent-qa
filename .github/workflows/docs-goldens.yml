@@ -16,6 +16,8 @@ on:
       - "site/**"
       - "docs/**"
       - "evals/docsite/**"
+      - "scripts/build-play.mjs"
+      - "npm/agent-qa/web/**"
       - ".github/workflows/docs-goldens.yml"
   workflow_dispatch:
     inputs:

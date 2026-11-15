@@ -28,7 +28,8 @@
     "workbench": {
       "command": "agent-qa web",
       "url": "http://127.0.0.1:7878",
-      "docs": "https://rasmusjosefsson.github.io/agent-qa/docs/workbench.md"
+      "docs": "https://rasmusjosefsson.github.io/agent-qa/docs/workbench.md",
+      "demo": "https://rasmusjosefsson.github.io/agent-qa/play/"
     }
   },
   "capabilities": [
@@ -43,6 +44,7 @@
     "test-inbox reads for OTP/verification links (mail)",
     "change-scoped scenario drafting (discover)",
     "localhost workbench (agent-qa web): chat, editor, cases, sets, plans, runs, goldens",
+    "read-only demo of Runs at /play/, replaying bundled traces",
     "duration baseline compared on each pull request (timings check)"
   ]
 }

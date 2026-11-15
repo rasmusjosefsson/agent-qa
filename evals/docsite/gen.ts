@@ -58,19 +58,21 @@ const pass = (theme: "light" | "dark") => {
       value: { from: "literal", literal: p.url },
       intent: `${p.slug} (${theme})`,
     });
+    const gateSelector = p.ready || (p.mermaid ? ".mermaid svg" : "main");
     steps.push({
       id: `s${++n}`,
       kind: "check",
+      ...(p.ready ? { context: { timeoutMs: 20000 } } : {}),
       claim: {
         subject: {
           element: {
-            raw: { kind: "css", value: p.mermaid ? ".mermaid svg" : "main" },
+            raw: { kind: "css", value: gateSelector },
             reason: "docsite",
           },
         },
         predicate: "isVisible",
       },
-      intent: p.mermaid ? "content + diagram rendered" : "content rendered",
+      intent: p.ready ? "demo ready" : p.mermaid ? "content + diagram rendered" : "content rendered",
     });
     steps.push({
       id: `s${++n}`,

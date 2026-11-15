@@ -2,6 +2,23 @@ import { useCallback, useEffect, useState } from "react"
 
 export type Route = { pathname: string; search: string }
 
+/** Prefix an in-app path with Vite's `base`. `/` stays `/` for the local app. */
+export function withBase(path: string, base: string = import.meta.env.BASE_URL || '/'): string {
+  const prefix = base.endsWith('/') ? base.slice(0, -1) : base
+  if (!prefix) return path
+  if (path === '/') return `${prefix}/`
+  return `${prefix}${path.startsWith('/') ? path : `/${path}`}`
+}
+
+/** Drop Vite's `base` so route matching still sees `/runs`-style paths. */
+export function withoutBase(pathname: string, base: string = import.meta.env.BASE_URL || '/'): string {
+  const prefix = base.endsWith('/') ? base.slice(0, -1) : base
+  if (!prefix) return pathname
+  if (pathname === prefix || pathname === `${prefix}/`) return '/'
+  if (pathname.startsWith(`${prefix}/`)) return pathname.slice(prefix.length) || '/'
+  return pathname
+}
+
 function currentRoute(): Route {
   return {
     pathname: window.location.pathname,

@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { PageHeader } from '@/components/page-header'
 import { SpaLink } from '@/components/spa-link'
+import { withBase } from '@/router'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -351,7 +352,7 @@ export function GoldensPage() {
           <section key={s.sid} className="aqa-table-card aqa-elevated">
             <header className="flex items-center gap-2.5 border-b border-border/60 px-4 py-2.5">
               <SpaLink
-                href={`/?sid=${encodeURIComponent(s.sid)}`}
+                href={withBase(`/?sid=${encodeURIComponent(s.sid)}`)}
                 title={s.sid}
                 className="truncate text-sm font-semibold tracking-tight text-foreground hover:underline"
               >
