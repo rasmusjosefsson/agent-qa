@@ -25,7 +25,20 @@ export function isShotMiss(
   return shotIdFromError(step.error) != null
 }
 
-/** The step a failed run should open on. A passing trace stays on its first step. */
-export function focusStep<T extends { status?: string }>(steps: T[]): T | undefined {
-  return steps.find((step) => step.status === 'fail') ?? steps[0]
+/** A viewport step is captured before any page exists, so its file is blank. */
+export function hasPageFrame(step: { kind?: string; screenshot?: string }): boolean {
+  if (!step.screenshot) return false
+  return !/(^|:)viewport$/.test(step.kind || '')
+}
+
+/**
+ * A failed run opens on the failure. A passing run opens on the first step
+ * that actually shows a page, skipping a blank viewport frame.
+ */
+export function focusStep<T extends { status?: string; kind?: string; screenshot?: string }>(
+  steps: T[],
+): T | undefined {
+  const failed = steps.find((step) => step.status === 'fail')
+  if (failed) return failed
+  return steps.find((step) => hasPageFrame(step)) ?? steps[0]
 }

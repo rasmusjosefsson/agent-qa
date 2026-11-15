@@ -223,6 +223,36 @@ describe('CenterPane scenario controls', () => {
     expect(html).not.toContain('/screenshots/s0.png')
     expect(html).not.toContain('/screenshots/s5.png')
   })
+
+  it('opens a passing run on the first page frame, not a blank viewport', () => {
+    setScenarioSourceForTests(createFixtureSource('/demo'))
+    const runs = {
+      detail: {
+        sid: 'fixture',
+        runId: 'pass-1',
+        audit: { summary: 'SUMMARY: 6/6 (PASS)', exitCode: 0 },
+        status: { state: 'done', ok: true },
+        events: [
+          { idx: 1, id: 's0', intent: 'Use a compact viewport', kind: 'do:viewport', status: 'pass', ms: 100, screenshot: 'screenshots/s0.png' },
+          { idx: 2, id: 's1', intent: 'Open the directory', kind: 'do:goto', status: 'pass', ms: 1500, screenshot: 'screenshots/s1.png' },
+          { idx: 3, id: 's2', intent: 'Enter a name', kind: 'do:type', status: 'pass', ms: 200, screenshot: 'screenshots/s2.png' },
+        ],
+        video: false,
+        shotDiffs: [],
+      },
+      scenarioDef: null,
+      sel: { sid: 'fixture', runId: 'pass-1', stepIdx: null },
+      runDefSteps: { sid: 'fixture', steps: [] },
+      runsBySid: {},
+      selectStep() {},
+    } as unknown as RunsApi
+    const html = renderToStaticMarkup(<CenterPane runs={runs} runConfig={runConfig} />)
+    expect(html).toContain('/demo/fixture/replays/pass-1/screenshots/s1.png')
+    expect(html).toContain('Open the directory')
+    expect(html).not.toContain('/screenshots/s0.png')
+    expect(html).not.toContain('Baseline')
+    expect(html).not.toContain('>Diff<')
+  })
 })
 
 afterEach(() => setScenarioSourceForTests(null))

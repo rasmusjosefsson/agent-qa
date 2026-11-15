@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { PauseIcon, PlayIcon } from 'lucide-react'
 import { artifactUrl } from '@/lib/runs-api'
-import { evidenceStepId, focusStep, isShotMiss } from '../shot-evidence'
+import { evidenceStepId, focusStep, hasPageFrame, isShotMiss } from '../shot-evidence'
 import { formatClock } from '../timeline'
 import {
   advancePlayback,
@@ -122,7 +122,7 @@ export function EventPlayback({
   const source = shown ? steps.find((step) => step.idx === shown.idx) : undefined
   const frameId = source ? evidenceStepId(source) : undefined
   const frame =
-    frameId && source && (source.screenshot || isShotMiss(source))
+    frameId && source && (isShotMiss(source) || hasPageFrame(source))
       ? artifactUrl(sid, runId, 'screenshots', frameId)
       : null
 

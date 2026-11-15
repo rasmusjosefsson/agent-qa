@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { artifactUrl, baselineShotUrl } from '@/lib/runs-api'
-import { evidenceStepId, focusStep, isShotMiss } from './shot-evidence'
+import { evidenceStepId, focusStep, hasPageFrame, isShotMiss } from './shot-evidence'
 
 const miss = {
   idx: 6,
@@ -30,6 +30,17 @@ describe('shot evidence', () => {
       { id: 's1', status: 'pass' },
       miss,
     ])?.id).toBe('s5')
+  })
+
+  it('opens a passing run on the first real page, not a blank viewport', () => {
+    const viewport = { id: 's0', status: 'pass', kind: 'do:viewport', screenshot: 'screenshots/s0.png' }
+    const open = { id: 's1', status: 'pass', kind: 'do:goto', screenshot: 'screenshots/s1.png' }
+    const typed = { id: 's2', status: 'pass', kind: 'do:type', screenshot: 'screenshots/s2.png' }
+    expect(hasPageFrame(viewport)).toBe(false)
+    expect(hasPageFrame(open)).toBe(true)
+    expect(isShotMiss(typed)).toBe(false)
+    expect(focusStep([viewport, open, typed])?.id).toBe('s1')
+    expect(evidenceStepId(typed)).toBe('s2')
   })
 
   it('keeps an ordinary step on its own screenshot', () => {
