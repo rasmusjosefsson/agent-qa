@@ -1,6 +1,7 @@
 // web/src/features/runs/RunsPage.tsx
 import { useEffect, useRef, useState } from 'react'
-import { canWrite } from '@/lib/source'
+import { canWrite, hasServer } from '@/lib/source'
+import { requestPlayback } from './playback-request'
 import { DemoTour } from './components/DemoTour'
 import { DEMO_TOUR_EVENT, DEMO_TOUR_KEY } from './components/DemoBanner'
 import { useRuns } from './useRuns'
@@ -67,6 +68,7 @@ export function RunsPage() {
   const [draftsBySid, setDraftsBySid] = useState<Record<string, Record<string, string>>>({})
   // Seed from the workbench "headed by default" setting once it loads.
   useEffect(() => {
+    if (!hasServer()) return
     void effectiveSettings()
       .then((s) => setHeaded(s.effective.headedDefault))
       .catch(() => {})
@@ -74,6 +76,7 @@ export function RunsPage() {
   }, [])
 
   useEffect(() => {
+    if (!hasServer()) return
     Promise.all([getPersonas(), getEnvironments()])
       .then(([pe, en]) => {
         setPersonas(pe.personas)
@@ -143,6 +146,14 @@ export function RunsPage() {
   }))
 
   const onReplay = async (sid: string) => {
+    if (!hasServer()) {
+      const sc = runs.scenarios.find((s) => s.sid === sid)
+      const runId = sc?.latestRunId || sc?.activeRunId
+      if (!runId) return
+      requestPlayback(sid, runId)
+      await runs.selectRun(sid, runId)
+      return
+    }
     setReplayErr('')
     setReplayingSid(sid)
     const persona = personas.find((p) => p.id === personaId)

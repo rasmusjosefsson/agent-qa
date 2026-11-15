@@ -14,6 +14,7 @@ import {
   PLAYBACK_SPEEDS,
   type PlaybackMarker,
 } from '../playback'
+import { consumePlaybackRequest, onPlaybackRequest } from '../playback-request'
 import type { RunEvent } from '../types'
 
 export function EventPlayback({
@@ -61,6 +62,17 @@ export function EventPlayback({
     // Open each run on its failed step. `steps` is a fresh array every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId])
+
+  // Demo Replay asks for this run before or after the player mounts.
+  useEffect(() => {
+    const start = () => {
+      if (!consumePlaybackRequest(sid, runId)) return
+      setTime(0)
+      setPlaying(true)
+    }
+    start()
+    return onPlaybackRequest(start)
+  }, [sid, runId])
 
   useEffect(() => {
     if (!playing) return

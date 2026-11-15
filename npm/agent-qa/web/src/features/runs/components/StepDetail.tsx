@@ -4,7 +4,7 @@ import { BugIcon, WrenchIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { TextLineDiff } from '@/components/text-line-diff'
 import { acceptDomshot, acceptShot, artifactUrl, baselineShotUrl, fetchArtifactText, getScenarioDef, promoteHeal } from '@/lib/runs-api'
-import { canWrite } from '@/lib/source'
+import { canWrite, hasServer } from '@/lib/source'
 import { withBase } from '@/router'
 import { evidenceStepId, hasPageFrame, isShotMiss } from '../shot-evidence'
 import { BeforeAfterSlider } from './BeforeAfterSlider'
@@ -119,7 +119,7 @@ export function StepDetail({ runs, onLightbox }: { runs: Api; onLightbox: (url: 
             {targetSummary(defStep) ? <> · {targetSummary(defStep)}</> : null}
           </div>
         </div>
-        {step.status === 'fail' && (
+        {step.status === 'fail' && hasServer() && (
           <button
             type="button"
             onClick={askAgent}

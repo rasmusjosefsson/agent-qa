@@ -26,7 +26,10 @@ import { httpSource } from './http-source'
 import {
   canWrite,
   createScenarioSource,
+  hasServer,
+  LOCAL_ONLY_NOTE,
   resolveSourceKind,
+  routeNeedsServer,
   setScenarioSourceForTests,
   sourceWrites,
 } from './select'
@@ -57,7 +60,9 @@ describe('source selection', () => {
     expect(source.kind).toBe('http')
     expect(source).toBe(httpSource)
     expect(source.capabilities.writes).toBe(true)
+    expect(source.capabilities.server).toBe(true)
     expect(canWrite(source)).toBe(true)
+    expect(hasServer(source)).toBe(true)
     expect(sourceWrites(source)).toBe(httpSource.writes)
   })
 
@@ -67,7 +72,12 @@ describe('source selection', () => {
     const source = createScenarioSource()
     expect(source.kind).toBe('fixture')
     expect(source.capabilities.writes).toBe(false)
+    expect(source.capabilities.server).toBe(false)
     expect(canWrite(source)).toBe(false)
+    expect(hasServer(source)).toBe(false)
+    expect(LOCAL_ONLY_NOTE).toMatch(/run agent-qa locally/)
+    expect(routeNeedsServer('/settings')).toBe(true)
+    expect(routeNeedsServer('/')).toBe(false)
     expect(sourceWrites(source)).toBeNull()
     expect(source.screenshotUrl('s-1', 'r-1', 'open')).toBe('/play/fixtures/s-1/replays/r-1/screenshots/open.png')
   })
@@ -84,8 +94,8 @@ describe('source selection', () => {
 
   it('treats the writes flag as the gate, not the source kind', () => {
     const writes = {} as ScenarioWrites
-    const blocked = { kind: 'http', capabilities: { writes: false }, writes } as unknown as ScenarioSource
-    const opened = { kind: 'fixture', capabilities: { writes: true }, writes } as unknown as ScenarioSource
+    const blocked = { kind: 'http', capabilities: { writes: false, server: true }, writes } as unknown as ScenarioSource
+    const opened = { kind: 'fixture', capabilities: { writes: true, server: false }, writes } as unknown as ScenarioSource
     expect(sourceWrites(blocked)).toBeNull()
     expect(canWrite(blocked)).toBe(false)
     expect(sourceWrites(opened)).toBe(writes)

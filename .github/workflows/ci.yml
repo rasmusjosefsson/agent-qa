@@ -93,6 +93,11 @@ jobs:
       - name: web tests
         working-directory: npm/agent-qa/web
         run: npx vitest run
+      - name: browser for the play demo
+        working-directory: npm/agent-qa
+        run: ./node_modules/.bin/agent-browser install
+      - name: play demo smoke
+        run: node scripts/smoke-play.mjs
       - uses: oven-sh/setup-bun@v2
       - name: evals parity tests
         working-directory: evals

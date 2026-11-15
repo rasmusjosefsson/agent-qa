@@ -157,7 +157,7 @@ const writes: ScenarioWrites = {
 
 export const httpSource: ScenarioSource = {
   kind: 'http',
-  capabilities: { writes: true },
+  capabilities: { writes: true, server: true },
   writes,
 
   listScenarios() {

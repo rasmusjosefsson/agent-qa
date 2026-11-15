@@ -4,7 +4,10 @@ export {
   canWrite,
   createScenarioSource,
   getScenarioSource,
+  hasServer,
+  LOCAL_ONLY_NOTE,
   resolveSourceKind,
+  routeNeedsServer,
   setScenarioSourceForTests,
   sourceWrites,
 } from './select'

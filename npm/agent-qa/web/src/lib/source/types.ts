@@ -8,6 +8,10 @@
 // sets it false. Callers ask `sourceWrites` / `canWrite` — they do not
 // branch on `kind`.
 //
+// `capabilities.server` is the local report server. The static demo sets
+// it false. Callers ask `hasServer` — pages that need the CLI or `/api`
+// stay disabled instead of calling the server.
+//
 // Later steps plug in here, not in the components:
 //   capture   writes `scenarios.json`, `<sid>/runs.json`, and the replay tree
 //   playback  reads heals, shot diffs, video cues, and network on `getRun`
@@ -27,9 +31,14 @@ import type {
 
 export type SourceKind = 'http' | 'fixture'
 
-/** Positive capability. False means every mutating call is refused. */
+/**
+ * Positive capabilities.
+ * `writes` false refuses every mutation.
+ * `server` false means there is no local report server (the static demo).
+ */
 export interface SourceCapabilities {
   readonly writes: boolean
+  readonly server: boolean
 }
 
 export interface ReplayOpts {

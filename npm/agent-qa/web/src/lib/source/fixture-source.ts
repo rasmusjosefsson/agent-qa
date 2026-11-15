@@ -109,7 +109,7 @@ export function createFixtureSource(base?: string, doFetch?: SourceFetch): Scena
 
   const source: ScenarioSource = {
     kind: 'fixture',
-    capabilities: { writes: false },
+    capabilities: { writes: false, server: false },
     writes: null,
 
     listScenarios() {

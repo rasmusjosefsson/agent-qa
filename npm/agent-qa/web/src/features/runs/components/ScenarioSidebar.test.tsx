@@ -86,7 +86,7 @@ describe('ScenarioSidebar health badges', () => {
     expect(html).not.toContain('aria-label="Replay run"')
   })
 
-  it('hides Replay and delete when the source cannot write', () => {
+  it('plays the recorded run and hides delete when there is no local server', () => {
     setScenarioSourceForTests(createFixtureSource('/demo'))
     const runs = runsApi({})
     runs.expanded = new Set(['s-login'])
@@ -97,7 +97,9 @@ describe('ScenarioSidebar health badges', () => {
     const html = renderToStaticMarkup(
       <ScenarioSidebar runs={runs} onReplay={() => {}} headed={false} onHeadedChange={() => {}} />
     )
-    expect(html).not.toContain('aria-label="Replay scenario"')
+    expect(html).toContain('aria-label="Replay scenario"')
+    expect(html).toContain('Play the recorded run')
+    expect(html).not.toContain('aria-label="Headless"')
     expect(html).not.toContain('aria-label="Delete scenario"')
     expect(html).not.toContain('aria-label="Delete run"')
     expect(html).toContain('data-tour="runs"')

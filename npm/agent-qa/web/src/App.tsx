@@ -1,4 +1,6 @@
 import { AppShell, type Tab } from "./AppShell"
+import { DemoLocalOnly } from "./components/DemoLocalOnly"
+import { hasServer } from "./lib/source"
 import { useRoute, withoutBase } from "./router"
 import RunsPage from "./features/runs/RunsPage"
 import CasesPage from "./features/cases/CasesPage"
@@ -59,25 +61,47 @@ function tabForPath(pathname: string): Tab {
 // page content swaps without a document reload. Query strings stay on the
 // route (list/detail views read them reactively) and key the content wrapper
 // so list ↔ detail still gets a soft enter transition instead of a flash.
+const TAB_LABEL: Record<Tab, string> = {
+  runs: "Runs",
+  cases: "Cases",
+  sets: "Sets",
+  plans: "Plans",
+  editor: "Editor",
+  chat: "Chat",
+  personas: "Personas",
+  environments: "Environments",
+  knowledge: "Knowledge",
+  goldens: "Goldens",
+  plugins: "Extensions",
+  settings: "Settings",
+}
+
 export function App() {
   const route = useRoute()
   const tab = tabForPath(withoutBase(route.pathname))
+  const localOnly = !hasServer() && tab !== "runs"
 
   return (
     <AppShell tab={tab}>
       <div key={`${tab}${route.search}`} className="aqa-page-enter flex min-h-0 flex-1 flex-col">
-        {tab === "runs" && <RunsPage key={route.search} />}
-        {tab === "cases" && <CasesPage />}
-        {tab === "sets" && <SetsPage />}
-        {tab === "plans" && <PlansPage />}
-        {tab === "editor" && <EditorPage />}
-        {tab === "chat" && <ChatPage />}
-        {tab === "personas" && <PersonasPage />}
-        {tab === "environments" && <EnvironmentsPage />}
-        {tab === "knowledge" && <KnowledgePage />}
-        {tab === "goldens" && <GoldensPage />}
-                {tab === "plugins" && <PluginsPage />}
-        {tab === "settings" && <SettingsPage />}
+        {localOnly ? (
+          <DemoLocalOnly label={TAB_LABEL[tab]} />
+        ) : (
+          <>
+            {tab === "runs" && <RunsPage key={route.search} />}
+            {tab === "cases" && <CasesPage />}
+            {tab === "sets" && <SetsPage />}
+            {tab === "plans" && <PlansPage />}
+            {tab === "editor" && <EditorPage />}
+            {tab === "chat" && <ChatPage />}
+            {tab === "personas" && <PersonasPage />}
+            {tab === "environments" && <EnvironmentsPage />}
+            {tab === "knowledge" && <KnowledgePage />}
+            {tab === "goldens" && <GoldensPage />}
+            {tab === "plugins" && <PluginsPage />}
+            {tab === "settings" && <SettingsPage />}
+          </>
+        )}
       </div>
     </AppShell>
   )
