@@ -1,0 +1,11 @@
+{
+  "schema": "scenario-replay-audit/v1",
+  "runId": "2026-11-14T20-31-24-037Z__2e6c899e",
+  "scenarioId": "fixture",
+  "startedAt": "2026-11-14T20:31:24.037Z",
+  "finishedAt": "2026-11-14T20:31:50.144Z",
+  "exitCode": 0,
+  "summary": "SUMMARY: 6/6 (PASS)",
+  "sessionName": "demo-fixture-pass",
+  "scenarioContentHash": "f2df7f28628637c47f160daa695edefd997d2be92f621dda98b0721611b996f8"
+}

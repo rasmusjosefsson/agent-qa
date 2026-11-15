@@ -1,0 +1,12 @@
+{"idx":1,"total":6,"id":"s0","intent":"Use a compact viewport","kind":"do:viewport","status":"running"}
+{"idx":1,"total":6,"id":"s0","intent":"Use a compact viewport","kind":"do:viewport","status":"pass","ms":100,"screenshot":"screenshots/s0.png","snapshot":"snapshots/s0.txt"}
+{"idx":2,"total":6,"id":"s1","intent":"Open the directory","kind":"do:goto","status":"running"}
+{"idx":2,"total":6,"id":"s1","intent":"Open the directory","kind":"do:goto","status":"pass","ms":1504,"screenshot":"screenshots/s1.png","snapshot":"snapshots/s1.txt"}
+{"idx":3,"total":6,"id":"s2","intent":"Enter a name","kind":"do:type","status":"running"}
+{"idx":3,"total":6,"id":"s2","intent":"Enter a name","kind":"do:type","status":"pass","ms":201,"screenshot":"screenshots/s2.png","snapshot":"snapshots/s2.txt"}
+{"idx":4,"total":6,"id":"s3","intent":"Save the name","kind":"do:click","status":"running"}
+{"idx":4,"total":6,"id":"s3","intent":"Save the name","kind":"do:click","status":"pass","ms":833,"screenshot":"screenshots/s3.png","snapshot":"snapshots/s3.txt"}
+{"idx":5,"total":6,"id":"s4","intent":"Status says the name was saved","kind":"check","status":"running"}
+{"idx":5,"total":6,"id":"s4","intent":"Status says the name was saved","kind":"check","status":"pass","ms":100,"screenshot":"screenshots/s4.png","snapshot":"snapshots/s4.txt"}
+{"idx":6,"total":6,"id":"s5","intent":"The directory screenshot matches the baseline","kind":"check","status":"running"}
+{"idx":6,"total":6,"id":"s5","intent":"The directory screenshot matches the baseline","kind":"check","status":"fail","ms":360,"error":"shot 's1' differs from baseline: 4.28% pixels changed (tolerance 2.00%) in 258 region(s), largest 448x40 at 256,40 — diff at fixtures/fixture/replays/2026-11-14T20-31-51-384Z__a521cd3f/shots-diff/s1.diff.png — suspects: body.revised>main>input#name, body.revised>main>button#save, body.revised>main>h1","screenshot":"screenshots/s5.png","snapshot":"snapshots/s5.txt"}

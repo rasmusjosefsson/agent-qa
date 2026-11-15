@@ -1,0 +1,10 @@
+- main
+  - heading "Team directory" [level=1, ref=e1]
+  - paragraph
+    - StaticText "Add a person and confirm the page saved them."
+  - LabelText
+    - StaticText "Name"
+  - textbox "Name" [ref=e2]: Ada
+    - StaticText "Ada"
+  - button "Save" [ref=e3]
+  - status

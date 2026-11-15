@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Directory</title>
+    <style>
+      :root { color-scheme: light; }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        background: #f4f2fb;
+        color: #1c1730;
+      }
+      main { max-width: 28rem; margin: 2.5rem auto; padding: 0 1.25rem; }
+      h1 { font-size: 1.6rem; margin: 0 0 0.25rem; }
+      p.lede { margin: 0 0 1.25rem; color: #514b66; }
+      .banner {
+        display: none;
+        margin: 0 0 1rem;
+        padding: 0.55rem 0.75rem;
+        border-radius: 0.6rem;
+        background: #ffe08a;
+        font-weight: 600;
+      }
+      body.revised .banner { display: block; }
+      label { display: block; font-weight: 650; margin-bottom: 0.35rem; }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        font: inherit;
+        padding: 0.45rem 0.6rem;
+        border: 1px solid #d5d0e6;
+        border-radius: 0.5rem;
+        background: white;
+      }
+      button {
+        margin-top: 0.9rem;
+        font: inherit;
+        font-weight: 650;
+        padding: 0.5rem 0.95rem;
+        border: 0;
+        border-radius: 0.55rem;
+        background: #5b4dff;
+        color: white;
+      }
+      #status { min-height: 1.4rem; margin-top: 1rem; font-weight: 650; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="banner" id="banner">Directory layout updated</p>
+      <h1>Team directory</h1>
+      <p class="lede">Add a person and confirm the page saved them.</p>
+      <label for="name">Name</label>
+      <input id="name" name="Name" autocomplete="off" />
+      <button id="save" type="button">Save</button>
+      <p id="status" role="status"></p>
+    </main>
+    <script>
+      if ("__PAGE_REV__" === "2") document.body.classList.add("revised")
+      document.getElementById("save").addEventListener("click", () => {
+        const name = document.getElementById("name").value.trim()
+        document.getElementById("status").textContent = name ? "Saved " + name : "Missing name"
+      })
+    </script>
+  </body>
+</html>

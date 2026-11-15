@@ -1,0 +1,11 @@
+{
+  "schema": "scenario-replay-audit/v1",
+  "runId": "2026-11-14T20-30-48-979Z__46f9f336",
+  "scenarioId": "hello",
+  "startedAt": "2026-11-14T20:30:48.979Z",
+  "finishedAt": "2026-11-14T20:30:55.688Z",
+  "exitCode": 0,
+  "summary": "SUMMARY: 2/2 (PASS)",
+  "sessionName": "demo-hello",
+  "scenarioContentHash": "ae4b371705029cf109129482cf486f5936a3c49324c0ca9fcc8754e93674ce33"
+}

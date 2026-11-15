@@ -1,0 +1,25 @@
+{
+  "schema": "scenario/2",
+  "id": "hello",
+  "intent": "Smoke check — the example page loads and its URL is right",
+  "env": { "open": [{ "kind": "fresh" }] },
+  "steps": [
+    {
+      "id": "s0",
+      "intent": "Open the example page",
+      "kind": "do",
+      "verb": "goto",
+      "value": { "from": "literal", "literal": "https://example.com/" }
+    },
+    {
+      "id": "s1",
+      "intent": "URL is the example page",
+      "kind": "check",
+      "claim": {
+        "subject": { "url": true },
+        "predicate": "contains",
+        "value": "example.com"
+      }
+    }
+  ]
+}

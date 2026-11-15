@@ -1,0 +1,11 @@
+- main
+  - paragraph
+    - StaticText "Directory layout updated"
+  - heading "Team directory" [level=1, ref=e1]
+  - paragraph
+    - StaticText "Add a person and confirm the page saved them."
+  - LabelText
+    - StaticText "Name"
+  - textbox "Name" [ref=e2]
+  - button "Save" [ref=e3]
+  - status

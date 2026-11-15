@@ -1,0 +1,11 @@
+{
+  "schema": "scenario-replay-audit/v1",
+  "runId": "2026-11-14T20-31-51-384Z__a521cd3f",
+  "scenarioId": "fixture",
+  "startedAt": "2026-11-14T20:31:51.384Z",
+  "finishedAt": "2026-11-14T20:32:17.711Z",
+  "exitCode": 1,
+  "summary": "SUMMARY: 5/6 (FAIL)",
+  "sessionName": "demo-fixture-drift",
+  "scenarioContentHash": "f2df7f28628637c47f160daa695edefd997d2be92f621dda98b0721611b996f8"
+}

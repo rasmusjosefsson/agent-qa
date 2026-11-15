@@ -1,0 +1,25 @@
+{
+  "sid": "fixture",
+  "trend": {
+    "scenarioId": "fixture",
+    "runs": [
+      {
+        "runId": "2026-11-14T20-31-24-037Z__2e6c899e",
+        "exitCode": 0,
+        "durationSecs": 26.107,
+        "startedAt": "2026-11-14T20:31:24.037Z"
+      },
+      {
+        "runId": "2026-11-14T20-31-51-384Z__a521cd3f",
+        "exitCode": 1,
+        "durationSecs": 26.327,
+        "startedAt": "2026-11-14T20:31:51.384Z"
+      }
+    ],
+    "passed": 1,
+    "failed": 1,
+    "medianSecs": 26.217,
+    "outcomes": "✓✗",
+    "sparkline": "▁█"
+  }
+}

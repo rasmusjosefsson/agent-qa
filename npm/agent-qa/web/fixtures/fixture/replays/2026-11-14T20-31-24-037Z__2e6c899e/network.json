@@ -1,0 +1,21 @@
+{
+  "requestCount": 2,
+  "requests": [
+    {
+      "requestId": "A3A9C88B873F682B9564AA88D1E68E58",
+      "url": "http://127.0.0.1:8765/",
+      "method": "GET",
+      "status": 200,
+      "resourceType": "Document",
+      "mimeType": "text/html"
+    },
+    {
+      "requestId": "11177.2",
+      "url": "http://127.0.0.1:8765/favicon.ico",
+      "method": "GET",
+      "status": 200,
+      "resourceType": "Other",
+      "mimeType": "text/html"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "sid": "hello",
+  "trend": {
+    "scenarioId": "hello",
+    "runs": [
+      {
+        "runId": "2026-11-14T20-30-48-979Z__46f9f336",
+        "exitCode": 0,
+        "durationSecs": 6.709,
+        "startedAt": "2026-11-14T20:30:48.979Z"
+      }
+    ],
+    "passed": 1,
+    "failed": 0,
+    "medianSecs": 6.709,
+    "outcomes": "✓",
+    "sparkline": "▄"
+  }
+}

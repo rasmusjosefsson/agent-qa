@@ -1,0 +1,73 @@
+{
+  "scenariosRoot": "fixtures",
+  "scenarios": [
+    {
+      "sid": "fixture",
+      "dir": "fixtures/fixture",
+      "scenarioId": "fixture",
+      "hasScenario": true,
+      "scenarioError": null,
+      "intent": "Save a name on the directory page and confirm the status",
+      "steps": 6,
+      "tags": [],
+      "coverage": {
+        "doSteps": 4,
+        "checked": 1,
+        "bare": 3,
+        "shotCovered": 0,
+        "goldenCovered": 0,
+        "ratio": 0.25,
+        "shotRatio": 0,
+        "goldenRatio": 0
+      },
+      "latestRunId": "2026-11-14T20-31-51-384Z__a521cd3f",
+      "activeRunId": null,
+      "latestRun": {
+        "runId": "2026-11-14T20-31-51-384Z__a521cd3f",
+        "summary": "SUMMARY: 5/6 (FAIL)",
+        "exitCode": 1,
+        "startedAt": "2026-11-14T20:31:51.384Z",
+        "finishedAt": "2026-11-14T20:32:17.711Z",
+        "state": "done",
+        "currentIdx": 6,
+        "total": 6,
+        "ok": false,
+        "healed": 0
+      }
+    },
+    {
+      "sid": "hello",
+      "dir": "fixtures/hello",
+      "scenarioId": "hello",
+      "hasScenario": true,
+      "scenarioError": null,
+      "intent": "Smoke check — the example page loads and its URL is right",
+      "steps": 2,
+      "tags": [],
+      "coverage": {
+        "doSteps": 1,
+        "checked": 1,
+        "bare": 0,
+        "shotCovered": 0,
+        "goldenCovered": 0,
+        "ratio": 1,
+        "shotRatio": 0,
+        "goldenRatio": 0
+      },
+      "latestRunId": "2026-11-14T20-30-48-979Z__46f9f336",
+      "activeRunId": null,
+      "latestRun": {
+        "runId": "2026-11-14T20-30-48-979Z__46f9f336",
+        "summary": "SUMMARY: 2/2 (PASS)",
+        "exitCode": 0,
+        "startedAt": "2026-11-14T20:30:48.979Z",
+        "finishedAt": "2026-11-14T20:30:55.688Z",
+        "state": "done",
+        "currentIdx": 2,
+        "total": 2,
+        "ok": true,
+        "healed": 0
+      }
+    }
+  ]
+}

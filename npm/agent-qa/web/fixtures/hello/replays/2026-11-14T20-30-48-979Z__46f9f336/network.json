@@ -1,0 +1,21 @@
+{
+  "requestCount": 2,
+  "requests": [
+    {
+      "requestId": "4347A4633116E0A711D45E06CDA9A9CE",
+      "url": "https://example.com/",
+      "method": "GET",
+      "status": 200,
+      "resourceType": "Document",
+      "mimeType": "text/html"
+    },
+    {
+      "requestId": "10211.2",
+      "url": "https://example.com/s.js",
+      "method": "GET",
+      "status": 200,
+      "resourceType": "Script",
+      "mimeType": "text/javascript"
+    }
+  ]
+}
