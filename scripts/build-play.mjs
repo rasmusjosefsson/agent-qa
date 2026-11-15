@@ -8,7 +8,7 @@
 // The local workbench build is unchanged: it still uses the http source.
 
 import { spawnSync } from 'node:child_process'
-import { cpSync, mkdirSync, rmSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -27,12 +27,18 @@ function run(cmd, args, cwd, env) {
 rmSync(out, { recursive: true, force: true })
 mkdirSync(out, { recursive: true })
 
+// The site job and the docs-goldens job do not install the workbench.
+// `npx vite` would then fetch a bare Vite and fail to resolve the plugins.
+if (!existsSync(join(web, 'node_modules', 'vite'))) {
+  run('npm', ['ci', '--no-audit', '--no-fund'], web, process.env)
+}
+
 const env = {
   ...process.env,
   VITE_AQA_SOURCE: 'fixture',
   VITE_AQA_FIXTURE_BASE: '/agent-qa/play/fixtures',
 }
 
-run('npx', ['vite', 'build', '--base', '/agent-qa/play/', '--outDir', out], web, env)
+run('npm', ['run', 'build:only', '--', '--base', '/agent-qa/play/', '--outDir', out], web, env)
 cpSync(fixtures, join(out, 'fixtures'), { recursive: true })
 console.log(`play build → ${out}`)
