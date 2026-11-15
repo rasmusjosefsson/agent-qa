@@ -4,7 +4,7 @@ import { BugIcon, WrenchIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { TextLineDiff } from '@/components/text-line-diff'
 import { acceptDomshot, acceptShot, artifactUrl, baselineShotUrl, fetchArtifactText, getScenarioDef, promoteHeal } from '@/lib/runs-api'
-import { evidenceStepId, isShotMiss } from '../shot-evidence'
+import { evidenceStepId, hasPageFrame, isShotMiss } from '../shot-evidence'
 import { BeforeAfterSlider } from './BeforeAfterSlider'
 import { collapseEvents, fmtMs, icon } from '../rows'
 import type { DetailTab, HealRow, RunDetail, RunEvent, ScenarioDef, ScenarioStep } from '../types'
@@ -231,7 +231,9 @@ function Shot({
   step: RunEvent | undefined
   onLightbox: (url: string, caption: string) => void
 }) {
-  if (!step || !step.screenshot) {
+  // A viewport capture is a blank page. Treat it like a missing frame
+  // so the detail pane does not show a white photo as this step's image.
+  if (!step || !hasPageFrame(step)) {
     return (
       <div>
         <h4 className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">{title}</h4>

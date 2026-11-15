@@ -66,6 +66,31 @@ describe('failed shot step', () => {
   })
 })
 
+describe('passing step frames', () => {
+  it('does not show a blank viewport capture as the step image', () => {
+    const runs = {
+      detail: {
+        sid: 'fixture',
+        runId: 'pass-1',
+        audit: { summary: 'SUMMARY: 6/6 (PASS)' },
+        status: { state: 'done', ok: true },
+        events: [
+          { idx: 1, id: 's0', intent: 'Use a compact viewport', kind: 'do:viewport', status: 'pass', screenshot: 'screenshots/s0.png' },
+          { idx: 2, id: 's1', intent: 'Open the directory', kind: 'do:goto', status: 'pass', screenshot: 'screenshots/s1.png' },
+        ],
+        shotDiffs: [],
+      },
+      sel: { sid: 'fixture', runId: 'pass-1', stepIdx: 1, tab: 'step' },
+      selectTab() {},
+    } as unknown as RunsApi
+    const html = renderToStaticMarkup(<StepDetail runs={runs} onLightbox={() => {}} />)
+    expect(html).toContain('not captured')
+    expect(html).not.toContain('/artifact/screenshots/s0')
+    expect(html).not.toContain('Baseline')
+    expect(html).not.toContain('>Diff<')
+  })
+})
+
 describe('RunTraffic', () => {
   it('renders one row per captured request with method, url, and status', () => {
     const html = renderToStaticMarkup(
