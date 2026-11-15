@@ -1,5 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { createFixtureSource } from '@/lib/source/fixture-source'
+import { setScenarioSourceForTests } from '@/lib/source'
 import type { RunsApi } from '../useRuns'
 import { CenterPane, type RunConfig } from './CenterPane'
 
@@ -156,9 +158,101 @@ describe('CenterPane scenario controls', () => {
       <CenterPane runs={noVid} runConfig={runConfig} />
     )
     expect(html2).not.toContain('aria-label="Replay timeline"')
+    expect(html2).not.toContain('aria-label="Event timeline"')
     expect(html2).not.toContain('<video')
     // Replay belongs to the scenario card. A past run does not grow its own.
     expect(html).not.toContain('>Replay</button>')
     expect(html2).not.toContain('>Replay</button>')
   })
+
+  it('plays events.jsonl when the source cannot write and there is no video', () => {
+    setScenarioSourceForTests(createFixtureSource('/demo'))
+    const runs = {
+      detail: {
+        sid: 's-1',
+        runId: 'r-1',
+        audit: { summary: 'SUMMARY: 2/2 (PASS)', exitCode: 0 },
+        status: { state: 'done', ok: true },
+        events: [
+          { idx: 1, id: 'open', intent: 'Open the directory', kind: 'do:goto', status: 'pass', ms: 400, screenshot: 'screenshots/open.png' },
+          { idx: 2, id: 'save', intent: 'Save the name', kind: 'do:click', status: 'pass', ms: 200, screenshot: 'screenshots/save.png' },
+        ],
+        video: false,
+      },
+      scenarioDef: null,
+      sel: { sid: 's-1', runId: 'r-1', stepIdx: null },
+      runDefSteps: { sid: 's-1', steps: [] },
+      runsBySid: {},
+      selectStep() {},
+    } as unknown as RunsApi
+    const html = renderToStaticMarkup(<CenterPane runs={runs} runConfig={runConfig} />)
+    expect(html).toContain('data-testid="event-playback"')
+    expect(html).toContain('aria-label="Event timeline"')
+    expect(html).toContain('aria-label="Play"')
+    expect(html).toContain('aria-label="Playback speed"')
+    expect(html).toContain('>8x</option>')
+    expect(html).toContain('Open the directory')
+    expect(html).toContain('/demo/s-1/replays/r-1/screenshots/open.png')
+    expect(html).not.toContain('<video')
+  })
+
+  it('opens a shot miss on the screenshot the error names, not the first frame', () => {
+    setScenarioSourceForTests(createFixtureSource('/demo'))
+    const error = "shot 's1' differs from baseline: 4.28% pixels changed"
+    const runs = {
+      detail: {
+        sid: 'fixture',
+        runId: 'run-1',
+        audit: { summary: 'SUMMARY: 5/6 (FAIL)', exitCode: 1 },
+        status: { state: 'done', ok: false },
+        events: [
+          { idx: 1, id: 's0', intent: 'Use a compact viewport', status: 'pass', ms: 100, screenshot: 'screenshots/s0.png' },
+          { idx: 6, id: 's5', intent: 'The directory screenshot matches the baseline', status: 'fail', ms: 360, error, screenshot: 'screenshots/s5.png' },
+        ],
+        video: false,
+      },
+      scenarioDef: null,
+      sel: { sid: 'fixture', runId: 'run-1', stepIdx: null },
+      runDefSteps: { sid: 'fixture', steps: [] },
+      runsBySid: {},
+      selectStep() {},
+    } as unknown as RunsApi
+    const html = renderToStaticMarkup(<CenterPane runs={runs} runConfig={runConfig} />)
+    expect(html).toContain('shot &#x27;s1&#x27; differs from baseline')
+    expect(html).toContain('/demo/fixture/replays/run-1/screenshots/s1.png')
+    expect(html).not.toContain('/screenshots/s0.png')
+    expect(html).not.toContain('/screenshots/s5.png')
+  })
+
+  it('opens a passing run on the first page frame, not a blank viewport', () => {
+    setScenarioSourceForTests(createFixtureSource('/demo'))
+    const runs = {
+      detail: {
+        sid: 'fixture',
+        runId: 'pass-1',
+        audit: { summary: 'SUMMARY: 6/6 (PASS)', exitCode: 0 },
+        status: { state: 'done', ok: true },
+        events: [
+          { idx: 1, id: 's0', intent: 'Use a compact viewport', kind: 'do:viewport', status: 'pass', ms: 100, screenshot: 'screenshots/s0.png' },
+          { idx: 2, id: 's1', intent: 'Open the directory', kind: 'do:goto', status: 'pass', ms: 1500, screenshot: 'screenshots/s1.png' },
+          { idx: 3, id: 's2', intent: 'Enter a name', kind: 'do:type', status: 'pass', ms: 200, screenshot: 'screenshots/s2.png' },
+        ],
+        video: false,
+        shotDiffs: [],
+      },
+      scenarioDef: null,
+      sel: { sid: 'fixture', runId: 'pass-1', stepIdx: null },
+      runDefSteps: { sid: 'fixture', steps: [] },
+      runsBySid: {},
+      selectStep() {},
+    } as unknown as RunsApi
+    const html = renderToStaticMarkup(<CenterPane runs={runs} runConfig={runConfig} />)
+    expect(html).toContain('/demo/fixture/replays/pass-1/screenshots/s1.png')
+    expect(html).toContain('Open the directory')
+    expect(html).not.toContain('/screenshots/s0.png')
+    expect(html).not.toContain('Baseline')
+    expect(html).not.toContain('>Diff<')
+  })
 })
+
+afterEach(() => setScenarioSourceForTests(null))

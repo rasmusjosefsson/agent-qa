@@ -10,7 +10,7 @@
 //
 // Later steps plug in here, not in the components:
 //   capture   writes `scenarios.json`, `<sid>/runs.json`, and the replay tree
-//   playback  fills heals, shot diffs, video cues, and network on `getRun`
+//   playback  reads heals, shot diffs, video cues, and network on `getRun`
 //   play/     builds with `VITE_AQA_SOURCE=fixture`
 //   banner    reads `canWrite()` and hides the write controls
 
@@ -115,18 +115,23 @@ export interface ScenarioSource {
   fetchArtifactText(sid: string, runId: string, kind: string, stepId: string, pretty: boolean): Promise<string | null>
 }
 
-/** Parsed `events.jsonl`. A trailing partial line is skipped. */
-export function parseEventsJsonl(text: string | null): RunEvent[] {
+/** Parsed JSONL. A trailing partial line is skipped. */
+export function parseJsonl<T>(text: string | null): T[] {
   if (!text) return []
-  const rows: RunEvent[] = []
+  const rows: T[] = []
   for (const line of text.split('\n')) {
     const trimmed = line.trim()
     if (!trimmed) continue
     try {
-      rows.push(JSON.parse(trimmed) as RunEvent)
+      rows.push(JSON.parse(trimmed) as T)
     } catch {
       /* truncated line while a run is still writing */
     }
   }
   return rows
+}
+
+/** Parsed `events.jsonl`. A trailing partial line is skipped. */
+export function parseEventsJsonl(text: string | null): RunEvent[] {
+  return parseJsonl<RunEvent>(text)
 }

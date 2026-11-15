@@ -135,7 +135,9 @@ describe('fixture source', () => {
       { idx: 1, status: 'pass' },
     ])
     expect(detail.heals).toEqual([])
+    expect(detail.shotDiffs).toEqual([])
     expect(detail.video).toBe(false)
+    expect(detail.network).toBeNull()
 
     expect(urls).toContain('/demo/s-1/replays/r-1/audit.json')
     expect(urls).toContain('/demo/s-1/replays/r-1/events.jsonl')
@@ -147,6 +149,67 @@ describe('fixture source', () => {
     expect(source.artifactUrl('s-1', 'r-1', 'snapshots', 'open')).toBe(source.snapshotUrl('s-1', 'r-1', 'open'))
     expect(source.replayStreamUrl('s-1')).toBeNull()
     expect(await source.fetchArtifactText('s-1', 'r-1', 'snapshots', 'open', false)).toBe('button "Save"')
+  })
+
+  it('fills heals, diffs, cues, and network when the files exist', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.endsWith('/audit.json')) return jsonResponse({ summary: 'SUMMARY: 1/2 (FAIL)', exitCode: 1 })
+      if (path.endsWith('/events.jsonl')) return textResponse('{"idx":1,"id":"open","status":"pass","ms":100}\n')
+      if (path.endsWith('/status.json')) return jsonResponse({ state: 'done', ok: false })
+      if (path.endsWith('/latest.txt')) return textResponse('r-1\n')
+      if (path.endsWith('/artifacts.json')) {
+        return jsonResponse({
+          heals: [{ stepId: 'open', mode: 'locator-correction', strategy: 'name', patch: { rationale: 'renamed' } }],
+          shotDiffs: ['open'],
+          domshotDiffs: ['open'],
+          video: true,
+          videoFile: 'run.mp4',
+          cues: [{ id: 'open', idx: 1, tMs: 400 }],
+        })
+      }
+      if (path.endsWith('/network.json')) {
+        return jsonResponse({ requestCount: 1, requests: [{ requestId: '1', url: 'https://example.com/', method: 'GET', status: 200 }] })
+      }
+      return new Response('missing', { status: 404 })
+    })
+    const source = createFixtureSource('/demo', fetchMock)
+    const detail = await source.getRun('s-1', 'r-1')
+    expect(detail.heals).toEqual([
+      { stepId: 'open', mode: 'locator-correction', strategy: 'name', patch: { rationale: 'renamed' } },
+    ])
+    expect(detail.shotDiffs).toEqual(['open'])
+    expect(detail.domshotDiffs).toEqual(['open'])
+    expect(detail.video).toBe(true)
+    expect(detail.videoFile).toBe('run.mp4')
+    expect(detail.cues).toEqual([{ id: 'open', idx: 1, tMs: 400 }])
+    expect(detail.network).toMatchObject({ requestCount: 1 })
+  })
+
+  it('joins heal.jsonl with patch files when artifacts.json is absent', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.endsWith('/audit.json')) return jsonResponse(null)
+      if (path.endsWith('/events.jsonl')) return new Response('missing', { status: 404 })
+      if (path.endsWith('/status.json')) return new Response('missing', { status: 404 })
+      if (path.endsWith('/latest.txt')) return new Response('missing', { status: 404 })
+      if (path.endsWith('/artifacts.json')) return new Response('missing', { status: 404 })
+      if (path.endsWith('/network.json')) return new Response('missing', { status: 404 })
+      if (path.endsWith('/heal.jsonl')) {
+        return textResponse(
+          '{"stepId":"open","mode":"locator-correction","strategy":"name"}\n{"stepId":"save","mode":"value-rejection"}\n'
+        )
+      }
+      if (path.endsWith('/diffs/open.patch.json')) return jsonResponse({ rationale: 'role matched' })
+      return new Response('missing', { status: 404 })
+    })
+    const source = createFixtureSource('/demo', fetchMock)
+    const detail = await source.getRun('s-1', 'r-1')
+    expect(detail.heals).toEqual([
+      { stepId: 'open', mode: 'locator-correction', strategy: 'name', patch: { rationale: 'role matched' } },
+      { stepId: 'save', mode: 'value-rejection', patch: null },
+    ])
+    expect(detail.network).toBeNull()
   })
 
   it('refuses every write without fetching', async () => {

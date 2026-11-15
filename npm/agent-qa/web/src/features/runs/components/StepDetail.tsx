@@ -4,6 +4,7 @@ import { BugIcon, WrenchIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { TextLineDiff } from '@/components/text-line-diff'
 import { acceptDomshot, acceptShot, artifactUrl, baselineShotUrl, fetchArtifactText, getScenarioDef, promoteHeal } from '@/lib/runs-api'
+import { evidenceStepId, hasPageFrame, isShotMiss } from '../shot-evidence'
 import { BeforeAfterSlider } from './BeforeAfterSlider'
 import { collapseEvents, fmtMs, icon } from '../rows'
 import type { DetailTab, HealRow, RunDetail, RunEvent, ScenarioDef, ScenarioStep } from '../types'
@@ -78,7 +79,11 @@ export function StepDetail({ runs, onLightbox }: { runs: Api; onLightbox: (url: 
   // A failing {"shot":"x"} check references the do-step whose screenshot
   // drifted; the delta map is keyed by that referenced id.
   const shotRef = (defStep?.claim as { subject?: { shot?: string } } | undefined)?.subject?.shot
-  const shotDiff = shotRef && (detail.shotDiffs || []).includes(shotRef) ? shotRef : null
+  // The check step's own sidecar is a later frame. The miss names the
+  // screenshot it compared; baseline, actual, and diff all use that id.
+  const evidenceId = evidenceStepId(step, shotRef)
+  const shotMiss = isShotMiss(step, shotRef)
+  const shotDiff = evidenceId && (detail.shotDiffs || []).includes(evidenceId) ? evidenceId : null
   // Same for {"domshot":"x"}: the unified diff is keyed by the referenced id.
   const domshotRef = (defStep?.claim as { subject?: { domshot?: string } } | undefined)?.subject?.domshot
   const domshotDiff = domshotRef && (detail.domshotDiffs || []).includes(domshotRef) ? domshotRef : null
@@ -124,10 +129,33 @@ export function StepDetail({ runs, onLightbox }: { runs: Api; onLightbox: (url: 
         )}
       </div>
 
-      <div className="grid shrink-0 grid-cols-2 gap-2 border-b border-border p-3">
-        <Shot title="Before" sid={sid} runId={runId} step={prev} onLightbox={onLightbox} />
-        <Shot title="After" sid={sid} runId={runId} step={step} onLightbox={onLightbox} />
-      </div>
+      {shotMiss && evidenceId ? (
+        <div className="grid shrink-0 grid-cols-3 gap-2 border-b border-border p-3">
+          <Still
+            title="Baseline"
+            url={baselineShotUrl(sid, `${evidenceId}.png`)}
+            alt={`baseline · ${evidenceId}`}
+            onLightbox={onLightbox}
+          />
+          <Still
+            title="This run"
+            url={artifactUrl(sid, runId, 'screenshots', evidenceId)}
+            alt={`this run · ${evidenceId}`}
+            onLightbox={onLightbox}
+          />
+          <Still
+            title="Diff"
+            url={artifactUrl(sid, runId, 'shots-diff', evidenceId)}
+            alt={`diff · ${evidenceId}`}
+            onLightbox={onLightbox}
+          />
+        </div>
+      ) : (
+        <div className="grid shrink-0 grid-cols-2 gap-2 border-b border-border p-3">
+          <Shot title="Before" sid={sid} runId={runId} step={prev} onLightbox={onLightbox} />
+          <Shot title="After" sid={sid} runId={runId} step={step} onLightbox={onLightbox} />
+        </div>
+      )}
 
       <div className="flex shrink-0 gap-1 border-b border-border px-2 py-1.5">
         {TABS.map((t) => (
@@ -169,6 +197,27 @@ export function StepDetail({ runs, onLightbox }: { runs: Api; onLightbox: (url: 
   )
 }
 
+function Still({
+  title,
+  url,
+  alt,
+  onLightbox,
+}: {
+  title: string
+  url: string
+  alt: string
+  onLightbox: (url: string, caption: string) => void
+}) {
+  return (
+    <div>
+      <h4 className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">{title}</h4>
+      <button type="button" onClick={() => onLightbox(url, alt)} className="block w-full">
+        <img src={url} alt={alt} loading="lazy" className="aspect-video w-full rounded-lg border border-border object-cover object-top" />
+      </button>
+    </div>
+  )
+}
+
 function Shot({
   title,
   sid,
@@ -182,7 +231,9 @@ function Shot({
   step: RunEvent | undefined
   onLightbox: (url: string, caption: string) => void
 }) {
-  if (!step || !step.screenshot) {
+  // A viewport capture is a blank page. Treat it like a missing frame
+  // so the detail pane does not show a white photo as this step's image.
+  if (!step || !hasPageFrame(step)) {
     return (
       <div>
         <h4 className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">{title}</h4>
@@ -252,7 +303,7 @@ function TabBody({
       ['status', step.status || ''],
       ['duration', fmtMs(step.ms)],
       ['snapshot', step.snapshot || '(none)'],
-      ['screenshot', step.screenshot || '(none)']
+      ['screenshot', (isShotMiss(step) && evidenceStepId(step) ? `screenshots/${evidenceStepId(step)}.png` : step.screenshot) || '(none)']
     )
     return (
       <dl className="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-1 text-xs">

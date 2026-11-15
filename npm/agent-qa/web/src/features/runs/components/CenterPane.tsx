@@ -6,7 +6,9 @@ import { CameraIcon, GitCompareIcon, Loader2Icon, PlayIcon, PlusIcon, WrenchIcon
 import { Button } from '@/components/ui/button'
 import { SpaLink } from '@/components/spa-link'
 import { acceptAllDomshots, acceptAllShots } from '@/lib/runs-api'
+import { canWrite } from '@/lib/source'
 import { CompareView } from './CompareView'
+import { EventPlayback } from './EventPlayback'
 import { InsertCheckDialog } from './InsertCheckDialog'
 import { ReplayScrubber } from './ReplayScrubber' 
 import {
@@ -442,6 +444,15 @@ export function CenterPane({
             steps={rows}
             cues={detail.cues}
             videoFile={detail.videoFile}
+            selectedIdx={sel.stepIdx}
+            onSelect={(idx) => runs.selectStep(idx)}
+          />
+        )}
+        {!live && !detail.video && !canWrite() && sel.sid && events.length > 0 && (
+          <EventPlayback
+            sid={sel.sid}
+            runId={detail.runId}
+            steps={events}
             selectedIdx={sel.stepIdx}
             onSelect={(idx) => runs.selectStep(idx)}
           />

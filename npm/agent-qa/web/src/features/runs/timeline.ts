@@ -21,6 +21,7 @@ export interface TimelineStep {
   ms?: number
   pending?: boolean
   screenshot?: string
+  error?: string
 }
 
 export interface VideoCue {

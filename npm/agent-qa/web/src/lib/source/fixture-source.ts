@@ -1,5 +1,5 @@
-// Static replay tree. The capture step writes these files; playback fills
-// the run fields this stub leaves empty (heals, diffs, video, network).
+// Static replay tree. The capture step writes these files. getRun fills
+// heals, shot diffs, video cues, and network when the files are present.
 //
 //   <base>/scenarios.json                         GET /api/scenarios body
 //   <base>/health.json                            GET /api/health body (optional)
@@ -10,6 +10,9 @@
 //   <base>/<sid>/replays/<runId>/audit.json
 //   <base>/<sid>/replays/<runId>/events.jsonl
 //   <base>/<sid>/replays/<runId>/status.json
+//   <base>/<sid>/replays/<runId>/artifacts.json           heals, diffs, video cues
+//   <base>/<sid>/replays/<runId>/network.json             optional
+//   <base>/<sid>/replays/<runId>/heal.jsonl               used when artifacts.json is absent
 //   <base>/<sid>/replays/<runId>/screenshots/<stepId>.png
 //   <base>/<sid>/replays/<runId>/snapshots/<stepId>.txt
 //   <base>/<sid>/baselines/<name>
@@ -18,9 +21,9 @@
 // Extensions match the report server's artifact kinds. A static host has
 // no live browser, so replayStreamUrl is null and writes is null.
 
-import type { AuditTrend, RunDetail, RunSummary, ScenarioDef, ScenarioHealth, ScenarioSummary } from '@/features/runs/types'
+import type { AuditTrend, HealRow, RunDetail, RunSummary, ScenarioDef, ScenarioHealth, ScenarioSummary } from '@/features/runs/types'
 import { fetchJson, fetchOptional, readArtifactText } from './fetch-json'
-import { parseEventsJsonl, type ScenarioSource } from './types'
+import { parseEventsJsonl, parseJsonl, type ScenarioSource } from './types'
 
 export const DEFAULT_FIXTURE_BASE = '/fixtures'
 
@@ -45,6 +48,16 @@ export function fixtureUrl(base: string, ...segments: string[]): string {
   return `${root}/${segments.map((segment) => encodeURIComponent(segment)).join('/')}`
 }
 
+/** Directory listing a static host cannot produce. Capture writes this. */
+export interface FixtureArtifacts {
+  heals?: HealRow[]
+  shotDiffs?: string[]
+  domshotDiffs?: string[]
+  video?: boolean
+  videoFile?: 'run.mp4' | 'run.webm' | null
+  cues?: RunDetail['cues']
+}
+
 export function runDetailFromFiles(
   sid: string,
   runId: string,
@@ -53,8 +66,11 @@ export function runDetailFromFiles(
     eventsJsonl: string | null
     status: RunDetail['status']
     latestRunId: string | null
+    artifacts?: FixtureArtifacts | null
+    network?: RunDetail['network']
   },
 ): RunDetail {
+  const artifacts = files.artifacts
   return {
     sid,
     runId,
@@ -62,14 +78,13 @@ export function runDetailFromFiles(
     audit: files.audit,
     status: files.status,
     events: parseEventsJsonl(files.eventsJsonl),
-    // Playback (a later step) fills these from heal.jsonl, diff dirs, and video.
-    heals: [],
-    shotDiffs: [],
-    domshotDiffs: [],
-    video: false,
-    videoFile: null,
-    cues: null,
-    network: null,
+    heals: artifacts?.heals ?? [],
+    shotDiffs: artifacts?.shotDiffs ?? [],
+    domshotDiffs: artifacts?.domshotDiffs ?? [],
+    video: artifacts?.video ?? false,
+    videoFile: artifacts?.videoFile ?? null,
+    cues: artifacts?.cues ?? null,
+    network: files.network ?? null,
   }
 }
 
@@ -125,13 +140,38 @@ export function createFixtureSource(base?: string, doFetch?: SourceFetch): Scena
     },
 
     async getRun(sid, runId) {
-      const [audit, eventsJsonl, status, latestRunId] = await Promise.all([
+      const [audit, eventsJsonl, status, latestRunId, artifacts, network, healText] = await Promise.all([
         source.readAudit(sid, runId),
         source.readEvents(sid, runId),
         source.readStatus(sid, runId),
         source.readLatestRunId(sid),
+        readJson<FixtureArtifacts>(url(sid, 'replays', runId, 'artifacts.json')),
+        readJson<RunDetail['network']>(url(sid, 'replays', runId, 'network.json')),
+        readText(url(sid, 'replays', runId, 'heal.jsonl')),
       ])
-      return runDetailFromFiles(sid, runId, { audit, eventsJsonl, status, latestRunId })
+      // artifacts.json is the joined form (patches included). Without it,
+      // heal.jsonl is joined one patch file at a time — a static host cannot
+      // list diffs/.
+      let heals = artifacts?.heals
+      if (!heals) {
+        const rows = parseJsonl<HealRow>(healText)
+        heals = await Promise.all(
+          rows.map(async (row) => {
+            const stepId = typeof row.stepId === 'string' ? row.stepId : ''
+            if (row.mode !== 'locator-correction' || !stepId) return { ...row, patch: row.patch ?? null }
+            const patch = await readJson<NonNullable<HealRow['patch']>>(url(sid, 'replays', runId, 'diffs', `${stepId}.patch.json`))
+            return { ...row, patch }
+          })
+        )
+      }
+      return runDetailFromFiles(sid, runId, {
+        audit,
+        eventsJsonl,
+        status,
+        latestRunId,
+        artifacts: { ...artifacts, heals },
+        network,
+      })
     },
 
     readAudit(sid, runId) {
