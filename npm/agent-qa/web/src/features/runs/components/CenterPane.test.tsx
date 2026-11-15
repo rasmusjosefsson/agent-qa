@@ -195,6 +195,34 @@ describe('CenterPane scenario controls', () => {
     expect(html).toContain('/demo/s-1/replays/r-1/screenshots/open.png')
     expect(html).not.toContain('<video')
   })
+
+  it('opens a shot miss on the screenshot the error names, not the first frame', () => {
+    setScenarioSourceForTests(createFixtureSource('/demo'))
+    const error = "shot 's1' differs from baseline: 4.28% pixels changed"
+    const runs = {
+      detail: {
+        sid: 'fixture',
+        runId: 'run-1',
+        audit: { summary: 'SUMMARY: 5/6 (FAIL)', exitCode: 1 },
+        status: { state: 'done', ok: false },
+        events: [
+          { idx: 1, id: 's0', intent: 'Use a compact viewport', status: 'pass', ms: 100, screenshot: 'screenshots/s0.png' },
+          { idx: 6, id: 's5', intent: 'The directory screenshot matches the baseline', status: 'fail', ms: 360, error, screenshot: 'screenshots/s5.png' },
+        ],
+        video: false,
+      },
+      scenarioDef: null,
+      sel: { sid: 'fixture', runId: 'run-1', stepIdx: null },
+      runDefSteps: { sid: 'fixture', steps: [] },
+      runsBySid: {},
+      selectStep() {},
+    } as unknown as RunsApi
+    const html = renderToStaticMarkup(<CenterPane runs={runs} runConfig={runConfig} />)
+    expect(html).toContain('shot &#x27;s1&#x27; differs from baseline')
+    expect(html).toContain('/demo/fixture/replays/run-1/screenshots/s1.png')
+    expect(html).not.toContain('/screenshots/s0.png')
+    expect(html).not.toContain('/screenshots/s5.png')
+  })
 })
 
 afterEach(() => setScenarioSourceForTests(null))

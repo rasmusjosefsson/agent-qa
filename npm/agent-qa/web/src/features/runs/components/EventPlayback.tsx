@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { PauseIcon, PlayIcon } from 'lucide-react'
 import { artifactUrl } from '@/lib/runs-api'
+import { evidenceStepId, focusStep, isShotMiss } from '../shot-evidence'
 import { formatClock } from '../timeline'
 import {
   advancePlayback,
@@ -30,7 +31,8 @@ export function EventPlayback({
 }) {
   const markers = useMemo(() => buildPlayback(steps), [steps])
   const end = playbackEnd(markers)
-  const [time, setTime] = useState(0)
+  const opened = focusStep(steps)
+  const [time, setTime] = useState(() => markers.find((marker) => marker.idx === opened?.idx)?.at ?? 0)
   const [playing, setPlaying] = useState(false)
   const [rate, setRate] = useState<number>(1)
   const trackRef = useRef<HTMLDivElement>(null)
@@ -48,8 +50,16 @@ export function EventPlayback({
   const pct = end > 0 ? Math.min(100, Math.max(0, (time / end) * 100)) : 0
 
   useEffect(() => {
-    setTime(0)
+    const failed = focusStep(steps)
+    const at = markers.find((marker) => marker.idx === failed?.idx)?.at ?? 0
+    setTime(at)
     setPlaying(false)
+    if (failed && failed.status === 'fail' && typeof failed.idx === 'number') {
+      fromPlayer.current = true
+      onSelectRef.current(failed.idx)
+    }
+    // Open each run on its failed step. `steps` is a fresh array every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId])
 
   useEffect(() => {
@@ -109,7 +119,12 @@ export function EventPlayback({
     seek(frac * end)
   }
 
-  const frame = shown?.shot && shown.id ? artifactUrl(sid, runId, 'screenshots', shown.id) : null
+  const source = shown ? steps.find((step) => step.idx === shown.idx) : undefined
+  const frameId = source ? evidenceStepId(source) : undefined
+  const frame =
+    frameId && source && (source.screenshot || isShotMiss(source))
+      ? artifactUrl(sid, runId, 'screenshots', frameId)
+      : null
 
   return (
     <div className="shrink-0 border-b border-border bg-card text-foreground" data-testid="event-playback">

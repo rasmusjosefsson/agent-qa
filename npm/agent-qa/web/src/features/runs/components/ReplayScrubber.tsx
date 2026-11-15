@@ -22,6 +22,7 @@ import {
   PlayIcon,
 } from 'lucide-react'
 import { artifactUrl, runFileUrl } from '@/lib/runs-api'
+import { evidenceStepId, isShotMiss } from '../shot-evidence'
 import { cn } from '@/lib/utils'
 import {
   PLAYBACK_RATES,
@@ -307,7 +308,12 @@ export function ReplayScrubber({
     }
   }
 
-  const frame = shown?.shot && shown.id ? artifactUrl(sid, runId, 'screenshots', shown.id) : null
+  const source = shown ? steps.find((step) => step.idx === shown.idx) : undefined
+  const frameId = source ? evidenceStepId(source) : shown?.id
+  const frame =
+    frameId && source && (source.screenshot || isShotMiss(source))
+      ? artifactUrl(sid, runId, 'screenshots', frameId)
+      : null
   const pastFile = mode === 'video' && shown != null && beyondRecording(shown.at, duration)
   const showFrame = mode === 'frames' || (pastFile && !!frame)
   const clockTotal = mode === 'video' && duration > 0 && dur <= duration + 0.05 ? duration : dur
