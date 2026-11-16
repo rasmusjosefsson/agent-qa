@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { withBase, withoutBase } from './router'
+import { appPath, withBase, withoutBase } from './router'
 
 describe('app base paths', () => {
   it('leaves the local app at /', () => {
@@ -16,5 +16,9 @@ describe('app base paths', () => {
     expect(withoutBase('/agent-qa/play/', base)).toBe('/')
     expect(withoutBase('/agent-qa/play/chat', base)).toBe('/chat')
     expect(withoutBase('/docs', base)).toBe('/docs')
+    expect(appPath('/sets?id=smoke', base)).toBe('/agent-qa/play/sets?id=smoke')
+    expect(appPath('/?sid=hello', base)).toBe('/agent-qa/play/?sid=hello')
+    expect(appPath('/agent-qa/play/sets?id=smoke', base)).toBe('/agent-qa/play/sets?id=smoke')
+    expect(appPath('/sets?id=smoke', '/')).toBe('/sets?id=smoke')
   })
 })

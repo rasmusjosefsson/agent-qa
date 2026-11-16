@@ -2,7 +2,15 @@
 
 `agent-qa web` opens a localhost UI for the same scenarios root the CLI uses. You describe a test in Chat, hand-edit one in the Editor, or write a case in plain English and let the agent record it. Sets group cases, plans run a scope, and Runs shows each replay with its evidence.
 
-A read-only copy of Runs is published with the docs at <https://rasmusjosefsson.github.io/agent-qa/play/>. It replays two recorded scenarios (the `hello` smoke check and a small directory page, including one screenshot miss). **Replay** on a scenario plays that recorded run: play, pause, and scrub follow `events.jsonl`. A banner points at the quickstart, and a tour walks the list, a run, playback, screenshots, checks, heals, diffs, and recording locally. Chat, the Editor, Cases, Sets, Plans, Goldens, Personas, Environments, Knowledge, Extensions, and Settings are disabled there, with the note “Available when you run agent-qa locally”. A direct link such as `/play/settings` shows that note. Delete, accept, insert, and compare stay hidden. Recording stays on `agent-qa web`. Rebuild that bundle with `node scripts/build-play.mjs` after `node scripts/capture-demo-fixtures.mjs` refreshes the traces.
+A read-only copy is published with the docs at <https://rasmusjosefsson.github.io/agent-qa/play/>. Runs replays two recorded scenarios (the `hello` smoke check and a small directory page, including one screenshot miss). **Replay** on a scenario plays that recorded run: play, pause, and scrub follow `events.jsonl`. Cases, Sets, and Plans show the example records checked in under `examples/scenarios` (the Smoke set, the Release check plan, and the three cases they cover). Create, edit, delete, and run stay hidden there. A banner points at the quickstart, and a tour walks the list, a run, playback, screenshots, checks, heals, diffs, and recording locally. Chat, the Editor, Goldens, Personas, Environments, Knowledge, Extensions, and Settings stay disabled, with the note “Available when you run agent-qa locally”. A direct link such as `/play/settings` shows that note. Delete, accept, insert, and compare stay hidden on Runs. Recording stays on `agent-qa web`. Rebuild that bundle with `node scripts/build-play.mjs` after `node scripts/capture-demo-fixtures.mjs` refreshes the traces.
+
+Point the CLI at the same tree to read the example plan:
+
+```bash
+AGENT_QA_SCENARIOS_DIR=examples/scenarios agent-qa plan list
+AGENT_QA_SCENARIOS_DIR=examples/scenarios agent-qa plan cases release-check
+agent-qa web --root examples/scenarios
+```
 
 Every record, flush, and replay shells the `agent-qa` CLI, so a scenario written here is the same `scenario.json` a terminal run would produce.
 

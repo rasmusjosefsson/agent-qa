@@ -7,7 +7,7 @@ agent-qa is a CLI (plus browser extension) that captures browser sessions as det
 ## Docs (markdown mirrors — same URL as the HTML page, minus the trailing slash)
 
 - [Quickstart](https://rasmusjosefsson.github.io/agent-qa/docs/quickstart.md): install, record, replay in five minutes
-- [Demo](https://rasmusjosefsson.github.io/agent-qa/play/): read-only Runs workbench replaying two recorded scenarios
+- [Demo](https://rasmusjosefsson.github.io/agent-qa/play/): read-only Runs, plus an example set and plan, replaying two recorded scenarios
 - [How it works](https://rasmusjosefsson.github.io/agent-qa/docs/overview.md): the whole system in one read
 - [Workbench](https://rasmusjosefsson.github.io/agent-qa/docs/workbench.md): local UI for chat, editor, cases, sets, plans, runs, and goldens
 - [Configuration](https://rasmusjosefsson.github.io/agent-qa/docs/configuration.md): agent-qa.toml, env vars, precedence

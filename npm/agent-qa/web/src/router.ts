@@ -10,6 +10,17 @@ export function withBase(path: string, base: string = import.meta.env.BASE_URL |
   return `${prefix}${path.startsWith('/') ? path : `/${path}`}`
 }
 
+/**
+ * Prefix an in-app path once. A path that already carries `base` (sidebar
+ * links, the demo banner) is left alone, so `/sets?id=` stays inside `/play`.
+ */
+export function appPath(to: string, base: string = import.meta.env.BASE_URL || '/'): string {
+  const prefix = base.endsWith('/') ? base.slice(0, -1) : base
+  if (!prefix) return to
+  if (to === prefix || to.startsWith(`${prefix}/`) || to.startsWith(`${prefix}?`)) return to
+  return withBase(to, base)
+}
+
 /** Drop Vite's `base` so route matching still sees `/runs`-style paths. */
 export function withoutBase(pathname: string, base: string = import.meta.env.BASE_URL || '/'): string {
   const prefix = base.endsWith('/') ? base.slice(0, -1) : base
@@ -57,6 +68,7 @@ function announceNavigate() {
 
 /** Client-side navigation — pushState + notify listeners, no full reload. */
 export function navigate(to: string) {
+  to = appPath(to)
   if (here() === to) {
     announceNavigate()
     return
@@ -69,7 +81,7 @@ export function navigate(to: string) {
 
 /** Replace the URL without pushing history (e.g. consuming one-shot params). */
 export function replaceRoute(to: string) {
-  window.history.replaceState({}, "", to)
+  window.history.replaceState({}, "", appPath(to))
   window.dispatchEvent(new PopStateEvent("popstate"))
 }
 

@@ -20,6 +20,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { getCases } from '@/lib/cases-api'
+import { canWrite } from '@/lib/source'
 import { deleteSet, getSet, upsertSet } from '@/lib/sets-api'
 import { useUnsavedChanges } from '@/lib/useUnsavedChanges'
 import { navigate } from '@/router'
@@ -36,6 +37,7 @@ export function SetDetail({ id }: { id: string }) {
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const [confirmDel, setConfirmDel] = useState(false)
+  const writes = canWrite()
 
   // Editable fields.
   const [name, setName] = useState('')
@@ -144,31 +146,37 @@ export function SetDetail({ id }: { id: string }) {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col" data-set-detail={set.id}>
       <div className="flex items-center gap-3 border-b border-border px-5 py-3">
         <Button variant="ghost" size="icon" className="size-7" onClick={back} title="Back to sets">
           <ArrowLeftIcon className="size-4" />
         </Button>
         <div className="min-w-0 flex-1">
-          <Input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="h-8 border-transparent bg-transparent px-1.5 text-base font-semibold shadow-none transition-colors hover:bg-muted/50 focus-visible:border-primary/40 focus-visible:bg-card dark:bg-transparent dark:hover:bg-muted/50 dark:focus-visible:bg-card"
-          />
+          {writes ? (
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="h-8 border-transparent bg-transparent px-1.5 text-base font-semibold shadow-none transition-colors hover:bg-muted/50 focus-visible:border-primary/40 focus-visible:bg-card dark:bg-transparent dark:hover:bg-muted/50 dark:focus-visible:bg-card"
+            />
+          ) : (
+            <h2 className="px-1.5 text-base font-semibold text-foreground">{name}</h2>
+          )}
           <div className="px-1 font-mono text-[11px] text-muted-foreground">
             {set.id} · {members.length} {members.length === 1 ? 'case' : 'cases'}
           </div>
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-7 shrink-0 text-muted-foreground/60 hover:text-destructive"
-          onClick={() => setConfirmDel(true)}
-          disabled={busy}
-          title="Delete this set"
-        >
-          <Trash2Icon className="size-4" />
-        </Button>
+        {writes && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7 shrink-0 text-muted-foreground/60 hover:text-destructive"
+            onClick={() => setConfirmDel(true)}
+            disabled={busy}
+            title="Delete this set"
+          >
+            <Trash2Icon className="size-4" />
+          </Button>
+        )}
       </div>
 
       {err && (
@@ -181,17 +189,24 @@ export function SetDetail({ id }: { id: string }) {
         <div className="mx-auto max-w-3xl space-y-6 p-5">
           <div className="space-y-2">
             <Label htmlFor="set-desc">Description</Label>
-            <Textarea
-              id="set-desc"
-              rows={2}
-              placeholder="What is this set for?"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-            />
+            {writes ? (
+              <Textarea
+                id="set-desc"
+                rows={2}
+                placeholder="What is this set for?"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+              />
+            ) : (
+              <p id="set-desc" className="text-sm text-foreground">
+                {description || 'No description.'}
+              </p>
+            )}
           </div>
 
           <div className="space-y-2">
             <Label>Membership</Label>
+            {writes ? (
             <div className="grid grid-cols-2 gap-2">
               {(['manual', 'tag'] as const).map((m) => (
                 <button
@@ -211,9 +226,16 @@ export function SetDetail({ id }: { id: string }) {
                 </button>
               ))}
             </div>
+            ) : (
+              <p className="text-sm text-foreground">
+                {mode === 'tag'
+                  ? `By label${tagQuery.length ? `: ${tagQuery.join(', ')}` : ''}`
+                  : 'Manual'}
+              </p>
+            )}
           </div>
 
-          {mode === 'tag' ? (
+          {writes && mode === 'tag' ? (
             <div className="space-y-2">
               <Label>Labels</Label>
               <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-border p-2">
@@ -267,7 +289,7 @@ export function SetDetail({ id }: { id: string }) {
             </div>
             {cases.length === 0 ? (
               <p className="text-xs text-muted-foreground">No cases yet — create some first.</p>
-            ) : mode === 'tag' ? (
+            ) : mode === 'tag' || !writes ? (
               <div className="divide-y divide-border/60 rounded-md border border-border">
                 {members.length === 0 ? (
                   <div className="px-3 py-4 text-center text-xs text-muted-foreground">
@@ -297,11 +319,13 @@ export function SetDetail({ id }: { id: string }) {
         </div>
       </div>
 
+      {writes && (
       <div className="flex h-14 shrink-0 items-center justify-end border-t border-border bg-card px-5 shadow-[0_-12px_32px_-16px_rgba(0,0,0,0.35)]">
         <Button size="sm" className="min-w-28 shadow-sm" onClick={() => void save()} disabled={busy}>
           {busy ? <Loader2Icon className="animate-spin" /> : <SaveIcon />} Save
         </Button>
       </div>
+      )}
 
       <Dialog open={confirmDel} onOpenChange={setConfirmDel}>
         <DialogContent>

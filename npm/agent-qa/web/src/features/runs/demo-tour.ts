@@ -50,6 +50,6 @@ export const TOUR_STEPS: TourStep[] = [
   {
     id: 'local',
     title: 'Run it locally',
-    body: 'This demo only replays the bundled traces. Install agent-qa and run agent-qa web to record your own.',
+    body: 'This demo replays the bundled traces and shows an example set and plan. Install agent-qa and run agent-qa web to record your own.',
   },
 ]

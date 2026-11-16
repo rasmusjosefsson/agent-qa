@@ -1,6 +1,8 @@
 // Report-server client. Request paths and bodies match the previous
 // runs-api wrappers so http mode is unchanged.
 
+import type { CaseWithScenario } from '@/features/cases/types'
+import type { PlanWithCount } from '@/features/plans/types'
 import type {
   AuditTrend,
   CompareReport,
@@ -10,6 +12,7 @@ import type {
   ScenarioHealth,
   ScenarioSummary,
 } from '@/features/runs/types'
+import type { SetWithCount } from '@/features/sets/types'
 import { fetchJson, readArtifactText } from './fetch-json'
 import type { ScenarioSource, ScenarioWrites } from './types'
 
@@ -182,6 +185,30 @@ export const httpSource: ScenarioSource = {
 
   getRun(sid, runId) {
     return readDetail(sid, runId)
+  },
+
+  listCases() {
+    return fetchJson<{ cases: CaseWithScenario[] }>('/api/cases')
+  },
+
+  getCase(id) {
+    return fetchJson<{ case: CaseWithScenario }>(`/api/cases/${encodeURIComponent(id)}`)
+  },
+
+  listSets() {
+    return fetchJson<{ sets: SetWithCount[] }>('/api/sets')
+  },
+
+  getSet(id) {
+    return fetchJson<{ set: SetWithCount }>(`/api/sets/${encodeURIComponent(id)}`)
+  },
+
+  listPlans() {
+    return fetchJson<{ plans: PlanWithCount[] }>('/api/plans')
+  },
+
+  getPlan(id) {
+    return fetchJson<{ plan: PlanWithCount }>(`/api/plans/${encodeURIComponent(id)}`)
   },
 
   async readAudit(sid, runId) {

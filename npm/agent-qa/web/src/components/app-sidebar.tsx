@@ -18,7 +18,7 @@ import {
 import type { Tab } from "../AppShell"
 import { cn } from "@/lib/utils"
 import { SpaLink as SpaAnchor } from "@/components/spa-link"
-import { hasServer, LOCAL_ONLY_NOTE } from "@/lib/source"
+import { hasServer, LOCAL_ONLY_NOTE, routeNeedsServer } from "@/lib/source"
 import { withBase } from "@/router"
 import {
   Sidebar,
@@ -112,7 +112,7 @@ const WORKSPACE: NavItem[] = [{ label: "Settings", icon: Settings2Icon, tab: "se
 
 function NavRow({ item, tab, step }: { item: NavItem; tab: Tab; step?: number }) {
   const Icon = item.icon
-  if (item.href && item.href !== "/" && !hasServer()) {
+  if (item.href && routeNeedsServer(item.href) && !hasServer()) {
     return (
       <SidebarMenuItem>
         <SidebarMenuButton

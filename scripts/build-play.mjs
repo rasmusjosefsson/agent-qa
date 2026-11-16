@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Build the read-only Runs demo and stage it for the docs site.
+// Build the read-only demo (Runs, plus the example set and plan) and stage it for the docs site.
 //
 //   node scripts/build-play.mjs
 //

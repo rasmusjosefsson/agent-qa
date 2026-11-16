@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Load the built demo the way GitHub Pages does: files under /agent-qa/play/,
 // and 404.html for every other /play route. Visit each workbench route with a
-// fresh document, play a recorded run, and fail on console errors or /api calls.
+// fresh document, open the example set and plan, play a recorded run, and fail
+// on console errors or /api calls.
 
 import { spawn, spawnSync } from 'node:child_process'
 import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, symlinkSync } from 'node:fs'
@@ -18,18 +19,18 @@ const browser =
   join(repo, 'npm', 'agent-qa', 'node_modules', '.bin', 'agent-browser')
 
 const ROUTES = [
-  ['/', '[data-demo-ready]'],
-  ['/chat', '[data-testid="demo-local-only"]'],
-  ['/editor', '[data-testid="demo-local-only"]'],
-  ['/cases', '[data-testid="demo-local-only"]'],
-  ['/sets', '[data-testid="demo-local-only"]'],
-  ['/plans', '[data-testid="demo-local-only"]'],
-  ['/goldens', '[data-testid="demo-local-only"]'],
-  ['/personas', '[data-testid="demo-local-only"]'],
-  ['/environments', '[data-testid="demo-local-only"]'],
-  ['/knowledge', '[data-testid="demo-local-only"]'],
-  ['/plugins', '[data-testid="demo-local-only"]'],
-  ['/settings', '[data-testid="demo-local-only"]'],
+  { path: '/', ready: '[data-demo-ready]', kind: 'runs' },
+  { path: '/cases', ready: '[data-case-id="open-homepage"]', kind: 'example', text: 'Open the homepage' },
+  { path: '/sets', ready: '[data-set-id="smoke"]', kind: 'example', text: 'Smoke' },
+  { path: '/plans', ready: '[data-plan-id="release-check"]', kind: 'example', text: 'Release check' },
+  { path: '/chat', ready: '[data-testid="demo-local-only"]', kind: 'local' },
+  { path: '/editor', ready: '[data-testid="demo-local-only"]', kind: 'local' },
+  { path: '/goldens', ready: '[data-testid="demo-local-only"]', kind: 'local' },
+  { path: '/personas', ready: '[data-testid="demo-local-only"]', kind: 'local' },
+  { path: '/environments', ready: '[data-testid="demo-local-only"]', kind: 'local' },
+  { path: '/knowledge', ready: '[data-testid="demo-local-only"]', kind: 'local' },
+  { path: '/plugins', ready: '[data-testid="demo-local-only"]', kind: 'local' },
+  { path: '/settings', ready: '[data-testid="demo-local-only"]', kind: 'local' },
 ]
 
 const failures = []
@@ -69,11 +70,11 @@ function isClean(text) {
   return body === '' || body.startsWith('✓') || /no (page )?errors/i.test(body)
 }
 
-function apiFailures(text) {
+function apiRequests(text) {
   return text
     .split('\n')
     .map((line) => line.trim())
-    .filter((line) => /\/api\//.test(line) && /\b[45]\d\d\b/.test(line))
+    .filter((line) => line && !line.startsWith('[agent-browser]') && /\/api\//.test(line))
 }
 
 function fileFor(root, pathname) {
@@ -122,8 +123,30 @@ function serve(root) {
 async function checkPage(path) {
   const errors = await run(['errors'], { allowFail: true })
   if (!isClean(errors)) fail(`${path} page errors:\n${errors}`)
-  const api = apiFailures(await run(['network', 'requests'], { allowFail: true }))
+  const api = apiRequests(await run(['network', 'requests'], { allowFail: true }))
   if (api.length) fail(`${path} called the report server:\n${api.join('\n')}`)
+}
+
+async function pageText() {
+  return run(['eval', 'document.body?.innerText||""'])
+}
+
+// `wait --text` misses some client-side updates. Poll the rendered text.
+async function waitForText(needle) {
+  const deadline = Date.now() + 20000
+  let last = ''
+  while (Date.now() < deadline) {
+    last = await pageText()
+    if (last.includes(needle)) return last
+    await run(['wait', '200'])
+  }
+  const message = `timed out waiting for ${JSON.stringify(needle)}`
+  fail(message)
+  throw new Error(message)
+}
+
+function controlLabels(text) {
+  return /New case|New set|New plan|Run plan|Run with agent|Delete case|Delete this/.test(text)
 }
 
 async function main() {
@@ -156,22 +179,85 @@ async function main() {
   console.log(`settings ${settingsProbe.status} ${(await settingsProbe.text()).includes('aqa-play-redirect') ? 'fallback-ok' : 'fallback-MISSING'}`)
   try {
     await run(['set', 'viewport', '1280', '800'])
-    for (const [path, ready] of ROUTES) {
+    for (const route of ROUTES) {
+      const path = route.path
       const url = `${origin}/agent-qa/play${path === '/' ? '/' : path}`
       await run(['console', '--clear'], { allowFail: true })
       await run(['errors', '--clear'], { allowFail: true })
       await run(['network', 'requests', '--clear'], { allowFail: true })
       await run(['open', url])
-      await run(['wait', ready])
+      await run(['wait', route.ready])
       const landed = await run(['get', 'url'])
       const expectPath = `/agent-qa/play${path === '/' ? '/' : path}`
       if (!landed.includes(expectPath)) fail(`${path} landed on ${landed}`)
       await checkPage(path)
-      if (path !== '/') {
-        const note = await run(['eval', 'document.querySelector("[data-testid=demo-local-only]")?.textContent||""'])
-        if (!note.includes('Available when you run agent-qa locally')) fail(`${path} missing the local-only note`)
+      const text = await pageText()
+      if (route.kind === 'local') {
+        if (!text.includes('Available when you run agent-qa locally')) fail(`${path} missing the local-only note`)
+      }
+      if (route.kind === 'example') {
+        if (!text.includes(route.text)) fail(`${path} did not render ${route.text}`)
+        if (text.includes('Available when you run agent-qa locally')) fail(`${path} still shows the local-only placeholder`)
+        if (controlLabels(text)) fail(`${path} shows a write or run control:\n${text}`)
       }
     }
+
+    await run(['open', `${origin}/agent-qa/play/sets`])
+    await run(['wait', '[data-set-id="smoke"]'])
+    await run(['eval', 'document.querySelector("[data-set-id=smoke]").click()'])
+    await run(['wait', '[data-set-detail="smoke"]'])
+    const setDetail = await pageText()
+    if (!setDetail.includes('Stay within the accessibility budget')) fail('set detail is missing the accessibility case')
+    if (!setDetail.includes('Open the homepage')) fail('set detail is missing the homepage case')
+    if (setDetail.includes('Emulate a phone')) fail('the smoke set included the emulation case')
+    if (controlLabels(setDetail)) fail('set detail shows a write or run control')
+    const setUrl = await run(['get', 'url'])
+    if (!setUrl.includes('/sets') || !setUrl.includes('id=smoke')) fail(`set click landed on ${setUrl}`)
+    await checkPage('/sets click')
+
+    await run(['console', '--clear'], { allowFail: true })
+    await run(['errors', '--clear'], { allowFail: true })
+    await run(['network', 'requests', '--clear'], { allowFail: true })
+    await run(['open', `${origin}/agent-qa/play/sets?id=smoke`])
+    await run(['wait', '[data-set-detail="smoke"]'])
+    await run(['reload'])
+    await run(['wait', '[data-set-detail="smoke"]'])
+    const setRefresh = await pageText()
+    if (!setRefresh.includes('Smoke')) fail('refresh did not keep the smoke set')
+    const setRefreshUrl = await run(['get', 'url'])
+    if (!setRefreshUrl.includes('id=smoke')) fail(`set refresh landed on ${setRefreshUrl}`)
+    await checkPage('/sets deep link')
+
+    await run(['open', `${origin}/agent-qa/play/plans`])
+    await run(['wait', '[data-plan-id="release-check"]'])
+    await run(['eval', 'document.querySelector("[data-plan-id=release-check]").click()'])
+    const planDetail = await waitForText('The smoke set, plus')
+    if (!planDetail.includes('Release check')) fail('plan detail is missing its name')
+    if (!planDetail.includes('Emulate a phone')) fail('plan detail is missing the direct case')
+    if (!planDetail.includes('Open the homepage')) fail('plan detail is missing a smoke member')
+    if (controlLabels(planDetail)) fail('plan detail shows a write or run control')
+    const planUrl = await run(['get', 'url'])
+    if (!planUrl.includes('/plans') || !planUrl.includes('id=release-check')) fail(`plan click landed on ${planUrl}`)
+    await checkPage('/plans click')
+
+    await run(['eval', 'document.querySelector("[data-case-id=open-homepage] button").click()'])
+    const caseDetail = await waitForText('Confirm the page URL is set')
+    if (!caseDetail.includes('Open the homepage')) fail('case drill-down lost the title')
+    if (!caseDetail.includes('example.com')) fail('case drill-down lost the steps')
+    if (controlLabels(caseDetail)) fail('case detail shows a write or run control')
+    await checkPage('/plans case')
+
+    await run(['console', '--clear'], { allowFail: true })
+    await run(['errors', '--clear'], { allowFail: true })
+    await run(['network', 'requests', '--clear'], { allowFail: true })
+    await run(['open', `${origin}/agent-qa/play/plans?id=release-check`])
+    await waitForText('The smoke set, plus')
+    await run(['reload'])
+    const planRefresh = await waitForText('The smoke set, plus')
+    if (!planRefresh.includes('Release check')) fail('refresh did not keep the release-check plan')
+    const planRefreshUrl = await run(['get', 'url'])
+    if (!planRefreshUrl.includes('id=release-check')) fail(`plan refresh landed on ${planRefreshUrl}`)
+    await checkPage('/plans deep link')
 
     await run(['open', `${origin}/agent-qa/play/settings`])
     await run(['wait', '[data-testid="demo-local-only"]'])

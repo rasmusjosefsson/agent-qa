@@ -26,6 +26,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { getCases } from '@/lib/cases-api'
+import { canWrite, hasServer } from '@/lib/source'
 import { effectiveSettings } from '@/lib/settings-api'
 import { getSets } from '@/lib/sets-api'
 import { deletePlan, getPlan, runPlan, upsertPlan } from '@/lib/plans-api'
@@ -94,6 +95,7 @@ export function PlanDetail({ id }: { id: string }) {
   const [autoRepair, setAutoRepair] = useState(false)
   // Seed from the workbench "headed by default" setting once it loads.
   useEffect(() => {
+    if (!hasServer()) return
     void effectiveSettings()
       .then((s) => setHeaded(s.effective.headedDefault))
       .catch(() => {})
@@ -105,6 +107,8 @@ export function PlanDetail({ id }: { id: string }) {
   const [runMsg, setRunMsg] = useState('')
   const [confirmDel, setConfirmDel] = useState(false)
   const [lightbox, setLightbox] = useState<{ url: string; caption: string } | null>(null)
+  const writes = canWrite()
+  const server = hasServer()
 
   // Editable fields. `saved` is the last persisted copy, so leaving the page
   // can warn when the form has drifted.
@@ -126,7 +130,9 @@ export function PlanDetail({ id }: { id: string }) {
   }, [])
 
   useEffect(() => {
-    Promise.all([getPlan(id), getSets(), getCases(), getPersonas(), getEnvironments()])
+    const personaReq = hasServer() ? getPersonas() : Promise.resolve({ personas: [] as PersonaRecord[] })
+    const envReq = hasServer() ? getEnvironments() : Promise.resolve({ environments: [] as EnvironmentRecord[] })
+    Promise.all([getPlan(id), getSets(), getCases(), personaReq, envReq])
       .then(([p, s, c, pe, en]) => {
         setName(p.plan.name)
         setDescription(p.plan.description)
@@ -376,25 +382,31 @@ export function PlanDetail({ id }: { id: string }) {
   const runnable = members.some((c) => c.scenario?.hasScenario)
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col" data-plan-detail={id}>
       <div className="flex items-center gap-3 border-b border-border px-5 py-3">
         <Button variant="ghost" size="icon" className="size-7" onClick={back} title="Back to plans">
           <ArrowLeftIcon className="size-4" />
         </Button>
         <div className="min-w-0 flex-1">
-          <Input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="h-8 border-transparent bg-transparent px-1.5 text-base font-semibold shadow-none transition-colors hover:bg-muted/50 focus-visible:border-primary/40 focus-visible:bg-card dark:bg-transparent dark:hover:bg-muted/50 dark:focus-visible:bg-card"
-          />
+          {writes ? (
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="h-8 border-transparent bg-transparent px-1.5 text-base font-semibold shadow-none transition-colors hover:bg-muted/50 focus-visible:border-primary/40 focus-visible:bg-card dark:bg-transparent dark:hover:bg-muted/50 dark:focus-visible:bg-card"
+            />
+          ) : (
+            <h2 className="px-1.5 text-base font-semibold text-foreground">{name}</h2>
+          )}
           <div className="px-1 font-mono text-[11px] text-muted-foreground">
             {id} · {members.length} {members.length === 1 ? 'case' : 'cases'}
           </div>
         </div>
-        <Button variant="ghost" size="sm" onClick={() => setConfirmDel(true)} disabled={busy}>
-          <Trash2Icon /> Delete
-        </Button>
-        {xrayItems.length > 0 && (
+        {writes && (
+          <Button variant="ghost" size="sm" onClick={() => setConfirmDel(true)} disabled={busy}>
+            <Trash2Icon /> Delete
+          </Button>
+        )}
+        {writes && xrayItems.length > 0 && (
           <Button
             variant="secondary"
             size="sm"
@@ -405,13 +417,16 @@ export function PlanDetail({ id }: { id: string }) {
             <UploadIcon /> Export to Xray
           </Button>
         )}
-        <BrowserModeToggle headed={headed} onChange={setHeaded} disabled={busy} />
-        <Button size="sm" onClick={() => void run()} disabled={busy || !runnable}>
-          <PlayIcon /> Run plan
-        </Button>
+        {server && <BrowserModeToggle headed={headed} onChange={setHeaded} disabled={busy} />}
+        {server && (
+          <Button size="sm" onClick={() => void run()} disabled={busy || !runnable}>
+            <PlayIcon /> Run plan
+          </Button>
+        )}
       </div>
 
-      {/* Run config — who/where the next run uses. */}
+      {/* Run config — who/where the next run uses. Needs the local server. */}
+      {server && (
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border px-5 py-2 text-xs text-muted-foreground">
         <span>Run as</span>
         <RunSelect
@@ -447,6 +462,7 @@ export function PlanDetail({ id }: { id: string }) {
           </span>
         )}
       </div>
+      )}
 
       {err && (
         <div className="border-b border-destructive/30 bg-destructive/10 px-5 py-1.5 text-xs text-destructive">
@@ -465,18 +481,39 @@ export function PlanDetail({ id }: { id: string }) {
           <div className="space-y-5">
             <div className="space-y-2">
               <Label htmlFor="plan-desc">Description</Label>
-              <Textarea
-                id="plan-desc"
-                rows={2}
-                placeholder="What does this plan cover?"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-              />
+              {writes ? (
+                <Textarea
+                  id="plan-desc"
+                  rows={2}
+                  placeholder="What does this plan cover?"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                />
+              ) : (
+                <p id="plan-desc" className="text-sm text-foreground">
+                  {description || 'No description.'}
+                </p>
+              )}
             </div>
 
             <div className="space-y-2">
               <Label>Sets</Label>
-              {allSets.length === 0 ? (
+              {!writes ? (
+                setIds.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No sets in this plan.</p>
+                ) : (
+                  <div className="divide-y divide-border/60 rounded-md border border-border">
+                    {allSets
+                      .filter((s) => setIds.includes(s.id))
+                      .map((s) => (
+                        <div key={s.id} className="flex items-center gap-3 px-3 py-2">
+                          <span className="min-w-0 flex-1 truncate text-sm">{s.name}</span>
+                          <span className="text-[11px] text-muted-foreground">{s.caseCount}</span>
+                        </div>
+                      ))}
+                  </div>
+                )
+              ) : allSets.length === 0 ? (
                 <p className="text-xs text-muted-foreground">No sets yet.</p>
               ) : (
                 <div className="divide-y divide-border/60 rounded-md border border-border">
@@ -496,7 +533,21 @@ export function PlanDetail({ id }: { id: string }) {
 
             <div className="space-y-2">
               <Label>Individual cases</Label>
-              {allCases.length === 0 ? (
+              {!writes ? (
+                caseIds.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No cases added directly.</p>
+                ) : (
+                  <div className="divide-y divide-border/60 rounded-md border border-border">
+                    {allCases
+                      .filter((c) => caseIds.includes(c.id))
+                      .map((c) => (
+                        <div key={c.id} className="px-3 py-2 text-sm">
+                          {c.title}
+                        </div>
+                      ))}
+                  </div>
+                )
+              ) : allCases.length === 0 ? (
                 <p className="text-xs text-muted-foreground">No cases yet.</p>
               ) : (
                 <div className="max-h-72 divide-y divide-border/60 overflow-auto rounded-md border border-border">
@@ -548,7 +599,7 @@ export function PlanDetail({ id }: { id: string }) {
                   const healed = c.scenario?.latestRun?.healed ?? 0
                   return (
                     <div key={c.id}>
-                      <div className="flex w-full items-center gap-3 px-3 py-2 hover:bg-muted/40">
+                      <div className="flex w-full items-center gap-3 px-3 py-2 hover:bg-muted/40" data-case-id={c.id}>
                         <button
                           onClick={() => (recorded ? gotoRun(c.scenario!.sid) : gotoCase(c.id))}
                           title={recorded ? 'Open the live run + step details' : 'Open the case'}
@@ -569,7 +620,7 @@ export function PlanDetail({ id }: { id: string }) {
                           </span>
                         )}
                         {progress && <span className="text-[11px] text-warning">{progress}</span>}
-                        {recorded && (
+                        {server && recorded && (
                           <button
                             onClick={() => void rerunCase(c)}
                             disabled={busy || running}
@@ -599,11 +650,13 @@ export function PlanDetail({ id }: { id: string }) {
         </div>
       </div>
 
+      {writes && (
       <div className="flex h-14 shrink-0 items-center justify-end border-t border-border bg-card px-5 shadow-[0_-12px_32px_-16px_rgba(0,0,0,0.35)]">
         <Button size="sm" className="min-w-28 shadow-sm" onClick={() => void save()} disabled={busy}>
           {busy ? <Loader2Icon className="animate-spin" /> : <SaveIcon />} Save
         </Button>
       </div>
+      )}
 
       <Dialog open={confirmDel} onOpenChange={setConfirmDel}>
         <DialogContent>

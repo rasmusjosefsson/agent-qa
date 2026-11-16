@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { canWrite } from '@/lib/source'
 import { getSets, upsertSet } from '@/lib/sets-api'
 import { navigate } from '@/router'
 import type { SetMode, SetWithCount } from './types'
@@ -50,6 +51,7 @@ export function SetList() {
   const [name, setName] = useState('')
   const [mode, setMode] = useState<SetMode>('manual')
   const [busy, setBusy] = useState(false)
+  const writes = canWrite()
 
   useEffect(() => {
     getSets()
@@ -82,11 +84,11 @@ export function SetList() {
           </>
         }
         actions={
-          <>
+          writes ? (
             <Button size="sm" onClick={() => setOpen(true)}>
               <PlusIcon /> New set
             </Button>
-          </>
+          ) : null
         }
       >
         <TestFlow current="sets" />
@@ -110,11 +112,11 @@ export function SetList() {
               </>
             }
             action={
-              <>
+              writes ? (
                 <Button size="sm" onClick={() => setOpen(true)}>
                   <PlusIcon /> New set
                 </Button>
-              </>
+              ) : null
             }
           />
         ) : (
@@ -133,6 +135,7 @@ export function SetList() {
                   {sets.map((s) => (
                     <tr
                       key={s.id}
+                      data-set-id={s.id}
                       onClick={() => gotoSet(s.id)}
                       className="cursor-pointer border-b border-border/60 transition-colors hover:bg-muted/40"
                     >
