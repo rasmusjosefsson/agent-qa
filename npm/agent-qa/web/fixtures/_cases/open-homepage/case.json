@@ -1,0 +1,21 @@
+{
+  "schema": "case/1",
+  "id": "open-homepage",
+  "title": "Open the homepage",
+  "startUrl": "https://example.com/",
+  "preconditions": "The network can reach the public example page.",
+  "steps": [
+    "Open https://example.com/",
+    "Confirm the page URL is set",
+    "Confirm the URL contains example.com"
+  ],
+  "expected": "The browser lands on example.com and the address contains example.com.",
+  "inputs": {},
+  "tags": ["smoke"],
+  "scenarioSid": "smoke",
+  "source": "example",
+  "sourceRef": "scenarios/smoke/scenario.json",
+  "externalRefs": [],
+  "createdAt": 1794688248979,
+  "updatedAt": 1794688248979
+}

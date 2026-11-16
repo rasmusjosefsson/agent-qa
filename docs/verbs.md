@@ -85,7 +85,7 @@ The baseline is `agent-qa-timings/v1`:
 
 ## Plans
 
-Plans, cases, and sets are the [workbench](workbench.md)'s run-scope records under `<root>/_plans`, `_sets`, `_cases` (created and edited in the UI); `plan` is their terminal and CI twin. Leaving a case, set, or plan with unsaved edits asks before the form is dropped. A case can attach a recording that already exists.
+Plans, cases, and sets are the [workbench](workbench.md)'s run-scope records under `<root>/_plans`, `_sets`, `_cases` (created and edited in the UI); `plan` is their terminal and CI twin. `examples/scenarios` is one such root: the smoke, a11y, and emulate scenarios, a Smoke set, and a Release check plan. Leaving a case, set, or plan with unsaved edits asks before the form is dropped. A case can attach a recording that already exists.
 
 On a run, `when` and `group` expand to their children, and a skipped child names the control (`“Pay now” is not on the page`). A declared input sits next to Replay. A plan run from the workbench forwards only params the member scenario declares. `plan run --param` on the CLI requires each key to be declared on the scenario it reaches.
 

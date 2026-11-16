@@ -1512,6 +1512,67 @@ test('test-plan CRUD + scope resolution (union of sets and cases, deduped)', asy
   assert.ok(fs.existsSync(path.join(fx.root, '_sets', 'smoke', 'set.json')));
 });
 
+test('checked-in example set and plan load from examples/scenarios', async (t) => {
+  const root = path.resolve(__dirname, '..', '..', '..', 'examples', 'scenarios');
+  const { server, base } = await boot(root);
+  t.after(() => server.close());
+
+  const sets = await (await fetch(`${base}/api/sets`)).json();
+  assert.equal(sets.sets.length, 1);
+  assert.equal(sets.sets[0].schema, 'set/1');
+  assert.equal(sets.sets[0].id, 'smoke');
+  assert.equal(sets.sets[0].name, 'Smoke');
+  assert.equal(sets.sets[0].mode, 'tag');
+  assert.deepEqual(sets.sets[0].tagQuery, ['smoke']);
+  assert.equal(sets.sets[0].caseCount, 2);
+
+  const plans = await (await fetch(`${base}/api/plans`)).json();
+  assert.equal(plans.plans.length, 1);
+  assert.equal(plans.plans[0].schema, 'plan/1');
+  assert.equal(plans.plans[0].id, 'release-check');
+  assert.equal(plans.plans[0].name, 'Release check');
+  assert.deepEqual(plans.plans[0].scope, { setIds: ['smoke'], caseIds: ['device-emulation'] });
+  assert.equal(plans.plans[0].caseCount, 3);
+
+  const members = await (await fetch(`${base}/api/plans/release-check/cases`)).json();
+  // The cases route keeps case-directory order. `plan cases` and the plan
+  // page use set-then-direct order instead.
+  assert.deepEqual(
+    members.cases.map((c) => c.id),
+    ['accessibility-gate', 'device-emulation', 'open-homepage'],
+  );
+  assert.equal(members.cases[0].scenarioSid, 'a11y');
+  assert.equal(members.cases[0].scenario.hasScenario, true);
+  assert.equal(members.cases[1].scenario.sid, 'emulate');
+  assert.equal(members.cases[2].scenario.sid, 'smoke');
+
+  const setCases = await (await fetch(`${base}/api/sets/smoke/cases`)).json();
+  assert.deepEqual(
+    setCases.cases.map((c) => c.id),
+    ['accessibility-gate', 'open-homepage'],
+  );
+
+  const scn = await (await fetch(`${base}/api/scenarios`)).json();
+  const sids = scn.scenarios.map((s) => s.sid);
+  for (const sid of ['a11y', 'emulate', 'smoke']) assert.ok(sids.includes(sid), sid);
+  assert.ok(sids.every((sid) => !sid.startsWith('_')));
+
+  const fixtures = path.resolve(__dirname, '..', 'web', 'fixtures');
+  for (const rel of [
+    '_cases/accessibility-gate/case.json',
+    '_cases/device-emulation/case.json',
+    '_cases/open-homepage/case.json',
+    '_sets/smoke/set.json',
+    '_plans/release-check/plan.json',
+  ]) {
+    assert.equal(
+      fs.readFileSync(path.join(fixtures, rel), 'utf8'),
+      fs.readFileSync(path.join(root, rel), 'utf8'),
+      rel,
+    );
+  }
+});
+
 test('POST /api/plans/:id/run replays each member scenario via deps.replay', async (t) => {
   const fx = makeFixture();
   const calls = [];

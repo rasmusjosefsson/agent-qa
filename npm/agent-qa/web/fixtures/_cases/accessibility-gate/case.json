@@ -1,0 +1,22 @@
+{
+  "schema": "case/1",
+  "id": "accessibility-gate",
+  "title": "Stay within the accessibility budget",
+  "startUrl": "https://example.com/",
+  "preconditions": "",
+  "steps": [
+    "Open https://example.com/",
+    "Confirm there are no serious accessibility violations",
+    "Confirm the total violation count stays within the budget",
+    "Confirm the color-contrast rule is clean inside the app shell"
+  ],
+  "expected": "The page stays within the accessibility budget.",
+  "inputs": {},
+  "tags": ["smoke", "a11y"],
+  "scenarioSid": "a11y",
+  "source": "example",
+  "sourceRef": "scenarios/a11y/scenario.json",
+  "externalRefs": [],
+  "createdAt": 1794688248979,
+  "updatedAt": 1794688248979
+}

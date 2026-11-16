@@ -1,0 +1,23 @@
+{
+  "schema": "case/1",
+  "id": "device-emulation",
+  "title": "Emulate a phone",
+  "startUrl": "https://httpbingo.org/user-agent",
+  "preconditions": "The echo endpoint reports the user agent and request headers.",
+  "steps": [
+    "Emulate an iPhone 12 and send the X-QA-Suite header",
+    "Reload the page",
+    "Confirm the echoed user agent contains iPhone",
+    "Open the headers echo",
+    "Confirm the echoed headers contain golden"
+  ],
+  "expected": "The server sees the phone user agent and the tagged header.",
+  "inputs": {},
+  "tags": ["emulation"],
+  "scenarioSid": "emulate",
+  "source": "example",
+  "sourceRef": "scenarios/emulate/scenario.json",
+  "externalRefs": [],
+  "createdAt": 1794688248979,
+  "updatedAt": 1794688248979
+}
