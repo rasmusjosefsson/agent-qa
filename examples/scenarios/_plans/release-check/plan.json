@@ -1,0 +1,14 @@
+{
+  "schema": "plan/1",
+  "id": "release-check",
+  "name": "Release check",
+  "description": "The smoke set, plus the device-emulation case that is not part of that set.",
+  "scope": {
+    "setIds": ["smoke"],
+    "caseIds": ["device-emulation"]
+  },
+  "source": "example",
+  "sourceRef": null,
+  "createdAt": 1794688248979,
+  "updatedAt": 1794688248979
+}

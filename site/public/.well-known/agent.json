@@ -44,7 +44,7 @@
     "test-inbox reads for OTP/verification links (mail)",
     "change-scoped scenario drafting (discover)",
     "localhost workbench (agent-qa web): chat, editor, cases, sets, plans, runs, goldens",
-    "read-only demo of Runs at /play/, replaying bundled traces",
+    "read-only demo at /play/: Runs replays bundled traces, and Cases, Sets, and Plans show an example set and plan",
     "duration baseline compared on each pull request (timings check)"
   ]
 }

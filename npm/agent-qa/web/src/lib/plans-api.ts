@@ -1,7 +1,9 @@
 // web/src/lib/plans-api.ts
-// Typed wrappers for the /api/plans/* endpoints (lib/report-server.js).
+// Reads go through the active source (report server, or the static demo).
+// Writes and run stay on /api/plans and are only called when a server is up.
 import type { PlanRecord, PlanRunResult, PlanWithCount } from '@/features/plans/types'
 import type { CaseWithScenario } from '@/features/cases/types'
+import { getScenarioSource } from '@/lib/source'
 
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(path, { headers: { accept: 'application/json' } })
@@ -23,11 +25,11 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 export function getPlans(): Promise<{ plans: PlanWithCount[] }> {
-  return getJson('/api/plans')
+  return getScenarioSource().listPlans()
 }
 
 export function getPlan(id: string): Promise<{ plan: PlanWithCount }> {
-  return getJson(`/api/plans/${encodeURIComponent(id)}`)
+  return getScenarioSource().getPlan(id)
 }
 
 // Resolved member cases (joined to each case's last-run scenario summary).

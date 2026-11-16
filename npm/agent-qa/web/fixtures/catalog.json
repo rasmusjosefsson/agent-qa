@@ -1,0 +1,5 @@
+{
+  "cases": ["accessibility-gate", "device-emulation", "open-homepage"],
+  "sets": ["smoke"],
+  "plans": ["release-check"]
+}

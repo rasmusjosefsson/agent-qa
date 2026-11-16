@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { canWrite } from '@/lib/source'
 import { getPlans, upsertPlan } from '@/lib/plans-api'
 import { navigate } from '@/router'
 import type { PlanWithCount } from './types'
@@ -49,6 +50,7 @@ export function PlanList() {
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
+  const writes = canWrite()
 
   useEffect(() => {
     getPlans()
@@ -81,11 +83,11 @@ export function PlanList() {
           </>
         }
         actions={
-          <>
+          writes ? (
             <Button size="sm" onClick={() => setOpen(true)}>
               <PlusIcon /> New plan
             </Button>
-          </>
+          ) : null
         }
       >
         <TestFlow current="plans" />
@@ -109,11 +111,11 @@ export function PlanList() {
               </>
             }
             action={
-              <>
+              writes ? (
                 <Button size="sm" onClick={() => setOpen(true)}>
                   <PlusIcon /> New plan
                 </Button>
-              </>
+              ) : null
             }
           />
         ) : (
@@ -132,6 +134,7 @@ export function PlanList() {
                   {plans.map((p) => (
                     <tr
                       key={p.id}
+                      data-plan-id={p.id}
                       onClick={() => gotoPlan(p.id)}
                       className="cursor-pointer border-b border-border/60 transition-colors hover:bg-muted/40"
                     >

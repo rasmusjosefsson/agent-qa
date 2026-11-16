@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { canWrite } from '@/lib/source'
 import { getCases, upsertCase } from '@/lib/cases-api'
 import { SpaLink } from '@/components/spa-link'
 import { navigate } from '@/router'
@@ -53,6 +54,7 @@ export function CaseList() {
   const [open, setOpen] = useState(false)
   const [title, setTitle] = useState('')
   const [busy, setBusy] = useState(false)
+  const writes = canWrite()
 
   useEffect(() => {
     getCases()
@@ -85,11 +87,11 @@ export function CaseList() {
           </>
         }
         actions={
-          <>
+          writes ? (
             <Button size="sm" onClick={() => setOpen(true)}>
               <PlusIcon /> New case
             </Button>
-          </>
+          ) : null
         }
       >
         <TestFlow current="cases" />
@@ -116,11 +118,11 @@ export function CaseList() {
               </>
             }
             action={
-              <>
+              writes ? (
                 <Button size="sm" onClick={() => setOpen(true)}>
                   <PlusIcon /> New case
                 </Button>
-              </>
+              ) : null
             }
           />
         ) : (
@@ -143,6 +145,7 @@ export function CaseList() {
                   {cases.map((c) => (
                     <tr
                       key={c.id}
+                      data-case-id={c.id}
                       onClick={() => gotoCase(c.id)}
                       className="cursor-pointer border-b border-border/60 transition-colors hover:bg-muted/40"
                     >

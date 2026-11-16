@@ -2,6 +2,10 @@
 // heals, shot diffs, video cues, and network when the files are present.
 //
 //   <base>/scenarios.json                         GET /api/scenarios body
+//   <base>/catalog.json                           ids for cases, sets, and plans
+//   <base>/_cases/<id>/case.json                  case/1
+//   <base>/_sets/<id>/set.json                    set/1
+//   <base>/_plans/<id>/plan.json                  plan/1
 //   <base>/health.json                            GET /api/health body (optional)
 //   <base>/<sid>/scenario.json                    raw scenario.json
 //   <base>/<sid>/runs.json                        GET /api/scenarios/:sid/runs body
@@ -21,7 +25,10 @@
 // Extensions match the report server's artifact kinds. A static host has
 // no live browser, so replayStreamUrl is null and writes is null.
 
+import type { CaseRecord, CaseWithScenario } from '@/features/cases/types'
+import type { PlanRecord, PlanWithCount } from '@/features/plans/types'
 import type { AuditTrend, HealRow, RunDetail, RunSummary, ScenarioDef, ScenarioHealth, ScenarioSummary } from '@/features/runs/types'
+import type { SetRecord, SetWithCount } from '@/features/sets/types'
 import { fetchJson, fetchOptional, readArtifactText } from './fetch-json'
 import { parseEventsJsonl, parseJsonl, type ScenarioSource } from './types'
 
@@ -88,6 +95,57 @@ export function runDetailFromFiles(
   }
 }
 
+interface FixtureCatalog {
+  cases?: string[]
+  sets?: string[]
+  plans?: string[]
+}
+
+function isSafeId(id: string): boolean {
+  return id !== '.' && id !== '..' && /^[A-Za-z0-9._-]+$/.test(id)
+}
+
+function sortedIds(ids: string[] | undefined): string[] {
+  return [...(ids ?? [])].filter(isSafeId).sort()
+}
+
+/** Same membership as report-server.js `resolveSetCaseIds`. */
+export function resolveSetCaseIds(
+  set: Pick<SetRecord, 'mode' | 'caseIds' | 'tagQuery'>,
+  cases: Pick<CaseRecord, 'id' | 'tags'>[],
+): string[] {
+  if (set.mode === 'tag') {
+    const want = new Set(set.tagQuery)
+    if (want.size === 0) return []
+    return cases.filter((c) => c.tags.some((tag) => want.has(tag))).map((c) => c.id)
+  }
+  const byId = new Set(cases.map((c) => c.id))
+  return set.caseIds.filter((id) => byId.has(id))
+}
+
+/** Same membership as report-server.js `resolvePlanCaseIds`. */
+export function resolvePlanCaseIds(
+  plan: Pick<PlanRecord, 'scope'>,
+  sets: Array<Pick<SetRecord, 'id' | 'mode' | 'caseIds' | 'tagQuery'>>,
+  cases: Array<Pick<CaseRecord, 'id' | 'tags'>>,
+): string[] {
+  const order: string[] = []
+  const seen = new Set<string>()
+  const add = (id: string) => {
+    if (seen.has(id)) return
+    seen.add(id)
+    order.push(id)
+  }
+  const setById = new Map(sets.map((set) => [set.id, set]))
+  for (const id of plan.scope.setIds) {
+    const set = setById.get(id)
+    if (set) for (const caseId of resolveSetCaseIds(set, cases)) add(caseId)
+  }
+  const byId = new Set(cases.map((c) => c.id))
+  for (const id of plan.scope.caseIds) if (byId.has(id)) add(id)
+  return order
+}
+
 type SourceFetch = typeof fetch
 
 export function createFixtureSource(base?: string, doFetch?: SourceFetch): ScenarioSource {
@@ -105,6 +163,57 @@ export function createFixtureSource(base?: string, doFetch?: SourceFetch): Scena
     const res = await fetchOptional(path, request)
     if (!res) return null
     return (await res.json()) as T
+  }
+
+  interface Library {
+    cases: CaseWithScenario[]
+    sets: SetWithCount[]
+    plans: PlanWithCount[]
+  }
+
+  let library: Promise<Library> | null = null
+
+  function loadLibrary(): Promise<Library> {
+    if (!library) {
+      library = readLibrary().catch((err) => {
+        library = null
+        throw err
+      })
+    }
+    return library
+  }
+
+  async function readLibrary(): Promise<Library> {
+    const [catalog, listed] = await Promise.all([
+      readJson<FixtureCatalog>(url('catalog.json')),
+      readJson<{ scenarios: ScenarioSummary[] }>(url('scenarios.json')),
+    ])
+    const scenarios = listed?.scenarios ?? []
+    const scenarioById = new Map(scenarios.map((row) => [row.sid, row]))
+    const cases: CaseWithScenario[] = []
+    for (const id of sortedIds(catalog?.cases)) {
+      const rec = await readJson<CaseRecord>(url('_cases', id, 'case.json'))
+      if (!rec) continue
+      const scenario = rec.scenarioSid ? scenarioById.get(rec.scenarioSid) ?? null : null
+      cases.push({ ...rec, scenario })
+    }
+    const sets: SetWithCount[] = []
+    for (const id of sortedIds(catalog?.sets)) {
+      const rec = await readJson<SetRecord>(url('_sets', id, 'set.json'))
+      if (!rec) continue
+      sets.push({ ...rec, caseCount: resolveSetCaseIds(rec, cases).length })
+    }
+    const plans: PlanWithCount[] = []
+    for (const id of sortedIds(catalog?.plans)) {
+      const rec = await readJson<PlanRecord>(url('_plans', id, 'plan.json'))
+      if (!rec) continue
+      plans.push({ ...rec, caseCount: resolvePlanCaseIds(rec, sets, cases).length })
+    }
+    return { cases, sets, plans }
+  }
+
+  function missing(kind: string, id: string): Error {
+    return new Error(`${url(kind, id)} → 404`)
   }
 
   const source: ScenarioSource = {
@@ -184,6 +293,39 @@ export function createFixtureSource(base?: string, doFetch?: SourceFetch): Scena
 
     readStatus(sid, runId) {
       return readJson<RunDetail['status']>(url(sid, 'replays', runId, 'status.json'))
+    },
+
+    listCases() {
+      return loadLibrary().then((lib) => ({ cases: lib.cases }))
+    },
+
+    async getCase(id) {
+      const lib = await loadLibrary()
+      const found = lib.cases.find((row) => row.id === id)
+      if (!found) throw missing('_cases', id)
+      return { case: found }
+    },
+
+    listSets() {
+      return loadLibrary().then((lib) => ({ sets: lib.sets }))
+    },
+
+    async getSet(id) {
+      const lib = await loadLibrary()
+      const found = lib.sets.find((row) => row.id === id)
+      if (!found) throw missing('_sets', id)
+      return { set: found }
+    },
+
+    listPlans() {
+      return loadLibrary().then((lib) => ({ plans: lib.plans }))
+    },
+
+    async getPlan(id) {
+      const lib = await loadLibrary()
+      const found = lib.plans.find((row) => row.id === id)
+      if (!found) throw missing('_plans', id)
+      return { plan: found }
     },
 
     async readLatestRunId(sid) {

@@ -734,4 +734,28 @@ mod tests {
         let err = out.unwrap_err().to_string();
         assert!(err.contains("0 of 2 members ran"), "got: {err}");
     }
+
+    #[test]
+    fn example_release_check_loads_from_the_scenarios_tree() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../examples/scenarios");
+        let rows = list_plan_rows(&root);
+        assert_eq!(rows.len(), 1, "plans: {rows:?}");
+        assert_eq!(rows[0].id, "release-check");
+        assert_eq!(rows[0].name, "Release check");
+        assert_eq!(rows[0].case_count, 3);
+
+        let plan = load_plan(&root, "release-check").unwrap();
+        let members = member_rows(&root, &plan);
+        let ids: Vec<&str> = members.iter().map(|row| row.case_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["accessibility-gate", "open-homepage", "device-emulation"]
+        );
+        assert_eq!(members[0].scenario_sid.as_deref(), Some("a11y"));
+        assert_eq!(members[1].scenario_sid.as_deref(), Some("smoke"));
+        assert_eq!(members[2].scenario_sid.as_deref(), Some("emulate"));
+        assert!(root.join("smoke").join("scenario.json").is_file());
+        assert!(root.join("a11y").join("scenario.json").is_file());
+        assert!(root.join("emulate").join("scenario.json").is_file());
+    }
 }

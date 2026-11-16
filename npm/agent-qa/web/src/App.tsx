@@ -1,6 +1,6 @@
 import { AppShell, type Tab } from "./AppShell"
 import { DemoLocalOnly } from "./components/DemoLocalOnly"
-import { hasServer } from "./lib/source"
+import { hasServer, routeNeedsServer } from "./lib/source"
 import { useRoute, withoutBase } from "./router"
 import RunsPage from "./features/runs/RunsPage"
 import CasesPage from "./features/cases/CasesPage"
@@ -79,7 +79,7 @@ const TAB_LABEL: Record<Tab, string> = {
 export function App() {
   const route = useRoute()
   const tab = tabForPath(withoutBase(route.pathname))
-  const localOnly = !hasServer() && tab !== "runs"
+  const localOnly = !hasServer() && routeNeedsServer(withoutBase(route.pathname))
 
   return (
     <AppShell tab={tab}>

@@ -1,8 +1,9 @@
-// The workbench's door to scenario and replay data.
+// The workbench's door to scenario, case, set, plan, and replay data.
 //
 // Two implementations: `httpSource` (the report server on 127.0.0.1:7878)
 // and `fixtureSource` (a static tree). `VITE_AQA_SOURCE` selects one,
-// default `http`. Every Runs read and write goes through this interface.
+// default `http`. Runs, Cases, Sets, and Plans reads go through this
+// interface. Writes stay on the report server and are absent in the demo.
 //
 // `capabilities.writes` is the only switch for mutations. Fixture mode
 // sets it false. Callers ask `sourceWrites` / `canWrite` — they do not
@@ -18,6 +19,8 @@
 //   play/     builds with `VITE_AQA_SOURCE=fixture`
 //   banner    reads `canWrite()` and hides the write controls
 
+import type { CaseWithScenario } from '@/features/cases/types'
+import type { PlanWithCount } from '@/features/plans/types'
 import type {
   AuditTrend,
   CompareReport,
@@ -28,6 +31,7 @@ import type {
   ScenarioHealth,
   ScenarioSummary,
 } from '@/features/runs/types'
+import type { SetWithCount } from '@/features/sets/types'
 
 export type SourceKind = 'http' | 'fixture'
 
@@ -103,6 +107,16 @@ export interface ScenarioSource {
   getTrend(sid: string, limit?: number): Promise<{ sid: string; trend: AuditTrend | null }>
   listRuns(sid: string): Promise<{ sid: string; replays: RunSummary[] }>
   getRun(sid: string, runId: string): Promise<RunDetail>
+
+  /** `case/1` records joined to their scenario summary. */
+  listCases(): Promise<{ cases: CaseWithScenario[] }>
+  getCase(id: string): Promise<{ case: CaseWithScenario }>
+  /** `set/1` records with a resolved member count. */
+  listSets(): Promise<{ sets: SetWithCount[] }>
+  getSet(id: string): Promise<{ set: SetWithCount }>
+  /** `plan/1` records with a resolved member count. */
+  listPlans(): Promise<{ plans: PlanWithCount[] }>
+  getPlan(id: string): Promise<{ plan: PlanWithCount }>
 
   /** `replays/<runId>/audit.json`. Null when the file is absent. */
   readAudit(sid: string, runId: string): Promise<RunDetail['audit']>

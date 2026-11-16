@@ -43,10 +43,24 @@ export function hasServer(source: ScenarioSource = getScenarioSource()): boolean
   return source.capabilities.server
 }
 
-/** Runs is the only workbench route the static demo can serve. */
+/**
+ * Routes the static demo can render from the fixture tree.
+ * Everything else still needs a local `agent-qa web`.
+ */
+const FIXTURE_ROUTES = new Set([
+  '/',
+  '/index.html',
+  '/cases',
+  '/cases.html',
+  '/sets',
+  '/sets.html',
+  '/plans',
+  '/plans.html',
+])
+
 export function routeNeedsServer(pathname: string): boolean {
-  const path = pathname.split('?')[0].replace(/\/+$/, '') || '/'
-  return path !== '/' && path !== '/index.html'
+  const path = pathname.split(/[?#]/)[0].replace(/\/+$/, '') || '/'
+  return !FIXTURE_ROUTES.has(path)
 }
 
 let override: ScenarioSource | null = null

@@ -21,7 +21,11 @@ import {
   runFileUrl,
   startReplay,
 } from '../runs-api'
-import { createFixtureSource, runDetailFromFiles } from './fixture-source'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { createFixtureSource, resolvePlanCaseIds, resolveSetCaseIds, runDetailFromFiles } from './fixture-source'
+import { getPlans } from '../plans-api'
+import { getSets } from '../sets-api'
 import { httpSource } from './http-source'
 import {
   canWrite,
@@ -77,7 +81,11 @@ describe('source selection', () => {
     expect(hasServer(source)).toBe(false)
     expect(LOCAL_ONLY_NOTE).toMatch(/run agent-qa locally/)
     expect(routeNeedsServer('/settings')).toBe(true)
+    expect(routeNeedsServer('/chat')).toBe(true)
     expect(routeNeedsServer('/')).toBe(false)
+    expect(routeNeedsServer('/cases')).toBe(false)
+    expect(routeNeedsServer('/sets')).toBe(false)
+    expect(routeNeedsServer('/plans?id=release-check')).toBe(false)
     expect(sourceWrites(source)).toBeNull()
     expect(source.screenshotUrl('s-1', 'r-1', 'open')).toBe('/play/fixtures/s-1/replays/r-1/screenshots/open.png')
   })
@@ -244,6 +252,45 @@ describe('fixture source', () => {
     expect(fetchMock).not.toHaveBeenCalled()
     expect(canWrite()).toBe(false)
   })
+
+  it('resolves the example set and plan without calling /api', async () => {
+    const root = resolve(__dirname, '../../../fixtures')
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const rel = String(input).replace(/^\/demo\//, '')
+      try {
+        return textResponse(readFileSync(resolve(root, rel), 'utf8'))
+      } catch {
+        return new Response('missing', { status: 404 })
+      }
+    })
+    const source = createFixtureSource('/demo', fetchMock)
+    const sets = await source.listSets()
+    expect(sets.sets.map((set) => [set.id, set.name, set.caseCount])).toEqual([['smoke', 'Smoke', 2]])
+    const plans = await source.listPlans()
+    expect(plans.plans.map((plan) => [plan.id, plan.name, plan.caseCount])).toEqual([
+      ['release-check', 'Release check', 3],
+    ])
+    const cases = await source.listCases()
+    expect(cases.cases.map((row) => row.id)).toEqual(['accessibility-gate', 'device-emulation', 'open-homepage'])
+    expect(cases.cases.every((row) => row.scenario === null)).toBe(true)
+    const plan = await source.getPlan('release-check')
+    expect(plan.plan.scope).toEqual({ setIds: ['smoke'], caseIds: ['device-emulation'] })
+    await expect(source.getSet('missing')).rejects.toThrow(/404/)
+    expect(fetchMock.mock.calls.every((call) => !String(call[0]).includes('/api/'))).toBe(true)
+  })
+
+  it('unions a tag set and a direct case in case-list order', () => {
+    const cases = [
+      { id: 'accessibility-gate', title: 'A', tags: ['smoke', 'a11y'], scenarioSid: 'a11y' },
+      { id: 'device-emulation', title: 'D', tags: ['emulation'], scenarioSid: 'emulate' },
+      { id: 'open-homepage', title: 'O', tags: ['smoke'], scenarioSid: 'smoke' },
+    ]
+    const smoke = { id: 'smoke', name: 'Smoke', mode: 'tag' as const, caseIds: [], tagQuery: ['smoke'] }
+    expect(resolveSetCaseIds(smoke, cases)).toEqual(['accessibility-gate', 'open-homepage'])
+    expect(
+      resolvePlanCaseIds({ scope: { setIds: ['smoke'], caseIds: ['device-emulation', 'open-homepage'] } }, [smoke], cases),
+    ).toEqual(['accessibility-gate', 'open-homepage', 'device-emulation'])
+  })
 })
 
 describe('http source parity', () => {
@@ -293,6 +340,12 @@ describe('http source parity', () => {
 
     expect(await fetchArtifactText('s-1', 'r-1', 'probes', 'open', true)).toBe('{\n  "ok": true\n}')
     expect(canWrite()).toBe(true)
+
+    expect(await getSets()).toEqual({ ok: true })
+    expect(await getPlans()).toEqual({ ok: true })
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual(
+      expect.arrayContaining(['/api/sets', '/api/plans']),
+    )
   })
 })
 

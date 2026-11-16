@@ -1,0 +1,13 @@
+{
+  "schema": "set/1",
+  "id": "smoke",
+  "name": "Smoke",
+  "description": "The short checks that should pass on every change: the homepage opens and the accessibility budget holds.",
+  "mode": "tag",
+  "caseIds": [],
+  "tagQuery": ["smoke"],
+  "source": "example",
+  "sourceRef": null,
+  "createdAt": 1794688248979,
+  "updatedAt": 1794688248979
+}

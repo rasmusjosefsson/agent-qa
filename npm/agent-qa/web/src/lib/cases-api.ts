@@ -1,12 +1,8 @@
 // web/src/lib/cases-api.ts
-// Typed wrappers for the /api/cases/* endpoints (lib/report-server.js).
+// Reads go through the active source (report server, or the static demo).
+// Writes stay on /api/cases and are only called when the source can write.
 import type { CaseRecord, CaseWithScenario } from '@/features/cases/types'
-
-async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(path, { headers: { accept: 'application/json' } })
-  if (!res.ok) throw new Error(`${path} → ${res.status}`)
-  return (await res.json()) as T
-}
+import { getScenarioSource } from '@/lib/source'
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(path, {
@@ -22,11 +18,11 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 export function getCases(): Promise<{ cases: CaseWithScenario[] }> {
-  return getJson('/api/cases')
+  return getScenarioSource().listCases()
 }
 
 export function getCase(id: string): Promise<{ case: CaseWithScenario }> {
-  return getJson(`/api/cases/${encodeURIComponent(id)}`)
+  return getScenarioSource().getCase(id)
 }
 
 export function upsertCase(

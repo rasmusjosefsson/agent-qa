@@ -25,6 +25,7 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
 import { getCase, upsertCase, deleteCase, linkCase } from '@/lib/cases-api'
+import { canWrite, hasServer } from '@/lib/source'
 import { getScenarios, startReplay } from '@/lib/runs-api'
 import { useUnsavedChanges } from '@/lib/useUnsavedChanges'
 import { navigate, useSpaLink } from '@/router'
@@ -76,6 +77,9 @@ export function CaseDetail({ id }: { id: string }) {
   const [err, setErr] = useState('')
   const [flash, setFlash] = useState('')
   const [saving, setSaving] = useState(false)
+  const [missing, setMissing] = useState(false)
+  const writes = canWrite()
+  const server = hasServer()
 
   // form fields
   const [title, setTitle] = useState('')
@@ -105,6 +109,10 @@ export function CaseDetail({ id }: { id: string }) {
       .catch((e) => {
         // 404 → fresh draft for this id; anything else is a real error.
         if (String(e.message || e).includes('404')) {
+          if (!canWrite()) {
+            setMissing(true)
+            return
+          }
           setNotFound(true)
           hydrate(emptyCase(id), null)
         } else {
@@ -212,7 +220,7 @@ export function CaseDetail({ id }: { id: string }) {
   // the agent's own curl link-back in the seed prompt.
   const pollRef = useRef<number | undefined>(undefined)
   useEffect(() => {
-    if (!loaded) return
+    if (!loaded || !canWrite()) return
     const marker = localStorage.getItem(runMarkerKey(id))
     if (!marker) return
     const startedAt = Number(marker)
@@ -264,6 +272,16 @@ export function CaseDetail({ id }: { id: string }) {
   const setInput = (token: string, patch: Partial<InputDecl>) =>
     setInputs((prev) => ({ ...prev, [token]: { ...prev[token], ...patch } }))
 
+  if (missing) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-8 text-sm text-muted-foreground">
+        No case named {id}.
+        <Button variant="ghost" size="sm" onClick={() => navigate('/cases')}>
+          <ArrowLeftIcon /> Back to cases
+        </Button>
+      </div>
+    )
+  }
   if (err && !loaded) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center p-8 text-sm text-destructive">
@@ -280,47 +298,55 @@ export function CaseDetail({ id }: { id: string }) {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col" data-case-detail={id}>
       {/* header */}
       <div className="flex flex-col gap-2 border-b border-border px-3 py-2 sm:flex-row sm:items-center sm:gap-3 sm:px-5 sm:py-3">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <BackToCases />
-          <Input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Untitled case"
-            aria-label="Case title"
-            className="h-8 min-w-0 flex-1 border-transparent bg-transparent px-1.5 text-base font-semibold shadow-none transition-colors hover:bg-muted/50 focus-visible:border-primary/40 focus-visible:bg-card dark:bg-transparent dark:hover:bg-muted/50 dark:focus-visible:bg-card"
-          />
+          {writes ? (
+            <Input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Untitled case"
+              aria-label="Case title"
+              className="h-8 min-w-0 flex-1 border-transparent bg-transparent px-1.5 text-base font-semibold shadow-none transition-colors hover:bg-muted/50 focus-visible:border-primary/40 focus-visible:bg-card dark:bg-transparent dark:hover:bg-muted/50 dark:focus-visible:bg-card"
+            />
+          ) : (
+            <h2 className="min-w-0 flex-1 px-1.5 text-base font-semibold text-foreground">{title}</h2>
+          )}
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2 sm:ml-auto">
           {flash && <span className="text-xs text-success">{flash}</span>}
-          {loaded.scenarioSid && (
-            <>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => navigate(`/?sid=${encodeURIComponent(loaded.scenarioSid!)}`)}
-              >
-                <ExternalLinkIcon /> Open in Runs
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => void replay()}>
-                <RotateCwIcon /> Replay
-              </Button>
-              {caseStatus(scenario).tone === 'fail' && (
-                <Button size="sm" variant="outline" onClick={repairWithAgent}>
-                  <WrenchIcon /> Repair with agent
-                </Button>
-              )}
-            </>
+          {scenario?.hasScenario && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => navigate(`/?sid=${encodeURIComponent(loaded.scenarioSid!)}`)}
+            >
+              <ExternalLinkIcon /> Open in Runs
+            </Button>
           )}
-          <Button size="sm" variant="outline" onClick={() => void save()} disabled={!dirty || saving}>
-            {saving && <Loader2Icon className="animate-spin" />}
-            Save
-          </Button>
-          <Button size="sm" onClick={() => void runWithAgent()}>
-            <SparklesIcon /> Run with agent
-          </Button>
+          {server && scenario?.hasScenario && (
+            <Button size="sm" variant="outline" onClick={() => void replay()}>
+              <RotateCwIcon /> Replay
+            </Button>
+          )}
+          {writes && scenario?.hasScenario && caseStatus(scenario).tone === 'fail' && (
+            <Button size="sm" variant="outline" onClick={repairWithAgent}>
+              <WrenchIcon /> Repair with agent
+            </Button>
+          )}
+          {writes && (
+            <Button size="sm" variant="outline" onClick={() => void save()} disabled={!dirty || saving}>
+              {saving && <Loader2Icon className="animate-spin" />}
+              Save
+            </Button>
+          )}
+          {writes && (
+            <Button size="sm" onClick={() => void runWithAgent()}>
+              <SparklesIcon /> Run with agent
+            </Button>
+          )}
         </div>
       </div>
 
@@ -337,6 +363,7 @@ export function CaseDetail({ id }: { id: string }) {
             <Input
               value={startUrl}
               onChange={(e) => setStartUrl(e.target.value)}
+              readOnly={!writes}
               placeholder="https://app.example.com/login"
             />
           </Field>
@@ -345,6 +372,7 @@ export function CaseDetail({ id }: { id: string }) {
             <Textarea
               value={preconditions}
               onChange={(e) => setPreconditions(e.target.value)}
+              readOnly={!writes}
               rows={2}
               placeholder="e.g. A user account already exists."
             />
@@ -354,19 +382,32 @@ export function CaseDetail({ id }: { id: string }) {
             label="Steps"
             hint="One step per line, in plain English. Use [TOKEN] for test data (e.g. [EMAIL])."
           >
-            <Textarea
-              value={stepsText}
-              onChange={(e) => setStepsText(e.target.value)}
-              rows={8}
-              className="font-mono text-[13px] leading-relaxed"
-              placeholder={'Open the login page\nEnter [EMAIL] in the email field\nEnter [PASSWORD] in the password field\nClick Sign in\n…'}
-            />
+            {writes ? (
+              <Textarea
+                value={stepsText}
+                onChange={(e) => setStepsText(e.target.value)}
+                rows={8}
+                className="font-mono text-[13px] leading-relaxed"
+                placeholder={'Open the login page\nEnter [EMAIL] in the email field\nEnter [PASSWORD] in the password field\nClick Sign in\n…'}
+              />
+            ) : (
+              <ol className="list-decimal space-y-1 pl-5 text-sm text-foreground">
+                {stepsText
+                  .split('\n')
+                  .map((step) => step.trim())
+                  .filter(Boolean)
+                  .map((step) => (
+                    <li key={step}>{step}</li>
+                  ))}
+              </ol>
+            )}
           </Field>
 
           <Field label="Expected result" hint="What proves the case passed.">
             <Textarea
               value={expected}
               onChange={(e) => setExpected(e.target.value)}
+              readOnly={!writes}
               rows={3}
               placeholder="e.g. The dashboard loads and greets the signed-in user by name."
             />
@@ -389,14 +430,16 @@ export function CaseDetail({ id }: { id: string }) {
                       <Input
                         value={d.sensitive ? '' : String(d.default ?? '')}
                         onChange={(e) => setInput(t, { default: e.target.value })}
-                        disabled={d.sensitive}
+                        readOnly={!writes}
+                        disabled={d.sensitive || !writes}
                         placeholder={d.sensitive ? 'kept secret' : 'default value'}
                         className="h-7 flex-1"
                       />
                       <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
                         <Checkbox
                           checked={!!d.sensitive}
-                          onCheckedChange={(v) => setInput(t, { sensitive: !!v })}
+                          disabled={!writes}
+                          onCheckedChange={(v) => writes && setInput(t, { sensitive: !!v })}
                         />
                         sensitive
                       </label>
@@ -414,6 +457,7 @@ export function CaseDetail({ id }: { id: string }) {
             <select
               aria-label="Recorded scenario"
               value={loaded.scenarioSid || ''}
+              disabled={!writes}
               onChange={(e) => void linkRecording(e.target.value)}
               className="h-8 w-full rounded-lg border border-border bg-card px-2 text-sm text-foreground shadow-xs outline-none transition-colors hover:border-primary/30 focus-visible:border-primary/50 focus-visible:ring-3 focus-visible:ring-primary/10"
             >
@@ -433,6 +477,7 @@ export function CaseDetail({ id }: { id: string }) {
             <Input
               value={tagsText}
               onChange={(e) => setTagsText(e.target.value)}
+              readOnly={!writes}
               placeholder="smoke, auth"
             />
           </Field>
@@ -468,6 +513,7 @@ export function CaseDetail({ id }: { id: string }) {
             <span className="text-xs text-muted-foreground">{fmtAgo(loaded.updatedAt)}</span>
           </Prop>
 
+          {writes && (
           <div className="mt-auto">
             <AlertDialog>
               <AlertDialogTrigger asChild>
@@ -502,6 +548,7 @@ export function CaseDetail({ id }: { id: string }) {
               </AlertDialogContent>
             </AlertDialog>
           </div>
+          )}
         </aside>
       </div>
     </div>

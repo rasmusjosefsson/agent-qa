@@ -1,7 +1,9 @@
 // web/src/lib/sets-api.ts
-// Typed wrappers for the /api/sets/* endpoints (lib/report-server.js).
+// Reads go through the active source (report server, or the static demo).
+// Writes stay on /api/sets and are only called when the source can write.
 import type { SetRecord, SetWithCount } from '@/features/sets/types'
 import type { CaseWithScenario } from '@/features/cases/types'
+import { getScenarioSource } from '@/lib/source'
 
 async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(path, { headers: { accept: 'application/json' } })
@@ -23,11 +25,11 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 export function getSets(): Promise<{ sets: SetWithCount[] }> {
-  return getJson('/api/sets')
+  return getScenarioSource().listSets()
 }
 
 export function getSet(id: string): Promise<{ set: SetWithCount }> {
-  return getJson(`/api/sets/${encodeURIComponent(id)}`)
+  return getScenarioSource().getSet(id)
 }
 
 // Resolved member cases (joined to each case's last-run scenario summary).
