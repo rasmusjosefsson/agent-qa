@@ -35,6 +35,20 @@ export function canWrite(source: ScenarioSource = getScenarioSource()): boolean 
   return source.capabilities.writes
 }
 
+/** Shown on nav and pages that need a local `agent-qa web`. */
+export const LOCAL_ONLY_NOTE = 'Available when you run agent-qa locally'
+
+/** The static demo has no report server. The local app does. */
+export function hasServer(source: ScenarioSource = getScenarioSource()): boolean {
+  return source.capabilities.server
+}
+
+/** Runs is the only workbench route the static demo can serve. */
+export function routeNeedsServer(pathname: string): boolean {
+  const path = pathname.split('?')[0].replace(/\/+$/, '') || '/'
+  return path !== '/' && path !== '/index.html'
+}
+
 let override: ScenarioSource | null = null
 let cached: ScenarioSource | null = null
 

@@ -12,11 +12,15 @@ function playHtml(): Plugin {
     name: "aqa-play-html",
     transformIndexHtml(html) {
       if (process.env.VITE_AQA_SOURCE !== "fixture") return html
+      // GitHub Pages serves 404.html for /play/<route> and stashes the URL.
+      // Restore it before the app reads location, so a hard refresh stays put.
+      const restore =
+        "<script>(function(){try{var k='aqa-play-redirect',n=sessionStorage.getItem(k);if(!n)return;sessionStorage.removeItem(k);var path=n.split('?')[0].split('#')[0];if(path.indexOf('/play/')===-1&&!/\\/play$/.test(path))return;history.replaceState(null,'',n);}catch(e){}})();</script>\n    "
       return html
         .replace("<div id=\"root\"></div>", "<main id=\"root\"></main>")
         .replace(
           "</head>",
-          '<meta name="aqa-golden-ready" content="[data-demo-ready]" />\n  </head>'
+          restore + '<meta name="aqa-golden-ready" content="[data-demo-ready]" />\n  </head>'
         )
     },
   }

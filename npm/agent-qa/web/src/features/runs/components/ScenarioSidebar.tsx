@@ -1,7 +1,7 @@
 // web/src/features/runs/components/ScenarioSidebar.tsx
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
-import { canWrite } from '@/lib/source'
+import { canWrite, hasServer } from '@/lib/source'
 import { BrowserModeToggle } from '@/components/browser-mode-toggle'
 import { GlobeIcon, Loader2Icon, PlayIcon, RefreshCwIcon, Trash2Icon } from 'lucide-react'
 import {
@@ -183,6 +183,7 @@ export function ScenarioSidebar({
 }) {
   const { scenarios, expanded, runsBySid, sel } = runs
   const writes = canWrite()
+  const playback = !hasServer()
   return (
     <nav className="flex h-full min-h-0 flex-col overflow-hidden bg-sidebar/60" {...(writes ? {} : { 'data-tour': 'runs' })}>
       <div className="flex h-11 items-center justify-between border-b border-border px-3">
@@ -280,9 +281,9 @@ export function ScenarioSidebar({
                 </AlertDialog>
                 )}
                 </div>
-                {writes && onReplay && (
+                {(writes || playback) && onReplay && (
                   <div className="flex flex-wrap items-center gap-1.5 px-2 pb-2">
-                    {onHeadedChange && sel.sid === sc.sid && (
+                    {writes && onHeadedChange && sel.sid === sc.sid && (
                       <BrowserModeToggle
                         headed={headed}
                         onChange={onHeadedChange}
@@ -292,7 +293,7 @@ export function ScenarioSidebar({
                     <button
                       type="button"
                       aria-label="Replay scenario"
-                      title="Replay this scenario"
+                      title={writes ? 'Replay this scenario' : 'Play the recorded run'}
                       disabled={busySid === sc.sid}
                       onClick={() => onReplay(sc.sid)}
                       className="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[12px] font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
